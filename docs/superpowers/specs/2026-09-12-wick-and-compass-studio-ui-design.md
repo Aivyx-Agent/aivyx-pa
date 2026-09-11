@@ -1,5 +1,45 @@
 # "Wick & Compass" — Studio UI Propagation (Design)
 
+## Addendum (found during plan-writing, 2026-09-12)
+
+Real grounding of every file this spec names corrected several
+assumptions below. Treat the implementation plan
+(`docs/superpowers/plans/2026-09-12-wick-and-compass-studio-ui.md`) as
+authoritative over this document's original estimates.
+
+1. **`.glass-panel`/`.glass-header` don't exist as real classes.** The
+   only real backdrop-blur surfaces are `.topbar` (structural, not
+   "glass"-named), `.btn-glass` (45 call-sites), and `.glass-card` (112
+   call-sites) — 3 real sites, not the implied "glass-panel/card/header"
+   trio.
+2. **The retired-token CSS surface is much larger than "4 named
+   indicators."** `var(--color-sage)` alone has 11 real usages across
+   the file (agent/routine live-dots, stat-card/agent-status "ok"
+   values, a notice banner, a seed-card accent, a mission-node state, a
+   step-dot "done" state, the statusbar live dot) — every one of them
+   already broken in spirit today (`--color-sage` is a real, currently-
+   defined variable in the *old* `:root`, but retranscribing to
+   `aivyx-brand`'s new token table without also carrying its usages
+   would silently break all 11 the moment `:root` changes). Two more
+   class families carry retired-adjacent names: `.chip.sage`/`.chip.amber`
+   (shared between trust-tier chips *and* an unrelated "contradictory
+   entries" memory-conflict flag) and `.mission-node.sage`/`.mission-node.amber`,
+   plus `.btn-sage` (2 real button call-sites). All of this needs one
+   atomic migration task, not scattered fixes — a partial rename would
+   leave some call-sites pointing at class names the CSS no longer
+   defines.
+3. **The icon/logo "swap" is 4 files, not ~26.** Every one of
+   `aivyx-web`'s 23 icons already uses `stroke="currentColor"` with zero
+   baked hex (confirmed via the same sweep sub-project 2 ran on
+   `aivyx-brand`'s own icons) — 22 of them are byte-identical copies of
+   real `aivyx-brand/icons/{nav,feature}/*.svg` files that never
+   contained palette information to begin with, so nothing about the
+   rebrand touches them. Only `icons/feature/candle-flame.svg` (still
+   holds the old flame-only geometry, pre-dial-ring) and the 3
+   `logos/*.svg` files (still hold old candle-body geometry/hex) are
+   real, confirmed via direct `diff` against `aivyx-brand`'s current
+   files.
+
 ## Context
 
 Sub-project 3 of a 5-part ecosystem rebrand (1: identity definition —
