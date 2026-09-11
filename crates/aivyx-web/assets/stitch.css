@@ -267,8 +267,8 @@ a { color: var(--color-primary); text-decoration: none; }
 .topbar {
   display: flex; align-items: center; gap: 16px;
   padding: 0 22px; height: 56px;
-  background: rgba(19,19,25,0.7); backdrop-filter: blur(20px);
-  border-bottom: 1px solid var(--color-border-ghost);
+  background: var(--color-bg-surface);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 .topbar .title { font-family: var(--font-display); font-weight: 700; font-size: 18px; }
 .topbar .spacer { flex: 1; }
@@ -310,8 +310,8 @@ a { color: var(--color-primary); text-decoration: none; }
 }
 .btn-primary:not(:disabled):hover { box-shadow: 0 0 15px 0 rgba(255,183,125,0.3); }
 .btn-glass {
-  background: rgba(53,52,59,0.4); backdrop-filter: blur(12px);
-  border: 1px solid var(--color-border-ghost); color: var(--color-text-primary);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-subtle); color: var(--color-text-primary);
 }
 .btn-glass:hover { border-color: var(--color-secondary); }
 .btn-sage { background: var(--color-sage); color: #0e0d14; }
@@ -323,8 +323,8 @@ a { color: var(--color-primary); text-decoration: none; }
   border-radius: 0.5rem; padding: 16px;
 }
 .glass-card {
-  background: rgba(53,52,59,0.4); backdrop-filter: blur(12px);
-  border: 1px solid var(--color-border-warm);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-subtle);
   border-radius: 0.5rem; padding: 16px;
   /* POLISH_WAVES.md sub-project 6, item A — the brand guide's own Shadow
      System table assigns shadow-md to "Cards"; this token existed but was
