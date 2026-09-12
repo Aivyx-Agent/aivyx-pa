@@ -60,9 +60,9 @@ const POLL_INTERVAL_MS: u32 = 1500;
 const STITCH_CSS: Asset = asset!("/assets/stitch.css");
 const FAVICON: Asset = asset!("/assets/logos/aivyx-favicon.svg");
 const LOGOMARK: Asset = asset!("/assets/logos/aivyx-logomark.svg");
-const FONT_DISPLAY: Asset = asset!("/assets/fonts/space-grotesk-var.woff2");
-const FONT_BODY: Asset = asset!("/assets/fonts/inter-var.woff2");
-const FONT_MONO: Asset = asset!("/assets/fonts/jetbrains-mono-var.woff2");
+const FONT_DISPLAY: Asset = asset!("/assets/fonts/fraunces-var.woff2");
+const FONT_BODY: Asset = asset!("/assets/fonts/ibm-plex-sans-var.woff2");
+const FONT_MONO: Asset = asset!("/assets/fonts/ibm-plex-mono-var.woff2");
 const ICON_COMMAND: Asset = asset!("/assets/icons/command-center.svg");
 const ICON_CHAT: Asset = asset!("/assets/icons/chat.svg");
 const ICON_MISSIONS: Asset = asset!("/assets/icons/missions.svg");
@@ -815,9 +815,9 @@ fn apply_theme(light: bool) {
 /// resolve to the bundled, offline woff2 — not a CDN).
 fn font_faces() -> String {
     format!(
-        "@font-face{{font-family:'Space Grotesk';src:url('{FONT_DISPLAY}') format('woff2');font-weight:300 700;font-display:swap;}}\
-         @font-face{{font-family:'Inter';src:url('{FONT_BODY}') format('woff2');font-weight:100 900;font-display:swap;}}\
-         @font-face{{font-family:'JetBrains Mono';src:url('{FONT_MONO}') format('woff2');font-weight:100 800;font-display:swap;}}"
+        "@font-face{{font-family:'Fraunces';src:url('{FONT_DISPLAY}') format('woff2');font-weight:100 900;font-display:swap;}}\
+         @font-face{{font-family:'IBM Plex Sans';src:url('{FONT_BODY}') format('woff2');font-weight:100 700;font-display:swap;}}\
+         @font-face{{font-family:'IBM Plex Mono';src:url('{FONT_MONO}') format('woff2');font-weight:100 700;font-display:swap;}}"
     )
 }
 
