@@ -3885,9 +3885,9 @@ fn MissionGraphSvg(graph: MissionGraph, selected: Option<String>, on_select: Eve
                     {
                         let (cx, cy) = pos[i];
                         let state_class = match node.state {
-                            TeamStepState::Running | TeamStepState::Awaiting => "amber",
+                            TeamStepState::Running | TeamStepState::Awaiting => "warning",
                             TeamStepState::Rejected => "error",
-                            TeamStepState::Done => "sage",
+                            TeamStepState::Done => "success",
                             TeamStepState::Pending => "",
                         };
                         let mut classes = format!("mission-node {state_class}");
@@ -4213,7 +4213,7 @@ fn MemoryPanel() -> Element {
                                     ws.send(mem_topic_query(topic.clone()));
                                 },
                                 if conflicted {
-                                    span { class: "chip amber mem-topic-flag", title: "contradictory entries", "⚠" }
+                                    span { class: "chip warning mem-topic-flag", title: "contradictory entries", "⚠" }
                                 }
                                 span { "{label}" }
                             }
@@ -4344,12 +4344,12 @@ fn ConflictsPanel(topic: String, conflicts: Vec<aivyx_ipc::conflict::MemoryConfl
                             div { class: "conflict-side", span { class: "label-tech", "{b.topic} #{b.seq}" } p { "{b.body}" } }
                             div { class: "conflict-actions",
                                 button {
-                                    class: "btn btn-sage btn-xs",
+                                    class: "btn btn-success btn-xs",
                                     onclick: move |_| ws.send(resolve_memory_conflict_query(keep_a_topic.clone(), keep_a_seq)),
                                     "Keep \"{a.topic} #{a.seq}\""
                                 }
                                 button {
-                                    class: "btn btn-sage btn-xs",
+                                    class: "btn btn-success btn-xs",
                                     onclick: move |_| ws.send(resolve_memory_conflict_query(keep_b_topic.clone(), keep_b_seq)),
                                     "Keep \"{b.topic} #{b.seq}\""
                                 }
@@ -5596,8 +5596,8 @@ fn tier_label(t: TrustTier) -> &'static str {
 fn tier_chip_class(t: TrustTier) -> &'static str {
     match t {
         TrustTier::Kernel => "chip error",
-        TrustTier::Trusted => "chip sage",
-        TrustTier::SemiTrusted => "chip amber",
+        TrustTier::Trusted => "chip success",
+        TrustTier::SemiTrusted => "chip warning",
         TrustTier::Untrusted => "chip muted",
     }
 }

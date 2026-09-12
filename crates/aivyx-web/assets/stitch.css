@@ -290,7 +290,7 @@ a { color: var(--color-primary); text-decoration: none; }
 }
 .statusbar .seg { display: inline-flex; align-items: center; gap: 7px; }
 .statusbar .seg .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-disabled); }
-.statusbar .seg.live .dot { background: var(--color-sage); }
+.statusbar .seg.live .dot { background: var(--color-success); }
 
 /* ── Components ────────────────────────────────────────────────────────────── */
 .btn {
@@ -309,7 +309,7 @@ a { color: var(--color-primary); text-decoration: none; }
   border: 1px solid var(--color-border-subtle); color: var(--color-text-primary);
 }
 .btn-glass:hover { border-color: var(--color-secondary); }
-.btn-sage { background: var(--color-sage); color: #0e0d14; }
+.btn-success { background: var(--color-success); color: #0a0d13; }
 .btn-ghost-danger { background: transparent; border: 1px solid var(--color-error); color: var(--color-error); }
 
 .card {
@@ -349,8 +349,8 @@ a { color: var(--color-primary); text-decoration: none; }
   padding: 3px 8px; border-radius: 0.125rem;
   background: var(--color-secondary-dim); color: var(--color-secondary-pale);
 }
-.chip.amber { background: rgba(255,183,125,0.12); color: var(--color-primary); }
-.chip.sage  { background: rgba(77,139,106,0.15); color: var(--color-sage); }
+.chip.warning { background: rgba(217,123,41,0.15); color: var(--color-warning); }
+.chip.success { background: rgba(77,139,106,0.15); color: var(--color-success); }
 .chip.error { background: rgba(196,85,62,0.15); color: var(--color-error); }
 
 .stat-card {
@@ -396,7 +396,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .stat-card .stat-top { display: flex; align-items: center; gap: 8px; color: var(--color-text-secondary); }
 .stat-card .stat-top .ico { width: 15px; height: 15px; }
 .stat-card .value { font-family: var(--font-display); font-weight: 700; font-size: 26px; color: var(--color-text-primary); }
-.stat-card .value.ok { color: var(--color-sage); }
+.stat-card .value.ok { color: var(--color-success); }
 .stat-card .value.off { color: var(--color-error); }
 
 .dash-grid { display: grid; grid-template-columns: 1fr 300px; gap: 18px; align-items: start; }
@@ -432,7 +432,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .agent-status { display: flex; flex-direction: column; gap: 2px; }
 .agent-status .kv { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; }
 .agent-status .kv .v { font-size: 13px; color: var(--color-text-primary); }
-.agent-status .kv .v.ok { color: var(--color-sage); }
+.agent-status .kv .v.ok { color: var(--color-success); }
 .agent-status .kv .v.off { color: var(--color-text-disabled); }
 
 /* ── Memory view ───────────────────────────────────────────────────────────── */
@@ -588,7 +588,7 @@ select.input { appearance: none; cursor: pointer; overflow: hidden; text-overflo
   color: var(--color-text-primary);
 }
 .notice { padding: 10px 14px; border-radius: 0.5rem; font-size: 13px; }
-.notice.ok   { background: rgba(77, 139, 106, 0.12); color: var(--color-sage); }
+.notice.ok   { background: rgba(77, 139, 106, 0.12); color: var(--color-success); }
 .notice.err  { background: rgba(196, 85, 62, 0.15); color: var(--color-error); }
 .notice.info { background: rgba(255, 183, 125, 0.12); color: var(--color-primary); }
 .reload-hint {
@@ -637,7 +637,7 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 
 /* X.3 — the onboarding "Seed your assistant" card: a sage left accent so a
    fresh agent's first action reads as a welcome, not a warning. */
-.seed-card { border-left: 3px solid var(--color-sage); }
+.seed-card { border-left: 3px solid var(--color-success); }
 .seed-card h4 { font-size: 13px; font-family: var(--font-mono); color: var(--color-text-secondary); }
 
 /* ── Persona governance (V.4) — proposals, effective viewer, change history. ── */
@@ -798,8 +798,8 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   fill: var(--color-secondary-dim); stroke: var(--color-secondary);
   stroke-width: 1.5; transition: fill 0.15s, stroke 0.15s;
 }
-.mission-node.amber circle { stroke: var(--color-warning); }
-.mission-node.sage circle { stroke: var(--color-sage); }
+.mission-node.warning circle { stroke: var(--color-warning); }
+.mission-node.success circle { stroke: var(--color-success); }
 .mission-node.error circle { stroke: var(--color-error); }
 .mission-node.lead circle { stroke-width: 3; }
 .mission-node.off-roster circle { stroke-dasharray: 4 3; }
@@ -836,7 +836,7 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   color: var(--color-text-disabled); font-size: 12px;
 }
 .step-dot.active { border-color: var(--color-primary); color: var(--color-primary); }
-.step-dot.done { border-color: var(--color-sage); color: var(--color-sage); }
+.step-dot.done { border-color: var(--color-success); color: var(--color-success); }
 .step-num {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; border-radius: 50%;
@@ -1096,7 +1096,7 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   margin-right: 6px; vertical-align: middle;
 }
 .agent-status .dot.live, .routine-row .dot.live {
-  background: var(--color-sage); animation: dot-pulse 2s ease-in-out infinite;
+  background: var(--color-success); animation: dot-pulse 2s ease-in-out infinite;
 }
 .agent-status .dot.off, .routine-row .dot.off { background: var(--color-text-disabled); }
 @keyframes dot-pulse {
