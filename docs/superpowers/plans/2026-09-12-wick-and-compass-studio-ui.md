@@ -140,7 +140,7 @@ new_header = '''/* ────────────────────�
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Backward-compat aliases — remove once every consumer below is migrated
-     off retired Neon-Cartographer-era names (Task 3 of this plan migrates
+     off retired Neon-Cartographer-era names (Task 4 of this plan migrates
      every real usage in this file; these aliases exist only as a safety
      net matching aivyx-brand/design-tokens.md's own convention). */
   --color-bg-deep: var(--color-bg-base);
@@ -261,7 +261,7 @@ git commit -m "feat: retranscribe stitch.css tokens to Wick & Compass
 Full :root + [data-theme=\"light\"] rewrite from aivyx-brand/design-tokens.md's
 current live values. Includes the same Backward Compatibility Aliases
 block aivyx-brand's own file carries, so every retired-name var() usage
-in this file keeps resolving (to the new values) until Task 3 migrates
+in this file keeps resolving (to the new values) until Task 4 migrates
 each call site to the real new names."
 ```
 
@@ -408,7 +408,139 @@ redefinition."
 
 ---
 
-### Task 3: Retired-name CSS class + Rust identifier migration
+### Task 3: Depth-background retirement (body gradient, hover glow, dead keyframes)
+
+**Files:**
+- Modify: `crates/aivyx-web/assets/stitch.css` (`body`'s background rule, `.btn-primary:not(:disabled):hover`, `@keyframes pulse-glow`, `@keyframes candle-flicker`)
+
+**Interfaces:** Consumes Task 1's `--shadow-glow` token. Produces
+nothing consumed by later tasks — this is a sibling cleanup to Task 2,
+found by that task's own reviewer rather than named in the original
+design spec.
+
+Found during Task 2's review: `body`'s background rule still carries an
+organic radial-gradient "depth" effect tagged with the literal comment
+`/* bg-depth: never flat */`, using two hardcoded retired-palette rgba
+values (`rgba(204,193,230,...)`, the old cyber-purple secondary;
+`rgba(255,183,125,...)`, the old amber primary). `aivyx-brand/brand-
+guidelines.md` §5 already retired this *exact* pattern by its own
+internal name: *"Noise overlay and organic gradient depth (`bg-depth`,
+`texture-noise`) are dropped — no replacement, flat is the replacement."*
+The same old amber rgba value also lingers in `.btn-primary:hover`'s
+box-shadow glow and an unused `@keyframes pulse-glow` (confirmed via
+`grep` — genuinely never referenced by any `animation:` property in
+`main.rs`). A `@keyframes candle-flicker` (also confirmed unused) uses
+the exact stale "candle" naming `aivyx-brand`'s own rebrand already
+renamed to `wick-flicker` for the identical reason.
+
+- [ ] **Step 1: Retire `body`'s organic-gradient depth background**
+
+```bash
+cd /home/julian/Projects/Rust/aivyx-pa/crates/aivyx-web
+python3 << 'PYEOF'
+with open('assets/stitch.css') as f:
+    content = f.read()
+
+old = '''  /* bg-depth: never flat — subtle organic gradients over the base */
+  background:
+    radial-gradient(ellipse at 30% 20%, rgba(204,193,230,0.03), transparent 50%),
+    radial-gradient(ellipse at 70% 80%, rgba(255,183,125,0.02), transparent 50%),
+    var(--color-bg-base);
+  background-attachment: fixed;'''
+
+new = '''  background: var(--color-bg-base);'''
+
+assert old in content, "old body background rule not found verbatim -- stop and check stitch.css manually"
+content = content.replace(old, new)
+
+with open('assets/stitch.css', 'w') as f:
+    f.write(content)
+PYEOF
+```
+
+`background-attachment: fixed` is dropped along with the gradient — it
+existed only to keep the (now-removed) gradient anchored during scroll,
+serving no purpose against a flat single color.
+
+- [ ] **Step 2: Migrate `.btn-primary:hover`'s glow to the real token**
+
+```bash
+python3 << 'PYEOF'
+with open('assets/stitch.css') as f:
+    content = f.read()
+
+old = '.btn-primary:not(:disabled):hover { box-shadow: 0 0 15px 0 rgba(255,183,125,0.3); }'
+new = '.btn-primary:not(:disabled):hover { box-shadow: var(--shadow-glow); }'
+
+assert old in content, "old .btn-primary hover rule not found verbatim -- stop and check stitch.css manually"
+content = content.replace(old, new)
+
+with open('assets/stitch.css', 'w') as f:
+    f.write(content)
+PYEOF
+```
+
+- [ ] **Step 3: Fix the dead `pulse-glow` keyframe's color and rename `candle-flicker`**
+
+```bash
+python3 << 'PYEOF'
+with open('assets/stitch.css') as f:
+    content = f.read()
+
+old_pulse = '@keyframes pulse-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(255,183,125,0.4); } 50% { box-shadow: 0 0 0 6px rgba(255,183,125,0); } }'
+new_pulse = '@keyframes pulse-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(201,162,75,0.4); } 50% { box-shadow: 0 0 0 6px rgba(201,162,75,0); } }'
+
+old_candle = '@keyframes candle-flicker { 0%,100% { opacity: 1; } 45% { opacity: 0.85; } 70% { opacity: 0.92; } }'
+new_candle = '@keyframes wick-flicker { 0%,100% { opacity: 1; } 45% { opacity: 0.85; } 70% { opacity: 0.92; } }'
+
+assert old_pulse in content, "old pulse-glow keyframe not found verbatim -- stop and check stitch.css manually"
+assert old_candle in content, "old candle-flicker keyframe not found verbatim -- stop and check stitch.css manually"
+content = content.replace(old_pulse, new_pulse).replace(old_candle, new_candle)
+
+with open('assets/stitch.css', 'w') as f:
+    f.write(content)
+PYEOF
+```
+
+Both keyframes are confirmed unused today (no `animation:` property in
+`main.rs` references either name) — this fix keeps them correctly
+themed for whenever they're picked up, rather than deleting dead CSS
+that isn't this task's concern to prune.
+
+- [ ] **Step 4: Verify**
+
+```bash
+grep -n "bg-depth\|rgba(204,193,230\|rgba(255,183,125\|candle-flicker\|background-attachment" assets/stitch.css
+```
+
+Expected: no output.
+
+- [ ] **Step 5: Confirm the workspace compiles**
+
+```bash
+cd /home/julian/Projects/Rust/aivyx-pa
+cargo build -p aivyx-web --target wasm32-unknown-unknown
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/aivyx-web/assets/stitch.css
+git commit -m "feat: retire the last old-palette depth/glow/keyframe leftovers
+
+Found during Task 2's review: body's organic-gradient 'bg-depth'
+background (literally named that in its own comment) is the same
+pattern aivyx-brand/brand-guidelines.md SS5 already retired by name --
+'no replacement, flat is the replacement'. .btn-primary:hover's glow
+and an unused pulse-glow keyframe both still used the old amber rgba
+value; migrated to --shadow-glow and its brass equivalent respectively.
+An unused candle-flicker keyframe renamed to wick-flicker, matching the
+identical rename aivyx-brand's own rebrand already made."
+```
+
+---
+
+### Task 4: Retired-name CSS class + Rust identifier migration
 
 **Files:**
 - Modify: `crates/aivyx-web/assets/stitch.css` (11 `var(--color-sage)` usages, `.chip.sage`/`.chip.amber`, `.mission-node.sage`/`.mission-node.amber`, `.btn-sage`)
@@ -416,7 +548,7 @@ redefinition."
 
 **Interfaces:** Consumes Task 1's `--color-success`/`--color-warning`
 tokens. Produces the final class names (`chip success`/`chip warning`/
-`mission-node success`/`mission-node warning`/`btn-success`) that Task 6's
+`mission-node success`/`mission-node warning`/`btn-success`) that Task 7's
 indicator work builds on for the trust-tier-chip half of its scope (Task
 6 covers the other 3 named indicators — audit chain, notification badge,
 daemon dot — trust-tier chips are fully handled here since they share
@@ -572,7 +704,7 @@ rename would leave call-sites pointing at now-undefined class names."
 
 ---
 
-### Task 4: Font asset swap
+### Task 5: Font asset swap
 
 **Files:**
 - Create: `crates/aivyx-web/assets/fonts/fraunces-var.woff2`, `ibm-plex-sans-var.woff2`, `ibm-plex-mono-var.woff2`
@@ -589,7 +721,7 @@ needs updating.
 ```bash
 mkdir -p /tmp/wick-studio-fonts && cd /tmp/wick-studio-fonts
 
-# Fraunces (same font aivyx-brand's Task 6 used)
+# Fraunces (same font aivyx-brand's Task 7 used)
 curl -sL -o fraunces-var.woff2 \
   "https://fonts.gstatic.com/s/fraunces/v34/6NUM8FiPJgv3EXazX6MwXbeZ_lQV.woff2" \
   || echo "gstatic URL may have rotated -- fetch fresh from fonts.google.com/specimen/Fraunces if this 404s"
@@ -697,7 +829,7 @@ ranges to match each font's real supported range."
 
 ---
 
-### Task 5: Icon/logo asset swap
+### Task 6: Icon/logo asset swap
 
 **Files:**
 - Modify: `crates/aivyx-web/assets/icons/candle-flame.svg`
@@ -765,15 +897,15 @@ geometry/hex) needed a real copy."
 
 ---
 
-### Task 6: Remaining indicator restyles (audit chain, notification badge, daemon connection dot)
+### Task 7: Remaining indicator restyles (audit chain, notification badge, daemon connection dot)
 
 **Files:**
 - Modify: `crates/aivyx-web/assets/stitch.css` (`.dot` rules, a new `.dial-glyph` utility)
 - Modify: `crates/aivyx-web/src/main.rs:3405-3406` (audit chain status), `:1561-1564` (notification badge), the `statusbar` footer's `.dot` markup
 
 **Interfaces:** Consumes Task 1's `--color-primary`/`--color-tertiary`
-tokens and Task 3's already-migrated `--color-success` naming (trust-tier
-chips, handled entirely in Task 3, are not part of this task's scope).
+tokens and Task 4's already-migrated `--color-success` naming (trust-tier
+chips, handled entirely in Task 4, are not part of this task's scope).
 
 First, ground the real current `.dot` CSS and the `statusbar` footer's
 exact markup (the design spec deferred this) — read
@@ -857,7 +989,7 @@ python3 << 'PYEOF'
 with open('assets/stitch.css') as f:
     content = f.read()
 
-# Insert right after the .chip rules Task 3 already touched, before
+# Insert right after the .chip rules Task 4 already touched, before
 # .stat-card, so related small-indicator utilities stay grouped.
 anchor = '.stat-card {'
 assert anchor in content, "anchor point '.stat-card {' not found -- stop and check stitch.css manually"
@@ -887,7 +1019,7 @@ above) — the plan's assumed current state:
 ```
 
 (the second line already reads `--color-success` here, not
-`--color-sage`, because Task 3 already migrated it). Add a matching
+`--color-sage`, because Task 4 already migrated it). Add a matching
 ring:
 
 ```bash
@@ -901,7 +1033,7 @@ old = '''.statusbar .seg .dot { width: 6px; height: 6px; border-radius: 50%; bac
 new = '''.statusbar .seg .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-disabled); border: 1px solid var(--color-tertiary); }
 .statusbar .seg.live .dot { background: var(--color-success); border-color: var(--color-primary); }'''
 
-assert old in content, "statusbar dot rules not found verbatim -- stop, re-read the file's real current state (Task 3 should have already migrated the .live rule to --color-success) and adapt this replacement to match reality"
+assert old in content, "statusbar dot rules not found verbatim -- stop, re-read the file's real current state (Task 4 should have already migrated the .live rule to --color-success) and adapt this replacement to match reality"
 content = content.replace(old, new)
 
 with open('assets/stitch.css', 'w') as f:
@@ -934,7 +1066,7 @@ git add crates/aivyx-web/assets/stitch.css crates/aivyx-web/src/main.rs
 git commit -m "feat: dial-ring treatment for audit chain, notification badge, daemon dot
 
 Trust-tier chips already got their dial-motif treatment (a leading
-success/warning-colored indicator via the class rename) in Task 3 --
+success/warning-colored indicator via the class rename) in Task 4 --
 this covers the other 3 named indicators from the design spec. Audit
 chain status trades its Unicode checkmark/cross for a small bordered
 ring matching the same success/error color, since the ring now carries
@@ -946,7 +1078,7 @@ throughout this whole rebrand."
 
 ---
 
-### Task 7: Final build verification + repo-wide sweep
+### Task 8: Final build verification + repo-wide sweep
 
 **Files:** none created/modified — pure verification.
 
@@ -994,7 +1126,7 @@ grep -rn -iE '#(ffb77d|ffc999|d9802b|ffdcc3|904d00|ccc1e6|4a4261|e8ddff|332c49|d
 it's numerically identical to the new `--color-success` dark value, so
 including it would false-positive on every legitimate token definition
 Task 1 wrote. The `var(--color-sage)`-shaped *consumption* is what
-Task 3's own Step 3 already checks for, which is the actually-meaningful
+Task 4's own Step 3 already checks for, which is the actually-meaningful
 signal here.)
 
 Decimal-rgba sweep:
@@ -1016,7 +1148,7 @@ grep -rn -i "neon cartographer\|candle motif\|glass-panel\|glass-header\|backdro
 Expected: no output from any of the three (the 12 `--danger`/`--ok`/
 `--warn` hex fallbacks are explicitly out of scope per Global
 Constraints and are not part of this sweep's target list; `--font-mono:
-'JetBrains Mono'` no longer exists after Task 4, so a hit there would be
+'JetBrains Mono'` no longer exists after Task 5, so a hit there would be
 real). If something prints, it's a real miss from Tasks 1-6 — fix it in
 the relevant task's own file before proceeding, don't patch ad hoc
 outside any task's commit.
