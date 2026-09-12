@@ -351,7 +351,7 @@ a { color: var(--color-primary); text-decoration: none; }
 }
 .chip.warning { background: rgba(217,123,41,0.15); color: var(--color-warning); }
 .chip.success { background: rgba(77,139,106,0.15); color: var(--color-success); }
-.chip.error { background: rgba(196,85,62,0.15); color: var(--color-error); }
+.chip.error { background: rgba(214,69,69,0.15); color: var(--color-error); }
 
 .dial-glyph {
   display: inline-block; width: 8px; height: 8px; border-radius: 50%;
@@ -594,7 +594,7 @@ select.input { appearance: none; cursor: pointer; overflow: hidden; text-overflo
 }
 .notice { padding: 10px 14px; border-radius: 0.5rem; font-size: 13px; }
 .notice.ok   { background: rgba(77, 139, 106, 0.12); color: var(--color-success); }
-.notice.err  { background: rgba(196, 85, 62, 0.15); color: var(--color-error); }
+.notice.err  { background: rgba(214, 69, 69, 0.15); color: var(--color-error); }
 .notice.info { background: rgba(201, 162, 75, 0.12); color: var(--color-primary); }
 .reload-hint {
   position: sticky; top: 0; z-index: 999;
