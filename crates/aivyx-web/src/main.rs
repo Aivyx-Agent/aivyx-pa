@@ -3705,7 +3705,7 @@ fn GateControls(mission_id: String, step: String, verify_attempts: u32) -> Eleme
         div { class: "gate",
             span { class: "gate-label", "{label}" }
             button {
-                class: "btn btn-sage",
+                class: "btn btn-success",
                 onclick: move |_| ws.send(resolve_team_query(approve.0.clone(), approve.1.clone(), true)),
                 "Approve Sequence"
             }
@@ -3956,7 +3956,7 @@ fn MissionControls(mission: TeamMissionView) -> Element {
             }
             if shown.contains(&"resume") {
                 button {
-                    class: "btn btn-sage",
+                    class: "btn btn-success",
                     onclick: move |_| {
                         mission_ui.write().notice = None;
                         ws.send(resume_team_mission_query(id.clone()));
@@ -4142,7 +4142,7 @@ fn GatePrompt(gate: GateInfo) -> Element {
         div { class: "glass-card gateprompt",
             span { class: "gate-label", "⚑ approval needed — {gate.reason}" }
             button {
-                class: "btn btn-sage",
+                class: "btn btn-success",
                 onclick: move |_| {
                     ws.send(resolve_gate_query(approve.0.clone(), approve.1.clone(), true));
                     gate_sig.set(None);
