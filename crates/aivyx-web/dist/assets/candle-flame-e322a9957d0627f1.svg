@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Wick Flame</title>
+  <!-- Dial ring -->
+  <circle cx="12" cy="12" r="10.5" stroke-width="1.2"/>
+  <!-- Flame for loading/status -->
+  <path d="M12 7.25C9.5 10.75, 8.3 12.95, 12 16.75C15.7 12.95, 14.5 10.75, 12 7.25Z"/>
+  <path d="M12 9.75C10.6 11.75, 10 12.95, 12 15.05C14 12.95, 13.4 11.75, 12 9.75Z" stroke="none" fill="currentColor" opacity="0.2"/>
+</svg>
