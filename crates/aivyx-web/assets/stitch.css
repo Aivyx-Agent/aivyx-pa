@@ -349,7 +349,7 @@ a { color: var(--color-primary); text-decoration: none; }
   padding: 3px 8px; border-radius: 0.125rem;
   background: var(--color-secondary-dim); color: var(--color-secondary-pale);
 }
-.chip.amber { background: rgba(201,162,75,0.12); color: var(--color-primary); }
+.chip.amber { background: rgba(255,183,125,0.12); color: var(--color-primary); }
 .chip.sage  { background: rgba(77,139,106,0.15); color: var(--color-sage); }
 .chip.error { background: rgba(196,85,62,0.15); color: var(--color-error); }
 
