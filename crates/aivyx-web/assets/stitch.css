@@ -180,12 +180,7 @@ body {
   font-size: 14px;
   line-height: 1.5;
   color: var(--color-text-primary);
-  /* bg-depth: never flat — subtle organic gradients over the base */
-  background:
-    radial-gradient(ellipse at 30% 20%, rgba(204,193,230,0.03), transparent 50%),
-    radial-gradient(ellipse at 70% 80%, rgba(255,183,125,0.02), transparent 50%),
-    var(--color-bg-base);
-  background-attachment: fixed;
+  background: var(--color-bg-base);
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.02em; margin: 0; }
@@ -308,7 +303,7 @@ a { color: var(--color-primary); text-decoration: none; }
   background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dim));
   color: var(--color-text-inverse);
 }
-.btn-primary:not(:disabled):hover { box-shadow: 0 0 15px 0 rgba(255,183,125,0.3); }
+.btn-primary:not(:disabled):hover { box-shadow: var(--shadow-glow); }
 .btn-glass {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border-subtle); color: var(--color-text-primary);
@@ -354,7 +349,7 @@ a { color: var(--color-primary); text-decoration: none; }
   padding: 3px 8px; border-radius: 0.125rem;
   background: var(--color-secondary-dim); color: var(--color-secondary-pale);
 }
-.chip.amber { background: rgba(255,183,125,0.12); color: var(--color-primary); }
+.chip.amber { background: rgba(201,162,75,0.12); color: var(--color-primary); }
 .chip.sage  { background: rgba(77,139,106,0.15); color: var(--color-sage); }
 .chip.error { background: rgba(196,85,62,0.15); color: var(--color-error); }
 
@@ -372,8 +367,8 @@ a { color: var(--color-primary); text-decoration: none; }
 /* ── Animations (respect reduced motion) ──────────────────────────────────── */
 @keyframes fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes streaming-cursor { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
-@keyframes candle-flicker { 0%,100% { opacity: 1; } 45% { opacity: 0.85; } 70% { opacity: 0.92; } }
-@keyframes pulse-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(255,183,125,0.4); } 50% { box-shadow: 0 0 0 6px rgba(255,183,125,0); } }
+@keyframes wick-flicker { 0%,100% { opacity: 1; } 45% { opacity: 0.85; } 70% { opacity: 0.92; } }
+@keyframes pulse-glow { 0%,100% { box-shadow: 0 0 0 0 rgba(201,162,75,0.4); } 50% { box-shadow: 0 0 0 6px rgba(201,162,75,0); } }
 .fade-in { animation: fade-in 0.3s var(--ease-smooth); }
 
 @media (prefers-reduced-motion: reduce) {
