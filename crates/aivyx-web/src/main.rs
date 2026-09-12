@@ -2066,7 +2066,7 @@ fn SchedulesPanel() -> Element {
                                                 span { class: "dot live" }
                                                 span { class: "name", "{r.name}" }
                                                 span { class: "label-tech", style: "opacity:0.7;", "{r.cron}" }
-                                                span { class: if r.enabled { "chip sage" } else { "chip" }, if r.enabled { "enabled" } else { "disabled" } }
+                                                span { class: if r.enabled { "chip success" } else { "chip" }, if r.enabled { "enabled" } else { "disabled" } }
                                             }
                                             div { style: "display:flex; gap:8px; margin-top:8px;",
                                                 button { class: "btn btn-glass btn-xs", onclick: move |_| { refl_adding.set(false); refl_editing.set(Some(r2.clone())); }, "Edit" }
@@ -2400,7 +2400,7 @@ fn NotificationsPanel() -> Element {
                                                 if cfg.is_default {
                                                     span { class: "label-tech", style: "color: var(--ok, #16a34a);", "default" }
                                                 }
-                                                span { class: if cfg.enabled { "chip sage" } else { "chip" }, if cfg.enabled { "enabled" } else { "disabled" } }
+                                                span { class: if cfg.enabled { "chip success" } else { "chip" }, if cfg.enabled { "enabled" } else { "disabled" } }
                                             }
                                             div { style: "display:flex; gap:8px; margin-top:8px;",
                                                 button { class: "btn btn-glass btn-xs", onclick: move |_| { adding.set(false); editing.set(Some(cfg2.clone())); }, "Edit" }
@@ -4256,7 +4256,7 @@ fn MemoryPanel() -> Element {
                 div { class: "panel-head",
                     h3 { "{scope_label(&scope())}" }
                     if m.fell_back {
-                        span { class: "chip amber", "keyword fallback" }
+                        span { class: "chip warning", "keyword fallback" }
                     }
                     div { class: "mem-viewtoggle",
                         button {
@@ -4706,7 +4706,7 @@ fn SkillsPanel() -> Element {
                 div { class: "skills-proposals",
                     div { class: "panel-head",
                         h3 { class: "label-tech", "Pending proposals" }
-                        span { class: "chip amber", "{skill_proposals.len()}" }
+                        span { class: "chip warning", "{skill_proposals.len()}" }
                     }
                     for p in skill_proposals.iter() {
                         { rsx! { ProposalCard { key: "{p.id}", p: p.clone() } } }
@@ -4971,7 +4971,7 @@ fn McpPanel() -> Element {
                                     div { class: "mcp-card-head",
                                         span { class: "mcp-name", "{cfg.name}" }
                                         span { class: "label-tech", "{cfg.transport}" }
-                                        span { class: if cfg.enabled { "chip sage" } else { "chip" }, if cfg.enabled { "enabled" } else { "disabled" } }
+                                        span { class: if cfg.enabled { "chip success" } else { "chip" }, if cfg.enabled { "enabled" } else { "disabled" } }
                                     }
                                     div { style: "display:flex; gap:8px; margin-top:8px;",
                                         button { class: "btn btn-glass btn-xs", onclick: move |_| { adding.set(false); editing.set(Some(cfg2.clone())); }, "Edit" }
@@ -5137,18 +5137,18 @@ fn mcp_health_chip(stats: Option<&McpServerCallStats>) -> (&'static str, String)
         + s.outcomes.get("denied").copied().unwrap_or(0);
     let ok = s.calls.saturating_sub(bad);
     if bad == 0 {
-        ("chip sage", format!("{ok} ok"))
+        ("chip success", format!("{ok} ok"))
     } else if bad.saturating_mul(2) > s.calls {
         ("chip error", format!("{ok} ok / {bad} failed"))
     } else {
-        ("chip amber", format!("{ok} ok / {bad} failed"))
+        ("chip warning", format!("{ok} ok / {bad} failed"))
     }
 }
 
 #[component]
 fn McpServerCard(view: McpServerStatusView, call_stats: Option<McpServerCallStats>) -> Element {
     let (pill_class, pill_label) = if view.connected {
-        ("chip sage", "connected")
+        ("chip success", "connected")
     } else {
         ("chip error", "failed")
     };
@@ -5256,7 +5256,7 @@ mod mcp_health_chip_tests {
     }
 
     #[test]
-    fn mcp_health_chip_all_ok_is_sage() {
+    fn mcp_health_chip_all_ok_is_success() {
         let mut outcomes = std::collections::BTreeMap::new();
         outcomes.insert("completed".to_string(), 5u64);
         let stats = McpServerCallStats {
@@ -5266,12 +5266,12 @@ mod mcp_health_chip_tests {
             total_duration_ms: 500,
         };
         let (class, label) = mcp_health_chip(Some(&stats));
-        assert_eq!(class, "chip sage");
+        assert_eq!(class, "chip success");
         assert_eq!(label, "5 ok");
     }
 
     #[test]
-    fn mcp_health_chip_minority_failures_is_amber() {
+    fn mcp_health_chip_minority_failures_is_warning() {
         let mut outcomes = std::collections::BTreeMap::new();
         outcomes.insert("completed".to_string(), 8u64);
         outcomes.insert("failed".to_string(), 2u64);
@@ -5282,7 +5282,7 @@ mod mcp_health_chip_tests {
             total_duration_ms: 1000,
         };
         let (class, label) = mcp_health_chip(Some(&stats));
-        assert_eq!(class, "chip amber");
+        assert_eq!(class, "chip warning");
         assert_eq!(label, "8 ok / 2 failed");
     }
 
@@ -5314,7 +5314,7 @@ mod mcp_health_chip_tests {
             total_duration_ms: 400,
         };
         let (class, label) = mcp_health_chip(Some(&stats));
-        assert_eq!(class, "chip amber");
+        assert_eq!(class, "chip warning");
         assert_eq!(label, "3 ok / 1 failed");
     }
 }
@@ -7140,7 +7140,7 @@ fn AgentsPanel() -> Element {
             div { class: "glass-card settings-section",
                 div { class: "panel-head",
                     h3 { "Pending proposals" }
-                    span { class: if st.proposals.is_empty() { "chip muted" } else { "chip amber" },
+                    span { class: if st.proposals.is_empty() { "chip muted" } else { "chip warning" },
                         "{st.proposals.len()}"
                     }
                 }
@@ -7221,7 +7221,7 @@ fn OnboardingPanel(view: Signal<View>) -> Element {
             div { class: "glass-card settings-section",
                 div { class: "panel-head",
                     h3 { "Create your agent" }
-                    span { class: "chip sage", "step {step() + 1} of 4" }
+                    span { class: "chip success", "step {step() + 1} of 4" }
                 }
                 p { class: "muted",
                     "Shape your assistant's identity, voice, and reach. You're the author of "
@@ -7513,7 +7513,7 @@ fn SeedOnboardingCard() -> Element {
         div { class: "glass-card settings-section seed-card",
             div { class: "panel-head",
                 h3 { "Seed your assistant" }
-                span { class: "chip sage", "fresh" }
+                span { class: "chip success", "fresh" }
             }
             p { class: "label-tech",
                 "This agent hasn't learned a personality yet. Give it a head start — \
@@ -7633,7 +7633,7 @@ fn ProposalCard(p: PersonaProposalSummary) -> Element {
         div { class: "glass-card proposal-card",
             div { class: "panel-head",
                 h4 { "{p.category}" }
-                span { class: "chip amber", "pending" }
+                span { class: "chip warning", "pending" }
             }
             p { class: "op-desc", "{op_desc}" }
             if let Some(reason) = p.proposed_reason.clone() {
@@ -7742,7 +7742,7 @@ fn DeltaRow(d: PersonaDeltaSummary) -> Element {
                 // Mark deltas planted by the onboarding seed (W.2 sentinel) so
                 // they're visibly distinct from the agent's learned deltas.
                 if d.proposal_id == "genesis-seed" {
-                    span { class: "chip sage", title: "Planted at first launch from [persona_seed]", "seed" }
+                    span { class: "chip success", title: "Planted at first launch from [persona_seed]", "seed" }
                 }
                 span { class: "delta-cat label-tech", "{d.category}" }
                 span { class: "op-desc", "{desc}" }
@@ -8119,9 +8119,9 @@ fn phase_label(p: TeamMissionPhase) -> &'static str {
 
 fn phase_class(p: TeamMissionPhase) -> &'static str {
     match p {
-        TeamMissionPhase::AwaitingApproval => "amber",
-        TeamMissionPhase::Paused => "amber",
-        TeamMissionPhase::Done => "sage",
+        TeamMissionPhase::AwaitingApproval => "warning",
+        TeamMissionPhase::Paused => "warning",
+        TeamMissionPhase::Done => "success",
         TeamMissionPhase::Rejected => "error",
         TeamMissionPhase::Halted => "error",
         _ => "",
@@ -9000,7 +9000,7 @@ fn TeamsPanel() -> Element {
                         div { key: "{i}",
                             class: if is_lead { "glass-card member-card lead" } else { "glass-card member-card" },
                             div { class: "panel-head",
-                                if is_lead { span { class: "chip amber", "lead" } }
+                                if is_lead { span { class: "chip warning", "lead" } }
                                 span { class: "chip {trust_class(m.trust_ceiling)}", "{trust_label(m.trust_ceiling)}" }
                                 if !is_lead {
                                     button { class: "btn btn-ghost-danger btn-xs",
@@ -9147,11 +9147,11 @@ fn trust_label(t: TrustTier) -> &'static str {
     }
 }
 
-/// Chip accent for a trust tier — higher trust reads sage (calm), lower amber.
+/// Chip accent for a trust tier — higher trust reads success (calm), lower warning.
 fn trust_class(t: TrustTier) -> &'static str {
     match t {
-        TrustTier::Trusted | TrustTier::Kernel => "sage",
-        TrustTier::SemiTrusted => "amber",
+        TrustTier::Trusted | TrustTier::Kernel => "success",
+        TrustTier::SemiTrusted => "warning",
         TrustTier::Untrusted => "muted",
     }
 }
