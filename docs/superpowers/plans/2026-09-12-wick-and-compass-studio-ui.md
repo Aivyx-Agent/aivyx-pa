@@ -548,7 +548,7 @@ identical rename aivyx-brand's own rebrand already made."
 
 **Interfaces:** Consumes Task 1's `--color-success`/`--color-warning`
 tokens. Produces the final class names (`chip success`/`chip warning`/
-`mission-node success`/`mission-node warning`/`btn-success`) that Task 7's
+`mission-node success`/`mission-node warning`/`btn-success`) that Task 8's
 indicator work builds on for the trust-tier-chip half of its scope (Task
 6 covers the other 3 named indicators — audit chain, notification badge,
 daemon dot — trust-tier chips are fully handled here since they share
@@ -704,7 +704,184 @@ rename would leave call-sites pointing at now-undefined class names."
 
 ---
 
-### Task 5: Font asset swap
+### Task 5: Remaining retired-name literal migration (phase/trust/mcp-health chips)
+
+**Files:**
+- Modify: `crates/aivyx-web/src/main.rs` (`phase_class`, `trust_class`, `mcp_health_chip` and their doc comments; ~11 direct literal `class:` usages; 2 unit test names + their assertions)
+
+**Interfaces:** Consumes Task 4's already-renamed `.chip.success`/
+`.chip.warning` CSS classes. Produces nothing consumed elsewhere.
+
+Found by Task 4's own implementer (correctly not fixed there, staying
+in scope) and independently verified by the controller before this task
+was written: after Task 4 renamed `.chip.sage`/`.chip.amber` to
+`.chip.success`/`.chip.warning` in `stitch.css`, three more helper
+functions and roughly 11 more direct literal usages still reference the
+now-deleted old names — every one of these currently renders unstyled
+(no matching CSS rule) until fixed. This is a real functional
+regression, not stale documentation, and is entirely contained to
+`main.rs` — `stitch.css` needs no further changes for this task, since
+Task 4 already created the target classes these call-sites need to
+point at.
+
+- [ ] **Step 1: Rename `phase_class()`'s match arms and its doc comment**
+
+```bash
+cd /home/julian/Projects/Rust/aivyx-pa/crates/aivyx-web
+python3 << 'PYEOF'
+with open('src/main.rs') as f:
+    content = f.read()
+
+old = '''fn phase_class(p: TeamMissionPhase) -> &'static str {
+    match p {
+        TeamMissionPhase::AwaitingApproval => "amber",
+        TeamMissionPhase::Paused => "amber",
+        TeamMissionPhase::Done => "sage",
+        TeamMissionPhase::Rejected => "error",
+        TeamMissionPhase::Halted => "error",
+        _ => "",
+    }
+}'''
+
+new = '''fn phase_class(p: TeamMissionPhase) -> &'static str {
+    match p {
+        TeamMissionPhase::AwaitingApproval => "warning",
+        TeamMissionPhase::Paused => "warning",
+        TeamMissionPhase::Done => "success",
+        TeamMissionPhase::Rejected => "error",
+        TeamMissionPhase::Halted => "error",
+        _ => "",
+    }
+}'''
+
+assert old in content, "phase_class body not found verbatim -- stop and check main.rs manually"
+content = content.replace(old, new)
+
+with open('src/main.rs', 'w') as f:
+    f.write(content)
+PYEOF
+```
+
+- [ ] **Step 2: Rename `trust_class()`'s match arms and its doc comment**
+
+```bash
+python3 << 'PYEOF'
+with open('src/main.rs') as f:
+    content = f.read()
+
+old = '''/// Chip accent for a trust tier — higher trust reads sage (calm), lower amber.
+fn trust_class(t: TrustTier) -> &'static str {
+    match t {
+        TrustTier::Trusted | TrustTier::Kernel => "sage",
+        TrustTier::SemiTrusted => "amber",
+        TrustTier::Untrusted => "muted",
+    }
+}'''
+
+new = '''/// Chip accent for a trust tier — higher trust reads success (calm), lower warning.
+fn trust_class(t: TrustTier) -> &'static str {
+    match t {
+        TrustTier::Trusted | TrustTier::Kernel => "success",
+        TrustTier::SemiTrusted => "warning",
+        TrustTier::Untrusted => "muted",
+    }
+}'''
+
+assert old in content, "trust_class body not found verbatim -- stop and check main.rs manually"
+content = content.replace(old, new)
+
+with open('src/main.rs', 'w') as f:
+    f.write(content)
+PYEOF
+```
+
+- [ ] **Step 3: Rename every `"chip sage"`/`"chip amber"` literal (covers `mcp_health_chip`'s return tuples, all ~11 direct `class:` usages, and the 4 test assertions in one pass — every occurrence of these exact substrings in the file is a leftover reference to a class Task 4 already renamed, confirmed during planning; there is no legitimate reason for either substring to remain)**
+
+```bash
+python3 << 'PYEOF'
+with open('src/main.rs') as f:
+    content = f.read()
+
+before_sage = content.count('"chip sage"')
+before_amber = content.count('"chip amber"')
+assert before_sage > 0 and before_amber > 0, "expected both substrings to still be present before this step -- if either is already 0, stop and check whether an earlier task already handled this"
+
+content = content.replace('"chip sage"', '"chip success"').replace('"chip amber"', '"chip warning"')
+
+with open('src/main.rs', 'w') as f:
+    f.write(content)
+
+print(f"replaced {before_sage} \"chip sage\" occurrences and {before_amber} \"chip amber\" occurrences")
+PYEOF
+```
+
+Expected print: `replaced 8 "chip sage" occurrences and 8 "chip amber" occurrences` (2 from `mcp_health_chip`'s return tuples + 6 direct literal usages = 8 for sage; 2 from `mcp_health_chip` + 4 direct literal usages + 2 test assertions = 8 for amber — if the real counts differ from this expectation, that's fine as long as they're both greater than 0 and the Step 4 verification below comes back clean; the exact counts were derived from a point-in-time grep during planning and may have shifted slightly).
+
+- [ ] **Step 4: Rename the two test function names that encode the old palette names**
+
+```bash
+python3 << 'PYEOF'
+with open('src/main.rs') as f:
+    content = f.read()
+
+old_names = [
+    ('fn mcp_health_chip_all_ok_is_sage()', 'fn mcp_health_chip_all_ok_is_success()'),
+    ('fn mcp_health_chip_minority_failures_is_amber()', 'fn mcp_health_chip_minority_failures_is_warning()'),
+]
+
+for old, new in old_names:
+    assert old in content, f"test function signature not found verbatim, stop and check main.rs manually:\n{old}"
+    content = content.replace(old, new)
+
+with open('src/main.rs', 'w') as f:
+    f.write(content)
+PYEOF
+```
+
+(`mcp_health_chip_majority_failures_is_error` and
+`mcp_health_chip_counts_denied_as_unhealthy_too` don't encode a retired
+palette name in their own function name, so they're untouched — their
+body assertions were already updated by Step 3's global substring pass.)
+
+- [ ] **Step 5: Verify no retired names remain**
+
+```bash
+grep -n '"chip sage"\|"chip amber"\|=> "sage"\|=> "amber"\|is_sage\|is_amber' src/main.rs
+```
+
+Expected: no output.
+
+- [ ] **Step 6: Confirm the workspace compiles and the full test suite passes**
+
+```bash
+cd /home/julian/Projects/Rust/aivyx-pa
+cargo build -p aivyx-web --target wasm32-unknown-unknown
+cargo test -p aivyx-web
+```
+
+Expected: clean build; all tests pass, including the 2 renamed
+`mcp_health_chip_*` tests and the 2 untouched ones.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add crates/aivyx-web/src/main.rs
+git commit -m "feat: migrate the remaining retired-name literals to Wick & Compass
+
+Task 4's own review surfaced this: after it renamed .chip.sage/.chip.amber
+to .chip.success/.chip.warning in stitch.css, three more helper functions
+(phase_class, trust_class, mcp_health_chip) and ~11 direct literal class:
+usages still referenced the deleted names -- a real functional
+regression (unstyled UI), not just stale text. One atomic sweep across
+every \"chip sage\"/\"chip amber\" substring in the file, plus the 2
+match-arm functions' own bare \"sage\"/\"amber\" returns and their doc
+comments, plus renaming the 2 test functions whose own names encoded the
+old palette."
+```
+
+---
+
+### Task 6: Font asset swap
 
 **Files:**
 - Create: `crates/aivyx-web/assets/fonts/fraunces-var.woff2`, `ibm-plex-sans-var.woff2`, `ibm-plex-mono-var.woff2`
@@ -721,7 +898,7 @@ needs updating.
 ```bash
 mkdir -p /tmp/wick-studio-fonts && cd /tmp/wick-studio-fonts
 
-# Fraunces (same font aivyx-brand's Task 7 used)
+# Fraunces (same font aivyx-brand's Task 8 used)
 curl -sL -o fraunces-var.woff2 \
   "https://fonts.gstatic.com/s/fraunces/v34/6NUM8FiPJgv3EXazX6MwXbeZ_lQV.woff2" \
   || echo "gstatic URL may have rotated -- fetch fresh from fonts.google.com/specimen/Fraunces if this 404s"
@@ -829,7 +1006,7 @@ ranges to match each font's real supported range."
 
 ---
 
-### Task 6: Icon/logo asset swap
+### Task 7: Icon/logo asset swap
 
 **Files:**
 - Modify: `crates/aivyx-web/assets/icons/candle-flame.svg`
@@ -897,7 +1074,7 @@ geometry/hex) needed a real copy."
 
 ---
 
-### Task 7: Remaining indicator restyles (audit chain, notification badge, daemon connection dot)
+### Task 8: Remaining indicator restyles (audit chain, notification badge, daemon connection dot)
 
 **Files:**
 - Modify: `crates/aivyx-web/assets/stitch.css` (`.dot` rules, a new `.dial-glyph` utility)
@@ -1078,7 +1255,7 @@ throughout this whole rebrand."
 
 ---
 
-### Task 8: Final build verification + repo-wide sweep
+### Task 9: Final build verification + repo-wide sweep
 
 **Files:** none created/modified — pure verification.
 
@@ -1148,7 +1325,7 @@ grep -rn -i "neon cartographer\|candle motif\|glass-panel\|glass-header\|backdro
 Expected: no output from any of the three (the 12 `--danger`/`--ok`/
 `--warn` hex fallbacks are explicitly out of scope per Global
 Constraints and are not part of this sweep's target list; `--font-mono:
-'JetBrains Mono'` no longer exists after Task 5, so a hit there would be
+'JetBrains Mono'` no longer exists after Task 6, so a hit there would be
 real). If something prints, it's a real miss from Tasks 1-6 — fix it in
 the relevant task's own file before proceeding, don't patch ad hoc
 outside any task's commit.
