@@ -1559,7 +1559,7 @@ fn Topbar(
                 if unseen > 0 {
                     span {
                         class: "badge",
-                        style: "position:absolute; top:2px; right:2px; min-width:14px; height:14px; border-radius:7px; background:var(--danger, #b91c1c); color:#fff; font-size:9px; line-height:14px; text-align:center; padding:0 3px;",
+                        style: "position:absolute; top:2px; right:2px; min-width:14px; height:14px; border-radius:7px; background:var(--danger, #b91c1c); border: 1px solid var(--color-primary); color:#fff; font-size:9px; line-height:14px; text-align:center; padding:0 3px;",
                         if unseen > 9 { "9+" } else { "{unseen}" }
                     }
                 }
@@ -3402,8 +3402,8 @@ fn AuditPanel() -> Element {
                             "Verify chain"
                         }
                         match chain_ok {
-                            Some(true) => rsx! { span { style: "color: var(--ok, #16a34a); margin-left:8px;", "✓ chain intact" } },
-                            Some(false) => rsx! { span { style: "color: var(--danger, #b91c1c); margin-left:8px;", "✗ chain verification failed" } },
+                            Some(true) => rsx! { span { style: "color: var(--ok, #16a34a); margin-left:8px;", span { class: "dial-glyph", style: "border-color: var(--ok, #16a34a);" } "chain intact" } },
+                            Some(false) => rsx! { span { style: "color: var(--danger, #b91c1c); margin-left:8px;", span { class: "dial-glyph", style: "border-color: var(--danger, #b91c1c);" } "chain verification failed" } },
                             None => rsx! { span {} },
                         }
                     }

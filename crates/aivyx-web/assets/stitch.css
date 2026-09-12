@@ -289,8 +289,8 @@ a { color: var(--color-primary); text-decoration: none; }
   border-top: 1px solid var(--color-border-ghost);
 }
 .statusbar .seg { display: inline-flex; align-items: center; gap: 7px; }
-.statusbar .seg .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-disabled); }
-.statusbar .seg.live .dot { background: var(--color-success); }
+.statusbar .seg .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-text-disabled); border: 1px solid var(--color-tertiary); }
+.statusbar .seg.live .dot { background: var(--color-success); border-color: var(--color-primary); }
 
 /* ── Components ────────────────────────────────────────────────────────────── */
 .btn {
@@ -352,6 +352,11 @@ a { color: var(--color-primary); text-decoration: none; }
 .chip.warning { background: rgba(217,123,41,0.15); color: var(--color-warning); }
 .chip.success { background: rgba(77,139,106,0.15); color: var(--color-success); }
 .chip.error { background: rgba(196,85,62,0.15); color: var(--color-error); }
+
+.dial-glyph {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  border: 1.5px solid currentColor; margin-right: 6px; vertical-align: middle;
+}
 
 .stat-card {
   display: flex; flex-direction: column; gap: 6px;
