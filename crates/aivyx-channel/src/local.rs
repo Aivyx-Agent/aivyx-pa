@@ -170,6 +170,82 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
 }
 
 // ---------------------------------------------------------------------------
+// TierOverride — trust-tier-overriding delegation wrapper.
+// ---------------------------------------------------------------------------
+
+/// Wraps any `ChannelContext` and forces `trust_tier()` to a fixed value,
+/// delegating every other method to the inner channel unchanged. Used to
+/// downgrade a trigger source (webhooks) that would otherwise construct
+/// a full-trust channel via the shared `channel_factory`, without
+/// touching that channel type's own trust semantics for its normal
+/// callers.
+///
+/// Stores the inner channel as a concrete
+/// `Arc<dyn ChannelContext + Send + Sync>` rather than a generic
+/// `C: ChannelContext` — there is exactly one call site
+/// (`trigger.rs::fire()`'s webhook branch), and `ChannelFactory` already
+/// returns that exact trait-object type, so a generic parameter would
+/// add no flexibility, only an extra type parameter to thread through
+/// call sites.
+pub struct TierOverride {
+    inner: Arc<dyn ChannelContext + Send + Sync>,
+    tier: TrustTier,
+}
+
+impl TierOverride {
+    pub fn new(inner: Arc<dyn ChannelContext + Send + Sync>, tier: TrustTier) -> Self {
+        TierOverride { inner, tier }
+    }
+}
+
+#[async_trait]
+impl ChannelContext for TierOverride {
+    fn channel_name(&self) -> &str {
+        self.inner.channel_name()
+    }
+
+    fn platform(&self) -> ChannelPlatform {
+        self.inner.platform()
+    }
+
+    fn trust_tier(&self) -> TrustTier {
+        self.tier
+    }
+
+    fn session_id(&self) -> SessionId {
+        self.inner.session_id()
+    }
+
+    async fn stream_event(&self, event: StreamEvent<'_>) -> Result<(), ChannelError> {
+        self.inner.stream_event(event).await
+    }
+
+    async fn finalize(&self, outcome: &TurnOutcome) -> Result<(), ChannelError> {
+        self.inner.finalize(outcome).await
+    }
+
+    fn cancellation_token(&self) -> CancellationToken {
+        self.inner.cancellation_token()
+    }
+
+    // Default-body methods on `ChannelContext` — delegated explicitly so
+    // this wrapper stays transparent rather than silently reverting to
+    // the trait's own default (which would ignore whatever the inner
+    // channel actually does).
+    fn session_partition(&self) -> Option<String> {
+        self.inner.session_partition()
+    }
+
+    fn reset_cancellation(&self) {
+        self.inner.reset_cancellation();
+    }
+
+    fn cancel_inflight(&self) {
+        self.inner.cancel_inflight();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -337,6 +413,134 @@ mod tests {
         assert_eq!(
             guard.flushes, 3,
             "each text chunk should trigger one flush so the user sees tokens as they arrive"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // TierOverride
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn tier_override_replaces_trust_tier_only() {
+        let (channel, _) = mem_channel();
+        let inner: Arc<dyn ChannelContext + Send + Sync> = Arc::new(channel);
+        let wrapped = TierOverride::new(Arc::clone(&inner), TrustTier::Untrusted);
+
+        assert_eq!(wrapped.trust_tier(), TrustTier::Untrusted);
+        // Everything else is untouched — delegated straight through.
+        assert_eq!(wrapped.channel_name(), inner.channel_name());
+        assert_eq!(wrapped.platform(), inner.platform());
+        assert_eq!(wrapped.session_id(), inner.session_id());
+        assert_eq!(wrapped.session_partition(), inner.session_partition());
+    }
+
+    #[tokio::test]
+    async fn tier_override_delegates_stream_event_and_finalize() {
+        let (channel, handle) = mem_channel();
+        let inner: Arc<dyn ChannelContext + Send + Sync> = Arc::new(channel);
+        let wrapped = TierOverride::new(inner, TrustTier::Untrusted);
+
+        wrapped
+            .stream_event(StreamEvent::Text("hi"))
+            .await
+            .unwrap();
+        wrapped
+            .finalize(&TurnOutcome::Completed {
+                final_message: "hi".into(),
+                tool_calls_made: 0,
+                duration: std::time::Duration::from_millis(1),
+            })
+            .await
+            .unwrap();
+
+        let out = read_output(&handle);
+        assert!(out.starts_with("hi"), "text was relayed: {out:?}");
+        assert!(
+            out.ends_with("[turn completed]\n"),
+            "finalize marker was relayed: {out:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tier_override_delegates_cancellation_token() {
+        let (channel, _) = mem_channel();
+        let cancel = channel.cancel_handle();
+        let inner: Arc<dyn ChannelContext + Send + Sync> = Arc::new(channel);
+        let wrapped = TierOverride::new(inner, TrustTier::Untrusted);
+
+        assert!(!wrapped.cancellation_token().is_cancelled());
+        cancel.cancel();
+        assert!(
+            wrapped.cancellation_token().is_cancelled(),
+            "cancellation must be visible through the wrapper"
+        );
+    }
+
+    /// A minimal fake `ChannelContext` used solely to prove `TierOverride`
+    /// calls through to the inner channel's `reset_cancellation` /
+    /// `cancel_inflight` rather than silently falling back to the
+    /// trait's own no-op defaults. `LocalChannel` itself doesn't override
+    /// those two trait methods (it exposes non-trait inherent methods of
+    /// the same name instead), so it can't distinguish "delegated" from
+    /// "used the trait default" — this fake can.
+    struct RecordingChannel {
+        reset_calls: Arc<Mutex<u32>>,
+        cancel_calls: Arc<Mutex<u32>>,
+    }
+
+    #[async_trait]
+    impl ChannelContext for RecordingChannel {
+        fn channel_name(&self) -> &str {
+            "recording"
+        }
+        fn platform(&self) -> ChannelPlatform {
+            ChannelPlatform::Local
+        }
+        fn trust_tier(&self) -> TrustTier {
+            TrustTier::Trusted
+        }
+        fn session_id(&self) -> SessionId {
+            SessionId::new()
+        }
+        async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            CancellationToken::new()
+        }
+        fn reset_cancellation(&self) {
+            *self.reset_calls.lock().unwrap() += 1;
+        }
+        fn cancel_inflight(&self) {
+            *self.cancel_calls.lock().unwrap() += 1;
+        }
+    }
+
+    #[test]
+    fn tier_override_delegates_reset_cancellation_and_cancel_inflight() {
+        let reset_calls = Arc::new(Mutex::new(0));
+        let cancel_calls = Arc::new(Mutex::new(0));
+        let inner: Arc<dyn ChannelContext + Send + Sync> = Arc::new(RecordingChannel {
+            reset_calls: Arc::clone(&reset_calls),
+            cancel_calls: Arc::clone(&cancel_calls),
+        });
+        let wrapped = TierOverride::new(inner, TrustTier::Untrusted);
+
+        wrapped.reset_cancellation();
+        wrapped.cancel_inflight();
+
+        assert_eq!(
+            *reset_calls.lock().unwrap(),
+            1,
+            "reset_cancellation must delegate to the inner channel, not the trait default"
+        );
+        assert_eq!(
+            *cancel_calls.lock().unwrap(),
+            1,
+            "cancel_inflight must delegate to the inner channel, not the trait default"
         );
     }
 }

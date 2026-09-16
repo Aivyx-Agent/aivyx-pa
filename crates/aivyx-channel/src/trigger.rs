@@ -358,7 +358,25 @@ impl TriggerDispatch {
             "aivyx-pa trigger: firing {source} {trigger_id:?} (prompt={prompt:?}, mission={wrap_mission})",
         );
 
-        let channel = (self.channel_factory)(FrontendType::Local);
+        // Chapter H (Task 2) — THREAT_MODEL.md is explicit that webhook
+        // requests run `Untrusted` by default. Every trigger source
+        // shares the same `channel_factory` (there's no per-source
+        // frontend distinction below `FrontendType::Local`), so without
+        // this branch a webhook fire got `LocalChannel`'s hardcoded
+        // `Trusted` tier — the highest capability ceiling — for a
+        // request that, even post-auth (Task 1), originates outside the
+        // operator's own shell. Scoped to `Webhook` only: every other
+        // trigger source keeps going through the unmodified
+        // `channel_factory` path unchanged.
+        let channel: Arc<dyn aivyx_core::ChannelContext + Send + Sync> =
+            if source == TriggerSource::Webhook {
+                Arc::new(crate::local::TierOverride::new(
+                    (self.channel_factory)(FrontendType::Local),
+                    aivyx_capability::TrustTier::Untrusted,
+                ))
+            } else {
+                (self.channel_factory)(FrontendType::Local)
+            };
         // Phase 67 — keep the session_id around so the audit
         // event can carry it; the same id is recorded on the
         // `TurnStarted` audit entry emitted from agent.turn().
@@ -912,6 +930,149 @@ mod tests {
     use super::*;
     use aivyx_core::{AivyxError, ToolId};
     use std::time::Duration;
+
+    // ---- Task 2 — webhook-triggered turns run at Untrusted --------
+    //
+    // `fire()` always requested `FrontendType::Local` regardless of
+    // `source`, and `LocalChannel::trust_tier()` is hardcoded `Trusted`
+    // — so a webhook-fired turn ran at the highest capability ceiling.
+    // These tests prove the fix is scoped to `TriggerSource::Webhook`
+    // only: webhook now observes `Untrusted`, while another
+    // operator-configured source (`Cron`) is unaffected and still
+    // observes `Trusted`.
+
+    mod tier_override_tests {
+        use super::*;
+        use aivyx_capability::{CapabilitySet, TrustTier};
+        use aivyx_core::{
+            AgentId, CancellationToken as CoreCancellationToken, ChannelContext, ChannelError,
+            ChannelPlatform, StreamEvent,
+        };
+        use std::sync::Mutex as StdMutex;
+
+        /// Fake `Agent` that records the trust tier of whatever channel
+        /// `fire()` actually constructed and passed to `turn()` — the
+        /// only reliable way to observe what tier a triggered turn ran
+        /// at, since `TriggerDispatch::fire` doesn't return the channel
+        /// itself.
+        struct TierCapturingAgent {
+            id: AgentId,
+            caps: CapabilitySet,
+            captured_tier: Arc<StdMutex<Option<TrustTier>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl Agent for TierCapturingAgent {
+            fn id(&self) -> AgentId {
+                self.id
+            }
+
+            fn capabilities(&self) -> &CapabilitySet {
+                &self.caps
+            }
+
+            async fn turn(&self, _message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
+                *self.captured_tier.lock().unwrap() = Some(channel.trust_tier());
+                TurnOutcome::Completed {
+                    final_message: "ok".to_string(),
+                    tool_calls_made: 0,
+                    duration: Duration::from_millis(0),
+                }
+            }
+        }
+
+        /// Minimal `ChannelContext` used as the `channel_factory`'s
+        /// `FrontendType::Local` return value. Always reports `Trusted`
+        /// — mirrors `LocalChannel::trust_tier()`'s real hardcoded
+        /// value, so a passing `cron_trigger_still_runs_at_trusted_tier`
+        /// proves the untouched path rather than an artifact of the fake.
+        struct AlwaysTrustedChannel;
+
+        #[async_trait::async_trait]
+        impl ChannelContext for AlwaysTrustedChannel {
+            fn channel_name(&self) -> &str {
+                "test-local"
+            }
+            fn platform(&self) -> ChannelPlatform {
+                ChannelPlatform::Local
+            }
+            fn trust_tier(&self) -> TrustTier {
+                TrustTier::Trusted
+            }
+            fn session_id(&self) -> SessionId {
+                SessionId::new()
+            }
+            async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            fn cancellation_token(&self) -> CoreCancellationToken {
+                CoreCancellationToken::new()
+            }
+        }
+
+        fn tier_test_dispatch(captured_tier: Arc<StdMutex<Option<TrustTier>>>) -> TriggerDispatch {
+            let channel_factory: ChannelFactory = Arc::new(|_ft: FrontendType| {
+                Arc::new(AlwaysTrustedChannel) as Arc<dyn ChannelContext + Send + Sync>
+            });
+            TriggerDispatch::new(
+                Arc::new(TierCapturingAgent {
+                    id: AgentId::new(),
+                    caps: CapabilitySet::empty(),
+                    captured_tier,
+                }),
+                channel_factory,
+            )
+        }
+
+        #[tokio::test]
+        async fn webhook_trigger_runs_at_untrusted_tier() {
+            let captured_tier = Arc::new(StdMutex::new(None));
+            let dispatch = tier_test_dispatch(Arc::clone(&captured_tier));
+
+            dispatch
+                .fire(
+                    TriggerSource::Webhook,
+                    "wh1",
+                    "do it",
+                    false,
+                    &[],
+                    aivyx_config::NotifyWhen::Always,
+                )
+                .await;
+
+            assert_eq!(
+                *captured_tier.lock().unwrap(),
+                Some(TrustTier::Untrusted),
+                "a webhook-fired turn must run at Untrusted, per THREAT_MODEL.md"
+            );
+        }
+
+        #[tokio::test]
+        async fn cron_trigger_still_runs_at_trusted_tier() {
+            let captured_tier = Arc::new(StdMutex::new(None));
+            let dispatch = tier_test_dispatch(Arc::clone(&captured_tier));
+
+            dispatch
+                .fire(
+                    TriggerSource::Cron,
+                    "cron1",
+                    "do it",
+                    false,
+                    &[],
+                    aivyx_config::NotifyWhen::Always,
+                )
+                .await;
+
+            assert_eq!(
+                *captured_tier.lock().unwrap(),
+                Some(TrustTier::Trusted),
+                "non-webhook trigger sources must be unaffected by the webhook downgrade"
+            );
+        }
+    }
 
     #[test]
     fn resolve_notify_targets_prefers_explicit_list() {
