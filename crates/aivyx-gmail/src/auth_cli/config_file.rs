@@ -73,6 +73,15 @@ pub fn load_oauth_config(path: &Path) -> Result<OAuthConfig, ConfigFileError> {
             });
         }
     };
+    // Task 5 (2026-09-16 security audit fix). This config file
+    // is operator-authored (the operator pastes their OAuth
+    // client_id/client_secret in by hand — see module docs
+    // above), so there is no software write site to give it
+    // `tokens.json`'s atomic-0600 treatment. Best-effort
+    // tighten it on every load instead; a chmod failure here
+    // (e.g. an unusual filesystem) shouldn't block loading a
+    // config that was already read successfully.
+    let _ = aivyx_auth_cli::enforce_secure_permissions(path);
     let mut cfg: OAuthConfig =
         toml::from_str(&body).map_err(|e| ConfigFileError::Parse {
             path: path.to_path_buf(),
@@ -174,6 +183,30 @@ scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
             }) => assert_eq!(p, path),
             other => panic!("expected Parse; got {other:?}"),
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_oauth_config_tightens_permissions_to_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch_dir();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            r#"client_id = "id-x.apps.googleusercontent.com"
+client_secret = "GOCSPX-xxxx"
+redirect_uri = "http://127.0.0.1:8088/oauth/callback"
+"#,
+        )
+        .unwrap();
+        // std::fs::write lands at a umask-derived mode (typically
+        // 0644) — widen explicitly so the test proves
+        // load_oauth_config does the tightening.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let _cfg = load_oauth_config(&path).expect("load");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
         std::fs::remove_dir_all(&dir).ok();
     }
 

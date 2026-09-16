@@ -456,6 +456,7 @@ dependencies = [
 name = "aivyx-gmail"
 version = "0.9.4"
 dependencies = [
+ "aivyx-auth-cli",
  "aivyx-capability",
  "aivyx-core",
  "aivyx-google-oauth",

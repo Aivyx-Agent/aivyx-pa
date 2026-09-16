@@ -29,6 +29,12 @@ aivyx-capability = { path = "../aivyx-capability" }
 # Phase 129 OAuth substrate lift — gmail's oauth/* modules
 # are now thin re-export shims wrapping the shared crate.
 aivyx-google-oauth = { path = "../aivyx-google-oauth" }
+# Task 5 (2026-09-16 security audit fix) — reuses
+# `enforce_secure_permissions` for config.toml's 0600
+# tightening rather than reimplementing it. A pure leaf
+# substrate crate (serde/toml/thiserror only), so this
+# direction carries no cycle risk.
+aivyx-auth-cli = { path = "../aivyx-auth-cli" }
 
 # Async runtime — `process` not needed (we ARE the child process);
 # `io-util` for read_frame/write_frame; `signal` is harmless.

@@ -18,7 +18,14 @@
 //!   stay on the consumer side as a separate enum.
 //! - [`default_config_path`] — computes
 //!   `$HOME/.aivyx-pa/tool-processes/<service>/config.toml`.
-//! - [`load_toml`] — generic TOML file load.
+//! - [`load_toml`] — generic TOML file load. Also
+//!   tightens the file to `0600` on Unix on every
+//!   successful load (Task 5, 2026-09-16 security
+//!   audit fix — see [`enforce_secure_permissions`]).
+//! - [`enforce_secure_permissions`] — the standalone
+//!   0600-tightening step `load_toml` uses internally,
+//!   exposed for consumers (`aivyx-gmail`) that parse
+//!   `config.toml` without going through `load_toml`.
 //! - [`StatusReport`] / [`CheckReport`] — Display-aware
 //!   report types every consumer's `auth status` and
 //!   `auth check` subcommands return.
@@ -47,5 +54,5 @@ mod config_file;
 mod report;
 
 pub use cli::{parse_cli_args, AuthMode, BinaryMode};
-pub use config_file::{default_config_path, load_toml, ConfigFileError};
+pub use config_file::{default_config_path, enforce_secure_permissions, load_toml, ConfigFileError};
 pub use report::{CheckReport, StatusReport};

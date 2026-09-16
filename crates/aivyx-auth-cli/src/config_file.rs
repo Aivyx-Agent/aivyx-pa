@@ -91,10 +91,54 @@ pub fn load_toml<T: DeserializeOwned>(path: &Path) -> Result<T, ConfigFileError>
             });
         }
     };
+    // Best-effort permission tightening. Unlike `tokens.json`
+    // (written programmatically by the OAuth flow and given
+    // atomic-0600 treatment via `write_secure` in
+    // aivyx-google-oauth's storage.rs), `config.toml` here is
+    // operator-authored — the operator hand-creates it and
+    // pastes in the Notion token / n8n API key / Google
+    // client_secret (see each consumer's doc comments). There
+    // is no software write site to apply `write_secure` to, so
+    // this is the load-time equivalent: every time a tool
+    // process starts and loads its config, permissions are
+    // normalized back to 0600 if the operator's editor (or a
+    // `cp`) left it wider. Failure here does not block loading
+    // — the file was already read successfully by this point,
+    // and refusing to start over a chmod failure (e.g. an
+    // unusual filesystem) would be a worse outcome than leaving
+    // permissions untightened for one more run.
+    let _ = enforce_secure_permissions(path);
     toml::from_str(&body).map_err(|e| ConfigFileError::Parse {
         path: path.to_path_buf(),
         reason: e.to_string(),
     })
+}
+
+/// Tighten `path` to `0600` on Unix if its current mode is
+/// wider. No-op (`Ok(())`) on non-Unix targets — matches
+/// `write_secure`'s own Unix-only enforcement in
+/// aivyx-google-oauth's storage.rs, documented there as
+/// best-effort on Windows since its ACL model is different.
+///
+/// `pub` so consumers that don't route through [`load_toml`]
+/// (`aivyx-gmail`'s `config_file.rs` parses independently, to
+/// apply its own default-scopes fallback) can still reuse this
+/// exact enforcement rather than reimplementing it.
+pub fn enforce_secure_permissions(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
+        if mode != 0o600 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -159,6 +203,39 @@ max_retries = 5"#,
         let cfg: FakeConfig = load_toml(&path).expect("ok");
         assert_eq!(cfg.api_key, "k_test");
         assert_eq!(cfg.max_retries, Some(5));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_toml_tightens_permissions_to_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = tmpfile(r#"api_key = "k_test""#);
+        // tmpfile() creates via File::create, which lands at a
+        // umask-derived mode (typically 0644) — set it
+        // explicitly to a wider mode here so the test proves
+        // load_toml is the one doing the tightening, not that
+        // the file happened to already be 0600.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let _cfg: FakeConfig = load_toml(&path).expect("load");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_toml_tightens_permissions_even_on_parse_failure() {
+        use std::os::unix::fs::PermissionsExt;
+        // Permission tightening runs before the parse attempt,
+        // so a malformed config still gets its mode fixed —
+        // the operator shouldn't have to fix the TOML first to
+        // benefit from the permission hardening.
+        let path = tmpfile("not valid ====");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let _ = load_toml::<FakeConfig>(&path).expect_err("must error");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
         let _ = std::fs::remove_file(&path);
     }
 

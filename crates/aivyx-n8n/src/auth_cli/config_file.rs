@@ -103,6 +103,25 @@ n8n_api_key = """#,
         let _ = std::fs::remove_file(&path);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn load_config_tightens_permissions_to_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        // load_config wraps aivyx_auth_cli::load_toml, which
+        // owns the actual chmod logic (see its own tests for
+        // the exhaustive cases); this confirms the tightening
+        // survives n8n's wrapper.
+        let path = tmpfile(
+            r#"n8n_base_url = "https://n8n.example.com"
+n8n_api_key = "ntn_test""#,
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let _cfg = load_config(&path).expect("load");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn accepts_valid_config() {
         let path = tmpfile(
