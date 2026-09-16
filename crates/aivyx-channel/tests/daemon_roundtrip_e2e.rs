@@ -2744,6 +2744,27 @@ async fn mission_queries_round_trip_over_ipc() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let stream = UnixStream::connect(&socket_path).await.expect("connect");
+
+    // Task 7 final review — lock in the precondition the whole
+    // stage-then-rename socket-bind fix depends on: `run_daemon` really
+    // does call `create_dir_all_0700` on the socket's parent before
+    // binding, not just in a unit test of that helper in isolation.
+    // `ScratchDir::new()` creates this directory itself at the ambient
+    // umask (see its own doc/history — that's the exact directory whose
+    // pre-fix 0755 mode this crate's own concurrent test suite once
+    // corrupted via a racy process-global umask bracket), so seeing
+    // `0700` here after a real daemon has started proves the daemon's
+    // own startup path tightens it, not merely that the helper can.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&scratch.path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "daemon startup must tighten its socket's parent dir to 0700"
+        );
+    }
+
     let (mut reader, mut writer) = stream.into_split();
     let mut buf: Vec<u8> = Vec::new();
 

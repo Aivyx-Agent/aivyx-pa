@@ -596,8 +596,19 @@ pub struct ToolDescriptor {
 /// not-yet-final name, then atomically `rename`s it onto `path`.
 /// Nothing can connect to the socket via its *final* name before the
 /// rename, and it is already `0600` the instant it becomes visible
-/// there. Same end guarantee the umask approach was after, with no
+/// *there*. Same end guarantee the umask approach was after, with no
 /// process-wide side effect to race.
+///
+/// Precise, not sloppy, about what that guarantee covers: the staging
+/// file itself is briefly at the *ambient umask*'s mode between
+/// `bind` and the `set_permissions` two lines below — a real
+/// create-then-chmod window, just relocated off the final path rather
+/// than eliminated. What actually closes that window is the parent
+/// directory (see the precondition below and `create_dir_all_0700`):
+/// a `0700` directory means no other local user can `readdir()` or
+/// even `stat()` the staging name into existence, so the mode the
+/// staging file briefly sits at doesn't matter to anyone but this
+/// user's own processes.
 ///
 /// A first version staged inside a freshly created, separately-named
 /// subdirectory instead of a same-directory sibling file. Reverted:
@@ -653,17 +664,46 @@ fn bind_unix_socket_0600(path: &Path) -> std::io::Result<UnixListener> {
     Ok(listener)
 }
 
-/// Create `dir` (and its parents) if missing, then ensure it's `0700`.
-/// Used for the daemon socket's parent directory — home-relative
-/// fallback paths (`$HOME/.local/share/aivyx-pa/`) are otherwise
-/// created via `create_dir_all` at the process's default umask, which
-/// is lower severity than the socket-file race (the socket inside
-/// still isn't reachable until it exists at 0600) but cheap to close.
+/// Create `dir`'s parents (if missing, at whatever mode `create_dir_all`
+/// gives them — not sensitive) then create `dir` itself atomically at
+/// `0700`, or tighten it to `0700` if it already existed.
+///
+/// Task 7 final review (2026-09-16) — this used to be plain
+/// `create_dir_all` (all components, ambient umask) followed by a
+/// separate `set_permissions` on just the leaf, the same create-then-
+/// chmod shape `bind_unix_socket_0600` above exists to avoid for the
+/// socket file. That window matters more than it first looks: the
+/// stage-then-rename socket bind is briefly at the *ambient umask*
+/// mode while it exists under its staging name (see that function's
+/// doc), and this directory being un-traversable by other local users
+/// is the *only* thing covering that window — so a create-then-chmod
+/// gap here reopens exactly what the socket-bind fix closed. Fixed by
+/// creating the leaf via `DirBuilder::mode(0o700)`, whose mode is
+/// passed straight to `mkdir(2)`: a umask can only clear bits from a
+/// requested mode, never add them, so `0o700` requested this way can
+/// never land wider than `0o700` regardless of the ambient umask (the
+/// stage-then-rename socket bind above needs the same "no window at a
+/// wider mode" property but a temp *file*'s create-mode argument isn't
+/// the file's final mode on most platforms the way a directory's is,
+/// which is why that fix stages-and-renames rather than relying on
+/// `mode()` alone).
 #[cfg(unix)]
 fn create_dir_all_0700(dir: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Pre-existing directory (an older version of this daemon, or
+            // simply a prior run) — tighten it the same as before this
+            // fix, same as the socket-mode fix's own "chmod out of a
+            // pre-existing wider mode" posture.
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Run the daemon server.
@@ -10146,16 +10186,20 @@ system_prompt = "You are a custom role."
     // bracket (the umask approach was tried first and reverted after
     // it broke this crate's own concurrent test suite).
     //
-    // This test proves the *final* mode is 0600, and that it holds
-    // regardless of the ambient umask (unlike the original
-    // bind-then-chmod code, this implementation never reads or
-    // depends on process umask at all, so varying it here is a
-    // genuine robustness check, not just theater). It does not by
-    // itself prove the *old* code was racy — that would need a
-    // concurrent connect-during-bind test, higher effort than this
-    // fix warrants — but the new implementation is correct by
-    // construction regardless: the socket is never visible at `path`
-    // before it's already 0600.
+    // This test proves the *final* mode is 0600. It does NOT vary the
+    // ambient umask itself (a test setting process umask would
+    // reintroduce, inside the test binary, the exact same
+    // process-global-state race this whole fix exists to avoid — this
+    // crate's own test suite runs many tests concurrently) -- but the
+    // new implementation reads or depends on process umask nowhere in
+    // its own logic (unlike the original bind-then-chmod code), so the
+    // guarantee holds regardless of the ambient umask by construction,
+    // not because this test happened to run under one particular
+    // value. It does not by itself prove the *old* code was racy —
+    // that would need a concurrent connect-during-bind test, higher
+    // effort than this fix warrants — but the new implementation is
+    // correct by construction regardless: the socket is never visible
+    // at `path` before it's already 0600.
     //
     // `#[tokio::test]`, not plain `#[test]`: `bind_unix_socket_0600`
     // wraps `tokio::net::UnixListener::bind` (matching this file's
@@ -10203,7 +10247,7 @@ system_prompt = "You are a custom role."
 
     #[cfg(unix)]
     #[test]
-    fn socket_parent_dir_created_at_0700_even_under_permissive_umask() {
+    fn fresh_socket_parent_dir_is_created_at_0700() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = std::env::temp_dir().join(format!(
@@ -10216,6 +10260,30 @@ system_prompt = "You are a custom role."
 
         let mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "dir mode was {mode:o}, expected 0700");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pre_existing_socket_parent_dir_at_a_wider_mode_is_tightened() {
+        // Task 7 final review -- create_dir_all_0700 must still close
+        // this gap for a directory an older version of this daemon (or
+        // any other process) left at a wider mode, not only get the
+        // fresh-creation case right.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "aivyx-socket-dir-tighten-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        create_dir_all_0700(&dir).unwrap();
+
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "pre-existing dir mode was {mode:o}, expected tightened to 0700");
 
         std::fs::remove_dir_all(&dir).ok();
     }
