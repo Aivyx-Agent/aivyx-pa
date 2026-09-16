@@ -9398,6 +9398,20 @@ async fn run_async(
                             );
                         } else {
                             synced += 1;
+                            // Task 1 (2026-09-16 audit) — shown exactly once,
+                            // at creation time, same as webhook.create's
+                            // tool output. This webhook now requires
+                            // `Authorization: Bearer <secret>` on every
+                            // trigger; losing this means deleting and
+                            // re-adding the `[[webhook]]` config entry.
+                            eprintln!(
+                                "aivyx-pa daemon: webhook {:?} secret (save this, shown once): {}",
+                                wh_cfg.name, record.secret
+                            );
+                            eprintln!(
+                                "aivyx-pa daemon: include it as: Authorization: Bearer {}",
+                                record.secret
+                            );
                         }
                     }
                     Ok(Some(_)) => {} // already exists in storage

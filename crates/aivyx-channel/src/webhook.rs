@@ -23,6 +23,16 @@ pub struct WebhookRecord {
     pub wrap_mission: bool,
     pub created_at: u64,
     pub last_fired_at: Option<u64>,
+    /// Task 1 (2026-09-16 audit) — the bearer secret required as
+    /// `Authorization: Bearer <secret>` on every `POST /trigger/<id>`
+    /// request. Generated once at creation ([`generate_webhook_secret`])
+    /// and never displayed again. `#[serde(default)]` so a record
+    /// persisted before this field existed deserializes instead of
+    /// erroring out; `webhook_listener::authorized` treats an empty
+    /// secret as "never authorizes" rather than letting a legacy record
+    /// silently accept an empty bearer token.
+    #[serde(default)]
+    pub secret: String,
     /// Phase 63 Task 3 — see [`crate::schedule::ScheduleRecord::notify_target`].
     #[serde(default)]
     pub notify_target: Option<String>,
@@ -51,8 +61,26 @@ impl WebhookRecord {
             notify_target: None,
             notify_targets: Vec::new(),
             notify_when: aivyx_config::NotifyWhen::Always,
+            secret: generate_webhook_secret(),
         }
     }
+}
+
+/// Generate a fresh 32-byte bearer secret for a new webhook, hex-encoded
+/// (64 chars — no padding/URL-unsafe characters to worry about in a
+/// `Bearer` header).
+///
+/// Sourced from two `Uuid::new_v4()` draws rather than a new `rand`
+/// dependency: `uuid::Uuid::new_v4()` is already this crate's documented
+/// entropy source (see `passphrase.rs`'s salt generation, "the workspace
+/// standard entropy source, same choice aivyx-storage makes for its AEAD
+/// nonces"), and neither `aivyx-channel` nor `aivyx-crypto` otherwise
+/// depends on `rand`.
+fn generate_webhook_secret() -> String {
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +159,30 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
+/// Test-only helper: create and persist a `WebhookRecord` with a
+/// caller-chosen secret (rather than the random one `WebhookRecord::new`
+/// generates), so `webhook_listener.rs`'s auth tests can assert against a
+/// known bearer token. `pub(crate)` — used from `webhook_listener.rs`'s
+/// own `#[cfg(test)]` module, not part of the crate's public API.
+#[cfg(test)]
+pub(crate) async fn create_webhook_for_test(
+    handle: &DomainHandle,
+    webhook_id: &str,
+    prompt: &str,
+    secret: String,
+) -> WebhookRecord {
+    let mut record = WebhookRecord::new(
+        webhook_id.to_string(),
+        "default".to_string(),
+        prompt.to_string(),
+    );
+    record.secret = secret;
+    create_webhook(handle, &record)
+        .await
+        .expect("create_webhook_for_test: store write must succeed");
+    record
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -174,5 +226,14 @@ mod tests {
     fn webhook_key_is_stable() {
         let k = webhook_key("my-webhook");
         assert_eq!(k, b"my-webhook");
+    }
+
+    #[test]
+    fn webhook_record_new_generates_a_nonempty_random_secret() {
+        let a = WebhookRecord::new("wh-a".into(), "default".into(), "p".into());
+        let b = WebhookRecord::new("wh-b".into(), "default".into(), "p".into());
+        assert_eq!(a.secret.len(), 64, "32 bytes hex-encoded");
+        assert!(a.secret.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a.secret, b.secret, "each webhook gets its own secret");
     }
 }

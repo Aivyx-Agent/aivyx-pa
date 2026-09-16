@@ -271,7 +271,11 @@ const AUTH_COOKIE: &str = "aivyx_web_token";
 
 /// Constant-time byte comparison — avoids leaking the token length/prefix via
 /// early-exit timing on a shared secret.
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+///
+/// `pub(crate)` so `webhook_listener.rs`'s bearer-secret auth can reuse this
+/// exact implementation rather than duplicating the compare logic (Task 1,
+/// 2026-09-16 audit).
+pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

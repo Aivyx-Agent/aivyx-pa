@@ -135,10 +135,20 @@ impl Tool for WebhookCreateTool {
             DEFAULT_WEBHOOK_PORT, webhook_id
         );
 
+        // Task 1 (2026-09-16 audit) — the bearer secret is shown exactly
+        // once, here, at creation time. `webhook.list` deliberately never
+        // includes it (see that tool's output below); losing it means
+        // deleting and recreating the webhook.
         ToolOutcome::Completed {
             output: json!({
                 "webhook_id": webhook_id,
                 "trigger_url": trigger_url,
+                "secret": record.secret,
+                "note": format!(
+                    "Save this secret now — it will not be shown again. \
+                     Trigger this webhook with: curl -X POST -H 'Authorization: Bearer {}' {}",
+                    record.secret, trigger_url
+                ),
             }),
             verified: Verification::NotApplicable,
         }
