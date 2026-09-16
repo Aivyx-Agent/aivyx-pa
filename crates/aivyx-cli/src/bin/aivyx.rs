@@ -9404,6 +9404,28 @@ async fn run_async(
                             // `Authorization: Bearer <secret>` on every
                             // trigger; losing this means deleting and
                             // re-adding the `[[webhook]]` config entry.
+                            //
+                            // Fix-round-1 (2026-09-16 review) — note for
+                            // anyone hardening this further: under a
+                            // systemd-under-linger install (a supported
+                            // deployment, see the workspace CLAUDE.md),
+                            // stderr lands in journald, which retains it
+                            // indefinitely by default (subject to the
+                            // journal's own retention/rotation policy) —
+                            // this is not a true one-time reveal in that
+                            // deployment shape. It's still the right call
+                            // for now: there's no established
+                            // sensitive-one-time-value display path
+                            // elsewhere in this codebase to reuse (checked
+                            // the master-passphrase/keyring flows in this
+                            // file — they never print the passphrase
+                            // itself), and building dedicated
+                            // secret-reveal infrastructure is out of scope
+                            // for this task. If this needs tightening
+                            // later, look at restricting journald's
+                            // storage for this unit or routing the secret
+                            // through a one-time, permission-restricted
+                            // file instead of stderr.
                             eprintln!(
                                 "aivyx-pa daemon: webhook {:?} secret (save this, shown once): {}",
                                 wh_cfg.name, record.secret

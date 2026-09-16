@@ -135,19 +135,38 @@ impl Tool for WebhookCreateTool {
             DEFAULT_WEBHOOK_PORT, webhook_id
         );
 
-        // Task 1 (2026-09-16 audit) — the bearer secret is shown exactly
-        // once, here, at creation time. `webhook.list` deliberately never
-        // includes it (see that tool's output below); losing it means
-        // deleting and recreating the webhook.
+        // Task 1 fix-round-1 (2026-09-16 review) — `webhook.create` is an
+        // agent tool: its `output` feeds straight back into the LLM's
+        // context (see aivyx-core/src/agent.rs, planner.tool_result_texts()),
+        // lands in the session transcript, and is chained into the audit
+        // log. Putting the live bearer secret in `output` therefore ships
+        // the credential to whatever cloud LLM provider is configured for
+        // this agent. Instead, print it once to the daemon's own stderr —
+        // the same mechanism the CLI's `[[webhook]]` config-sync path
+        // already uses (`aivyx-cli/src/bin/aivyx.rs`) — and keep it out of
+        // the LLM-visible/audited `output` entirely. `webhook.list`
+        // deliberately never includes it either (see that tool's output
+        // below); losing it means deleting and recreating the webhook.
+        eprintln!(
+            "aivyx-pa daemon: webhook {:?} secret (save this, shown once): {}",
+            webhook_id, record.secret
+        );
+        eprintln!(
+            "aivyx-pa daemon: include it as: Authorization: Bearer {}",
+            record.secret
+        );
+
         ToolOutcome::Completed {
             output: json!({
                 "webhook_id": webhook_id,
                 "trigger_url": trigger_url,
-                "secret": record.secret,
+                "secret": "printed to the daemon log at creation time — see stderr/journal",
                 "note": format!(
-                    "Save this secret now — it will not be shown again. \
-                     Trigger this webhook with: curl -X POST -H 'Authorization: Bearer {}' {}",
-                    record.secret, trigger_url
+                    "The bearer secret was printed to the daemon's stderr/journal \
+                     at creation time, not returned here, so it never enters this \
+                     conversation's context or the audit trail. Trigger this webhook \
+                     with: curl -X POST -H 'Authorization: Bearer <secret>' {}",
+                    trigger_url
                 ),
             }),
             verified: Verification::NotApplicable,
@@ -394,6 +413,81 @@ impl Tool for WebhookDeleteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aivyx_core::{
+        AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform, SessionId,
+        StreamEvent, TurnId, TurnOutcome,
+    };
+    use aivyx_crypto::MasterKey;
+    use aivyx_storage::{RedbStorage, StorageConfig};
+
+    // Mirrors `reminder_tool.rs`'s own test scaffolding (`NoopChannel`/
+    // `NoopAudit`/`make_ctx`) — no such helper is exported across crates,
+    // so it's re-rolled locally, `#[cfg(test)]`-only.
+    struct NoopChannel {
+        session: SessionId,
+        token: CancellationToken,
+    }
+    #[async_trait]
+    impl ChannelContext for NoopChannel {
+        fn session_id(&self) -> SessionId {
+            self.session
+        }
+        fn platform(&self) -> ChannelPlatform {
+            ChannelPlatform::Local
+        }
+        fn channel_name(&self) -> &str {
+            "test"
+        }
+        fn trust_tier(&self) -> aivyx_capability::TrustTier {
+            aivyx_capability::TrustTier::Trusted
+        }
+        async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.token.clone()
+        }
+    }
+    struct NoopAudit;
+    impl aivyx_core::AuditHook for NoopAudit {
+        fn on_event(&self, _tag: aivyx_core::AuditTag) {}
+    }
+    fn ctx_parts() -> (NoopChannel, NoopAudit) {
+        (
+            NoopChannel {
+                session: SessionId::new(),
+                token: CancellationToken::new(),
+            },
+            NoopAudit,
+        )
+    }
+    fn make_ctx<'a>(ch: &'a NoopChannel, audit: &'a dyn aivyx_core::AuditHook) -> ToolContext<'a> {
+        ToolContext {
+            agent_id: AgentId::new(),
+            session_id: ch.session,
+            turn_id: TurnId::new(),
+            channel: ch,
+            audit,
+            cancellation: &ch.token,
+            message_origin: aivyx_core::MessageOrigin::Operator,
+        }
+    }
+
+    async fn test_store() -> DomainHandle {
+        let dir =
+            std::env::temp_dir().join(format!("aivyx-webhook-tool-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([11u8; 32]),
+        )
+        .await
+        .unwrap();
+        storage.domain(KeyDomain::Webhooks)
+    }
 
     #[test]
     fn webhook_create_scope() {
@@ -442,5 +536,61 @@ mod tests {
         assert_eq!(tool.name(), "webhook.delete");
         let schema = tool.input_schema();
         assert!(schema["required"].as_array().unwrap().contains(&json!("webhook_id")));
+    }
+
+    /// Task 1 fix-round-1 (2026-09-16 review) — `webhook.create`'s returned
+    /// `output` feeds straight back into the LLM's context, so it must
+    /// never carry the live bearer secret. This test creates a real
+    /// webhook through the tool, pulls the actual persisted secret out of
+    /// storage independently, and asserts that exact value is absent from
+    /// the tool's JSON output (recursively, not just at the top level).
+    #[tokio::test]
+    async fn webhook_create_output_never_contains_the_raw_secret() {
+        let handle = test_store().await;
+        let tool = WebhookCreateTool::new();
+        tool.set_webhook_store(handle.clone()).unwrap();
+        let (ch, audit) = ctx_parts();
+        let ctx = make_ctx(&ch, &audit);
+
+        let out = tool
+            .execute(json!({ "prompt": "do the thing" }), &ctx)
+            .await;
+        let output = match out {
+            ToolOutcome::Completed { output, .. } => output,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+
+        let webhook_id = output["webhook_id"].as_str().unwrap().to_string();
+        let record = webhook::get_webhook(&handle, &webhook_id)
+            .await
+            .unwrap()
+            .expect("webhook was persisted");
+        assert!(
+            !record.secret.is_empty(),
+            "sanity check: a real secret must have been generated"
+        );
+
+        // Recursively walk the JSON output and assert the raw secret
+        // string never appears anywhere in it — not in `secret`, not
+        // folded into `note`, not anywhere else.
+        fn contains_str(value: &Value, needle: &str) -> bool {
+            match value {
+                Value::String(s) => s.contains(needle),
+                Value::Array(items) => items.iter().any(|v| contains_str(v, needle)),
+                Value::Object(map) => map.values().any(|v| contains_str(v, needle)),
+                _ => false,
+            }
+        }
+        assert!(
+            !contains_str(&output, &record.secret),
+            "tool output must not contain the raw webhook secret: {output}"
+        );
+
+        // The placeholder `secret` field should say where to actually find
+        // it, not contain the credential itself.
+        assert_eq!(
+            output["secret"],
+            json!("printed to the daemon log at creation time — see stderr/journal")
+        );
     }
 }
