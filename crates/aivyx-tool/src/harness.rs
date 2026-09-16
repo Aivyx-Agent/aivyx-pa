@@ -147,11 +147,13 @@ fn outcome_to_wire(call_id: String, outcome: ToolOutcome) -> ToolToDaemon {
                  the parent enforces rate limits before InvokeTool)"
             ),
         },
-        ToolOutcome::RequiresEscalation { reason, .. } => ToolToDaemon::ToolError {
-            call_id,
-            code: "requires_escalation".into(),
-            message: reason,
-        },
+        // Task 4 (HIGH, 2026-09-16 audit) — see `multi_harness.rs`'s
+        // identical `outcome_to_wire` for the full rationale: this used
+        // to flatten into a generic `ToolError`, so the daemon-side
+        // `ToolProxy::execute` could never see a real escalation.
+        ToolOutcome::RequiresEscalation { reason, .. } => {
+            ToolToDaemon::RequiresEscalation { call_id, reason }
+        }
         ToolOutcome::Failed(err) => ToolToDaemon::ToolError {
             call_id,
             code: "tool_failed".into(),

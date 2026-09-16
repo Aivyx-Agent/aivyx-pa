@@ -547,6 +547,46 @@ pub fn is_irreversible_base(base: &str) -> bool {
     IRREVERSIBLE_BASES.contains(&base)
 }
 
+/// Third-party/OAuth integration write/send/delete/archive bases —
+/// Task 4 (HIGH security fix, 2026-09-16 audit). Derived from the real
+/// `Scope::parse(...)` call sites in `aivyx-gmail`, `aivyx-drive`,
+/// `aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n`, `aivyx-contacts`, and
+/// `aivyx-calendar` — every base one of those crates' write/send/delete/
+/// archive tools declares as its `required_scope()`. Deletion and
+/// archival actions in these integrations share their service's single
+/// `.write` base (e.g. `drive.delete_file` needs `drive.write`, same as
+/// `drive.create_folder`) rather than a separate `.delete` base, so this
+/// list has one entry per service except Gmail (which splits `email.write`
+/// — drafts — from `email.send` — immediate, irreversible delivery).
+///
+/// Two independent consumers share this single list so it cannot drift
+/// between them (mirrors the `IRREVERSIBLE_BASES` pattern just above):
+/// `aivyx-tool::ToolProxy::auto_grantable_in_backcompat_floor` (withhold
+/// these from the operator's backcompat floor grant — an operator must
+/// explicitly declare them in a role's `capability_scopes`) and
+/// `aivyx-core::agent`'s turn loop (even once explicitly granted, gate
+/// each call behind `[access] confirm_destructive`).
+const WITHHELD_INTEGRATION_BASES: &[&str] = &[
+    "email.write",
+    "email.send",
+    "drive.write",
+    "notion.write",
+    "obsidian.write",
+    "n8n.write",
+    "contacts.write",
+    "calendar.write",
+];
+
+/// Whether a capability `base` names a third-party/OAuth integration
+/// write/send/delete/archive action that must stay withheld from the
+/// backcompat floor grant and, once explicitly granted, still needs a
+/// per-call `[access] confirm_destructive` gate. See
+/// [`WITHHELD_INTEGRATION_BASES`]. Unknown bases return `false` — same
+/// deny-by-default posture as [`is_irreversible_base`].
+pub fn is_withheld_integration_base(base: &str) -> bool {
+    WITHHELD_INTEGRATION_BASES.contains(&base)
+}
+
 // ---------------------------------------------------------------------------
 // Scope
 // ---------------------------------------------------------------------------
@@ -1320,6 +1360,54 @@ mod tests {
             assert!(
                 KNOWN_BASES.contains(base),
                 "irreversible base `{base}` is not in KNOWN_BASES (typo?)"
+            );
+        }
+    }
+
+    // ---- Task 4 (HIGH, 2026-09-16 audit) — withheld integration bases ----
+
+    #[test]
+    fn withheld_integration_bases_classify_correctly() {
+        for base in [
+            "email.write",
+            "email.send",
+            "drive.write",
+            "notion.write",
+            "obsidian.write",
+            "n8n.write",
+            "contacts.write",
+            "calendar.write",
+        ] {
+            assert!(is_withheld_integration_base(base), "{base} must be withheld");
+        }
+        // Read-only integration bases stay auto-grantable / unconfirmed.
+        for base in [
+            "email.read",
+            "drive.read",
+            "notion.read",
+            "obsidian.read",
+            "n8n.read",
+            "contacts.read",
+            "calendar.read",
+        ] {
+            assert!(
+                !is_withheld_integration_base(base),
+                "{base} must not be withheld"
+            );
+        }
+        assert!(!is_withheld_integration_base("totally.unknown"));
+    }
+
+    /// Drift guard: every withheld integration base must be a real
+    /// `KNOWN_BASES` entry, so a typo here is caught rather than silently
+    /// never matching a scope (same rationale as the irreversible-bases
+    /// guard just above).
+    #[test]
+    fn every_withheld_integration_base_is_a_known_base() {
+        for base in WITHHELD_INTEGRATION_BASES {
+            assert!(
+                KNOWN_BASES.contains(base),
+                "withheld integration base `{base}` is not in KNOWN_BASES (typo?)"
             );
         }
     }

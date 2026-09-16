@@ -238,6 +238,28 @@ pub struct ConcreteAgent {
     /// Matched exactly against `Tool::name()`. Empty (the default)
     /// preserves Chapter Picket's original behavior byte-for-byte.
     injection_scan_exempt: std::collections::BTreeSet<String>,
+    /// Task 4 (HIGH, 2026-09-16 audit) — mirrors `[access]
+    /// confirm_destructive` (the same config field `fs.rs`/`git.rs`
+    /// already read, threaded here too rather than duplicated as a new
+    /// knob). `false` (the default) preserves pre-Task-4 behavior
+    /// byte-for-byte. When `true`, the dispatch layer refuses to call
+    /// any tool whose `required_scope(&input).base()` is a withheld
+    /// third-party-integration base (`aivyx_capability::
+    /// is_withheld_integration_base`) — e.g. `email.send`,
+    /// `drive.write` — even once a role has explicitly granted it,
+    /// returning `ToolOutcome::RequiresEscalation` instead of
+    /// executing. Unlike `fs.rs`/`git.rs`'s in-turn `confirmed: true`
+    /// retry (those tools declare `confirmed` in their own schema),
+    /// third-party integration tool schemas are declared by their own
+    /// crate with `additionalProperties: false` and have no `confirmed`
+    /// property to set — a model literally cannot pass one; input
+    /// validation would reject it before dispatch ever saw it. So this
+    /// gate always escalates rather than looking for an unreachable
+    /// per-call opt-out: the real "confirmation" is the operator
+    /// approving (or not) the resulting `TurnOutcome::Escalated`
+    /// out-of-band, the same resolution path already used by every
+    /// other `RequiresEscalation` source in this codebase.
+    confirm_destructive: bool,
 }
 
 impl ConcreteAgent {
@@ -265,6 +287,7 @@ impl ConcreteAgent {
             checkpointer: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
+            confirm_destructive: false,
         }
     }
 
@@ -374,6 +397,16 @@ impl ConcreteAgent {
         exempt: std::collections::BTreeSet<String>,
     ) -> Self {
         self.injection_scan_exempt = exempt;
+        self
+    }
+
+    /// Task 4 (HIGH, 2026-09-16 audit) — thread the operator's `[access]
+    /// confirm_destructive` setting into the dispatch layer's
+    /// withheld-integration-scope confirm gate. See the
+    /// [`Self::confirm_destructive`] field doc for the full contract.
+    /// `false` (the default) preserves pre-Task-4 behavior byte-for-byte.
+    pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
+        self.confirm_destructive = confirm;
         self
     }
 }
@@ -1446,8 +1479,50 @@ impl ConcreteAgent {
             checkpointer.checkpoint(tool.name(), cancellation).await;
         }
 
+        // Task 4 (HIGH, 2026-09-16 audit) — pre-dispatch confirm gate
+        // for third-party-integration write/send/delete/archive scopes.
+        // Placed here (after the capability grant above already passed,
+        // immediately before `tool.execute`) so it only ever fires for
+        // a scope the active role explicitly holds — an operator who
+        // granted `email.send` still gets a per-call pause, mirroring
+        // `fs.rs`/`git.rs`'s `confirm_destructive` gate for in-tree
+        // destructive ops.
+        //
+        // Unlike those, this can't look for an inline `confirmed: true`
+        // re-call: `fs.rs`/`git.rs` declare a `confirmed` property in
+        // their own schema, but a third-party-integration tool's schema
+        // is declared by its own crate with `additionalProperties:
+        // false` and no such property (`crates/aivyx-gmail/src/tools/
+        // send.rs`'s schema, for example) — a model literally cannot
+        // set it; the JSON-schema validation earlier in this function
+        // would reject the input before dispatch ever reached here.
+        // So this gate always escalates rather than checking for an
+        // unreachable per-call opt-out. The real confirmation loop is
+        // the standard `RequiresEscalation` / `TurnOutcome::Escalated`
+        // resolution path — the operator approves (or doesn't) out of
+        // band — the same mechanism any other escalating tool already
+        // uses; this task does not invent a second one.
+        let needs_destructive_confirmation = self.confirm_destructive
+            && aivyx_capability::is_withheld_integration_base(needed.base());
+
         let step_start = Instant::now();
-        let mut outcome = tool.execute(input, &ctx).await;
+        let mut outcome = if needs_destructive_confirmation {
+            ToolOutcome::RequiresEscalation {
+                reason: format!(
+                    "{tool_name} needs operator confirmation before it can run: \
+                     `[access] confirm_destructive` is enabled and `{}` is a \
+                     third-party-integration scope Aivyx PA never auto-confirms, \
+                     even once a role explicitly holds it. Show the operator \
+                     exactly what this call will do and get their explicit \
+                     approval before retrying.",
+                    needed.base()
+                ),
+                // Stamped below like any other RequiresEscalation (RN.3).
+                scope: None,
+            }
+        } else {
+            tool.execute(input, &ctx).await
+        };
         let step_duration = step_start.elapsed();
 
         // Chapter Reins (RN.3) — stamp an escalation with the authoritative
@@ -5628,6 +5703,108 @@ mod tests {
             }
             other => panic!("expected TurnEnded, got {other:?}"),
         }
+    }
+
+    // ---- Task 4 (HIGH, 2026-09-16 audit) — confirm_destructive gate ----
+
+    #[tokio::test]
+    async fn granted_email_send_scope_still_requires_confirmation_when_confirm_destructive_is_on()
+    {
+        let audit = RecordingAudit::new();
+
+        // A tool that would happily complete — proves the gate stops the
+        // call *before* `execute`, not by the tool itself refusing.
+        let tool = Arc::new(FakeTool::new_bare("gmail.send", "email.send"));
+        let tool_id = tool.id();
+
+        // The role explicitly holds `email.send` — bypasses the floor-
+        // grant question entirely (Steps 2-5). This test is about the
+        // confirm gate, not the floor.
+        let agent_caps = CapabilitySet::from_scopes([Scope::parse("email.send").unwrap()]);
+
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("should not reach here".to_string()),
+        ];
+
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan)
+            .with_confirm_destructive(true);
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "send the email");
+        let outcome = agent.turn(message, &channel).await;
+
+        match outcome {
+            TurnOutcome::Escalated {
+                pending_tool,
+                scope,
+                tool_calls_made,
+                ..
+            } => {
+                assert_eq!(pending_tool, tool_id);
+                assert_eq!(tool_calls_made, 1);
+                assert_eq!(
+                    scope.as_ref().map(|s| s.base()),
+                    Some("email.send"),
+                    "the escalation must carry the withheld scope"
+                );
+            }
+            other => panic!(
+                "expected Escalated — a granted but withheld destructive scope \
+                 must still pause for operator confirmation when \
+                 confirm_destructive is on; got {other:?}"
+            ),
+        }
+
+        // The tool must never have run: no ToolResult-bearing side
+        // effect, and the audit's ToolCall entry (still emitted — D1:
+        // no action, attempted or not, goes unaudited) records the
+        // escalation, not a Completed outcome.
+        let events = audit.snapshot();
+        let tool_call = events
+            .iter()
+            .find_map(|e| match e {
+                AuditTag::ToolCall { outcome, .. } => Some(outcome),
+                _ => None,
+            })
+            .expect("ToolCall must be audited even when the confirm gate short-circuits");
+        assert_eq!(*tool_call, ToolOutcomeSummary::RequiresEscalation);
+    }
+
+    #[tokio::test]
+    async fn granted_email_send_scope_completes_normally_when_confirm_destructive_is_off() {
+        // Companion to the test above: same granted scope, same
+        // destructive tool, but `confirm_destructive` is off (the
+        // default) — proves the gate is opt-in and doesn't regress the
+        // pre-Task-4 happy path.
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("gmail.send", "email.send"));
+        let tool_id = tool.id();
+        let agent_caps = CapabilitySet::from_scopes([Scope::parse("email.send").unwrap()]);
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ];
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan);
+
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let message = Message::text(channel.session, "send the email");
+        let outcome = agent.turn(message, &channel).await;
+
+        assert!(
+            matches!(outcome, TurnOutcome::Completed { .. }),
+            "confirm_destructive off must preserve the pre-Task-4 happy path; got {outcome:?}"
+        );
     }
 
     struct UntrustedContentTool {

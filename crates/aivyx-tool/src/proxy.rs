@@ -121,16 +121,25 @@ impl Tool for ToolProxy {
         true
     }
 
-    // Every tool-process-sourced tool (kitchen, `applications`, any
-    // future vertical toolkit) is here because the operator explicitly
-    // configured a `[[tool_process]]` entry -- that configuration act
-    // IS the opt-in. `scope_overrides` (the daemon's own
-    // narrower-than-declared override mechanism) is already folded into
+    // Task 4 (HIGH, 2026-09-16 audit) — a tool-process tool being
+    // *configured* (the `[[tool_process]]` entry existing at all) is
+    // NOT the same act as the operator reviewing and opting in a
+    // specific destructive scope base. `aivyx_core::Tool`'s own trait
+    // doc contract is explicit: third-party/OAuth integrations "stay
+    // withheld unless a maintainer has explicitly reviewed the base and
+    // opted it in" — this impl used to unconditionally return `true`
+    // for every tool-process tool, which contradicted that contract for
+    // every Gmail/Drive/Notion/Obsidian/N8N/Contacts/Calendar write,
+    // send, delete, or archive tool. `scope_overrides` (the daemon's own
+    // narrower-than-declared override mechanism) is still folded into
     // `required_scope()` by construction, so the floor grant reflects
-    // whatever the operator actually authorized, not the toolkit's own
-    // raw declaration.
+    // whatever the operator actually authorized, not the tool's raw
+    // declaration — but a withheld base stays withheld from the floor
+    // even if an operator override still names it; the floor grant is a
+    // *default*, not the only way to obtain the scope (a role's own
+    // `capability_scopes` can still grant it explicitly).
     fn auto_grantable_in_backcompat_floor(&self) -> bool {
-        true
+        !aivyx_capability::is_withheld_integration_base(self.required_scope.base())
     }
 
     async fn execute(&self, input: Value, context: &ToolContext<'_>) -> ToolOutcome {
@@ -264,6 +273,21 @@ impl Tool for ToolProxy {
                     "tool `{tool_name}` returned error [{code}]: {message}"
                 )))
             }
+            // Task 4 (HIGH, 2026-09-16 audit) — the other half of the
+            // same flattening fix, on the daemon side: this used to be
+            // unreachable (the tool-process side only ever emitted
+            // `InvocationOutcome::ToolError { code: "requires_escalation",
+            // .. }`). `scope: None` is correct, not a placeholder — the
+            // turn loop (`aivyx-core/src/agent.rs`, RN.3) always
+            // overwrites it with the authoritative `required_scope` it
+            // just checked before dispatch, discarding any scope a tool
+            // itself would have supplied.
+            Ok(InvocationOutcome::RequiresEscalation { reason }) => {
+                ToolOutcome::RequiresEscalation {
+                    reason,
+                    scope: None,
+                }
+            }
             Err(e) => ToolOutcome::Failed(AivyxError::Internal(format!(
                 "tool bridge error for `{tool_name}`: {e}"
             ))),
@@ -282,6 +306,7 @@ fn map_verification(v: WireVerification) -> Verification {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bridge::ToolProcessConfig;
 
     #[test]
     fn map_verification_covers_all_variants() {
@@ -297,5 +322,94 @@ mod tests {
             map_verification(WireVerification::NotApplicable),
             Verification::NotApplicable
         ));
+    }
+
+    // ---- Task 4 (HIGH, 2026-09-16 audit) — floor-grant scope gate ----
+
+    /// Minimal inline Python tool process: completes the `ToolHello` →
+    /// `ToolRegister` handshake (registering one throwaway `noop` tool
+    /// with an irrelevant scope) and then blocks on its next read.
+    /// `auto_grantable_in_backcompat_floor` never touches the bridge —
+    /// only `ToolProxy::new`'s own `required_scope_str` argument — but
+    /// building a `ToolProxy` at all requires a real, handshaked
+    /// `ToolProcessBridge`, so a live subprocess is unavoidable here
+    /// (same pattern `bridge.rs`'s own tests already use).
+    const HANDSHAKE_ONLY_SCRIPT: &str = r#"
+import sys, json, struct
+
+def read_frame():
+    hdr = sys.stdin.buffer.read(4)
+    if not hdr or len(hdr) < 4:
+        return None
+    (n,) = struct.unpack(">I", hdr)
+    return json.loads(sys.stdin.buffer.read(n).decode("utf-8"))
+
+def write_frame(msg):
+    body = json.dumps(msg).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+
+hello = read_frame()
+assert hello["type"] == "ToolHello"
+write_frame({
+    "type": "ToolRegister",
+    "tool_process_name": "test-tool",
+    "tools": [{
+        "name": "noop",
+        "description": "noop",
+        "input_schema": {"type": "object"},
+        "required_scope": "memory.read"
+    }]
+})
+# Block until the parent drops the pipe (test end), then exit quietly.
+read_frame()
+"#;
+
+    /// Build a `ToolProxy` whose `required_scope` is `scope_str`,
+    /// backed by a live handshake-only tool process. Returns `None`
+    /// (test should skip, not fail) when `python3` is unavailable —
+    /// mirrors `bridge.rs`'s own conformance tests.
+    async fn test_proxy_with_scope(scope_str: &str) -> Option<ToolProxy> {
+        let config = ToolProcessConfig {
+            name: "test".into(),
+            command: "python3".into(),
+            args: vec!["-c".into(), HANDSHAKE_ONLY_SCRIPT.into()],
+            env: vec![],
+            sandbox: None,
+            notification_sink: None,
+        };
+        let bridge = match crate::bridge::ToolProcessBridge::spawn(config).await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skipping: python3 unavailable: {e}");
+                return None;
+            }
+        };
+        Some(
+            ToolProxy::new(
+                Arc::new(bridge),
+                "test-tool".into(),
+                "a tool for testing".into(),
+                serde_json::json!({"type": "object"}),
+                scope_str,
+            )
+            .expect("scope_str must parse"),
+        )
+    }
+
+    #[tokio::test]
+    async fn write_scoped_tool_proxy_is_not_auto_grantable_in_backcompat_floor() {
+        let Some(proxy) = test_proxy_with_scope("email.send").await else {
+            return;
+        };
+        assert!(!proxy.auto_grantable_in_backcompat_floor());
+    }
+
+    #[tokio::test]
+    async fn read_scoped_tool_proxy_is_still_auto_grantable_in_backcompat_floor() {
+        let Some(proxy) = test_proxy_with_scope("email.read").await else {
+            return;
+        };
+        assert!(proxy.auto_grantable_in_backcompat_floor());
     }
 }

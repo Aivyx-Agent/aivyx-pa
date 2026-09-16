@@ -78,6 +78,14 @@ pub enum InvocationOutcome {
         code: String,
         message: String,
     },
+    /// Task 4 (HIGH, 2026-09-16 audit) — mirrors
+    /// `wire::ToolToDaemon::RequiresEscalation`. Kept distinct from
+    /// `ToolError` so `ToolProxy::execute` can map it onto the real
+    /// `aivyx_core::ToolOutcome::RequiresEscalation` instead of a
+    /// generic `Failed`.
+    RequiresEscalation {
+        reason: String,
+    },
 }
 
 /// One message pumped from the reader loop to a pending invocation.
@@ -432,6 +440,13 @@ async fn reader_loop(
                 if let Some(tx) = pending.lock().await.remove(&call_id) {
                     let _ = tx.send(BridgeMessage::Outcome(
                         InvocationOutcome::ToolError { code, message },
+                    ));
+                }
+            }
+            ToolToDaemon::RequiresEscalation { call_id, reason } => {
+                if let Some(tx) = pending.lock().await.remove(&call_id) {
+                    let _ = tx.send(BridgeMessage::Outcome(
+                        InvocationOutcome::RequiresEscalation { reason },
                     ));
                 }
             }

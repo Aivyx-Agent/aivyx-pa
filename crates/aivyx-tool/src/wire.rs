@@ -78,6 +78,21 @@ pub enum ToolToDaemon {
         code: String,
         message: String,
     },
+    /// Terminal — Task 4 (HIGH, 2026-09-16 audit). The tool needs
+    /// operator escalation before it can proceed (mirrors
+    /// `aivyx_core::ToolOutcome::RequiresEscalation`). Previously
+    /// flattened into `ToolError { code: "requires_escalation", .. }`,
+    /// which meant an out-of-process tool's escalation request reached
+    /// the daemon as a generic failure instead of the turn loop's real
+    /// `TurnOutcome::Escalated` handling. `scope` is deliberately not
+    /// carried on the wire: the daemon-side turn loop always overwrites
+    /// it with the authoritative `required_scope` it just checked (see
+    /// `ToolOutcome::RequiresEscalation`'s own doc — RN.3), so a tool
+    /// process's opinion of its own scope would be discarded anyway.
+    RequiresEscalation {
+        call_id: String,
+        reason: String,
+    },
     /// Phase 191 — a tool process pushes a notification with no
     /// preceding `InvokeTool` (no `call_id`: this isn't a response
     /// to anything, it fires from the tool process's own background
@@ -203,6 +218,11 @@ mod tests {
             call_id: "c-1".into(),
             code: "internal".into(),
             message: "boom".into(),
+        });
+        // Task 4 (HIGH, 2026-09-16 audit).
+        roundtrip(&ToolToDaemon::RequiresEscalation {
+            call_id: "c-1".into(),
+            reason: "operator approval needed".into(),
         });
     }
 

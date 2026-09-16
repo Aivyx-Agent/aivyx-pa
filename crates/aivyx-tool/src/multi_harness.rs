@@ -390,11 +390,17 @@ fn outcome_to_wire(call_id: String, outcome: ToolOutcome) -> ToolToDaemon {
                  the parent enforces rate limits before InvokeTool)"
             ),
         },
-        ToolOutcome::RequiresEscalation { reason, .. } => ToolToDaemon::ToolError {
-            call_id,
-            code: "requires_escalation".into(),
-            message: reason,
-        },
+        // Task 4 (HIGH, 2026-09-16 audit) — previously flattened into
+        // `ToolToDaemon::ToolError { code: "requires_escalation", .. }`,
+        // which meant `ToolProxy::execute` (daemon side) could only ever
+        // see a generic failure and never routed through the turn
+        // loop's real `TurnOutcome::Escalated` handling. `scope` is not
+        // carried across the wire: the turn loop always overwrites it
+        // with the authoritative `required_scope` it just checked (RN.3),
+        // so the tool process's own opinion would be discarded anyway.
+        ToolOutcome::RequiresEscalation { reason, .. } => {
+            ToolToDaemon::RequiresEscalation { call_id, reason }
+        }
         ToolOutcome::Failed(err) => ToolToDaemon::ToolError {
             call_id,
             code: "tool_failed".into(),
@@ -481,6 +487,26 @@ mod tests {
                 assert_eq!(output["k"], 1);
             }
             other => panic!("expected ToolResult; got {other:?}"),
+        }
+    }
+
+    // ---- Task 4 (HIGH, 2026-09-16 audit) — stop flattening escalation ----
+
+    #[test]
+    fn outcome_to_wire_requires_escalation_yields_wire_requires_escalation_not_tool_error() {
+        let outcome = ToolOutcome::RequiresEscalation {
+            reason: "operator approval needed".to_string(),
+            scope: None,
+        };
+        match outcome_to_wire("c-3".into(), outcome) {
+            ToolToDaemon::RequiresEscalation { call_id, reason } => {
+                assert_eq!(call_id, "c-3");
+                assert_eq!(reason, "operator approval needed");
+            }
+            other => panic!(
+                "expected ToolToDaemon::RequiresEscalation (not flattened into a \
+                 generic ToolError); got {other:?}"
+            ),
         }
     }
 
