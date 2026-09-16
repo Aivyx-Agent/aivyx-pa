@@ -137,6 +137,25 @@ struct ParsedAddInput {
 fn parse_add_input(input: &Value) -> Result<ParsedAddInput, String> {
     let name = required_string(input, "name")?;
     let url = required_string(input, "url")?;
+    // Chapter Rampart, applied here rather than daemon-side: this
+    // watcher persists and gets probed on an operator-chosen interval
+    // from this tool-process subprocess, which the daemon-side
+    // EgressPolicy instance guarding web.fetch/web.extract/web.post
+    // structurally cannot reach. Reuse the same classify() check
+    // directly here so a model-chosen metadata/loopback/private-network
+    // URL is refused before it's ever persisted.
+    //
+    // Known simplification: this uses EgressPolicy::default() (SSRF
+    // guard on, no host allow-list) rather than the operator's real
+    // `[access]` config, which lives daemon-side and isn't reachable
+    // from this tool-process crate without new IPC plumbing. The
+    // default policy still closes the metadata/loopback/private-network
+    // cases, which is the exploit this fix targets; an operator-
+    // configured host allow-list for this specific tool is a smaller
+    // follow-on, not required to close the reported vulnerability.
+    if let Some(reason) = aivyx_core::egress::EgressPolicy::default().classify(&url) {
+        return Err(format!("refusing to reach {url} — {reason}."));
+    }
     let interval_secs = input
         .get("interval_secs")
         .and_then(|v| v.as_u64())
@@ -571,6 +590,40 @@ mod tests {
             .expect_err("must error");
             assert!(e.contains("100-599"), "for {bad}: {e}");
         }
+    }
+
+    // ---- Chapter Rampart — parse_add_input URL validation ----
+
+    #[test]
+    fn add_rejects_a_cloud_metadata_url() {
+        let err = parse_add_input(&json!({
+            "name": "metadata-probe",
+            "url": "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+            "interval_secs": 60
+        }))
+        .expect_err("cloud-metadata URL must be refused");
+        assert!(err.contains("169.254.169.254"), "{err}");
+    }
+
+    #[test]
+    fn add_rejects_a_loopback_url() {
+        let err = parse_add_input(&json!({
+            "name": "loopback-probe",
+            "url": "http://127.0.0.1:9999/",
+            "interval_secs": 60
+        }))
+        .expect_err("loopback URL must be refused");
+        assert!(err.contains("127.0.0.1"), "{err}");
+    }
+
+    #[test]
+    fn add_still_accepts_a_public_url() {
+        let ok = parse_add_input(&json!({
+            "name": "public-probe",
+            "url": "https://example.com/status",
+            "interval_secs": 60
+        }));
+        assert!(ok.is_ok(), "{ok:?}");
     }
 
     // ---- parse_window_minutes ----------------------------
