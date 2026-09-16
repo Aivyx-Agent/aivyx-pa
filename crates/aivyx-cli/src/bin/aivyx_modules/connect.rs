@@ -129,8 +129,9 @@ fn escape(s: &str) -> String {
 }
 
 /// Write the OAuth `config.toml` for `service` under `home`,
-/// creating the per-tool-process dir and chmod'ing the file to
-/// `0600`. Returns the path written.
+/// creating the per-tool-process dir and writing the file at
+/// `0600` atomically (no window at a wider mode). Returns the
+/// path written.
 pub fn write_oauth_config(
     service: &ConnectService,
     home: &Path,
@@ -142,19 +143,36 @@ pub fn write_oauth_config(
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let path = service.config_path(home);
     let body = render_oauth_config_toml(client_id, client_secret, &service.redirect_uri());
-    std::fs::write(&path, body).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
-    set_file_0600(&path);
+    write_file_at_0600(&path, body.as_bytes())
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
     Ok(path)
 }
 
+/// Create (or truncate) `path` and write `body` to it, at `0600` from the
+/// moment the file exists — never a `write`-then-`chmod` window at a wider
+/// mode (Task 5, 2026-09-16 security audit: the prior `std::fs::write` +
+/// `set_file_0600` two-step here left exactly that window for every
+/// `config.toml` this module writes). Mirrors `aivyx-google-oauth/src/
+/// storage.rs`'s `write_secure` pattern, synchronously (this module has no
+/// async runtime).
 #[cfg(unix)]
-pub(crate) fn set_file_0600(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+pub(crate) fn write_file_at_0600(path: &Path, body: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(body)?;
+    file.sync_all()
 }
 
 #[cfg(not(unix))]
-pub(crate) fn set_file_0600(_path: &Path) {}
+pub(crate) fn write_file_at_0600(path: &Path, body: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, body)
+}
 
 // ---------------------------------------------------------------------------
 // The guided flow.
@@ -708,6 +726,22 @@ mod tests {
         // Simulate a successful auth init writing tokens.json.
         std::fs::write(svc.token_path(&tmp), "{}").unwrap();
         assert!(svc.is_connected(&tmp));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_oauth_config_is_0600() {
+        // Task 5 follow-up (final review) -- this write site was found to
+        // still use a write-then-chmod two-step (a real, if narrow, window
+        // at the default/umask mode) after the rest of Task 5 moved every
+        // other config.toml write onto an atomic create-at-0600 pattern.
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = std::env::temp_dir().join(format!("aivyx-connect-mode-{}", uuid::Uuid::new_v4()));
+        let svc = find_service("gmail").unwrap();
+        let path = write_oauth_config(svc, &tmp, "id", "secret").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

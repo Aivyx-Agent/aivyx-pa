@@ -5,7 +5,8 @@
 //! authenticates to KitchenDB (PostgREST) with a `base_url` + `api_key` +
 //! `organization_id`, not a consent dance. So `connect kitchen` routes here,
 //! reusing `connect`'s generic helpers (`append_tool_process`,
-//! `tool_process_present`, `find_aivyx_toml`, `set_file_0600`, the prompts) but
+//! `tool_process_present`, `find_aivyx_toml`, `write_file_at_0600`, the
+//! prompts) but
 //! writing the `[kitchen_db]` config (Brigade BG.1), planting the bundled BOH
 //! pack + `[team] config_path` (Roster), and **probing KitchenDB reachability**
 //! in place of the OAuth handshake. Every step is idempotent + no-clobber.
@@ -17,7 +18,7 @@ use aivyx_kitchen::KITCHEN_BOH_TOML;
 use aivyx_kitchen_toolkit::KitchenClient;
 
 use super::connect::{
-    append_tool_process, find_aivyx_toml, prompt_line, set_file_0600, tool_process_present,
+    append_tool_process, find_aivyx_toml, prompt_line, tool_process_present, write_file_at_0600,
 };
 
 const KITCHEN_BINARY: &str = "aivyx-kitchen-toolkit";
@@ -65,12 +66,9 @@ pub fn write_kitchen_config(
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let path = config_path(home);
-    std::fs::write(
-        &path,
-        render_kitchen_config_toml(base_url, api_key, organization_id),
-    )
-    .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
-    set_file_0600(&path);
+    let body = render_kitchen_config_toml(base_url, api_key, organization_id);
+    write_file_at_0600(&path, body.as_bytes())
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
     Ok(path)
 }
 
@@ -261,6 +259,18 @@ mod tests {
         let loaded = aivyx_kitchen_toolkit::load_config(&p).unwrap();
         assert_eq!(loaded.base_url, "https://k/rest/v1");
         assert_eq!(loaded.organization_id, "ORG");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_kitchen_config_is_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("mise-mode-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".aivyx-pa/tool-processes/kitchen")).unwrap();
+        let p = write_kitchen_config(&dir, "https://k/rest/v1", "KEY", "ORG").unwrap();
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
         std::fs::remove_dir_all(&dir).ok();
     }
 
