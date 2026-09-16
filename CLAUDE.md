@@ -181,6 +181,15 @@ working near file I/O, network calls, or untrusted content:
   Wraps flagged tool output in an
   `{"aivyx_untrusted_content_warning": ..., "data": ...}` envelope before it
   re-enters the model's context.
+- **Picket** — also `aivyx-core/src/agent.rs`, `check_for_injection`, run
+  just before Bulwark's fencing above on the same `output_is_untrusted()`
+  tools. An *active* scan (not just structural fencing) via the standalone
+  `aivyx-injection-guard` crate's phrase-list `scan_for_injection_markers`;
+  a match sets a side-channel reason the turn loop checks *after* recording
+  the tool's real (possibly-mutating) outcome, so a hit escalates for
+  operator review without misrepresenting an already-executed action as
+  still pending. Gated by `[agent] injection_scan_enabled`/
+  `injection_scan_exempt` — Bulwark's own fencing is never gated by either.
 - **Keyring** — `aivyx-channel/src/keyring_store.rs`. Master passphrase in
   the OS credential store (Secret Service/Keychain/Credential Manager);
   best-effort/desktop-only — a headless systemd-under-linger install has no
