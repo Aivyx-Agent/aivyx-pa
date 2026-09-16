@@ -436,6 +436,15 @@ impl Tool for ShellExecTool {
         true
     }
 
+    // Chapter Bulwark/Picket — a shell command's stdout/stderr can carry
+    // attacker-authored content (e.g. `curl` output from a remote server)
+    // with no operator review before it enters model context. Fence it as
+    // untrusted data and run the injection scan over it, same as fs.read
+    // and every tool-process proxy.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Run a shell command inside the agent's shell.exec sandbox \
          root and return its stdout, stderr, and exit code. The \
@@ -800,6 +809,12 @@ mod tests {
     fn shell_exec_mutates_fs_root() {
         let scratch = Scratch::new();
         assert!(build_tool(&scratch.dir).mutates_fs_root());
+    }
+
+    #[test]
+    fn shell_exec_output_is_untrusted_for_bulwark() {
+        let scratch = Scratch::new();
+        assert!(build_tool(&scratch.dir).output_is_untrusted());
     }
 
     #[test]

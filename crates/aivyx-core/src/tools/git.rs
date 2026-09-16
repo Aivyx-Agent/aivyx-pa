@@ -225,6 +225,14 @@ impl Tool for GitStatusTool {
         "git.status"
     }
 
+    // Chapter Bulwark/Picket — porcelain output includes third-party-
+    // authored file paths (e.g. from a pulled branch) with no operator
+    // review before it enters model context. Fence it as untrusted data
+    // and run the injection scan over it, same as fs.read.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Run `git status --porcelain` against a configured repo \
          path. Input is a JSON object with a `repo` field naming \
@@ -332,6 +340,14 @@ impl Tool for GitDiffTool {
 
     fn name(&self) -> &str {
         "git.diff"
+    }
+
+    // Chapter Bulwark/Picket — a diff's hunks and file paths are real
+    // third-party-authored content once a branch is pulled, with no
+    // operator review before it enters model context. Fence it as
+    // untrusted data and run the injection scan over it, same as fs.read.
+    fn output_is_untrusted(&self) -> bool {
+        true
     }
 
     fn description(&self) -> &str {
@@ -483,6 +499,15 @@ impl Tool for GitCommitTool {
 
     fn name(&self) -> &str {
         "git.commit"
+    }
+
+    // Chapter Bulwark/Picket — this tool's output can carry attacker-
+    // authored content (e.g. `git commit`'s stdout/stderr echoing a
+    // crafted message on failure) with no operator review before it
+    // enters model context. Fence it as untrusted data and run the
+    // injection scan over it, same as fs.read.
+    fn output_is_untrusted(&self) -> bool {
+        true
     }
 
     fn description(&self) -> &str {
@@ -1096,6 +1121,22 @@ mod git_tests {
     // test in Task 5 covers the success path via a real tmpdir
     // `git init` setup.
 
+    #[test]
+    fn git_status_output_is_untrusted_for_bulwark() {
+        let (status_tool, _diff_tool) = GitReadToolConfig::new(Vec::<PathBuf>::new())
+            .build()
+            .expect("build with empty allow-set");
+        assert!(status_tool.output_is_untrusted());
+    }
+
+    #[test]
+    fn git_diff_output_is_untrusted_for_bulwark() {
+        let (_status_tool, diff_tool) = GitReadToolConfig::new(Vec::<PathBuf>::new())
+            .build()
+            .expect("build with empty allow-set");
+        assert!(diff_tool.output_is_untrusted());
+    }
+
     // ---- git.commit (Chapter Forge FG.3) ----
 
     #[test]
@@ -1153,6 +1194,14 @@ mod git_tests {
             .build()
             .expect("build");
         assert!(!tool.mutates_fs_root());
+    }
+
+    #[test]
+    fn git_commit_output_is_untrusted_for_bulwark() {
+        let tool = GitWriteToolConfig::new(Vec::<PathBuf>::new())
+            .build()
+            .expect("build");
+        assert!(tool.output_is_untrusted());
     }
 
     // ---- Integration: a real tmpdir git repo ----
