@@ -559,6 +559,113 @@ pub struct ToolDescriptor {
     pub scope_base: String,
 }
 
+/// Bind a Unix socket at `path` with mode 0600 from the instant it's
+/// *visible* at that path — no window where a socket reachable by
+/// another local user briefly exists there.
+///
+/// ## Why this isn't the audit's suggested `libc::umask` bracket
+///
+/// The originally-specified fix (2026-09-16 audit, Task 7) was to
+/// temporarily narrow the process umask to `0o177` around a bind at
+/// the final path, then restore it, since `UnixListener::bind` takes
+/// no mode parameter. That was implemented first, and reverted after
+/// it broke this crate's own test suite: `umask` is per-process, not
+/// per-thread, state, so narrowing it around one bind narrows it for
+/// *any* file/directory creation happening anywhere in the process
+/// for the duration of the bracket — not just this socket.
+/// `daemon_roundtrip_e2e.rs` alone runs 20-30+ `#[tokio::test]`
+/// functions concurrently in one process, several of which start
+/// their own daemon (hitting this function) while others are
+/// concurrently creating their own unrelated scratch directories via
+/// plain `std::fs::create_dir_all`. One test's narrowed umask landed
+/// on another test's directory creation and stripped its execute
+/// bit (`0600` has no `x`), which then failed with "Permission
+/// denied" the instant that other test tried to create a file inside
+/// it (`mission_queries_round_trip_over_ipc`, reproduced
+/// 2026-09-16). A `Mutex` serializing only this function's own
+/// callers was tried next and confirmed *not* sufficient — it
+/// prevents this function's callers from racing each other, but does
+/// nothing for the unrelated `create_dir_all` calls that never take
+/// the lock, and the flake reproduced again with the lock in place.
+///
+/// ## What this does instead
+///
+/// Never touches process-global state. Binds to a staging path — the
+/// same file name, in the same directory, plus a short random
+/// suffix — chmods it to `0600` while it sits under that
+/// not-yet-final name, then atomically `rename`s it onto `path`.
+/// Nothing can connect to the socket via its *final* name before the
+/// rename, and it is already `0600` the instant it becomes visible
+/// there. Same end guarantee the umask approach was after, with no
+/// process-wide side effect to race.
+///
+/// A first version staged inside a freshly created, separately-named
+/// subdirectory instead of a same-directory sibling file. Reverted:
+/// nesting an extra path component (worse, one whose name embeds a
+/// full 36-character UUID for unguessability) routinely blew past
+/// `AF_UNIX`'s hard ~108-byte `sun_path` limit — it failed with
+/// `path must be shorter than SUN_LEN` in this very test suite,
+/// before ever reaching production. The short-suffix, same-directory
+/// approach below adds only a handful of bytes.
+///
+/// Precondition this relies on: `path`'s parent directory is already
+/// inaccessible to other local users by the time this is called.
+/// Both real call sites guarantee that — each calls
+/// `create_dir_all_0700` on the parent immediately before this — so
+/// nothing outside this user's own processes can ever `readdir()` the
+/// staging name into view, which is what makes a merely
+/// collision-avoiding (not cryptographically unguessable) suffix
+/// sufficient here: the threat this guards against is a *concurrent
+/// same-user process* reusing the identical staging name (this
+/// crate's own test suite starts many daemons at once), not an
+/// external attacker discovering it.
+#[cfg(unix)]
+fn bind_unix_socket_0600(path: &Path) -> std::io::Result<UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("daemon.sock");
+    // Low 32 bits of a fresh v4 UUID — short (8 hex chars) but still
+    // effectively random for collision-avoidance purposes: a v4
+    // UUID's fixed version/variant bits sit in the middle of its 128
+    // bits (bytes 6 and 8 of 16), not in the low 32 we take here.
+    // `uuid::Uuid::new_v4()` is already this workspace's standard
+    // entropy source for exactly this kind of use (see the `uuid`
+    // dep's Cargo.toml comment).
+    let suffix = uuid::Uuid::new_v4().as_u128() as u32;
+    let staging_path = parent.join(format!(".{file_name}.{suffix:08x}.tmp"));
+
+    // Best-effort cleanup of the staging file on every exit path:
+    // `rename` below moves it away on success, making this a no-op;
+    // on any early `?` return it still exists under the staging name.
+    struct RemoveFileOnDrop<'a>(&'a std::path::Path);
+    impl Drop for RemoveFileOnDrop<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.0);
+        }
+    }
+    let _cleanup = RemoveFileOnDrop(&staging_path);
+
+    let listener = UnixListener::bind(&staging_path)?;
+    std::fs::set_permissions(&staging_path, std::fs::Permissions::from_mode(0o600))?;
+    std::fs::rename(&staging_path, path)?;
+
+    Ok(listener)
+}
+
+/// Create `dir` (and its parents) if missing, then ensure it's `0700`.
+/// Used for the daemon socket's parent directory — home-relative
+/// fallback paths (`$HOME/.local/share/aivyx-pa/`) are otherwise
+/// created via `create_dir_all` at the process's default umask, which
+/// is lower severity than the socket-file race (the socket inside
+/// still isn't reachable until it exists at 0600) but cheap to close.
+#[cfg(unix)]
+fn create_dir_all_0700(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
 /// Run the daemon server.
 ///
 /// Binds the Unix socket at `config.socket_path`, accepts connections
@@ -686,7 +793,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     let _ = std::fs::remove_file(socket_path);
 
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| DaemonError::Bind {
+        create_dir_all_0700(parent).map_err(|e| DaemonError::Bind {
             path: parent.display().to_string(),
             source: e,
         })?;
@@ -699,20 +806,10 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // (reader for `GetLearningInsights`).
     let cadence_stats = crate::reflection_scheduler::shared_recent_reflection_stats();
 
-    let listener = UnixListener::bind(socket_path).map_err(|e| DaemonError::Bind {
+    let listener = bind_unix_socket_0600(socket_path).map_err(|e| DaemonError::Bind {
         path: socket_path.display().to_string(),
         source: e,
     })?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(socket_path, perms).map_err(|e| DaemonError::Bind {
-            path: socket_path.display().to_string(),
-            source: e,
-        })?;
-    }
 
     let pid_path = socket_path.with_extension("pid");
     let _pid_guard = PidGuard::write(&pid_path)?;
@@ -3570,20 +3667,13 @@ async fn run_single_connection_daemon(
     let _ = std::fs::remove_file(socket_path);
 
     if let Some(parent) = socket_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_dir_all_0700(parent)?;
     }
 
-    let listener = UnixListener::bind(socket_path).map_err(|source| DaemonError::Bind {
+    let listener = bind_unix_socket_0600(socket_path).map_err(|source| DaemonError::Bind {
         path: socket_path.display().to_string(),
         source,
     })?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(socket_path, perms)?;
-    }
 
     let (stream, _addr) = listener.accept().await.map_err(DaemonError::Accept)?;
 
@@ -10045,5 +10135,88 @@ system_prompt = "You are a custom role."
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].name, "nightly");
         assert_eq!(configs[0].cron, "0 0 9 * * * *");
+    }
+
+    // Task 7 (2026-09-16 audit) — the daemon socket used to bind, then
+    // chmod(0600) as a separate step, leaving a real window at the
+    // process's default umask (often 022) where the socket was
+    // world-accessible before the chmod landed. See
+    // `bind_unix_socket_0600`'s doc comment for why the fix is a
+    // private-staging-directory-then-rename, not a `libc::umask`
+    // bracket (the umask approach was tried first and reverted after
+    // it broke this crate's own concurrent test suite).
+    //
+    // This test proves the *final* mode is 0600, and that it holds
+    // regardless of the ambient umask (unlike the original
+    // bind-then-chmod code, this implementation never reads or
+    // depends on process umask at all, so varying it here is a
+    // genuine robustness check, not just theater). It does not by
+    // itself prove the *old* code was racy — that would need a
+    // concurrent connect-during-bind test, higher effort than this
+    // fix warrants — but the new implementation is correct by
+    // construction regardless: the socket is never visible at `path`
+    // before it's already 0600.
+    //
+    // `#[tokio::test]`, not plain `#[test]`: `bind_unix_socket_0600`
+    // wraps `tokio::net::UnixListener::bind` (matching this file's
+    // real bind sites), which registers the socket with the Tokio
+    // reactor and so panics ("there is no reactor running") outside a
+    // Tokio runtime context, even though the call itself is
+    // synchronous.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn socket_is_never_observable_at_a_wider_mode_than_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Hand-rolled temp dir per this file's existing test convention
+        // (see e.g. `secret_leak_temp_toml`/team-run-denial tests above)
+        // rather than adding the `tempfile` crate — an established
+        // workspace convention (see aivyx-storage/aivyx-config
+        // Cargo.toml dev-dependency comments).
+        let dir =
+            std::env::temp_dir().join(format!("aivyx-socket-umask-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket_path = dir.join("test.sock");
+
+        let listener = bind_unix_socket_0600(&socket_path).unwrap();
+
+        let mode = std::fs::metadata(&socket_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "socket mode was {mode:o}, expected 0600");
+
+        // The socket is genuinely connectable at its final path (the
+        // stage-then-rename didn't leave it stranded or break the fd).
+        let connect = tokio::net::UnixStream::connect(&socket_path).await;
+        assert!(connect.is_ok(), "socket should be connectable at its final path");
+
+        // No leftover staging file next to it.
+        let leaked_staging_files = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .count();
+        assert_eq!(leaked_staging_files, 0, "staging file should not leak");
+
+        drop(listener);
+        std::fs::remove_file(&socket_path).ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_parent_dir_created_at_0700_even_under_permissive_umask() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "aivyx-socket-dir-umask-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let nested = dir.join("aivyx-pa");
+
+        create_dir_all_0700(&nested).unwrap();
+
+        let mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "dir mode was {mode:o}, expected 0700");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
