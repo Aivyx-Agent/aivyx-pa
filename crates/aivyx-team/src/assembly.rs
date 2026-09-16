@@ -403,9 +403,15 @@ mod tests {
     /// the whole production path — `TeamAssembly::build` ->
     /// `SpecialistPool::run` -> `SpecialistFactory::with_confirm_destructive`
     /// -> `ConcreteAgent::with_confirm_destructive` — not just that the
-    /// field is stored somewhere. A silent swap with `injection_scan_enabled`
-    /// (also `true` in this same call) would make this test fail, since
-    /// that knob alone does not gate `email.send`.
+    /// field is stored somewhere. Corrected (Task 4 final review, Minor):
+    /// a swap with `broker_slot_hint_mode` (`false` in this call) would
+    /// make this test fail, since `confirm_destructive` would then receive
+    /// `false` and the call would complete instead of escalating. A swap
+    /// with `injection_scan_enabled` specifically would NOT be caught by
+    /// this test — both are `true` in this call, so either ordering passes
+    /// the same value to `with_confirm_destructive`; only a value-level
+    /// assertion on which knob fired (not attempted here) would catch that
+    /// particular pair.
     #[tokio::test]
     async fn confirm_destructive_threads_from_team_assembly_build_to_a_specialist_gate() {
         let tool: Arc<dyn Tool> = Arc::new(EmailSendTool(aivyx_core::ToolId::new()));

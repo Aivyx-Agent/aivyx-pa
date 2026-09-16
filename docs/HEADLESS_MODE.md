@@ -3,11 +3,16 @@
 > **Status:** design contract. This is the spec Chapter H scaffolds from
 > (mirrors `docs/DAEMON_TEAMS.md` / `docs/WEB_MISSION_CONTROL.md`).
 >
-> Today every approval point in Aivyx PA assumes a **human is reachable**: a tool
-> that returns `RequiresEscalation` parks the turn behind an operator gate and
-> *waits* (the daemon emits `ApprovalGate`, the operator answers `ResolveGate`);
-> a team mission's `GateMode::Human` step pauses as `AwaitingApproval` until
-> someone resolves it. That is correct for interactive use and wrong for
+> Today every approval point in Aivyx PA assumes a **human is reachable**: a
+> tool that returns `RequiresEscalation` **inside a team mission** parks the
+> turn behind an operator gate and *waits* (the daemon emits `ApprovalGate`,
+> the operator answers `ResolveGate`); a team mission's `GateMode::Human` step
+> pauses as `AwaitingApproval` until someone resolves it. A plain
+> single-agent turn (no mission wrapping it) has no such park-and-wait today
+> — see the "Single-agent escalation" bullet below for the precise, narrower
+> claim (2026-09-16 security audit fix, Task 4's final review — corrected
+> from this doc's original overstatement). That mission-scoped case is
+> correct for interactive use and wrong for
 > **unattended** use — a batch job, a cron-triggered run, or a fully-autonomous
 > agent — where blocking on an absent human means hanging forever.
 >
@@ -35,10 +40,25 @@
 - **Single-agent escalation.** A tool returns `ToolOutcome::RequiresEscalation
   { reason }` (`aivyx-core/src/lib.rs`); the agent turn loop
   (`aivyx-core/src/agent.rs`) breaks and yields `TurnOutcome::Escalated {
-  reason }`. The daemon (`daemon_server.rs` ~1832) then **parks** it: creates a
-  gate on a `MissionRecord` (`mission::add_gate`), persists it, and emits
-  `StreamEventPayload::ApprovalGate` to the frontend. The operator answers with
-  `FrontendMessage::ResolveGate { mission_id, gate_id, approved }`.
+  reason }`. **Corrected 2026-09-16 (Task 4's final review — this bullet
+  previously overstated the mechanism as universal):** the daemon
+  (`daemon_server.rs`, the gate-park block) only **parks** the escalation —
+  creates a gate on a `MissionRecord` (`mission::add_gate`), persists it,
+  and emits `StreamEventPayload::ApprovalGate` — when the turn is running
+  **inside a team mission** (`Some(mission_id)` and `Some(mission_store)`
+  both present); only then can the operator answer with
+  `FrontendMessage::ResolveGate { mission_id, gate_id, approved }`. A plain
+  single-agent turn with no mission wrapping it (the ordinary interactive
+  chat/CLI/Telegram/Discord/Slack case) has **no park-and-resume path**
+  today: the turn simply finalizes as `Escalated`, gets rendered as a
+  one-line marker, and the specific paused tool call cannot be re-approved
+  and replayed — the operator's only recourse is to re-issue the request
+  after changing the gating posture. This is a known, fail-safe (blocks
+  the action, never lets it through) limitation — see
+  `docs/ACCESS_LEVELS.md`'s "single-agent gate-resume machinery Chapter H
+  deferred" note and `docs/SECURITY_POSTURE.md`'s attended/unattended
+  section for the full writeup. Building that resume machinery remains
+  future work, not something this correction implements.
 - **Team-mission human gates (Chapter L).** `StepKind::Gate { mode:
   GateMode::Human }`; `TeamRuntime::run_until_pause` returns
   `RunYield::AwaitingHuman { step, .. }`; the daemon marks the mission
