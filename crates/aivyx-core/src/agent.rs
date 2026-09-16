@@ -259,6 +259,22 @@ pub struct ConcreteAgent {
     /// approving (or not) the resulting `TurnOutcome::Escalated`
     /// out-of-band, the same resolution path already used by every
     /// other `RequiresEscalation` source in this codebase.
+    ///
+    /// Task 4 fix round 3 (whole-task review, C2) — "the same resolution
+    /// path" above is real only inside a team mission
+    /// (`mission::add_gate`/`resolve_gate`, `aivyx-pa team approve`). For a
+    /// plain single-agent turn built directly from this struct (no mission
+    /// wrapping it), there is currently no resume path at all: the turn
+    /// ends as `Escalated`, gets printed, and the specific paused call
+    /// cannot be re-approved and replayed — the operator must re-issue the
+    /// request after changing the gating posture instead. This is a
+    /// pre-existing gap in the `RequiresEscalation` mechanism itself
+    /// (`ACCESS_LEVELS.md` already named it "the single-agent gate-resume
+    /// machinery Chapter H deferred" before this task); Task 4 only widens
+    /// which tool bases route through it, it doesn't introduce the gap.
+    /// See `docs/SECURITY_POSTURE.md`'s "attended/unattended split"
+    /// section for the full writeup. Fail-safe, not fail-open — a stuck
+    /// escalation blocks the action, it never lets it through.
     confirm_destructive: bool,
 }
 

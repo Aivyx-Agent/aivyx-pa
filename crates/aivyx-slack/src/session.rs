@@ -99,6 +99,11 @@ pub struct SlackSessionConfig {
     /// `[agent] injection_scan_exempt` — per-tool-name exemption list for
     /// the active scan. See `aivyx_core::TurnSafety` for the full contract.
     pub injection_scan_exempt: std::collections::BTreeSet<String>,
+    /// Task 4 security-audit fix round 3 — `[access] confirm_destructive`.
+    /// Threaded into `ConcreteAgent::with_confirm_destructive(...)` at the
+    /// construction site below, same pattern as `injection_scan_enabled`.
+    /// `false` preserves pre-fix behavior byte-for-byte.
+    pub confirm_destructive: bool,
 }
 
 /// Per-channel session report. Returned by an inner mailbox
@@ -170,7 +175,10 @@ where
     )
     .with_tool_allowlist(config.tool_allowlist)
     .with_memory_topic_prefix(config.memory_topic_prefix)
-    .with_checkpointer(checkpointer);
+    .with_checkpointer(checkpointer)
+    // Task 4 security-audit fix round 3 — same [access] confirm_destructive
+    // posture as every other agent construction path.
+    .with_confirm_destructive(config.confirm_destructive);
     // Route through the shared per-turn-safety choke point with the
     // operator's configured values.
     let agent = aivyx_core::TurnSafety::interactive(

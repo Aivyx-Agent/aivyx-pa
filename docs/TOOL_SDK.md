@@ -163,7 +163,18 @@ All frames are length-prefixed JSON per
 | `ToolEvent` | Streaming progress (0..N per invocation) | `call_id: String`, `event: ToolEventPayload` |
 | `ToolResult` | Terminal — success | `call_id: String`, `verified: Verification`, `output: serde_json::Value` |
 | `ToolError` | Terminal — failure | `call_id: String`, `code: String`, `message: String` |
+| `RequiresEscalation` | Terminal — needs operator approval before proceeding | `call_id: String`, `reason: String` |
 | `DispatchNotification` | Unprompted, when tool needs to alert | `target: String`, `message: String`, `subject: Option<String>` |
+
+`RequiresEscalation` mirrors `aivyx_core::ToolOutcome::RequiresEscalation` and
+surfaces on the daemon side as the turn loop's real `TurnOutcome::Escalated`
+— not a generic failure. `scope` is deliberately not one of the wire fields:
+the daemon always overwrites it with the `required_scope` it already
+checked before dispatch, so a tool process's own opinion of its scope would
+be discarded anyway. Added in the 2026-09-16 security audit fix (Task 4);
+before that, a tool process requesting escalation was flattened into
+`ToolError { code: "requires_escalation", .. }`, which meant it reached the
+daemon as a generic failure instead of a real escalation.
 
 ### `ToolDescriptor` shape
 

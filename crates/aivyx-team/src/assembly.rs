@@ -357,4 +357,110 @@ mod tests {
             aivyx_core::ToolOutcome::Completed { .. }
         ));
     }
+
+    // A tool that requires a withheld-by-default destructive scope
+    // (`email.send` — see `aivyx_capability::WITHHELD_INTEGRATION_BASES`).
+    // Its `execute` would happily complete; the point of the test below is
+    // that `confirm_destructive` must stop the call before `execute` ever
+    // runs.
+    struct EmailSendTool(aivyx_core::ToolId);
+    #[async_trait::async_trait]
+    impl Tool for EmailSendTool {
+        fn id(&self) -> aivyx_core::ToolId {
+            self.0
+        }
+        fn name(&self) -> &str {
+            "send"
+        }
+        fn description(&self) -> &str {
+            "send an email"
+        }
+        fn input_schema(&self) -> &Value {
+            use std::sync::OnceLock;
+            static S: OnceLock<Value> = OnceLock::new();
+            S.get_or_init(|| json!({ "type": "object" }))
+        }
+        fn required_scope(&self, _: &Value) -> Scope {
+            Scope::parse("email.send").unwrap()
+        }
+        async fn execute(
+            &self,
+            _: Value,
+            _: &aivyx_core::ToolContext<'_>,
+        ) -> aivyx_core::ToolOutcome {
+            aivyx_core::ToolOutcome::Completed {
+                output: json!({ "sent": true }),
+                verified: aivyx_core::Verification::NotApplicable,
+            }
+        }
+    }
+
+    /// Task 4 fix round 3, I2 — `TeamAssembly::build` takes 15 positional
+    /// parameters, three of them bare `bool`s (`broker_slot_hint_mode`,
+    /// `injection_scan_enabled`, `confirm_destructive`); a reviewer flagged
+    /// that shape as a real argument-swap risk. This proves
+    /// `confirm_destructive: true` reaches a real specialist's gate through
+    /// the whole production path — `TeamAssembly::build` ->
+    /// `SpecialistPool::run` -> `SpecialistFactory::with_confirm_destructive`
+    /// -> `ConcreteAgent::with_confirm_destructive` — not just that the
+    /// field is stored somewhere. A silent swap with `injection_scan_enabled`
+    /// (also `true` in this same call) would make this test fail, since
+    /// that knob alone does not gate `email.send`.
+    #[tokio::test]
+    async fn confirm_destructive_threads_from_team_assembly_build_to_a_specialist_gate() {
+        let tool: Arc<dyn Tool> = Arc::new(EmailSendTool(aivyx_core::ToolId::new()));
+
+        let mailer = TeamMember {
+            name: "mailer".into(),
+            role: "R".into(),
+            soul: "You send email.".into(),
+            tool_allowlist: vec!["send".to_string()],
+            capability_scopes: vec!["email.send".to_string()],
+            trust_ceiling: TrustTier::Trusted,
+            model: None,
+            base_url: None,
+        };
+        let mut cfg = config();
+        cfg.members.push(mailer);
+
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse("team.delegate").unwrap(),
+            Scope::parse("team.message").unwrap(),
+            Scope::parse("email.send").unwrap(),
+        ]);
+
+        let a = TeamAssembly::build(
+            cfg,
+            FakeProvider::tool_call_then_done("send", json!({})),
+            "test-model",
+            4096,
+            Arc::new(NullAuditHook),
+            vec![tool],
+            caps,
+            std::collections::HashMap::new(),
+            None,
+            None,
+            false,
+            aivyx_core::MessageOrigin::Operator,
+            true,
+            std::collections::BTreeSet::new(),
+            true, // confirm_destructive
+        )
+        .expect("valid team");
+
+        let lead = FakeLeadChannel::at(TrustTier::Trusted);
+        let err = a
+            .pool()
+            .run("mailer", "send the email", None, &lead)
+            .await
+            .expect_err("a withheld destructive scope must escalate, not complete");
+
+        match err {
+            TeamError::Config(msg) => assert!(
+                msg.contains("escalated for approval"),
+                "expected an escalation error naming the pending approval, got: {msg}"
+            ),
+            other => panic!("expected TeamError::Config carrying the escalation, got {other:?}"),
+        }
+    }
 }

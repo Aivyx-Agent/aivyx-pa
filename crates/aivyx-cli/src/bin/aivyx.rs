@@ -10129,6 +10129,10 @@ async fn run_async(
                 cycle_detection,
                 injection_scan_enabled,
                 injection_scan_exempt,
+                // Task 4 security-audit fix round 3 — same [access]
+                // confirm_destructive posture as every other agent
+                // construction path in this function.
+                confirm_destructive,
             };
             run_telegram_multi_session(
                 "aivyx-telegram",
@@ -10242,6 +10246,10 @@ async fn run_async(
                 cycle_detection,
                 injection_scan_enabled,
                 injection_scan_exempt,
+                // Task 4 security-audit fix round 3 — same [access]
+                // confirm_destructive posture as every other agent
+                // construction path in this function.
+                confirm_destructive,
             };
             aivyx_discord::run_discord_session(
                 "aivyx-discord",
@@ -10380,6 +10388,10 @@ async fn run_async(
                 cycle_detection,
                 injection_scan_enabled,
                 injection_scan_exempt,
+                // Task 4 security-audit fix round 3 — same [access]
+                // confirm_destructive posture as every other agent
+                // construction path in this function.
+                confirm_destructive,
             };
             aivyx_slack::run_slack_session(
                 "aivyx-slack",

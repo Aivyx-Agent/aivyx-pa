@@ -96,14 +96,29 @@ picks. See [`ACCESS_LEVELS.md`](ACCESS_LEVELS.md).
 
 `confirm_destructive` (default **on** for `workspace`/`home`/`full`) routes
 *irreversible* operations — destructive shell, `fs.delete`, overwrites,
-outbound-money tools (`kitchen.order.send`, the `confirmed: true`
-pattern) — through `ToolOutcome::RequiresEscalation`, which parks the turn
-behind a confirm-first gate.
+outbound-money tools (`kitchen.order.send`, the `confirmed: true` pattern),
+and — since the 2026-09-16 security audit fix (Task 4) — every withheld
+third-party-integration base (`email.send`, `drive.write`, `notion.write`,
+and the rest of `aivyx_capability::WITHHELD_INTEGRATION_BASES`), even once a
+role has explicitly granted the scope — through `ToolOutcome::RequiresEscalation`,
+which parks the turn behind a confirm-first gate.
 
 The crucial part is **what happens when there is no human to ask**:
 
 - **Attended (interactive):** the daemon emits an approval gate and waits
-  for the operator to approve or reject.
+  for the operator to approve or reject — **inside a team mission.** A
+  mission's `TurnOutcome::Escalated` gets a real, resumable gate
+  (`mission::add_gate` / `resolve_gate`, `aivyx-pa team approve`). **Outside
+  a mission** — a plain single-agent chat turn — there is currently no
+  resume path: the turn simply ends as `Escalated`, the reason is printed,
+  and the specific paused tool call cannot be re-approved and replayed. The
+  operator's only recourse today is to re-issue the request after changing
+  the gating posture (a different `[access]` level, or `confirm_destructive
+  = false`) — see [`ACCESS_LEVELS.md`](ACCESS_LEVELS.md)'s "Invariants"
+  section, which already flagged this as the single-agent gate-resume
+  machinery Chapter H deferred. This is a known, fail-safe (not
+  fail-open) limitation, not a Task 4 regression: Task 4 only widened
+  which tool bases route through this same pre-existing mechanism.
 - **Unattended (headless / loop / cron / webhook):** **Chapter H makes the
   gate a reject-and-abort.** The destructive op is *refused and recorded*,
   never auto-approved. There is deliberately **no `AutoApprove` posture in

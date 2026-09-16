@@ -156,6 +156,7 @@ fn slack_session_config(storage: Arc<dyn Storage>) -> SlackSessionConfig {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
+        confirm_destructive: false,
     }
 }
 

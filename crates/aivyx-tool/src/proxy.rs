@@ -136,8 +136,19 @@ impl Tool for ToolProxy {
     // whatever the operator actually authorized, not the tool's raw
     // declaration — but a withheld base stays withheld from the floor
     // even if an operator override still names it; the floor grant is a
-    // *default*, not the only way to obtain the scope (a role's own
-    // `capability_scopes` can still grant it explicitly).
+    // *default*, not the only way to obtain the scope — a single-agent
+    // role's own `capability_scopes` can still grant it explicitly.
+    //
+    // Team missions are a real exception, not covered by that escape
+    // hatch: `aivyx-pa team run`'s `cli_lead_scopes` and the daemon's
+    // `TeamRunDeps.lead_scopes` are both built entirely from this same
+    // backcompat floor (`aivyx-cli/src/bin/aivyx.rs`'s
+    // `backcompat_floor`), which `bind_lead_scopes` then uses as the
+    // clamping ceiling for the whole team. So withholding a base from
+    // the floor withholds it from every team mission too, with no
+    // config knob to restore it there — a real, known limitation
+    // (Task 4 security-audit fix), not an oversight to silently work
+    // around by reading this comment as a promise it isn't.
     fn auto_grantable_in_backcompat_floor(&self) -> bool {
         !aivyx_capability::is_withheld_integration_base(self.required_scope.base())
     }
