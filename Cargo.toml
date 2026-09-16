@@ -154,6 +154,13 @@ hex = "0.4"
 
 # LLM provider HTTP transport (feature-gated in aivyx-llm via provider-anthropic)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+# WHATWG-compliant URL parsing — already transitive via reqwest; promoted to
+# a direct workspace dependency (Chapter Rampart hardening) so
+# `aivyx-core::egress::host_of` parses URLs with the exact same algorithm
+# `reqwest` uses internally, instead of a hand-rolled parser that could
+# (and did) disagree with it on edge cases like backslash-authority
+# splitting and non-dotted-decimal IPv4 literals.
+url = "2"
 # Bearer token wrapper — prevents accidental Debug/logging of API keys
 secrecy = { version = "0.10", features = ["serde"] }
 # Chapter Keyring — OS credential store for the master passphrase. Pure-Rust

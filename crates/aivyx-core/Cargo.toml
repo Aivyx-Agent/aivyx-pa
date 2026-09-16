@@ -99,6 +99,12 @@ workspace = true
 [dependencies.aivyx-injection-guard]
 workspace = true
 
+# Chapter Rampart hardening — `egress::host_of` delegates to url::Url
+# instead of hand-rolled string splitting, so it parses exactly the way
+# reqwest does internally (see workspace Cargo.toml comment on `url`).
+[dependencies.url]
+workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "process"] }
 # Confinement test fixture (Task 3 — shell.exec confinement): needs a

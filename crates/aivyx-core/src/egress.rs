@@ -125,21 +125,18 @@ impl EgressPolicy {
 
 /// Extract the bare host from an `http(s)://` URL — no scheme, no userinfo, no
 /// port, IPv6 brackets stripped. `None` if there's no authority.
+///
+/// Delegates to `url::Url`, the same WHATWG-compliant parser `reqwest` uses
+/// internally, rather than a hand-rolled splitter — a hand-rolled parser
+/// disagreeing with `reqwest` on edge cases (a backslash in the authority, a
+/// non-dotted-decimal IPv4 literal) is exactly the gap an attacker can use to
+/// make this guard see one host while `reqwest` connects to another.
 fn host_of(url: &str) -> Option<String> {
-    let after = url.split("://").nth(1)?;
-    let authority = after.split(['/', '?', '#']).next()?;
-    // Drop any `userinfo@`.
-    let hostport = authority.rsplit('@').next()?;
-    if let Some(rest) = hostport.strip_prefix('[') {
-        // IPv6 literal `[::1]:port`.
-        let end = rest.find(']')?;
-        return Some(rest[..end].to_string());
-    }
-    let host = hostport.split(':').next()?;
-    if host.is_empty() {
-        None
-    } else {
-        Some(host.to_string())
+    let parsed = url::Url::parse(url).ok()?;
+    match parsed.host()? {
+        url::Host::Domain(d) => Some(d.to_string()),
+        url::Host::Ipv4(ip) => Some(ip.to_string()),
+        url::Host::Ipv6(ip) => Some(ip.to_string()),
     }
 }
 
@@ -165,6 +162,14 @@ pub(crate) fn is_blocked_ip(ip: &IpAddr) -> bool {
             v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
         }
         IpAddr::V6(v6) => {
+            // An IPv4-mapped address (::ffff:a.b.c.d) must be judged by
+            // its embedded IPv4 rules, not by the IPv6 loopback/ULA/
+            // link-local checks alone — ::ffff:169.254.169.254 is NOT
+            // ::1 and is NOT in fc00::/7 or fe80::/10, but it IS the
+            // cloud-metadata address once unwrapped.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_blocked_ip(&IpAddr::V4(v4));
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
                 // Unique-local fc00::/7.
@@ -285,5 +290,50 @@ mod tests {
             Some("example.com")
         );
         assert_eq!(host_of("not a url"), None);
+    }
+
+    #[test]
+    fn blocks_ipv4_mapped_ipv6_metadata_and_loopback() {
+        for ip_str in [
+            "::ffff:169.254.169.254",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.5",
+        ] {
+            let ip: IpAddr = ip_str.parse().unwrap();
+            assert!(is_blocked_ip(&ip), "should block IPv4-mapped {ip_str}");
+        }
+    }
+
+    #[test]
+    fn host_of_agrees_with_url_crate_on_backslash_authority() {
+        // A backslash after the host is treated as a path separator by the
+        // WHATWG/url-crate parser reqwest actually uses — host_of must see
+        // the SAME host reqwest will connect to, not whatever comes after
+        // an rsplit('@').
+        let parsed = host_of("http://169.254.169.254\\@example.com/").unwrap();
+        assert_eq!(
+            parsed, "169.254.169.254",
+            "must match what reqwest actually connects to"
+        );
+    }
+
+    #[test]
+    fn host_of_normalizes_non_dotted_decimal_ipv4() {
+        // 2130706433 is 127.0.0.1 as a big-endian u32 — the url crate's
+        // real IPv4 parser normalizes this; host_of must match, so
+        // is_blocked_ip sees a real IP literal instead of failing to parse
+        // and falling through as an unrecognized hostname.
+        let parsed = host_of("http://2130706433:7843/").unwrap();
+        assert_eq!(parsed, "127.0.0.1");
+    }
+
+    #[test]
+    fn classify_blocks_the_two_parser_divergence_urls() {
+        let p = EgressPolicy::default();
+        assert!(
+            p.classify("http://169.254.169.254\\@example.com/")
+                .is_some()
+        );
+        assert!(p.classify("http://2130706433:7843/").is_some());
     }
 }
