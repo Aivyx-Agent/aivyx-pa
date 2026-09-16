@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-  <title>Candle Flame</title>
-  <!-- Flame for loading/status -->
-  <path d="M12 2C8 8, 6 12, 12 20C18 12, 16 8, 12 2Z"/>
-  <path d="M12 6C10 10, 9 12, 12 18C15 12, 14 10, 12 6Z" stroke="none" fill="currentColor" opacity="0.2"/>
-</svg>
