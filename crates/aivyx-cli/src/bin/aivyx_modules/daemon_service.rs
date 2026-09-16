@@ -122,6 +122,18 @@ pub fn render_env_file(passphrase: &str) -> String {
     format!("AIVYX_PA_PASSPHRASE={passphrase}\n")
 }
 
+/// Write the `daemon.env` file at `0600` from the moment it exists — never a
+/// `write`-then-`chmod` window at a wider mode (Task 8, 2026-09-16 security
+/// audit: the prior `std::fs::write` + `set_permissions_600` two-step here
+/// left exactly that window, same TOCTOU class as Task 7's socket bind, but
+/// for the file holding the actual master passphrase). Reuses
+/// `connect::write_file_at_0600` — Task 5 already established this exact
+/// atomic-0600 pattern in this crate for `config.toml`; no reason to invent
+/// a third variant of it here.
+fn write_env_file_secure(path: &Path, passphrase: &str) -> std::io::Result<()> {
+    crate::connect::write_file_at_0600(path, render_env_file(passphrase).as_bytes())
+}
+
 /// Compute the concrete Linux install plan — pure over its inputs so the paths
 /// and unit contents are testable without touching the real home or running any
 /// command.
@@ -220,9 +232,8 @@ fn install_linux(web_ui: bool, start: bool) -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create config dir {}: {e}", parent.display()))?;
     }
-    std::fs::write(&plan.env_file_path, render_env_file(&passphrase))
+    write_env_file_secure(&plan.env_file_path, &passphrase)
         .map_err(|e| format!("write env file: {e}"))?;
-    set_permissions_600(&plan.env_file_path)?;
 
     if let Some(parent) = plan.unit_path.parent() {
         std::fs::create_dir_all(parent)
@@ -359,12 +370,11 @@ fn install_macos(web_ui: bool, start: bool) -> Result<(), String> {
     if let Some(parent) = plist_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create LaunchAgents dir: {e}"))?;
     }
-    std::fs::write(
+    crate::connect::write_file_at_0600(
         &plist_path,
-        render_launchd_plist(&bin, web_ui, &working_dir, &passphrase),
+        render_launchd_plist(&bin, web_ui, &working_dir, &passphrase).as_bytes(),
     )
     .map_err(|e| format!("write plist {}: {e}", plist_path.display()))?;
-    set_permissions_600(&plist_path)?; // the plist carries the secret → owner-only
 
     if start {
         let uid = current_uid()?;
@@ -430,13 +440,41 @@ fn current_uid() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The passphrase for the unattended service: `AIVYX_PA_PASSPHRASE` if set+non-empty
-/// (the established policy), else a no-echo prompt.
+/// The passphrase for the unattended service: `AIVYX_PA_PASSPHRASE` if
+/// set+non-empty (the established policy), else the OS keyring (Chapter
+/// Keyring — Task 8, 2026-09-16 security audit: this used to skip straight
+/// to the prompt/file-write fallback without ever checking the keyring,
+/// unlike the daemon's own startup path, `select_passphrase_source` in
+/// `aivyx.rs`), else a no-echo prompt.
 fn resolve_passphrase() -> Result<String, String> {
+    resolve_passphrase_with(aivyx_channel::keyring_store::retrieve)
+}
+
+/// Testable core of [`resolve_passphrase`]. Takes the keyring lookup as a
+/// parameter rather than calling `keyring_store::retrieve` directly: the OS
+/// keyring's `mock` backend builds a fresh, independent credential per
+/// `Entry::new` (documented in `keyring_store`'s own tests), so it can't
+/// model a store-then-retrieve round trip the way a real Secret Service /
+/// Keychain does — dependency injection is what actually makes "the keyring
+/// is checked before prompting" testable here.
+fn resolve_passphrase_with(
+    keyring_retrieve: impl FnOnce() -> Result<
+        Option<secrecy::SecretString>,
+        aivyx_channel::keyring_store::KeyringError,
+    >,
+) -> Result<String, String> {
     if let Ok(v) = std::env::var("AIVYX_PA_PASSPHRASE") {
         if !v.is_empty() {
             return Ok(v);
         }
+    }
+    // Chapter Keyring — prefer the OS keyring over an interactive prompt or
+    // writing a fresh plaintext file, mirroring select_passphrase_source's
+    // preference order. An unavailable/locked keyring is not fatal — fall
+    // through to the prompt, same as that function.
+    if let Ok(Some(secret)) = keyring_retrieve() {
+        use secrecy::ExposeSecret;
+        return Ok(secret.expose_secret().to_string());
     }
     let p =
         rpassword::prompt_password("Store passphrase for the unattended service (input hidden): ")
@@ -477,17 +515,6 @@ fn install_working_dir() -> String {
 
 fn current_user() -> String {
     std::env::var("USER").unwrap_or_default()
-}
-
-fn set_permissions_600(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("set 0600 on {}: {e}", path.display()))?;
-    }
-    let _ = path;
-    Ok(())
 }
 
 /// Run a command, mapping a non-zero exit (or spawn failure) to a readable
@@ -618,5 +645,68 @@ mod tests {
         let plist = render_launchd_plist("/b/aivyx-pa", false, "/w", "a&b<c>\"d'");
         assert!(plist.contains("a&amp;b&lt;c&gt;&quot;d&apos;"));
         assert!(!plist.contains("a&b<c>"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_file_is_never_written_at_a_wider_mode_than_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        // Deliberately not manipulating the process umask here (Task 7's
+        // review found that racy against this crate's own concurrent test
+        // suite, since umask is process-global state). Not needed anyway:
+        // `write_file_at_0600` passes the mode straight to `open(2)`'s
+        // `O_CREAT` argument, and a umask can only ever clear bits from a
+        // requested mode, never add them — 0600 has no group/other bits to
+        // clear, so it lands at 0600 regardless of the ambient umask.
+        let dir = std::env::temp_dir().join(format!(
+            "aivyx-daemon-env-secure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemon.env");
+
+        write_env_file_secure(&path, "test-passphrase").unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "AIVYX_PA_PASSPHRASE=test-passphrase\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_passphrase_checks_keyring_before_prompting_or_writing_a_file() {
+        // AIVYX_PA_PASSPHRASE is asserted absent so the env-var short
+        // circuit can't mask a broken keyring check; if some ambient
+        // environment happens to have it set, skip rather than false-fail.
+        if std::env::var("AIVYX_PA_PASSPHRASE").is_ok() {
+            eprintln!(
+                "skipping resolve_passphrase_checks_keyring_before_prompting_or_writing_a_file: \
+                 AIVYX_PA_PASSPHRASE is set in this environment"
+            );
+            return;
+        }
+        // A real `rpassword::prompt_password` call would block/fail reading
+        // a TTY under `cargo test` — reaching it at all would fail this
+        // test's premise. Never calling it is exactly what proves the
+        // keyring is consulted first.
+        let result = resolve_passphrase_with(|| {
+            Ok(Some(secrecy::SecretString::from(
+                "from-the-keyring".to_string(),
+            )))
+        });
+        assert_eq!(result.unwrap(), "from-the-keyring");
+        // Deliberately not also exercising the `Ok(None)` (keyring reachable,
+        // nothing stored) branch here: it falls through to
+        // `rpassword::prompt_password`, which opens `/dev/tty` directly and
+        // would hang or misbehave under `cargo test`'s non-interactive
+        // environment. The env-var short-circuit above and this keyring-hit
+        // case are what's safely testable without a real TTY.
     }
 }
