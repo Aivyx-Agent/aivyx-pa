@@ -173,6 +173,13 @@ pub struct TeamRunDeps {
     /// `injection_scan_enabled`. Empty (the default) preserves Chapter
     /// Picket's original behavior byte-for-byte.
     pub injection_scan_exempt: std::collections::BTreeSet<String>,
+    /// Task 4 fix round 1 — the operator's `[access] confirm_destructive`
+    /// posture, passed through to `TeamAssembly::build` so a daemon-driven
+    /// team mission's lead and every specialist honor it, same as every
+    /// other agent construction path. `false` (the default) preserves
+    /// pre-Task-4 behavior byte-for-byte — mirrors `injection_scan_enabled`
+    /// above exactly.
+    pub confirm_destructive: bool,
     /// The daemon's own shared kvcache pool/store + served build hash (Task
     /// 5's binding, reused — not re-probed). Passed through to every
     /// specialist's `SpecialistFactory` so a team mission's specialist turns
@@ -1657,6 +1664,7 @@ fn assemble_runtime(
         message_origin,
         deps.injection_scan_enabled,
         deps.injection_scan_exempt.clone(),
+        deps.confirm_destructive,
     )?;
     Ok((assembly.runtime(), meter))
 }
@@ -2348,6 +2356,7 @@ pub(crate) mod tests {
             checkpointer: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
+            confirm_destructive: false,
             kv_cache_handles: None,
             broker_slot_hint_mode: false,
         }
@@ -2388,6 +2397,7 @@ pub(crate) mod tests {
             checkpointer: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
+            confirm_destructive: false,
             kv_cache_handles: None,
             broker_slot_hint_mode: false,
         }

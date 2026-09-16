@@ -179,6 +179,15 @@ pub struct SessionConfig {
     /// byte-identical. Lifted into the `AgentStackSpec` and applied in
     /// `build_agent_stack`.
     pub turn_safety: aivyx_core::TurnSafety,
+    /// Task 4 fix round 1 — the operator's `[access] confirm_destructive`
+    /// posture, threaded into `ConcreteAgent::with_confirm_destructive` by
+    /// `build_agent_stack` (via `AgentStackSpec`) so the agent-level
+    /// confirm-destructive gate in `run_tool_call` (D1) actually fires for
+    /// REPL/Local sessions built through `run_session`. Mirrors the same
+    /// flag already wired into the tool-level `fs.write`/`fs.delete`/
+    /// `git.commit` configs at the binary's construction sites. `false`
+    /// keeps the loop byte-identical to pre-Task-4 behavior.
+    pub confirm_destructive: bool,
 }
 
 /// Phase 137 — agent-stack construction inputs.
@@ -230,6 +239,14 @@ pub struct AgentStackSpec {
     /// non-REPL channels (voice) that want checkpointing set this directly
     /// on the spec, same pattern as `budget_gate`/`rate_gate`.
     pub checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>>,
+    /// Task 4 fix round 1 — the operator's `[access] confirm_destructive`
+    /// posture, applied to the built agent via
+    /// `ConcreteAgent::with_confirm_destructive` in `build_agent_stack`.
+    /// `from_session_config` copies this from `SessionConfig`; the voice
+    /// arm (the other `AgentStackSpec` construction site) sets it directly,
+    /// same pattern as `turn_safety`. `false` leaves the loop
+    /// byte-identical to pre-Task-4 behavior.
+    pub confirm_destructive: bool,
 }
 
 impl AgentStackSpec {
@@ -258,6 +275,7 @@ impl AgentStackSpec {
             rate_gate: None,
             turn_safety: c.turn_safety.clone(),
             checkpointer: None,
+            confirm_destructive: c.confirm_destructive,
         }
     }
 }
@@ -303,6 +321,7 @@ pub fn build_agent_stack(
         rate_gate,
         turn_safety,
         checkpointer,
+        confirm_destructive,
     } = spec;
 
     let provider_for_factory = Arc::clone(&provider);
@@ -353,7 +372,12 @@ pub fn build_agent_stack(
     .with_memory_topic_prefix(memory_topic_prefix)
     .with_budget_gate(budget_gate)
     .with_rate_gate(rate_gate)
-    .with_checkpointer(checkpointer);
+    .with_checkpointer(checkpointer)
+    // Task 4 fix round 1 — same `[access] confirm_destructive` posture as
+    // the tool-level fs.write/fs.delete/git.commit gate; without this the
+    // agent-level confirm-destructive gate in `run_tool_call` (D1) never
+    // fires for the REPL/Local and voice agent stacks built here.
+    .with_confirm_destructive(confirm_destructive);
 
     // Apply the per-turn safety knobs (deadline + small-cycle breaker) through
     // the one shared choke point, so this path can't drift from the others.

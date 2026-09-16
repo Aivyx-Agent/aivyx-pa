@@ -280,6 +280,7 @@ fn base_session_config(harness: &Harness, storage: Arc<dyn Storage>) -> SessionC
         system_prompt_refiner: None,
         prompt_refresher: None,
         turn_safety: Default::default(),
+        confirm_destructive: false,
     }
 }
 
@@ -688,5 +689,186 @@ async fn scripted_fs_read_out_of_sandbox_path_routes_through_denial_recovery() {
     assert!(
         !has_any_tool_call,
         "scope denial must NOT emit a ToolCall entry (loop returns early): {events:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 3 — Task 4 fix round 1. Proves `SessionConfig.confirm_destructive`
+// actually threads all the way through `run_session` →
+// `AgentStackSpec::from_session_config` → `build_agent_stack` →
+// `ConcreteAgent::with_confirm_destructive` into the D1 dispatch gate in
+// `aivyx-core::agent::run_tool_call` — not just that the field exists and
+// compiles. `aivyx-core::agent::tests` already proves the gate itself
+// works on a directly-constructed `ConcreteAgent`
+// (`granted_email_send_scope_still_requires_confirmation_when_confirm_destructive_is_on`);
+// this test is the end-to-end proof for the *other* production
+// construction path (`build_agent_stack`, reached here via `run_session`
+// exactly like the Local/REPL arm in the `aivyx-pa` binary).
+// ---------------------------------------------------------------------------
+
+/// A fake `email.send`-scoped tool. `email.send` is one of the withheld
+/// integration bases (`aivyx_capability::is_withheld_integration_base`)
+/// the Task 4 agent-level confirm gate targets — unlike `fs.write`/
+/// `fs.delete`, which have their own, separate, tool-level
+/// `confirm_destructive` check (`FsWriteToolConfig`/`FsDeleteToolConfig`)
+/// unrelated to the agent-level gate under test here. A fake tool avoids
+/// pulling `aivyx-gmail`'s OAuth-backed crate into this integration test
+/// just to prove config threading.
+struct EmailSendFakeTool {
+    id: aivyx_core::ToolId,
+    schema: Value,
+}
+
+impl EmailSendFakeTool {
+    fn new() -> Self {
+        EmailSendFakeTool {
+            id: aivyx_core::ToolId::new(),
+            schema: json!({}),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for EmailSendFakeTool {
+    fn id(&self) -> aivyx_core::ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "gmail.send"
+    }
+    fn description(&self) -> &str {
+        "fake gmail.send — Task 4 fix round 1 confirm_destructive threading test"
+    }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("email.send").expect("email.send is a known base")
+    }
+    async fn execute(
+        &self,
+        _input: Value,
+        _ctx: &aivyx_core::ToolContext<'_>,
+    ) -> aivyx_core::ToolOutcome {
+        // Would happily complete if it ever ran — proves the *gate* stops
+        // the call before dispatch, not the tool refusing itself.
+        aivyx_core::ToolOutcome::Completed {
+            output: json!({"ok": true}),
+            verified: aivyx_core::Verification::NotApplicable,
+        }
+    }
+}
+
+#[tokio::test]
+async fn scripted_withheld_scope_escalates_when_confirm_destructive_threads_from_session_config()
+{
+    // Storage only — this test doesn't exercise the fs sandbox at all.
+    let sandbox = TestSandbox::new();
+    let storage = open_scratch_storage(&sandbox).await;
+
+    let tool = Arc::new(EmailSendFakeTool::new());
+    let tool_id = tool.id();
+    let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![tool as Arc<dyn Tool>]));
+    // Role explicitly holds `email.send` — bypasses the floor-grant
+    // question entirely, same as the aivyx-core unit test this extends.
+    let capabilities = CapabilitySet::from_scopes([Scope::parse("email.send").unwrap()]);
+
+    let provider = ScriptedProvider::new(vec![ScriptedStep {
+        events: vec![],
+        terminal: LlmStepEnd::ToolCalls {
+            calls: vec![ToolCallEnd {
+                call_id: "toolu_send_01".to_string(),
+                tool_name: "gmail.send".to_string(),
+                input: json!({}),
+                name_resolution: aivyx_llm::NameResolution::Known,
+            }],
+            text_so_far: String::new(),
+            usage: zero_usage(),
+        },
+    }]);
+    // No second scripted step: if the confirm gate fails to short-circuit
+    // and the loop tries to dispatch a second `chat_stream` call, the
+    // scripted provider is exhausted and `run_session` fails loudly
+    // instead of silently completing — the escalation path never reaches
+    // a second planner turn.
+
+    let audit_log = HmacChainLog::new([21u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+
+    let stdin_script = b"send the email\n";
+    let reader = Cursor::new(&stdin_script[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("confirm-destructive-e2e", Vec::new());
+
+    let config = SessionConfig {
+        model: "claude-haiku-4-5-20251001".to_string(),
+        system_prompt: "test".to_string(),
+        max_tokens: 256,
+        capabilities,
+        tools,
+        storage,
+        prompt: String::new(),
+        banner: None,
+        tool_allowlist: None,
+        memory_topic_prefix: None,
+        role_overrides: None,
+        context_window_tokens: None,
+        prune_sink: None,
+        context_provider: None,
+        system_prompt_refiner: None,
+        prompt_refresher: None,
+        turn_safety: Default::default(),
+        // The field under test.
+        confirm_destructive: true,
+    };
+
+    let report = run_session(
+        Arc::clone(&provider) as Arc<dyn LlmProvider>,
+        audit_hook,
+        None,
+        config,
+        channel,
+        reader,
+    )
+    .await
+    .expect("run_session must complete cleanly on an escalated turn");
+
+    assert_eq!(report.turns_run, 1);
+    match report.last_outcome {
+        Some(TurnOutcome::Escalated {
+            pending_tool,
+            ref scope,
+            tool_calls_made,
+            ..
+        }) => {
+            assert_eq!(pending_tool, tool_id);
+            assert_eq!(tool_calls_made, 1);
+            assert_eq!(
+                scope.as_ref().map(|s| s.base()),
+                Some("email.send"),
+                "escalation must carry the withheld scope"
+            );
+        }
+        other => panic!(
+            "expected TurnOutcome::Escalated — proves SessionConfig.confirm_destructive \
+             actually reached the built ConcreteAgent's D1 gate through \
+             build_agent_stack, not just that the field compiles; got {other:?}"
+        ),
+    }
+
+    // The audit's ToolCall entry (still emitted — D1: no action, attempted
+    // or not, goes unaudited) must record RequiresEscalation, confirming
+    // the *gate*, not the fake tool, stopped the call.
+    let log = audit_bridge.writer();
+    log.verify().expect("audit chain must verify");
+    let entries = log.entries().expect("can read entries");
+    let tool_call_outcome = entries.iter().find_map(|e| match &e.event {
+        AuditEvent::ToolCall { outcome, .. } => Some(outcome.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        tool_call_outcome,
+        Some(ToolOutcomeSummary::RequiresEscalation),
+        "ToolCall audit entry must record RequiresEscalation"
     );
 }

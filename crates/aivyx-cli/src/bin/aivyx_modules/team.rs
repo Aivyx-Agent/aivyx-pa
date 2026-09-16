@@ -228,6 +228,7 @@ pub async fn run_mission(
     config: Option<&str>,
     injection_scan_enabled: bool,
     injection_scan_exempt: std::collections::BTreeSet<String>,
+    confirm_destructive: bool,
 ) -> Result<(), String> {
     let config = load_and_clamp_team(config, lead_scopes)?;
     let team_name = config.name.clone();
@@ -275,6 +276,7 @@ pub async fn run_mission(
         aivyx_core::MessageOrigin::Operator,
         injection_scan_enabled,
         injection_scan_exempt.clone(),
+        confirm_destructive,
     )
     .map_err(|e| format!("failed to assemble team: {e}"))?;
 
@@ -315,7 +317,12 @@ pub async fn run_mission(
         };
         Box::new(planner)
     })
-    .with_checkpointer(checkpointer);
+    .with_checkpointer(checkpointer)
+    // Task 4 fix round 1 — same `[access] confirm_destructive` posture as
+    // every specialist `TeamAssembly::build` just wired above; without
+    // this the CLI `team run` lead agent's own D1 confirm-destructive gate
+    // never fires even though its specialists' does.
+    .with_confirm_destructive(confirm_destructive);
     // The lead orchestrates the mission autonomously (delegating to specialists
     // via team.delegate), so it takes the same autonomous safety posture as the
     // specialists (see SpecialistFactory::build): the small-cycle breaker as a

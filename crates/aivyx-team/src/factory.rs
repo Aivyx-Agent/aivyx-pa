@@ -93,6 +93,14 @@ pub struct SpecialistFactory {
     /// `LlmPlanner::with_broker_slot_hint`'s own doc comment). `false`
     /// (the default) preserves pre-broker behavior.
     broker_slot_hint_mode: bool,
+    /// Task 4 fix round 1 — the operator's `[access] confirm_destructive`
+    /// posture, applied to every specialist (and the lead, when built
+    /// through this same factory — see `TeamAssembly::lead_tools`) via
+    /// `ConcreteAgent::with_confirm_destructive`, so an unattended team
+    /// mission's agent-level confirm-destructive gate in `run_tool_call`
+    /// (D1) fires exactly like every other agent construction path. `false`
+    /// (the default) preserves pre-Task-4 behavior.
+    confirm_destructive: bool,
 }
 
 impl SpecialistFactory {
@@ -116,6 +124,7 @@ impl SpecialistFactory {
             broker_slot_hint_mode: false,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
+            confirm_destructive: false,
         }
     }
 
@@ -194,6 +203,14 @@ impl SpecialistFactory {
         self
     }
 
+    /// Task 4 fix round 1 — the operator's `[access] confirm_destructive`
+    /// posture, applied to every specialist this factory builds. `false`
+    /// (the default) preserves pre-Task-4 behavior byte-for-byte.
+    pub fn with_confirm_destructive(mut self, confirm_destructive: bool) -> Self {
+        self.confirm_destructive = confirm_destructive;
+        self
+    }
+
     /// Build an attenuated specialist agent from `member`, with its
     /// capabilities capped at `ceiling` (NT-02) — the operator's real,
     /// un-narrowed authority, not any particular member's own declared
@@ -269,7 +286,10 @@ impl SpecialistFactory {
             },
         )
         .with_checkpointer(self.checkpointer.clone())
-        .with_memory_topic_override(memory_topic.map(String::from));
+        .with_memory_topic_override(memory_topic.map(String::from))
+        // Task 4 fix round 1 — same `[access] confirm_destructive` posture
+        // every other agent construction path threads through.
+        .with_confirm_destructive(self.confirm_destructive);
         // Team specialists run autonomously inside a mission — no human watches
         // each turn to `/cancel` a runaway — so they take the autonomous safety
         // posture: the small-cycle breaker as a built-in floor (always on, like

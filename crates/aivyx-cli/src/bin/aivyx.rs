@@ -8348,6 +8348,10 @@ async fn run_async(
             config.as_deref(),
             injection_scan_enabled,
             injection_scan_exempt.clone(),
+            // Task 4 fix round 1 — same `[access] confirm_destructive`
+            // posture as every other agent construction path in this
+            // function.
+            confirm_destructive,
         )
         .await;
     }
@@ -8757,7 +8761,13 @@ async fn run_async(
         )
         .with_tool_allowlist(child_tool_allowlist)
         .with_memory_topic_prefix(child_memory_topic_prefix)
-        .with_checkpointer(checkpointer_for_factory.clone());
+        .with_checkpointer(checkpointer_for_factory.clone())
+        // Task 4 fix round 1 — same `[access] confirm_destructive`
+        // posture as the tool-level gate wired above on this same
+        // child's fs.write/fs.delete/git.commit configs; without this
+        // the agent-level confirm-destructive gate in `run_tool_call`
+        // (D1) never fires for role-switch child agents.
+        .with_confirm_destructive(confirm_destructive);
         let child_agent = aivyx_core::TurnSafety::interactive(
             turn_timeout_secs,
             cycle_detection,
@@ -9216,6 +9226,10 @@ async fn run_async(
                 broker_slot_hint_mode,
                 injection_scan_enabled,
                 injection_scan_exempt: injection_scan_exempt.clone(),
+                // Task 4 fix round 1 — same `[access] confirm_destructive`
+                // posture as every other agent construction path in this
+                // function.
+                confirm_destructive,
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`
@@ -9257,7 +9271,14 @@ async fn run_async(
                 .with_memory_topic_prefix(memory_topic_prefix)
                 .with_budget_gate(daemon_budget_gate)
                 .with_rate_gate(daemon_rate_gate)
-                .with_checkpointer(checkpointer.clone());
+                .with_checkpointer(checkpointer.clone())
+                // Task 4 fix round 1 — same `[access] confirm_destructive`
+                // posture as the tool-level gate wired into fs.write/
+                // fs.delete/git.commit above; without this the agent-level
+                // confirm-destructive gate in `run_tool_call` (D1) never
+                // fires for the daemon-run agent (every frontend: Local,
+                // Telegram, Web, ... talks to this one agent).
+                .with_confirm_destructive(confirm_destructive);
         let daemon_agent = aivyx_core::TurnSafety::interactive(
             turn_timeout_secs,
             cycle_detection,
@@ -9988,6 +10009,11 @@ async fn run_async(
                     injection_scan_enabled,
                     injection_scan_exempt.clone(),
                 ),
+                // Task 4 fix round 1 — same `[access] confirm_destructive`
+                // posture as the tool-level fs.write/fs.delete/git.commit
+                // gate wired above from this same `confirm_destructive`
+                // local.
+                confirm_destructive,
             };
 
             let stdin = io::stdin();
@@ -10487,6 +10513,10 @@ async fn run_async(
                         injection_scan_exempt.clone(),
                     ),
                     checkpointer: checkpointer.clone(),
+                    // Task 4 fix round 1 — same `[access] confirm_destructive`
+                    // posture as the Local arm and the tool-level
+                    // fs.write/fs.delete/git.commit gate.
+                    confirm_destructive,
                 };
                 let agent = aivyx_channel::build_agent_stack(
                     Arc::clone(&provider),

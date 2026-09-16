@@ -79,6 +79,11 @@ impl TeamAssembly {
         message_origin: aivyx_core::MessageOrigin,
         injection_scan_enabled: bool,
         injection_scan_exempt: std::collections::BTreeSet<String>,
+        // Task 4 fix round 1 — the operator's `[access] confirm_destructive`
+        // posture, threaded into `SpecialistFactory::with_confirm_destructive`
+        // so every specialist (and the lead, when built through this same
+        // factory) honors it, same as every other agent construction path.
+        confirm_destructive: bool,
     ) -> Result<Self, TeamError> {
         config.validate()?;
         let dialogue = config.dialogue.clone();
@@ -91,7 +96,10 @@ impl TeamAssembly {
             .with_kv_cache(kv_cache_handles)
             .with_broker_slot_hint_mode(broker_slot_hint_mode)
             .with_injection_scan_enabled(injection_scan_enabled)
-            .with_injection_scan_exempt(injection_scan_exempt);
+            .with_injection_scan_exempt(injection_scan_exempt)
+            // Task 4 fix round 1 — same `[access] confirm_destructive`
+            // posture as every other agent construction path.
+            .with_confirm_destructive(confirm_destructive);
         let pool = Arc::new(SpecialistPool::new(
             factory,
             config.clone(),
@@ -218,6 +226,7 @@ mod tests {
             aivyx_core::MessageOrigin::Operator,
             true,
             std::collections::BTreeSet::new(),
+            false,
         )
         .expect("valid team")
     }
@@ -241,6 +250,7 @@ mod tests {
             aivyx_core::MessageOrigin::Operator,
             true,
             std::collections::BTreeSet::new(),
+            false,
         );
         assert!(matches!(result, Err(TeamError::Config(m)) if m.contains("lead")));
     }
@@ -310,6 +320,7 @@ mod tests {
             aivyx_core::MessageOrigin::Operator,
             true,
             std::collections::BTreeSet::new(),
+            false,
         )
         .unwrap();
 
