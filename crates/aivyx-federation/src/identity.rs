@@ -31,6 +31,19 @@ use crate::FederationError;
 /// Maximum age of a signed request before it is considered stale.
 const MAX_REQUEST_AGE_SECS: u64 = 60;
 
+/// How far into the future a header's timestamp may be before it's rejected
+/// outright, rather than accepted as merely "not yet expired". Without this
+/// bound, `now.saturating_sub(header.timestamp)` on an artificially
+/// future-dated header saturates to `0` and the header would never expire
+/// (a small allowance covers legitimate clock skew between peers).
+const FUTURE_SKEW_TOLERANCE_SECS: u64 = 5;
+
+/// Maximum number of nonces the replay guard's `seen` set may hold before it
+/// evicts the oldest entry to bound memory. Without this cap, an
+/// authenticated peer sending a flood of distinct (but individually valid)
+/// requests grows the set forever.
+const MAX_REPLAY_GUARD_ENTRIES: usize = 10_000;
+
 /// HKDF `info` that derives the federation identity-key-wrapping subkey from the
 /// storage [`MasterKey`]. Versioned so a future rotation is a new label, never a
 /// silent reinterpretation of old bytes.
@@ -59,36 +72,52 @@ pub struct SignedHeader {
 /// [`check_and_record`](ReplayGuard::check_and_record) **after** signature
 /// verification succeeds.
 pub struct ReplayGuard {
-    seen: Mutex<std::collections::HashSet<String>>,
-    last_evict: Mutex<u64>,
+    /// nonce -> the (virtual) unix-seconds timestamp it was inserted at.
+    /// A map rather than a set specifically so eviction can be per-entry
+    /// (each nonce ages out `MAX_REQUEST_AGE_SECS` after *its own* insertion)
+    /// instead of a global periodic clear, which used to give a nonce
+    /// recorded just before the clear boundary up to that whole window of
+    /// extra replayability.
+    seen: Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl ReplayGuard {
     pub fn new() -> Self {
         Self {
-            seen: Mutex::new(std::collections::HashSet::new()),
-            last_evict: Mutex::new(now_secs()),
+            seen: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
     /// Record this header's nonce; `Err` if it was already seen (a replay).
     pub fn check_and_record(&self, header: &SignedHeader) -> Result<(), FederationError> {
+        self.check_and_record_at(header, now_secs())
+    }
+
+    /// [`Self::check_and_record`] with an explicit `now`, so tests can drive
+    /// per-entry expiry across what used to be a flush boundary without
+    /// sleeping in real time.
+    fn check_and_record_at(&self, header: &SignedHeader, now: u64) -> Result<(), FederationError> {
         let nonce = format!(
             "{}:{}:{}",
             header.instance_id, header.timestamp, header.signature
         );
-        let now = now_secs();
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
-        {
-            let mut last = self.last_evict.lock().unwrap_or_else(|e| e.into_inner());
-            if now.saturating_sub(*last) >= MAX_REQUEST_AGE_SECS {
-                seen.clear();
-                *last = now;
-            }
-        }
-        if !seen.insert(nonce) {
+        // Sweep expired entries first -- per-entry, not a global periodic
+        // clear, so a nonce's replay window is exactly its own
+        // MAX_REQUEST_AGE_SECS from insertion, never extended by however
+        // close it landed to a shared flush boundary.
+        seen.retain(|_, &mut inserted| now.saturating_sub(inserted) < MAX_REQUEST_AGE_SECS);
+        if seen.contains_key(&nonce) {
             return Err(FederationError::Identity("replayed federation request".into()));
         }
+        if seen.len() >= MAX_REPLAY_GUARD_ENTRIES {
+            // Bound memory by dropping the single oldest entry rather than
+            // refusing a legitimately-fresh new request outright.
+            if let Some(oldest) = seen.iter().min_by_key(|(_, t)| *t).map(|(k, _)| k.clone()) {
+                seen.remove(&oldest);
+            }
+        }
+        seen.insert(nonce, now);
         Ok(())
     }
 }
@@ -348,7 +377,10 @@ impl Identity {
         header: &SignedHeader,
         body: &[u8],
     ) -> Result<(), FederationError> {
-        if now_secs().saturating_sub(header.timestamp) > MAX_REQUEST_AGE_SECS {
+        let now = now_secs();
+        let is_too_old = now.saturating_sub(header.timestamp) > MAX_REQUEST_AGE_SECS;
+        let is_too_far_in_future = header.timestamp > now.saturating_add(FUTURE_SKEW_TOLERANCE_SECS);
+        if is_too_old || is_too_far_in_future {
             return Err(FederationError::Identity("federation request expired".into()));
         }
         let key_bytes = BASE64
@@ -602,6 +634,70 @@ mod tests {
         let guard = ReplayGuard::new();
         assert!(guard.check_and_record(&header).is_ok());
         assert!(guard.check_and_record(&header).is_err(), "replay must be rejected");
+    }
+
+    #[tokio::test]
+    async fn nonce_replay_is_rejected_even_across_a_flush_boundary() {
+        // The old implementation cleared its *entire* `seen` set every
+        // MAX_REQUEST_AGE_SECS (60s) of wall-clock elapsed since the last
+        // clear -- not per entry. A nonce recorded at virtual t=59 (just
+        // before that global clear at t=60) would have been forgotten the
+        // instant the clear fired, letting a replay at t=61 through even
+        // though the nonce itself was only 2s old. Per-entry expiry must
+        // reject it instead: it only ages out MAX_REQUEST_AGE_SECS after its
+        // *own* insertion (t=59 + 60 = t=119), not at some shared boundary.
+        let id = Identity::generate("flush-boundary".into()).unwrap();
+        let header = id.sign_request(b"once").await.unwrap();
+        let guard = ReplayGuard::new();
+
+        assert!(
+            guard.check_and_record_at(&header, 59).is_ok(),
+            "first use at t=59 must be recorded"
+        );
+        assert!(
+            guard.check_and_record_at(&header, 61).is_err(),
+            "replay at t=61 (past the OLD global-clear boundary at t=60, but \
+             well within this nonce's own 60s window) must still be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_future_dated_header_is_rejected_not_treated_as_permanently_fresh() {
+        // Under the old `saturating_sub` freshness check, a header timestamped
+        // in the future saturates the age computation to 0, so it reads as
+        // maximally fresh forever -- it would never expire. A future-skew
+        // bound must reject it outright instead.
+        let id = Identity::generate("future-dated".into()).unwrap();
+        let mut header = id.sign_request(b"body").await.unwrap();
+        header.timestamp = now_secs() + 3600; // 1 hour in the future
+        let result = Identity::verify_request(&id.public_key_base64(), &header, b"body");
+        assert!(
+            result.is_err(),
+            "a header timestamped an hour in the future must be rejected"
+        );
+    }
+
+    #[test]
+    fn the_seen_set_does_not_grow_without_bound() {
+        let guard = ReplayGuard::new();
+        let extra_beyond_cap = 50;
+        for i in 0..(MAX_REPLAY_GUARD_ENTRIES + extra_beyond_cap) {
+            let header = SignedHeader {
+                instance_id: "cap-test".into(),
+                timestamp: i as u64,
+                signature: format!("sig-{i}"),
+            };
+            // Constant `now` -- nothing ages out via the freshness sweep here;
+            // only the size cap's oldest-first eviction should keep this bounded.
+            guard
+                .check_and_record_at(&header, 0)
+                .expect("each nonce here is distinct, so none should be a replay");
+        }
+        let len = guard.seen.lock().unwrap().len();
+        assert!(
+            len <= MAX_REPLAY_GUARD_ENTRIES,
+            "seen set grew to {len}, exceeding the {MAX_REPLAY_GUARD_ENTRIES} cap"
+        );
     }
 
     #[test]
