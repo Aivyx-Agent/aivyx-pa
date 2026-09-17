@@ -415,8 +415,11 @@ pub fn read_manifest(payload: &[u8]) -> Result<PackManifest, PackError> {
 }
 
 /// True when `rel` is a safe archive-relative path: no absolute roots,
-/// no `..`, no prefix components.
-fn safe_relative(rel: &Path) -> bool {
+/// no `..`, no prefix components. `pub` so callers outside this crate
+/// (e.g. `aivyx-cli`'s pack installer) can apply the same check to
+/// manifest-declared paths (`bin`, `team_config`) before joining them
+/// onto an install directory.
+pub fn safe_relative(rel: &Path) -> bool {
     rel.components()
         .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
         && !rel.as_os_str().is_empty()

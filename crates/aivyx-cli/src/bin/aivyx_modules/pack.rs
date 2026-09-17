@@ -123,7 +123,7 @@ fn install(file: &Path) -> Result<(), String> {
             println!("tool process {:?} already wired — leaving it", tp.name);
             continue;
         }
-        let bin = install_dir.join("bin").join(&tp.bin);
+        let bin = resolve_bin_path(&install_dir, &tp.bin)?;
         if !bin.is_file() {
             return Err(format!(
                 "manifest names bin {:?} but the payload didn't provide it",
@@ -139,7 +139,7 @@ fn install(file: &Path) -> Result<(), String> {
 
     let mut team_set = false;
     if let Some(team_rel) = &manifest.team_config {
-        let team_path = install_dir.join("config").join(team_rel);
+        let team_path = resolve_team_config_path(&install_dir, team_rel)?;
         if !team_path.is_file() {
             return Err(format!(
                 "manifest names team_config {team_rel:?} but the payload \
@@ -168,6 +168,31 @@ fn install(file: &Path) -> Result<(), String> {
         if team_set { ", team config set" } else { "" },
     );
     Ok(())
+}
+
+/// Resolve a manifest's `bin` path under `install_dir/bin`. Rejects any
+/// `bin` value that would escape `install_dir` (e.g. `../../../../usr/bin/curl`)
+/// using the same check that already guards pack archive extraction.
+fn resolve_bin_path(install_dir: &Path, bin: &str) -> Result<PathBuf, String> {
+    let rel = Path::new(bin);
+    if !aivyx_pack::safe_relative(rel) {
+        return Err(format!(
+            "manifest 'bin' path {bin:?} escapes the install directory"
+        ));
+    }
+    Ok(install_dir.join("bin").join(rel))
+}
+
+/// Resolve a manifest's `team_config` path under `install_dir/config`.
+/// Rejects any path that would escape `install_dir`.
+fn resolve_team_config_path(install_dir: &Path, team_rel: &str) -> Result<PathBuf, String> {
+    let rel = Path::new(team_rel);
+    if !aivyx_pack::safe_relative(rel) {
+        return Err(format!(
+            "manifest 'team_config' path {team_rel:?} escapes the install directory"
+        ));
+    }
+    Ok(install_dir.join("config").join(rel))
 }
 
 /// The last-appended `[[tool_process]]` gains an `args` array. Split
@@ -278,6 +303,43 @@ args = ["--flag"]
         // No-clobber half of the Mise rule.
         assert!(!set_team_config_path_if_absent(&mut doc, "/y/other.toml"));
         assert!(doc.to_string().contains("/x/team.toml"));
+    }
+
+    #[test]
+    fn resolve_bin_path_rejects_a_traversal_bin_path() {
+        let install_dir = Path::new("/opt/aivyx-pa/packs/kitchen/1.0.0");
+        let result = resolve_bin_path(install_dir, "../../../../usr/bin/curl");
+        assert!(result.is_err(), "expected a traversal bin path to be rejected");
+    }
+
+    #[test]
+    fn resolve_bin_path_accepts_a_normal_bin_path() {
+        let install_dir = Path::new("/opt/aivyx-pa/packs/kitchen/1.0.0");
+        let result = resolve_bin_path(install_dir, "kitchen-tool");
+        assert_eq!(
+            result.unwrap(),
+            install_dir.join("bin").join("kitchen-tool")
+        );
+    }
+
+    #[test]
+    fn resolve_team_config_path_rejects_a_traversal_path() {
+        let install_dir = Path::new("/opt/aivyx-pa/packs/kitchen/1.0.0");
+        let result = resolve_team_config_path(install_dir, "../../../../etc/passwd");
+        assert!(
+            result.is_err(),
+            "expected a traversal team_config path to be rejected"
+        );
+    }
+
+    #[test]
+    fn resolve_team_config_path_accepts_a_normal_path() {
+        let install_dir = Path::new("/opt/aivyx-pa/packs/kitchen/1.0.0");
+        let result = resolve_team_config_path(install_dir, "kitchen-boh.toml");
+        assert_eq!(
+            result.unwrap(),
+            install_dir.join("config").join("kitchen-boh.toml")
+        );
     }
 
     #[test]
