@@ -103,7 +103,8 @@ heuristic the two existing adapters use:
   DMs all live here. **Security-audit fix (Task 10, 2026-09-16):**
   this is conditional, not automatic — `SemiTrusted` requires the
   chat/channel to match the operator's configured allowlist
-  (`chat_filter`/`channel_filter`, see `docs/INSTALL.md`); an
+  (`chat_id` for Telegram, `channel_filter` for Discord/Slack, see
+  `docs/INSTALL.md`); an
   unallowlisted chat/channel on the same platform is `Untrusted`
   instead. All three shipped adapters (`aivyx-telegram`,
   `aivyx-discord`, `aivyx-slack`) implement this the same way — see

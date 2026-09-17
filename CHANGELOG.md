@@ -56,6 +56,26 @@ All notable changes to Aivyx are recorded here. This project adheres to
   closes Chapter N (Release & Distribution Integrity). See
   `docs/archive/phases/PHASE_197.md`.
 
+### Security
+
+- **Webhook-triggered turns now require authentication and run at
+  `Untrusted`, not `Trusted`.** Part of the 2026-09-16 security-audit
+  fixes: previously any local process (or any webpage the operator
+  merely visited, via a CORS "simple request") could fire an agent turn
+  through the webhook listener with no shared secret, and that turn ran
+  at the same trust tier as a local CLI session. Every webhook now
+  carries a `secret` (generated once at creation, shown only then) that
+  callers must present as `Authorization: Bearer <secret>`, and the
+  triggered turn runs at `Untrusted`. **If an existing webhook's prompt
+  relies on tools gated above `Untrusted`** (e.g. `fs.write`,
+  `shell.exec`), those tool calls will now fail their capability check
+  after upgrading — grant the narrower scope the webhook's task actually
+  needs via that role's `capability_scopes`, or rework the prompt,
+  rather than restoring blanket trust. Existing webhook records created
+  before this change have no `secret` on disk and, by design, an unset
+  secret never authorizes — re-create any such webhook to get a fresh
+  secret and keep it callable.
+
 ### Fixed
 
 - **Telegram/Discord/Slack's standalone (`--no-daemon`) session paths now
