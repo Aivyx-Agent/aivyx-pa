@@ -896,6 +896,86 @@ mod tests {
     }
 
     #[test]
+    fn the_seen_set_sweeps_expired_entries_but_keeps_fresh_ones_at_the_cap() {
+        // Review round 3 follow-up (found during round-3's own re-review):
+        // pinning `now` at a constant to force every eviction through
+        // `min_by_key` (the fix above) left the `retain` sweep's own
+        // predicate untested -- with `now` constant, `now.saturating_sub(ts)`
+        // is always 0 for every entry, so `retain` runs at the cap but never
+        // actually removes anything there either. Verified by mutation:
+        // inverting the sweep predicate to keep only *expired* entries and
+        // drop fresh ones passed the entire aivyx-federation suite unchanged.
+        //
+        // This test drives a real split: half the entries genuinely expired
+        // (timestamp far older than MAX_REQUEST_AGE_SECS before `now`), half
+        // genuinely fresh (timestamp == `now`), filled to exactly the cap so
+        // the next call triggers the sweep. A correct sweep reclaims exactly
+        // the expired half and keeps the fresh half; the inverted-predicate
+        // mutant above does the opposite, which this test now catches.
+        let guard = ReplayGuard::new();
+        let now = 1_000_000_000u64;
+        let half = MAX_REPLAY_GUARD_ENTRIES / 2;
+
+        for i in 0..half {
+            let header = SignedHeader {
+                instance_id: "sweep-test-expired".into(),
+                timestamp: now - MAX_REQUEST_AGE_SECS - 10_000,
+                signature: format!("sig-expired-{i}"),
+            };
+            guard
+                .check_and_record_at(&header, now)
+                .expect("each expired-group nonce here is distinct, so none should be a replay");
+        }
+        for i in 0..half {
+            let header = SignedHeader {
+                instance_id: "sweep-test-fresh".into(),
+                timestamp: now,
+                signature: format!("sig-fresh-{i}"),
+            };
+            guard
+                .check_and_record_at(&header, now)
+                .expect("each fresh-group nonce here is distinct, so none should be a replay");
+        }
+
+        // The map is now at exactly the cap (no eviction has run yet --
+        // every call above saw `len() < MAX_REPLAY_GUARD_ENTRIES`). One more
+        // call pushes `len() >= MAX_REPLAY_GUARD_ENTRIES`, triggering the
+        // sweep.
+        {
+            let seen = guard.seen.lock().unwrap();
+            assert_eq!(seen.len(), MAX_REPLAY_GUARD_ENTRIES);
+        }
+        let trigger_header = SignedHeader {
+            instance_id: "sweep-test-trigger".into(),
+            timestamp: now,
+            signature: "sig-trigger".into(),
+        };
+        guard
+            .check_and_record_at(&trigger_header, now)
+            .expect("the trigger nonce is distinct, so it should not be a replay");
+
+        let seen = guard.seen.lock().unwrap();
+        for i in 0..half {
+            let expired_nonce = format!("sweep-test-expired:{}:sig-expired-{i}", now - MAX_REQUEST_AGE_SECS - 10_000);
+            assert!(
+                !seen.contains_key(&expired_nonce),
+                "expired nonce sig-expired-{i} should have been swept, but is still present"
+            );
+        }
+        for i in 0..half {
+            let fresh_nonce = format!("sweep-test-fresh:{now}:sig-fresh-{i}");
+            assert!(
+                seen.contains_key(&fresh_nonce),
+                "fresh nonce sig-fresh-{i} should have survived the sweep, but was removed"
+            );
+        }
+        assert!(
+            seen.contains_key(&format!("sweep-test-trigger:{now}:sig-trigger")),
+            "the trigger nonce itself must be present after its own insertion"
+        );
+    }
+
+    #[test]
     fn debug_redacts_the_signing_key() {
         let id = Identity::generate("redact-test".into()).unwrap();
         let dbg = format!("{id:?}");
