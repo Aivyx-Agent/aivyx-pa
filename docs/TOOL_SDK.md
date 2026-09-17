@@ -311,8 +311,11 @@ You **do not** need to:
 
 ## 6. Capability scope declaration and operator override
 
-The tool declares `required_scope` per tool in `ToolRegister`.
-The operator's `aivyx-pa.toml` may override:
+The tool declares `required_scope` per tool in `ToolRegister`. This
+is **self-asserted** — a substituted binary at the configured
+`command` path can declare whatever scope it likes. The operator's
+`aivyx-pa.toml` has two independent, per-tool-name mechanisms to
+push back on that declaration:
 
 ```toml
 [[tool_process]]
@@ -321,24 +324,51 @@ command = "python3"
 args = ["/path/to/examples/python-tool/tool.py"]
 
 # Optional per-tool scope overrides.
-# Operator can only narrow, never widen.
+# Operator can only narrow, never widen — the override *becomes* the
+# effective scope, but only when it is itself covered by (is_granted_by)
+# what the tool actually declared.
 [tool_process.scope_overrides]
 wordcount = "tool.wordcount:read-only"  # tighter than the tool's declared "tool.wordcount"
+
+# Optional per-tool expected-scope ceiling (Task 15,
+# security-audit-fixes 2026-09-16). Unlike scope_overrides, this never
+# replaces the effective scope — it only validates: the declared scope
+# must be covered by (is_granted_by) the value here, or registration
+# is refused. This is the mechanism to use for a tool with no
+# scope_overrides entry, which would otherwise have its self-declared
+# scope trusted verbatim with no operator-side check at all.
+[tool_process.expected_scopes]
+wordcount = "tool.wordcount"
 ```
 
-**Narrowing rules:**
+**Narrowing rules (`scope_overrides`):**
 - Operator overrides must be `is_granted_by(declared)` — i.e.,
-  strictly attenuated.
+  strictly attenuated. An override that isn't covered by what the
+  tool declared is a configuration error, and registration for that
+  tool is refused (not silently widened to the override).
 - The daemon checks the *override-or-declared* scope against the
   active role's envelope.
 - Tools whose effective scope is not granted are silently
   excluded from the agent's tool registry. The daemon logs the
   rejection.
 
-The narrowing rule is the integration guarantee that makes
+**Ceiling rule (`expected_scopes`):**
+- When set for a tool name, the tool's declared scope must be
+  `is_granted_by` the configured value (declared ⊆ expected), or
+  registration for that tool is refused with a logged reason. This
+  never changes what scope is granted — it is a pure validation gate,
+  independent of and composable with `scope_overrides` (both may be
+  set for the same tool name; the ceiling is checked against the raw
+  declared scope, then narrowing is applied as usual).
+
+Together these are the integration guarantee that makes
 operator-side scope confinement meaningful — a malicious tool
-declaring overbroad scopes cannot trick the operator into
-granting them, because the operator's config is the floor.
+declaring overbroad scopes cannot trick the operator into granting
+them, because the operator's config is the floor, *provided the
+operator has configured `scope_overrides` and/or `expected_scopes`
+for that tool name*. A tool name with neither configured still has
+its self-declared scope trusted verbatim — operators who want the
+guarantee for a given tool process must configure one of the two.
 
 ---
 

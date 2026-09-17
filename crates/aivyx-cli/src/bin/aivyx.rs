@@ -5427,6 +5427,82 @@ async fn checkpointer_for(
 // `AivyxConfig` **is** the consolidated shape, so passing it whole
 // lets every downstream consumer pull its exact field without the
 // binary playing field-forwarder.
+/// Resolves the *effective* scope for one tool a `[[tool_process]]`
+/// entry declared over the wire in `ToolRegister`, applying the
+/// operator's configured expectations (Task 15,
+/// security-audit-fixes 2026-09-16). Extracted as its own function
+/// so the resolution logic is directly unit-testable without
+/// spawning a real tool-process subprocess/bridge.
+///
+/// A tool process's `required_scope` is *self-asserted* over the
+/// wire — a substituted binary at the configured `command` path can
+/// declare whatever scope it likes. Two independent, per-tool-name
+/// operator config maps push back on that:
+///
+/// - `expected_scopes` — a ceiling that never changes the effective
+///   scope, it only validates: if set for this tool name, the
+///   declared scope must be `is_granted_by` it (declared ⊆
+///   expected), or registration is refused. This is the check that
+///   closes the gap for tools with no `scope_overrides` entry, which
+///   were previously trusted verbatim.
+/// - `scope_overrides` — narrows: if set, it *becomes* the effective
+///   scope, but only when it is itself `is_granted_by` the declared
+///   scope (override ⊆ declared); otherwise the override is wider
+///   than what the tool even declared needing, which is treated as
+///   an operator misconfiguration and registration is refused.
+///
+/// Both checks use `Scope::is_granted_by` — the only authoritative
+/// grant-relationship comparison (D4) — never ad hoc string
+/// comparison. Returns `Err(reason)` with a human-readable reason
+/// (no tool-process/tool-name prefix — the caller adds that) when
+/// registration must be refused.
+fn resolve_tool_scope(
+    tp_cfg: &aivyx_config::ToolProcessConfig,
+    tool_name: &str,
+    declared_scope_str: &str,
+) -> Result<Scope, String> {
+    let declared = match aivyx_capability::Scope::parse(declared_scope_str) {
+        Some(s) => s,
+        None => {
+            return Err(format!("declared unparseable scope {declared_scope_str:?}"));
+        }
+    };
+
+    if let Some(expected_str) = tp_cfg.expected_scopes.get(tool_name) {
+        let expected = match aivyx_capability::Scope::parse(expected_str) {
+            Some(s) => s,
+            None => {
+                return Err(format!("has unparseable expected_scope {expected_str:?}"));
+            }
+        };
+        if !declared.is_granted_by(&expected) {
+            return Err(format!(
+                "declared scope {declared_scope_str:?} is not covered by configured \
+                 expected_scope {expected_str:?}"
+            ));
+        }
+    }
+
+    match tp_cfg.scope_overrides.get(tool_name) {
+        Some(override_str) => {
+            let parsed = match aivyx_capability::Scope::parse(override_str) {
+                Some(s) => s,
+                None => {
+                    return Err(format!("has unparseable scope_override {override_str:?}"));
+                }
+            };
+            if !parsed.is_granted_by(&declared) {
+                return Err(format!(
+                    "scope_override {override_str:?} is not narrower than declared \
+                     {declared_scope_str:?}"
+                ));
+            }
+            Ok(parsed)
+        }
+        None => Ok(declared),
+    }
+}
+
 /// The tool-derived slice of `compute_backcompat_floor`'s input: every
 /// registered tool's own `required_scope()`, filtered down to only the
 /// tools that have explicitly opted in via
@@ -8058,46 +8134,23 @@ async fn run_async(
 
         let mut registered = 0usize;
         for descriptor in bridge.descriptors() {
-            // Resolve the effective scope: operator override (if
-            // any) or the declared scope. Operator overrides must
-            // be `is_granted_by(declared)` — anything wider is a
-            // configuration error and the tool is skipped.
-            let declared = match aivyx_capability::Scope::parse(&descriptor.required_scope) {
-                Some(s) => s,
-                None => {
-                    eprintln!(
-                        "aivyx-pa: tool process {:?} tool {:?} declared unparseable scope {:?} — \
-                         skipped",
-                        tp_cfg.name, descriptor.name, descriptor.required_scope,
-                    );
-                    continue;
-                }
-            };
-            let effective_scope = match tp_cfg.scope_overrides.get(&descriptor.name) {
-                Some(override_str) => {
-                    let parsed = match aivyx_capability::Scope::parse(override_str) {
-                        Some(s) => s,
-                        None => {
-                            eprintln!(
-                                "aivyx-pa: tool process {:?} tool {:?} has unparseable \
-                                 scope_override {:?} — skipped",
-                                tp_cfg.name, descriptor.name, override_str,
-                            );
-                            continue;
-                        }
-                    };
-                    if !parsed.is_granted_by(&declared) {
+            // Resolve the effective scope against the operator's
+            // configured expectations (Task 15) — see
+            // `resolve_tool_scope`'s doc comment for the full
+            // rationale. A tool process's declared scope is
+            // self-asserted over the wire and must never be adopted
+            // verbatim without a check against operator config.
+            let effective_scope =
+                match resolve_tool_scope(tp_cfg, &descriptor.name, &descriptor.required_scope) {
+                    Ok(s) => s,
+                    Err(reason) => {
                         eprintln!(
-                            "aivyx-pa: tool process {:?} tool {:?} scope_override {:?} is not \
-                             narrower than declared {:?} — skipped",
-                            tp_cfg.name, descriptor.name, override_str, descriptor.required_scope,
+                            "aivyx-pa: tool process {:?} tool {:?} {reason} — skipped",
+                            tp_cfg.name, descriptor.name,
                         );
                         continue;
                     }
-                    parsed
-                }
-                None => declared,
-            };
+                };
 
             let proxy = aivyx_tool::ToolProxy::with_override_scope(
                 std::sync::Arc::clone(&bridge),
@@ -11761,6 +11814,143 @@ mod tests {
         assert!(
             !scope_strings.contains(&"notify.dispatch"),
             "notify.dispatch must be absent when has_tool_processes is false"
+        );
+    }
+
+    // ---- Task 15 — resolve_tool_scope (validate a tool process's
+    // self-declared scope against operator config at registration) ------
+
+    /// A minimal `ToolProcessConfig` with everything but `name` and
+    /// `command` at defaults — the fields these tests actually vary
+    /// (`scope_overrides`, `expected_scopes`) are set per-test.
+    fn fake_tp_cfg() -> aivyx_config::ToolProcessConfig {
+        aivyx_config::ToolProcessConfig {
+            name: "test-tool-process".to_string(),
+            command: "/bin/true".to_string(),
+            args: vec![],
+            env: vec![],
+            scope_overrides: std::collections::HashMap::new(),
+            expected_scopes: std::collections::HashMap::new(),
+            enabled: true,
+            sandbox: None,
+            disable_sandbox: false,
+        }
+    }
+
+    #[test]
+    fn tool_registration_is_refused_when_declared_scope_is_not_covered_by_the_configured_expectation()
+     {
+        // Operator configured an expected_scopes ceiling of "notion.read"
+        // for the "notion" tool. A substituted/malicious binary at the
+        // configured `command` path declares "notion.write" instead —
+        // broader/different, not a narrowing, and a different KNOWN_BASES
+        // entry entirely, so it can never be covered by "notion.read".
+        let mut tp_cfg = fake_tp_cfg();
+        tp_cfg
+            .expected_scopes
+            .insert("notion".to_string(), "notion.read".to_string());
+
+        let result = resolve_tool_scope(&tp_cfg, "notion", "notion.write");
+
+        assert!(
+            result.is_err(),
+            "a declared scope outside the configured expected_scopes ceiling must be refused, \
+             got {result:?}"
+        );
+        let reason = result.unwrap_err();
+        assert!(
+            reason.contains("not covered by configured expected_scope"),
+            "the logged refusal reason should name the mechanism that rejected it, got {reason:?}"
+        );
+    }
+
+    #[test]
+    fn tool_registration_succeeds_when_declared_scope_is_covered_by_the_configured_expectation() {
+        // The legitimate case: the tool declares exactly the scope the
+        // operator expected. No scope_overrides entry, so the declared
+        // scope (validated, not replaced) is the effective scope.
+        let mut tp_cfg = fake_tp_cfg();
+        tp_cfg
+            .expected_scopes
+            .insert("notion".to_string(), "notion.read".to_string());
+
+        let result = resolve_tool_scope(&tp_cfg, "notion", "notion.read");
+
+        assert_eq!(result, Ok(Scope::parse("notion.read").unwrap()));
+    }
+
+    #[test]
+    fn tool_registration_trusts_declared_scope_verbatim_when_no_expectation_is_configured() {
+        // Pre-existing behavior, pinned: with neither expected_scopes nor
+        // scope_overrides configured for this tool name, the declared
+        // scope is adopted as-is (the residual, accepted trust boundary —
+        // an operator who wants validation must configure one of the two
+        // mechanisms).
+        let tp_cfg = fake_tp_cfg();
+
+        let result = resolve_tool_scope(&tp_cfg, "notion", "notion.write");
+
+        assert_eq!(result, Ok(Scope::parse("notion.write").unwrap()));
+    }
+
+    #[test]
+    fn tool_registration_still_rejects_a_scope_override_wider_than_declared() {
+        // Pre-existing narrowing-only behavior, pinned: scope_overrides
+        // must itself be `is_granted_by` the declared scope. An override
+        // requesting something the tool never even declared needing is a
+        // misconfiguration, not silently granted.
+        let mut tp_cfg = fake_tp_cfg();
+        tp_cfg.scope_overrides.insert(
+            "fs".to_string(),
+            "fs.write:/home/**".to_string(),
+        );
+
+        let result = resolve_tool_scope(&tp_cfg, "fs", "fs.write:/home/project/**");
+
+        assert!(
+            result.is_err(),
+            "a scope_override wider than the declared scope must still be refused, got {result:?}"
+        );
+        assert!(result.unwrap_err().contains("is not narrower than declared"));
+    }
+
+    #[test]
+    fn tool_registration_still_narrows_via_scope_override_when_covered_by_declared() {
+        // Pre-existing narrowing behavior, pinned: a legitimate narrowing
+        // override becomes the effective scope.
+        let mut tp_cfg = fake_tp_cfg();
+        tp_cfg.scope_overrides.insert(
+            "fs".to_string(),
+            "fs.write:/home/project/**".to_string(),
+        );
+
+        let result = resolve_tool_scope(&tp_cfg, "fs", "fs.write:/home/**");
+
+        assert_eq!(
+            result,
+            Ok(Scope::parse("fs.write:/home/project/**").unwrap())
+        );
+    }
+
+    #[test]
+    fn tool_registration_applies_both_expected_scopes_and_scope_overrides_together() {
+        // Both mechanisms configured: expected_scopes validates the
+        // declared scope first, then scope_overrides still narrows the
+        // effective result.
+        let mut tp_cfg = fake_tp_cfg();
+        tp_cfg
+            .expected_scopes
+            .insert("fs".to_string(), "fs.write".to_string());
+        tp_cfg.scope_overrides.insert(
+            "fs".to_string(),
+            "fs.write:/home/project/**".to_string(),
+        );
+
+        let result = resolve_tool_scope(&tp_cfg, "fs", "fs.write:/home/**");
+
+        assert_eq!(
+            result,
+            Ok(Scope::parse("fs.write:/home/project/**").unwrap())
         );
     }
 

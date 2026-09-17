@@ -1826,6 +1826,19 @@ pub struct McpServerConfig {
 /// tool process; values are scope strings that must `is_granted_by`
 /// the declared scope. The daemon enforces the narrowing rule at
 /// registration time — see `docs/TOOL_SDK.md` §6.
+///
+/// `expected_scopes` (Task 15, security-audit-fixes 2026-09-16) is a
+/// separate, ungated ceiling: unlike `scope_overrides`, it never
+/// replaces the effective scope — it only validates the tool
+/// process's *self-declared* `required_scope` against what the
+/// operator configured as acceptable for that tool name, closing the
+/// gap where a tool with no `scope_overrides` entry was trusted
+/// verbatim (a substituted binary at `command` could declare any
+/// scope with nothing to check it against). Keys are tool names;
+/// values are scope strings the declared scope must be
+/// `is_granted_by` (declared ⊆ expected). Unset for a given tool
+/// name ⇒ no ceiling check for that tool (unchanged, pre-existing
+/// behavior).
 #[derive(Debug, Clone)]
 pub struct ToolProcessConfig {
     pub name: String,
@@ -1835,6 +1848,9 @@ pub struct ToolProcessConfig {
     /// Per-tool scope overrides keyed by tool name. Operator may only
     /// narrow what the tool declared; the daemon rejects widenings.
     pub scope_overrides: std::collections::HashMap<String, String>,
+    /// Per-tool expected-scope ceiling keyed by tool name. See the
+    /// struct doc comment above (Task 15).
+    pub expected_scopes: std::collections::HashMap<String, String>,
     pub enabled: bool,
     /// Phase 52 — optional sandbox wrapper. When present, the daemon
     /// spawns `wrapper wrapper_args... command command_args...`
@@ -4191,6 +4207,15 @@ struct RawMcpServer {
 /// [tool_process.scope_overrides]
 /// wordcount = "memory.read:topic:wordcount/**"
 ///
+/// # Optional per-tool expected-scope ceiling (Task 15). Unlike
+/// # scope_overrides, this never replaces the effective scope — it
+/// # only rejects registration if the tool's self-declared
+/// # required_scope isn't covered by (is_granted_by) the value here.
+/// # Useful for tools with no scope_overrides entry, which would
+/// # otherwise have their self-declared scope trusted verbatim.
+/// [tool_process.expected_scopes]
+/// wordcount = "memory.read"
+///
 /// enabled = true   # default
 /// ```
 /// `[applications]` deserialize target (Chapter Deckhand). Opt-in toggle for
@@ -4215,6 +4240,9 @@ struct RawToolProcess {
     env: Option<std::collections::HashMap<String, String>>,
     #[serde(default)]
     scope_overrides: Option<std::collections::HashMap<String, String>>,
+    /// Task 15 — see `ToolProcessConfig::expected_scopes`.
+    #[serde(default)]
+    expected_scopes: Option<std::collections::HashMap<String, String>>,
     #[serde(default = "default_true")]
     enabled: bool,
     /// Phase 52 — optional `[tool_process.sandbox]` nested block.
@@ -7018,12 +7046,14 @@ impl AivyxConfig {
                 .into_iter()
                 .collect();
             let scope_overrides = r.scope_overrides.unwrap_or_default();
+            let expected_scopes = r.expected_scopes.unwrap_or_default();
             tool_processes.push(ToolProcessConfig {
                 name: r.name,
                 command: r.command,
                 args: r.args.unwrap_or_default(),
                 env,
                 scope_overrides,
+                expected_scopes,
                 enabled: true,
                 sandbox,
                 disable_sandbox: r.disable_sandbox,
@@ -7048,6 +7078,7 @@ impl AivyxConfig {
                     args: Vec::new(),
                     env: Vec::new(),
                     scope_overrides: std::collections::HashMap::new(),
+                    expected_scopes: std::collections::HashMap::new(),
                     enabled: true,
                     sandbox: None,
                     disable_sandbox: true,
