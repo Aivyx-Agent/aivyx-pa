@@ -154,7 +154,12 @@ impl TelegramTransport for ScriptedTransport {
 
 fn make_channel() -> (TelegramChannel<ScriptedTransport>, Arc<ScriptedTransport>) {
     let transport = Arc::new(ScriptedTransport::new());
-    let channel = TelegramChannel::new("tg-test", 42, Arc::clone(&transport));
+    // `chat_filter: Some(42)` — matches `chat_id` below, so every
+    // existing test built on this helper keeps seeing `SemiTrusted`,
+    // exactly as it did before Task 10's trust_tier() fix. Tests that
+    // want to exercise the new Untrusted path construct their own
+    // channel directly instead of going through this helper.
+    let channel = TelegramChannel::new("tg-test", 42, Some(42), Arc::clone(&transport));
     (channel, transport)
 }
 
@@ -181,6 +186,44 @@ fn metadata_is_telegram_and_semi_trusted() {
     );
     assert_eq!(channel.channel_name(), "tg-test");
     assert_eq!(channel.chat_id(), 42);
+}
+
+// Security-audit fix (Task 10, 2026-09-16). `THREAT_MODEL.md` defines
+// `SemiTrusted` as requiring an allowlisted chat id and `Untrusted` as
+// the tier for anyone else — these three tests pin that distinction
+// down at the `TelegramChannel::trust_tier()` level, independent of
+// `metadata_is_telegram_and_semi_trusted` above (which exercises the
+// allowlisted-match case via `make_channel`'s `Some(42)` filter).
+
+#[test]
+fn allowlisted_chat_is_semitrusted() {
+    let transport = Arc::new(ScriptedTransport::new());
+    let channel = TelegramChannel::new("tg-allow", 12345, Some(12345), transport);
+    assert_eq!(channel.trust_tier(), TrustTier::SemiTrusted);
+}
+
+#[test]
+fn non_allowlisted_chat_is_untrusted() {
+    let transport = Arc::new(ScriptedTransport::new());
+    // chat_filter names a *different* chat than the one this channel
+    // is bound to — defensive case; shouldn't happen in production
+    // (the outer long-poll loop drops mismatched chats before a
+    // channel is ever constructed for them), but trust_tier() must
+    // not silently trust it if it does.
+    let channel = TelegramChannel::new("tg-deny", 99999, Some(12345), transport);
+    assert_eq!(channel.trust_tier(), TrustTier::Untrusted);
+}
+
+#[test]
+fn no_filter_configured_is_untrusted_by_default() {
+    // The important behavior-change assertion: per THREAT_MODEL.md,
+    // an operator who has not configured a chat_filter at all (the
+    // out-of-the-box default — "accept every chat") no longer gets
+    // SemiTrusted for free. This closes the gap where "no config"
+    // silently meant "trust everyone as SemiTrusted."
+    let transport = Arc::new(ScriptedTransport::new());
+    let channel = TelegramChannel::new("tg-nofilter", 55555, None, transport);
+    assert_eq!(channel.trust_tier(), TrustTier::Untrusted);
 }
 
 #[test]
@@ -443,10 +486,10 @@ async fn two_chats_isolated() {
     // that's the Task 2 override being exercised.
     let transport_a = Arc::new(ScriptedTransport::new());
     let chan_a: TelegramChannel<ScriptedTransport> =
-        TelegramChannel::new("tg-a", 1001, Arc::clone(&transport_a));
+        TelegramChannel::new("tg-a", 1001, Some(1001), Arc::clone(&transport_a));
     let transport_b = Arc::new(ScriptedTransport::new());
     let chan_b: TelegramChannel<ScriptedTransport> =
-        TelegramChannel::new("tg-b", 2002, Arc::clone(&transport_b));
+        TelegramChannel::new("tg-b", 2002, Some(2002), Arc::clone(&transport_b));
 
     assert_eq!(chan_a.session_partition(), Some("1001".to_string()));
     assert_eq!(chan_b.session_partition(), Some("2002".to_string()));
@@ -976,6 +1019,7 @@ async fn run_telegram_session_drives_two_scripted_turns() {
     let channel = Arc::new(TelegramChannel::new(
         "tg-task4-test",
         777,
+        Some(777),
         Arc::clone(&transport),
     ));
 
@@ -1333,6 +1377,7 @@ async fn run_telegram_session_cancelled_turn_renders_and_continues() {
     let channel = Arc::new(TelegramChannel::new(
         "tg-task5-test",
         555,
+        Some(555),
         Arc::clone(&transport),
     ));
 
@@ -1785,6 +1830,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
         let channel_a = Arc::new(TelegramChannel::new(
             "tg-chat-a",
             3001,
+            Some(3001),
             Arc::clone(&transport_a),
         ));
 
@@ -1800,6 +1846,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
         let channel_b = Arc::new(TelegramChannel::new(
             "tg-chat-b",
             4001,
+            Some(4001),
             Arc::clone(&transport_b),
         ));
 
@@ -2291,6 +2338,7 @@ async fn run_telegram_session_in_band_cancel_cancels_current_turn() {
     let channel = Arc::new(TelegramChannel::new(
         "tg-p9t1a",
         777,
+        Some(777),
         Arc::clone(&transport),
     ));
 
@@ -2551,6 +2599,7 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
     let channel = Arc::new(TelegramChannel::new(
         "tg-p9t1b",
         888,
+        Some(888),
         Arc::clone(&transport),
     ));
 
@@ -2712,19 +2761,29 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
 //
 // What this test proves:
 //
-// 1. **Per-chat memory partition isolation** — three chats each write
-//    `notes: purple` through `memory.write`, and after shutdown each
-//    chat's partition holds exactly its own entry.
-// 2. **Shared audit chain records interleaved turns** — one
+// 1. **Multi-chat routing still works with no chat allowlisted** —
+//    three different, unlisted chats are all routed and processed
+//    (interleaved through one shared long-poll cursor) even though,
+//    post-Task-10, none of them is `SemiTrusted`.
+// 2. **Security-audit fix (Task 10, 2026-09-16) regression coverage**
+//    — prior to Task 10, `chat_filter: None` ("Phase 9 default,
+//    accepts all three chats") also silently granted all three chats
+//    `SemiTrusted`, so their `memory.write` calls succeeded. That was
+//    the exact vulnerability `THREAT_MODEL.md` names: an unallowlisted
+//    sender must be `Untrusted`, not `SemiTrusted`. This test now
+//    asserts the corrected behavior: all three chats are still
+//    accepted and routed (assertion 1), but each one's `memory.write`
+//    attempt is denied (`ScopeDenied`, not `ToolCall`/`MemoryAccess`)
+//    and no memory entry is ever persisted for any of them.
+// 3. **Shared audit chain records interleaved turns** — one
 //    `Arc<dyn AuditHook>` handed to the outer multiplexer records
-//    12 events (3 turns × 4 events per turn).
-// 3. **`verify_from_disk` on the combined chain** — the cross-chat
+//    12 events (3 turns × 4 events per turn: `TurnStarted`,
+//    `ScopeDenied`, `TurnEnded`, `LlmCost` — no `ToolCall`/
+//    `MemoryAccess` since the write is denied before it executes).
+// 4. **`verify_from_disk` on the combined chain** — the cross-chat
 //    chain reopens cleanly and HMAC-replays to exactly 12 verified
 //    entries, proving the concurrent producer path doesn't corrupt
 //    the chain even when three inner tasks write in parallel.
-// 4. **`AIVYX_PA_TELEGRAM_CHAT_ID` optional** — `chat_filter: None` is
-//    the new Phase 9 default and it accepts all three chats without
-//    the operator having to list them.
 //
 // Provider scheme: all three chats run the same deterministic
 // `memory_write_turn("notes", "purple")` script, so one flat
@@ -2740,7 +2799,7 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use aivyx_audit::{AuditEvent, MemoryOperation, PersistentAuditLog, TrustTierSummary};
+    use aivyx_audit::{AuditEvent, PersistentAuditLog, TrustTierSummary};
     use aivyx_capability::{CapabilitySet, Scope};
     use aivyx_core::{AuditHook, CancellationToken, Tool, ToolRegistry};
     use crate::TelegramSessionConfig;
@@ -2903,7 +2962,11 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
             run_telegram_multi_session_with_transport(
                 "tg-multi",
                 Arc::clone(&transport),
-                None, // chat_filter = None → accept every chat
+                // chat_filter = None → accept every chat at the
+                // routing layer (Phase 9 behavior, unchanged), but
+                // post-Task-10 that also means none of them is
+                // SemiTrusted — see the module doc above.
+                None,
                 config,
                 Arc::clone(&provider),
                 Arc::clone(&audit_hook),
@@ -2939,12 +3002,14 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
 
         assert_eq!(
             persistent_audit.len(),
-            15,
-            "three chats × 5 events each = 15 \
-             (TurnStarted, MemoryAccess, ToolCall, TurnEnded, LlmCost)"
+            12,
+            "three chats × 4 events each = 12 (TurnStarted, ScopeDenied, \
+             TurnEnded, LlmCost) — post-Task-10, chat_filter: None means \
+             Untrusted for all three, so memory.write is denied before \
+             ToolCall/MemoryAccess ever fire"
         );
 
-        wait_for_audit_rows(&storage, 15).await;
+        wait_for_audit_rows(&storage, 12).await;
 
         drop(transport);
         drop(provider);
@@ -2971,24 +3036,26 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
             .await
             .expect("verify_from_disk must succeed on a clean combined chain");
     assert_eq!(
-        verify_report.entries_verified, 15,
-        "three concurrent chats × 5 events = 15 entries"
+        verify_report.entries_verified, 12,
+        "three concurrent chats × 4 events = 12 entries"
     );
-    assert_eq!(verify_report.head_seq, Some(14));
+    assert_eq!(verify_report.head_seq, Some(11));
 
     let log = PersistentAuditLog::open(Arc::clone(&storage), TEST_AUDIT_KEY)
         .await
         .expect("reopen for entries inspection must succeed");
     let entries = log.entries().expect("recovered chain must be readable");
-    assert_eq!(entries.len(), 15);
+    assert_eq!(entries.len(), 12);
 
-    // ---- Histogram over the 15 events by variant -------------------
+    // ---- Histogram over the 12 events by variant --------------------
+    // Security-audit fix (Task 10, 2026-09-16): with `chat_filter:
+    // None`, all three chats are `Untrusted`, so each turn's
+    // `memory.write` call is denied before it executes — a
+    // `ScopeDenied` event, not `ToolCall`/`MemoryAccess`.
     let mut turn_started = 0;
-    let mut memory_access_write = 0;
-    let mut tool_call_memory_write = 0;
-    let mut tool_call_chat_a = 0;
-    let mut tool_call_chat_b = 0;
-    let mut tool_call_chat_c = 0;
+    let mut scope_denied_chat_a = 0;
+    let mut scope_denied_chat_b = 0;
+    let mut scope_denied_chat_c = 0;
     let mut turn_ended = 0;
     let mut llm_cost = 0;
     for entry in &entries {
@@ -2999,25 +3066,26 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
                 ..
             } => {
                 turn_started += 1;
-                assert_eq!(*trust_tier, TrustTierSummary::SemiTrusted);
+                assert_eq!(
+                    *trust_tier,
+                    TrustTierSummary::Untrusted,
+                    "no chat_filter configured → Untrusted, not SemiTrusted"
+                );
                 assert_eq!(*channel, ChannelPlatform::Telegram);
             }
-            AuditEvent::MemoryAccess { operation, .. } => {
-                assert!(matches!(operation, MemoryOperation::Write));
-                memory_access_write += 1;
-            }
-            AuditEvent::ToolCall { scope_used, .. } => {
-                assert_eq!(scope_used.base(), "memory.write");
-                let q = scope_used
+            AuditEvent::ScopeDenied {
+                scope_requested, ..
+            } => {
+                assert_eq!(scope_requested.base(), "memory.write");
+                let q = scope_requested
                     .qualifier()
                     .expect("narrowed scope must have a qualifier");
                 match q {
-                    "topic:notes:session:7001" => tool_call_chat_a += 1,
-                    "topic:notes:session:7002" => tool_call_chat_b += 1,
-                    "topic:notes:session:7003" => tool_call_chat_c += 1,
-                    other => panic!("unexpected ToolCall scope qualifier: {other:?}"),
+                    "topic:notes:session:7001" => scope_denied_chat_a += 1,
+                    "topic:notes:session:7002" => scope_denied_chat_b += 1,
+                    "topic:notes:session:7003" => scope_denied_chat_c += 1,
+                    other => panic!("unexpected ScopeDenied scope qualifier: {other:?}"),
                 }
-                tool_call_memory_write += 1;
             }
             AuditEvent::TurnEnded { .. } => {
                 turn_ended += 1;
@@ -3031,15 +3099,17 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
         }
     }
     assert_eq!(turn_started, 3);
-    assert_eq!(memory_access_write, 3);
-    assert_eq!(tool_call_memory_write, 3);
-    assert_eq!(tool_call_chat_a, 1);
-    assert_eq!(tool_call_chat_b, 1);
-    assert_eq!(tool_call_chat_c, 1);
+    assert_eq!(scope_denied_chat_a, 1);
+    assert_eq!(scope_denied_chat_b, 1);
+    assert_eq!(scope_denied_chat_c, 1);
     assert_eq!(turn_ended, 3);
     assert_eq!(llm_cost, 3, "three chats → three LlmCost events (Chapter K)");
 
     // ---- Per-chat memory partition isolation -----------------------
+    // Security-audit fix (Task 10, 2026-09-16): since every write is
+    // now denied (Untrusted ceiling), no chat's partition ever gets
+    // an entry — this replaces the pre-fix assertion that each chat
+    // successfully wrote its own entry.
     let memory_post: Arc<dyn Memory> = RedbMemory::open(Arc::clone(&storage))
         .await
         .expect("RedbMemory reopen must succeed");
@@ -3051,9 +3121,9 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
     let b = memory_post.get_recent(phys_b, 16).await.unwrap();
     let c = memory_post.get_recent(phys_c, 16).await.unwrap();
     let none = memory_post.get_recent(phys_uninvolved, 16).await.unwrap();
-    assert_eq!(a.len(), 1, "chat A wrote exactly one entry");
-    assert_eq!(b.len(), 1, "chat B wrote exactly one entry");
-    assert_eq!(c.len(), 1, "chat C wrote exactly one entry");
+    assert_eq!(a.len(), 0, "chat A's denied write persists nothing");
+    assert_eq!(b.len(), 0, "chat B's denied write persists nothing");
+    assert_eq!(c.len(), 0, "chat C's denied write persists nothing");
     assert_eq!(none.len(), 0, "uninvolved chat must see nothing");
 
     drop(log);
@@ -3327,7 +3397,13 @@ async fn telegram_dispatched_mutating_tool_produces_a_checkpoint() {
         run_telegram_multi_session_with_transport(
             "aivyx-telegram-test",
             Arc::clone(&transport),
-            None, // chat_filter: accept every chat
+            // Security-audit fix (Task 10, 2026-09-16): this test is
+            // about checkpoint dispatch, not trust_tier() — it needs
+            // the SemiTrusted ceiling (Untrusted's near-empty ceiling
+            // would deny the mutating tool call regardless of the
+            // capability grant above), so the chat is explicitly
+            // allowlisted here rather than left at `None`.
+            Some(8001), // chat_filter: only chat 8001 (this test's chat)
             config,
             provider,
             audit,

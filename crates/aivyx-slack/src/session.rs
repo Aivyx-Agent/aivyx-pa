@@ -297,6 +297,16 @@ struct PartitionRoute {
 ///   token. Same destination.
 /// - `config` — template [`SlackSessionConfig`] cloned per
 ///   inner task.
+/// - `team_filter` — security-audit fix (Task 10, 2026-09-16). The
+///   operator's configured `SlackConfig::team_id` workspace
+///   constraint, if any. Consulted by `trust_tier()` alongside
+///   `channel_filter` below; see `SlackChannel::trust_tier()`.
+/// - `channel_filter` — security-audit fix (Task 10, 2026-09-16).
+///   `Some(channel_id)` names the one Slack channel the operator has
+///   allowlisted as `SemiTrusted`; every other channel (mismatched,
+///   or `None` meaning no channel is allowlisted at all) is
+///   `Untrusted` instead. Mirrors `aivyx_telegram`'s `chat_filter`/
+///   `aivyx_discord`'s `channel_filter`.
 /// - `provider` / `audit` — shared across all inner tasks.
 /// - `shutdown` — ctrl-C-driven token; cancels the outer
 ///   loop and cascades into inner-task drain.
@@ -305,6 +315,8 @@ pub async fn run_slack_session(
     channel_name: impl Into<String> + Clone,
     bot_token: &str,
     app_token: &str,
+    team_filter: Option<String>,
+    channel_filter: Option<String>,
     config: SlackSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
@@ -319,6 +331,8 @@ pub async fn run_slack_session(
     run_slack_session_with_transport(
         channel_name,
         transport,
+        team_filter,
+        channel_filter,
         config,
         provider,
         audit,
@@ -331,9 +345,12 @@ pub async fn run_slack_session(
 /// Transport-generic multi-channel driver. Production callers
 /// go through [`run_slack_session`]; tests call this directly
 /// with a `ScriptedTransport`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_slack_session_with_transport<T>(
     channel_name: impl Into<String> + Clone,
     transport: Arc<T>,
+    team_filter: Option<String>,
+    channel_filter: Option<String>,
     config: SlackSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
@@ -378,6 +395,8 @@ where
                 base_name.clone(),
                 msg.team_id.clone(),
                 msg.channel_id.clone(),
+                team_filter.clone(),
+                channel_filter.clone(),
                 Arc::clone(&transport),
             ));
             let config_clone = config.clone();

@@ -624,9 +624,11 @@ required reading.
 
 The Discord adapter mirrors the Telegram pattern: one bot
 account, configured per-operator, sees DMs and any guild
-channels you've added the bot to. Same `SemiTrusted` tier
-ceiling, same `/cancel` mid-turn handling, same Profile +
-Persona + mission-gate behavior.
+channels you've added the bot to. Same `SemiTrusted`-tier
+ceiling **when the channel is allowlisted** (see
+`channel_filter` below — added 2026-09-16; an unallowlisted
+channel is `Untrusted` instead), same `/cancel` mid-turn
+handling, same Profile + Persona + mission-gate behavior.
 
 1. **Create a bot account** at
    [https://discord.com/developers/applications](https://discord.com/developers/applications).
@@ -655,6 +657,7 @@ Persona + mission-gate behavior.
    [discord]
    token = "your_bot_token_here"
    # application_id = 12345...  # Reserved for slash commands; not used in v1.
+   # channel_filter = 123456789012345678  # RECOMMENDED: allowlist this one channel id as SemiTrusted (see the trust-tier note below); default (unset) = every channel is Untrusted
    # team_run_channel = true          # optional: let this channel start team missions via /team run <goal> (default false)
    # team_trigger_rate_limit = 5      # optional: max confirmed /team run starts per rolling hour from this channel (default unlimited)
    # team_command_allowed_senders = [111111111111111111]  # REQUIRED to use any /team command: Discord user ids ("snowflakes"), deny-by-default
@@ -676,6 +679,23 @@ set for Nonagon team-mission control — `/team status [<id>]`,
 `/team abort <id>` — routed the same way, across all three
 channels (Telegram, Discord, Slack).
 
+**`chat_filter`/`channel_filter` now gate `SemiTrusted` itself, not
+just `/team` (security fix, 2026-09-16).** Previously, Telegram,
+Discord, and Slack all granted every sender `SemiTrusted` tier
+unconditionally — `chat_filter` only decided whether a Telegram
+message was *routed* at all, and Discord/Slack had no filter
+concept whatsoever. **As of this fix, an operator who has NOT
+configured a sender/channel allowlist for a channel gets `Untrusted`
+tier for every sender on that channel** (a near-empty capability
+ceiling — see `docs/THREAT_MODEL.md` §2) **instead of the previous
+`SemiTrusted`.** If you want your existing Telegram/Discord/Slack
+bot to keep its `SemiTrusted` capabilities, set that channel's
+`chat_filter` (Telegram) or `channel_filter` (Discord/Slack) to the
+one chat/channel id you actually use — see the TOML examples below
+and in the Discord/Slack sections. This is separate from, and in
+addition to, the `team_command_allowed_senders` gate below, which
+governs `/team` commands specifically regardless of trust tier.
+
 **`team_command_allowed_senders` — required to use ANY `/team`
 command (2026-08-23).** This is a separate, deny-by-default gate from
 `team_run_channel` below, and it covers the *whole* `/team` surface —
@@ -694,7 +714,7 @@ sender's numeric user id, Slack uses the sender's string user id
 ```toml
 [telegram]
 token = "your_bot_token_here"
-# chat_filter = 123456789     # optional: restrict to a single chat_id
+# chat_filter = 123456789     # RECOMMENDED: allowlist this one chat_id as SemiTrusted (see the trust-tier note above); default (unset) = every chat is Untrusted
 # team_run_channel = true          # optional: let this channel start team missions via /team run <goal> (default false)
 # team_trigger_rate_limit = 5      # optional: max confirmed /team run starts per rolling hour from this channel (default unlimited)
 # team_command_allowed_senders = [123456789]  # REQUIRED to use any /team command: Telegram user ids, deny-by-default
@@ -723,10 +743,12 @@ CLI and scheduled ways to start a team mission.
 The Slack adapter follows the same shape as Discord and
 Telegram: one Slack app, one Socket Mode WebSocket from
 aivyx-pa to Slack, the bot sees DMs and channels it's been
-invited to. SemiTrusted tier; per-`(team_id, channel_id)`
-memory partitioning so a Slack bot installed in two
-workspaces partitions cleanly even when channel ids
-collide.
+invited to. `SemiTrusted` tier **when the channel is
+allowlisted** (see `channel_filter` below — added
+2026-09-16; an unallowlisted channel is `Untrusted`
+instead); per-`(team_id, channel_id)` memory partitioning so
+a Slack bot installed in two workspaces partitions cleanly
+even when channel ids collide.
 
 1. **Create a Slack app** at
    [https://api.slack.com/apps](https://api.slack.com/apps).
@@ -760,7 +782,8 @@ collide.
    [slack]
    bot_token = "xoxb-..."
    app_token = "xapp-..."
-   # team_id = "T0123456789"  # optional: constrain to one workspace
+   # team_id = "T0123456789"  # optional defense-in-depth: also require this workspace to match (does NOT by itself grant SemiTrusted — see channel_filter)
+   # channel_filter = "C0123456789"  # RECOMMENDED: allowlist this one channel id as SemiTrusted; default (unset) = every channel is Untrusted
    # team_run_channel = true          # optional: let this channel start team missions via /team run <goal> (default false)
    # team_trigger_rate_limit = 5      # optional: max confirmed /team run starts per rolling hour from this channel (default unlimited)
    # team_command_allowed_senders = ["U012ABCDEF"]  # REQUIRED to use any /team command: Slack user ids, deny-by-default

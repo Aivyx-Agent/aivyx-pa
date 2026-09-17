@@ -101,6 +101,13 @@ impl EnvScope {
             "AIVYX_PA_PASSPHRASE",
             "AIVYX_PA_TELEGRAM_TOKEN",
             "AIVYX_PA_TELEGRAM_CHAT_ID",
+            // Security-audit fix (Task 10, 2026-09-16): scope the new
+            // Discord/Slack channel_filter env vars into the guard so
+            // their round-trip tests don't leak state across the rest
+            // of this file's tests (same reasoning as
+            // AIVYX_PA_TELEGRAM_CHAT_ID above).
+            "AIVYX_PA_DISCORD_CHANNEL_ID",
+            "AIVYX_PA_SLACK_CHANNEL_ID",
             // Phase 11 Task 1: scope the role override env var into
             // the env-guard so role-tests don't leak state across
             // parallel cargo-test runs.
@@ -442,6 +449,138 @@ fn discord_and_slack_team_run_channel_round_trip_from_toml() {
     let slack = cfg.slack.expect("slack section present");
     assert!(slack.team_run_channel);
     assert_eq!(slack.team_trigger_rate_limit, Some(7));
+    drop(env);
+}
+
+// ------------------------------------------------------------------
+// Security-audit fix (Task 10, 2026-09-16) — Discord/Slack
+// `channel_filter`, mirroring Telegram's `chat_filter`. Consumed by
+// `DiscordChannel`/`SlackChannel::trust_tier()` to distinguish an
+// allowlisted channel (SemiTrusted) from everything else
+// (Untrusted) — see THREAT_MODEL.md.
+// ------------------------------------------------------------------
+
+#[test]
+fn discord_channel_filter_round_trips_from_toml() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [discord]
+        token = "t"
+        channel_filter = 123456789
+    "#,
+        "discord-channel-filter-round-trip",
+    );
+    let discord = cfg.discord.expect("discord section present");
+    let filter = discord.channel_filter.expect("channel_filter set");
+    assert_eq!(filter.source, FieldSource::Toml);
+    assert_eq!(filter.value, 123456789);
+    drop(env);
+}
+
+#[test]
+fn discord_channel_filter_env_beats_toml() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PA_DISCORD_CHANNEL_ID", "42");
+    let cfg = load_with_toml(
+        r#"
+        [discord]
+        token = "t"
+        channel_filter = 123456789
+    "#,
+        "discord-channel-filter-env-wins",
+    );
+    let discord = cfg.discord.expect("discord section present");
+    let filter = discord.channel_filter.expect("channel_filter set");
+    assert_eq!(filter.source, FieldSource::Env);
+    assert_eq!(filter.value, 42);
+    drop(env);
+}
+
+#[test]
+fn discord_channel_filter_absent_is_none() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [discord]
+        token = "t"
+    "#,
+        "discord-channel-filter-absent",
+    );
+    let discord = cfg.discord.expect("discord section present");
+    assert!(discord.channel_filter.is_none());
+    drop(env);
+}
+
+#[test]
+fn unparseable_discord_channel_id_is_typed_invalid_error() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PA_DISCORD_CHANNEL_ID", "oops");
+
+    let err = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
+        .expect_err("should fail parsing");
+    match err {
+        ConfigError::Invalid { field, .. } => {
+            assert_eq!(field, "discord.channel_filter");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    drop(env);
+}
+
+#[test]
+fn slack_channel_filter_round_trips_from_toml() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [slack]
+        bot_token = "b"
+        app_token = "a"
+        channel_filter = "C0123456789"
+    "#,
+        "slack-channel-filter-round-trip",
+    );
+    let slack = cfg.slack.expect("slack section present");
+    let filter = slack.channel_filter.expect("channel_filter set");
+    assert_eq!(filter.source, FieldSource::Toml);
+    assert_eq!(filter.value, "C0123456789");
+    drop(env);
+}
+
+#[test]
+fn slack_channel_filter_env_beats_toml() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PA_SLACK_CHANNEL_ID", "C_ENV");
+    let cfg = load_with_toml(
+        r#"
+        [slack]
+        bot_token = "b"
+        app_token = "a"
+        channel_filter = "C_TOML"
+    "#,
+        "slack-channel-filter-env-wins",
+    );
+    let slack = cfg.slack.expect("slack section present");
+    let filter = slack.channel_filter.expect("channel_filter set");
+    assert_eq!(filter.source, FieldSource::Env);
+    assert_eq!(filter.value, "C_ENV");
+    drop(env);
+}
+
+#[test]
+fn slack_channel_filter_absent_is_none() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+        [slack]
+        bot_token = "b"
+        app_token = "a"
+    "#,
+        "slack-channel-filter-absent",
+    );
+    let slack = cfg.slack.expect("slack section present");
+    assert!(slack.channel_filter.is_none());
     drop(env);
 }
 

@@ -94,12 +94,21 @@ heuristic the two existing adapters use:
   `crates/aivyx-channel/src/local.rs:126-131` picks this because a
   CLI REPL runs as the user, in the user's shell, against the user's
   filesystem. Desktop GUI apps would sit here too.
-- **`SemiTrusted`** — authenticated remote human. `TelegramChannel` at
-  `crates/aivyx-telegram/src/telegram_channel.rs:212-218` picks this:
-  the user is authenticated (Telegram's own login), but the channel
+- **`SemiTrusted`** — authenticated remote human *on an allowlisted
+  chat/channel*. `TelegramChannel::trust_tier()`
+  (`crates/aivyx-telegram/src/telegram_channel.rs`) picks this: the
+  user is authenticated (Telegram's own login), but the channel
   crosses the network and runs under the bot token's identity rather
   than the user's machine identity. Matrix, Signal, Discord, Slack
-  DMs all live here.
+  DMs all live here. **Security-audit fix (Task 10, 2026-09-16):**
+  this is conditional, not automatic — `SemiTrusted` requires the
+  chat/channel to match the operator's configured allowlist
+  (`chat_filter`/`channel_filter`, see `docs/INSTALL.md`); an
+  unallowlisted chat/channel on the same platform is `Untrusted`
+  instead. All three shipped adapters (`aivyx-telegram`,
+  `aivyx-discord`, `aivyx-slack`) implement this the same way — see
+  their `trust_tier()` for the exact match logic before copying the
+  pattern into a new adapter.
 - **`Untrusted`** — anonymous or drive-by traffic. An unauthenticated
   HTTP POST endpoint, a public chatroom with no membership gating, a
   webhook from an external service. No adapter currently ships at

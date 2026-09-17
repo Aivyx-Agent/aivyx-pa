@@ -1684,6 +1684,16 @@ pub struct DiscordConfig {
     /// re-shaping `DiscordConfig`). `None` until the
     /// operator sets it.
     pub application_id: Option<Sourced<u64>>,
+    /// Security-audit fix (Task 10, 2026-09-16) — optional channel_id
+    /// filter, mirroring Telegram's `chat_filter`. `None` = no channel
+    /// allowlisted; `Some(id)` = only the Discord channel with this
+    /// snowflake is allowlisted. This is what `trust_tier()` on
+    /// `DiscordChannel` consults: a channel whose id doesn't match
+    /// (including the `None` case) is `TrustTier::Untrusted`, not
+    /// `SemiTrusted`. Unlike `chat_filter`, this was not previously
+    /// wired anywhere — Discord had no filter mechanism at all before
+    /// this fix.
+    pub channel_filter: Option<Sourced<u64>>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
     /// from this channel. No env-var override (TOML-only, matching
     /// how narrow this knob is) so it stays a plain `bool`, not
@@ -1737,6 +1747,15 @@ pub struct SlackConfig {
     /// a defensive "this bot is only allowed in workspace X"
     /// constraint.
     pub team_id: Option<Sourced<String>>,
+    /// Security-audit fix (Task 10, 2026-09-16) — optional channel_id
+    /// filter, mirroring Telegram's `chat_filter` at Slack's own
+    /// `channel_id` granularity (finer than `team_id`'s workspace-wide
+    /// scope). `None` = no channel allowlisted. This is what
+    /// `trust_tier()` on `SlackChannel` consults (together with
+    /// `team_id` above, if set): a channel whose id doesn't match
+    /// (including the `None` case) is `TrustTier::Untrusted`, not
+    /// `SemiTrusted`.
+    pub channel_filter: Option<Sourced<String>>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
     /// from this channel. No env-var override (TOML-only, matching
     /// how narrow this knob is) so it stays a plain `bool`, not
@@ -4738,6 +4757,10 @@ struct RawDiscord {
     token: Option<String>,
     #[serde(default)]
     application_id: Option<u64>,
+    /// Security-audit fix (Task 10, 2026-09-16) — see
+    /// `DiscordConfig::channel_filter`.
+    #[serde(default)]
+    channel_filter: Option<u64>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
     /// from this channel. Absent/false: the command is recognized but
     /// always replies with a capability-denial message, both client-
@@ -4769,6 +4792,10 @@ struct RawSlack {
     app_token: Option<String>,
     #[serde(default)]
     team_id: Option<String>,
+    /// Security-audit fix (Task 10, 2026-09-16) — see
+    /// `SlackConfig::channel_filter`.
+    #[serde(default)]
+    channel_filter: Option<String>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
     /// from this channel. Absent/false: the command is recognized but
     /// always replies with a capability-denial message, both client-
@@ -5671,6 +5698,8 @@ const ENV_TELEGRAM_CHAT_ID: &str = "AIVYX_PA_TELEGRAM_CHAT_ID";
 /// Same `AIVYX_PA_*` prefix convention every other secret uses.
 const ENV_DISCORD_TOKEN: &str = "AIVYX_PA_DISCORD_TOKEN";
 const ENV_DISCORD_APPLICATION_ID: &str = "AIVYX_PA_DISCORD_APPLICATION_ID";
+/// Security-audit fix (Task 10, 2026-09-16) — see `DiscordConfig::channel_filter`.
+const ENV_DISCORD_CHANNEL_ID: &str = "AIVYX_PA_DISCORD_CHANNEL_ID";
 
 /// Phase 108 — Slack tokens. Two distinct tokens because
 /// Socket Mode requires both: bot for REST, app for the
@@ -5678,6 +5707,8 @@ const ENV_DISCORD_APPLICATION_ID: &str = "AIVYX_PA_DISCORD_APPLICATION_ID";
 const ENV_SLACK_BOT_TOKEN: &str = "AIVYX_PA_SLACK_BOT_TOKEN";
 const ENV_SLACK_APP_TOKEN: &str = "AIVYX_PA_SLACK_APP_TOKEN";
 const ENV_SLACK_TEAM_ID: &str = "AIVYX_PA_SLACK_TEAM_ID";
+/// Security-audit fix (Task 10, 2026-09-16) — see `SlackConfig::channel_filter`.
+const ENV_SLACK_CHANNEL_ID: &str = "AIVYX_PA_SLACK_CHANNEL_ID";
 /// Env-var override for the active role name, second-priority in the
 /// active-role resolution chain (below [`LoadOptions::role_override`]
 /// and above the [`DEFAULT_ROLE_NAME`] fall-through). Phase 11 Task 1.
@@ -6232,10 +6263,33 @@ impl AivyxConfig {
                 .map(|n| Sourced::new(n, FieldSource::Toml)),
         };
 
-        let discord = if discord_token.is_some() || discord_application_id.is_some() {
+        // Security-audit fix (Task 10, 2026-09-16) — mirrors
+        // `telegram_chat_filter` above: env var wins, else fall back
+        // to the TOML `channel_filter` key.
+        let discord_channel_filter = match env_string(ENV_DISCORD_CHANNEL_ID) {
+            Some(s) => {
+                let parsed = s.parse::<u64>().map_err(|e| ConfigError::Invalid {
+                    field: "discord.channel_filter",
+                    reason: format!(
+                        "{ENV_DISCORD_CHANNEL_ID}={s:?} is not a valid u64: {e}"
+                    ),
+                })?;
+                Some(Sourced::new(parsed, FieldSource::Env))
+            }
+            None => toml
+                .discord
+                .channel_filter
+                .map(|n| Sourced::new(n, FieldSource::Toml)),
+        };
+
+        let discord = if discord_token.is_some()
+            || discord_application_id.is_some()
+            || discord_channel_filter.is_some()
+        {
             Some(DiscordConfig {
                 token: discord_token,
                 application_id: discord_application_id,
+                channel_filter: discord_channel_filter,
                 team_run_channel: toml.discord.team_run_channel,
                 team_trigger_rate_limit: toml.discord.team_trigger_rate_limit,
                 team_command_allowed_senders: toml.discord.team_command_allowed_senders.clone(),
@@ -6274,15 +6328,27 @@ impl AivyxConfig {
                 .clone()
                 .map(|s| Sourced::new(s, FieldSource::Toml)),
         };
+        // Security-audit fix (Task 10, 2026-09-16) — mirrors
+        // `telegram_chat_filter`/`discord_channel_filter` above.
+        let slack_channel_filter = match env_string(ENV_SLACK_CHANNEL_ID) {
+            Some(s) => Some(Sourced::new(s, FieldSource::Env)),
+            None => toml
+                .slack
+                .channel_filter
+                .clone()
+                .map(|s| Sourced::new(s, FieldSource::Toml)),
+        };
 
         let slack = if slack_bot_token.is_some()
             || slack_app_token.is_some()
             || slack_team_id.is_some()
+            || slack_channel_filter.is_some()
         {
             Some(SlackConfig {
                 bot_token: slack_bot_token,
                 app_token: slack_app_token,
                 team_id: slack_team_id,
+                channel_filter: slack_channel_filter,
                 team_run_channel: toml.slack.team_run_channel,
                 team_trigger_rate_limit: toml.slack.team_trigger_rate_limit,
                 team_command_allowed_senders: toml.slack.team_command_allowed_senders.clone(),

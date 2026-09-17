@@ -251,6 +251,7 @@ async fn discord_session_smoke_e2e() {
         run_discord_session_with_transport(
             "aivyx-discord-test",
             Arc::clone(&transport),
+            Some(777), // channel_filter: matches this test's channel_id
             config,
             provider,
             audit,
@@ -449,6 +450,12 @@ async fn discord_dispatched_mutating_tool_produces_a_checkpoint() {
         run_discord_session_with_transport(
             "aivyx-discord-test",
             Arc::clone(&transport),
+            // Security-audit fix (Task 10, 2026-09-16): this test is
+            // about checkpoint dispatch, not trust_tier() — it needs
+            // the SemiTrusted ceiling for the mutating tool call to
+            // pass the capability check, so the channel is explicitly
+            // allowlisted here rather than left at `None`.
+            Some(777), // channel_filter: matches this test's channel_id
             config,
             provider,
             audit,
@@ -588,6 +595,10 @@ async fn discord_injection_scan_disabled_skips_escalation() {
         run_discord_session_with_transport(
             "aivyx-discord-test",
             Arc::clone(&transport),
+            // Security-audit fix (Task 10, 2026-09-16): this test's
+            // scripted tool call needs `memory.write`, which requires
+            // at least SemiTrusted.
+            Some(777), // channel_filter: matches this test's channel_id
             config,
             provider,
             audit,
@@ -690,6 +701,12 @@ async fn discord_two_partitions_persistent_e2e() {
         run_discord_session_with_transport(
             "aivyx-discord-test",
             Arc::clone(&transport),
+            // channel_filter: None — this test has no tool calls
+            // (plain final-message turns), so trust tier doesn't
+            // gate anything here; both channels stay Untrusted,
+            // which is fine for the routing/partitioning this test
+            // actually checks.
+            None,
             config,
             provider,
             audit,
@@ -817,6 +834,9 @@ async fn discord_shutdown_drains_inflight_turns() {
         run_discord_session_with_transport(
             "aivyx-discord-test",
             Arc::clone(&transport),
+            // channel_filter: None — plain final-message turn, no
+            // tool call, so trust tier doesn't gate anything here.
+            None,
             config,
             provider,
             audit,

@@ -215,6 +215,10 @@ async fn slack_session_smoke_e2e() {
         run_slack_session_with_transport(
             "aivyx-slack-test",
             Arc::clone(&transport),
+            // channel_filter: None — plain final-message turns, no
+            // tool calls, so trust tier doesn't gate anything here.
+            None,
+            None,
             config,
             provider,
             audit,
@@ -394,6 +398,12 @@ async fn slack_dispatched_mutating_tool_produces_a_checkpoint() {
         run_slack_session_with_transport(
             "aivyx-slack-test",
             Arc::clone(&transport),
+            None,
+            // Security-audit fix (Task 10, 2026-09-16): this test is
+            // about checkpoint dispatch, not trust_tier() — it needs
+            // the SemiTrusted ceiling for the mutating tool call to
+            // pass the capability check.
+            Some("C42".to_string()), // channel_filter: matches this test's channel_id
             config,
             provider,
             audit,
@@ -532,6 +542,11 @@ async fn slack_injection_scan_disabled_skips_escalation() {
         run_slack_session_with_transport(
             "aivyx-slack-test",
             Arc::clone(&transport),
+            None,
+            // Security-audit fix (Task 10, 2026-09-16): this test's
+            // scripted tool call needs `memory.write`, which requires
+            // at least SemiTrusted.
+            Some("C42".to_string()), // channel_filter: matches this test's channel_id
             config,
             provider,
             audit,
@@ -626,6 +641,13 @@ async fn slack_session_two_partitions_persistent_e2e() {
         run_slack_session_with_transport(
             "aivyx-slack-test",
             Arc::clone(&transport),
+            // channel_filter: None — this test has no tool calls
+            // (plain final-message turns), so trust tier doesn't
+            // gate anything here; both partitions stay Untrusted,
+            // which is fine for the routing/partitioning this test
+            // actually checks.
+            None,
+            None,
             config,
             provider,
             audit,
@@ -716,6 +738,10 @@ async fn slack_session_shutdown_drains_inflight_turns() {
         run_slack_session_with_transport(
             "aivyx-slack-test",
             Arc::clone(&transport),
+            // channel_filter: None — plain final-message turn, no
+            // tool call, so trust tier doesn't gate anything here.
+            None,
+            None,
             config,
             provider,
             audit,

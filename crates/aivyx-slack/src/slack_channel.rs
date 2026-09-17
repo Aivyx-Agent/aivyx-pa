@@ -55,6 +55,21 @@ pub struct SlackChannel<T: SlackTransport + 'static> {
     /// `D0123456789` for DM). String, not u64, because
     /// Slack IDs are alphanumeric strings natively.
     channel_id: String,
+    /// Security-audit fix (Task 10, 2026-09-16) — the operator's
+    /// configured workspace constraint
+    /// (`aivyx_config::SlackConfig::team_id`). `None` = no workspace
+    /// constraint; `Some(t)` = this bot is only meant to treat
+    /// workspace `t` as trusted. Consulted by `trust_tier()` alongside
+    /// `channel_filter` below.
+    team_filter: Option<String>,
+    /// Security-audit fix (Task 10, 2026-09-16) — the operator's
+    /// configured `channel_filter` (see
+    /// `aivyx_config::SlackConfig::channel_filter`), mirroring
+    /// Telegram's `chat_filter` at Slack's own `channel_id`
+    /// granularity. `None` = no channel allowlisted, which per
+    /// `THREAT_MODEL.md` means `Untrusted`, not `SemiTrusted` — see
+    /// `trust_tier()` below.
+    channel_filter: Option<String>,
     /// Per-turn cancellation slot. Rotated between turns.
     token: Arc<Mutex<CancellationToken>>,
     /// Accumulated turn output. Drained on each `finalize()`.
@@ -66,11 +81,18 @@ pub struct SlackChannel<T: SlackTransport + 'static> {
 impl<T: SlackTransport + 'static> SlackChannel<T> {
     /// Construct a `SlackChannel` bound to a single
     /// `(team_id, channel_id)` partition.
-    #[allow(dead_code)]
+    ///
+    /// `team_filter` / `channel_filter` are the operator's configured
+    /// allowlist values (`aivyx_config::SlackConfig::team_id` /
+    /// `channel_filter`), not necessarily equal to `team_id` /
+    /// `channel_id` — see `trust_tier()`.
+    #[allow(dead_code, clippy::too_many_arguments)]
     pub(crate) fn new(
         name: impl Into<String>,
         team_id: impl Into<String>,
         channel_id: impl Into<String>,
+        team_filter: Option<String>,
+        channel_filter: Option<String>,
         transport: Arc<T>,
     ) -> Self {
         SlackChannel {
@@ -78,6 +100,8 @@ impl<T: SlackTransport + 'static> SlackChannel<T> {
             session: SessionId::new(),
             team_id: team_id.into(),
             channel_id: channel_id.into(),
+            team_filter,
+            channel_filter,
             token: Arc::new(Mutex::new(CancellationToken::new())),
             buffer: Mutex::new(String::new()),
             transport,
@@ -214,10 +238,35 @@ impl<T: SlackTransport + 'static> ChannelContext for SlackChannel<T> {
     }
 
     fn trust_tier(&self) -> TrustTier {
-        // Slack DM / channel = authenticated user on a remote
-        // channel = D4 SemiTrusted tier. Matches Discord and
-        // Telegram per `docs/ADAPTER_PATTERN.md`.
-        TrustTier::SemiTrusted
+        // Security-audit fix (Task 10, 2026-09-16). Prior to this
+        // fix, Slack only optionally constrained by workspace
+        // (`team_id`) — and that constraint was never actually
+        // consulted anywhere, so it was dead config — while
+        // `trust_tier()` itself always returned `SemiTrusted`
+        // regardless. `THREAT_MODEL.md` §2 defines `SemiTrusted` as
+        // requiring an allowlisted chat/channel; `Untrusted` is the
+        // tier for everyone else. `SemiTrusted` now requires BOTH:
+        // this channel matches the operator's configured
+        // `channel_filter` (mirroring Telegram's `chat_filter`/
+        // Discord's `channel_filter`), AND, if a `team_filter`
+        // (workspace constraint) is also configured, this message's
+        // `team_id` matches it too (defense in depth — a channel_id
+        // could theoretically collide across two different
+        // workspaces the bot is installed in). No `channel_filter`
+        // configured at all (`None`) is `Untrusted`, full stop — a
+        // `team_filter` alone is not fine-grained enough to satisfy
+        // THREAT_MODEL.md's "allowlisted chat" requirement.
+        let channel_allowed =
+            matches!(&self.channel_filter, Some(id) if id == &self.channel_id);
+        let team_ok = match &self.team_filter {
+            Some(t) => t == &self.team_id,
+            None => true,
+        };
+        if channel_allowed && team_ok {
+            TrustTier::SemiTrusted
+        } else {
+            TrustTier::Untrusted
+        }
     }
 
     fn session_id(&self) -> SessionId {
@@ -298,7 +347,18 @@ mod channel_tests {
 
     fn channel_with_empty_transport() -> SlackChannel<ScriptedTransport> {
         let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
-        SlackChannel::new("aivyx-slack-test", "T01", "C123", transport)
+        // `channel_filter: Some("C123")` matches `channel_id` below,
+        // so every existing test built on this helper keeps seeing
+        // `SemiTrusted`, exactly as it did before Task 10's
+        // trust_tier() fix.
+        SlackChannel::new(
+            "aivyx-slack-test",
+            "T01",
+            "C123",
+            None,
+            Some("C123".to_string()),
+            transport,
+        )
     }
 
     // -- Identity surface ------------------------------------------------
@@ -313,6 +373,72 @@ mod channel_tests {
     fn channel_reports_semitrusted_tier() {
         let c = channel_with_empty_transport();
         assert_eq!(c.trust_tier(), TrustTier::SemiTrusted);
+    }
+
+    // Security-audit fix (Task 10, 2026-09-16). `THREAT_MODEL.md`
+    // defines `SemiTrusted` as requiring an allowlisted chat/channel
+    // and `Untrusted` as the tier for anyone else — these tests pin
+    // that distinction down at the `SlackChannel::trust_tier()`
+    // level. Prior to this fix Slack's `team_id` constraint was
+    // never actually consulted, and `trust_tier()` always returned
+    // `SemiTrusted` regardless.
+
+    #[test]
+    fn allowlisted_channel_is_semitrusted() {
+        let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
+        let c = SlackChannel::new(
+            "allow",
+            "T01",
+            "C123",
+            None,
+            Some("C123".to_string()),
+            transport,
+        );
+        assert_eq!(c.trust_tier(), TrustTier::SemiTrusted);
+    }
+
+    #[test]
+    fn non_allowlisted_channel_is_untrusted() {
+        let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
+        let c = SlackChannel::new(
+            "deny",
+            "T01",
+            "C999",
+            None,
+            Some("C123".to_string()),
+            transport,
+        );
+        assert_eq!(c.trust_tier(), TrustTier::Untrusted);
+    }
+
+    #[test]
+    fn no_filter_configured_is_untrusted_by_default() {
+        // The important behavior-change assertion: per
+        // THREAT_MODEL.md, an unallowlisted-by-default channel (no
+        // filter set at all) is Untrusted, not SemiTrusted — closing
+        // the gap where "no config" silently meant "trust everyone
+        // as SemiTrusted."
+        let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
+        let c = SlackChannel::new("nofilter", "T01", "C555", None, None, transport);
+        assert_eq!(c.trust_tier(), TrustTier::Untrusted);
+    }
+
+    #[test]
+    fn team_filter_mismatch_denies_even_with_matching_channel_filter() {
+        // Defense in depth: a configured team_filter that doesn't
+        // match this message's team_id denies SemiTrusted even when
+        // channel_filter matches — a channel_id could collide across
+        // two different workspaces the bot is installed in.
+        let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
+        let c = SlackChannel::new(
+            "team-mismatch",
+            "T_OTHER",
+            "C123",
+            Some("T01".to_string()),
+            Some("C123".to_string()),
+            transport,
+        );
+        assert_eq!(c.trust_tier(), TrustTier::Untrusted);
     }
 
     #[test]
@@ -349,12 +475,16 @@ mod channel_tests {
             "slack",
             "TEAM_A",
             "CSHARED",
+            None,
+            None,
             Arc::clone(&transport),
         );
         let c_b: SlackChannel<ScriptedTransport> = SlackChannel::new(
             "slack",
             "TEAM_B",
             "CSHARED",
+            None,
+            None,
             Arc::clone(&transport),
         );
         assert_ne!(
@@ -429,6 +559,8 @@ mod channel_tests {
             "smoke",
             "T01",
             "C42",
+            None,
+            None,
             Arc::clone(&transport),
         );
 
@@ -454,6 +586,8 @@ mod channel_tests {
             "smoke",
             "T01",
             "C42",
+            None,
+            None,
             Arc::clone(&transport),
         );
         c.finalize(&completed_outcome()).await.unwrap();
@@ -470,6 +604,8 @@ mod channel_tests {
             "smoke",
             "T01",
             "C42",
+            None,
+            None,
             Arc::clone(&transport),
         );
 

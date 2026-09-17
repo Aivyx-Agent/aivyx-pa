@@ -64,6 +64,14 @@ pub struct TelegramChannel<T: TelegramTransport + 'static> {
     /// is Task 2's problem. Fixing one chat per channel here keeps
     /// Task 1 a pure adapter-pattern exercise.
     chat_id: i64,
+    /// Security-audit fix (Task 10, 2026-09-16) — the operator's
+    /// configured `chat_filter` (see `aivyx_config::TelegramConfig`),
+    /// carried onto the channel so `trust_tier()` can tell an actually
+    /// allowlisted chat apart from one that merely happened to reach
+    /// this constructor. `None` = no chat allowlisted (per
+    /// `THREAT_MODEL.md`, that means `Untrusted`, not `SemiTrusted` —
+    /// see the `trust_tier()` doc comment below for why).
+    chat_filter: Option<i64>,
     /// Per-turn cancellation slot. See the module doc for why we
     /// rotate this between turns.
     token: Arc<Mutex<CancellationToken>>,
@@ -76,16 +84,28 @@ pub struct TelegramChannel<T: TelegramTransport + 'static> {
 
 impl<T: TelegramTransport + 'static> TelegramChannel<T> {
     /// Construct a `TelegramChannel` bound to a single chat.
+    ///
+    /// `chat_filter` is the operator's configured allowlist value
+    /// (`aivyx_config::TelegramConfig::chat_filter` / the
+    /// `chat_filter` parameter threaded through
+    /// `run_telegram_multi_session`), not necessarily equal to
+    /// `chat_id` — see `trust_tier()`.
     // Task 1 only exercises this from the tests module; Task 4's
     // binary wiring will call it for real. The allow is scoped to
     // the constructor so the rest of the impl still gets dead-code
     // checking on any accidentally-orphaned helpers.
     #[allow(dead_code)]
-    pub(crate) fn new(name: impl Into<String>, chat_id: i64, transport: Arc<T>) -> Self {
+    pub(crate) fn new(
+        name: impl Into<String>,
+        chat_id: i64,
+        chat_filter: Option<i64>,
+        transport: Arc<T>,
+    ) -> Self {
         TelegramChannel {
             name: name.into(),
             session: SessionId::new(),
             chat_id,
+            chat_filter,
             token: Arc::new(Mutex::new(CancellationToken::new())),
             buffer: Mutex::new(String::new()),
             transport,
@@ -226,11 +246,24 @@ impl<T: TelegramTransport + 'static> ChannelContext for TelegramChannel<T> {
     }
 
     fn trust_tier(&self) -> TrustTier {
-        // Telegram chat = authenticated user on a remote channel =
-        // D4's SemiTrusted tier. See the crate-level doc for the
-        // full reasoning and the correction against ROADMAP/PHASE_8
-        // drafts that initially said `Untrusted`.
-        TrustTier::SemiTrusted
+        // Security-audit fix (Task 10, 2026-09-16). `THREAT_MODEL.md`
+        // §2 defines `SemiTrusted` as "the operator over a remote,
+        // authenticated channel ... their own Telegram bot, with
+        // chat-id allowlisted" and `Untrusted` as "anyone the operator
+        // has not authenticated ... unallowlisted senders." Prior to
+        // this fix this method ignored `chat_filter` entirely and
+        // always returned `SemiTrusted` — including when the operator
+        // had configured no filter at all (`chat_filter: None`, the
+        // out-of-the-box default), which silently trusted *any* chat
+        // that found the bot. Now: `SemiTrusted` only when the
+        // operator's configured `chat_filter` names this exact chat;
+        // `Untrusted` otherwise, `None` included. This is a real
+        // behavior change for operators with no filter configured —
+        // see `docs/INSTALL.md`'s `chat_filter` note.
+        match self.chat_filter {
+            Some(allowed) if allowed == self.chat_id => TrustTier::SemiTrusted,
+            _ => TrustTier::Untrusted,
+        }
     }
 
     fn session_id(&self) -> SessionId {

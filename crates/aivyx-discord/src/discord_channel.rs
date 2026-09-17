@@ -58,6 +58,13 @@ pub struct DiscordChannel<T: DiscordTransport + 'static> {
     /// for memory partitioning, the same way `chat_id` is
     /// for Telegram.
     channel_id: u64,
+    /// Security-audit fix (Task 10, 2026-09-16) — the operator's
+    /// configured `channel_filter` (see
+    /// `aivyx_config::DiscordConfig::channel_filter`), mirroring
+    /// Telegram's `chat_filter`. `None` = no channel allowlisted,
+    /// which per `THREAT_MODEL.md` means `Untrusted`, not
+    /// `SemiTrusted` — see `trust_tier()` below.
+    channel_filter: Option<u64>,
     /// Per-turn cancellation slot. Rotated between turns.
     token: Arc<Mutex<CancellationToken>>,
     /// Accumulated turn output. Drained on each `finalize()`.
@@ -70,16 +77,26 @@ pub struct DiscordChannel<T: DiscordTransport + 'static> {
 impl<T: DiscordTransport + 'static> DiscordChannel<T> {
     /// Construct a `DiscordChannel` bound to a single channel id.
     ///
+    /// `channel_filter` is the operator's configured allowlist value
+    /// (`aivyx_config::DiscordConfig::channel_filter`), not
+    /// necessarily equal to `channel_id` — see `trust_tier()`.
+    ///
     /// Task 3 calls this from the transport's tests; Task 5
     /// binary wiring will call it for real per-channel-id
     /// partition. The dead-code allow is scoped narrowly because
     /// Task 4 ships the impl ahead of the consumer.
     #[allow(dead_code)]
-    pub(crate) fn new(name: impl Into<String>, channel_id: u64, transport: Arc<T>) -> Self {
+    pub(crate) fn new(
+        name: impl Into<String>,
+        channel_id: u64,
+        channel_filter: Option<u64>,
+        transport: Arc<T>,
+    ) -> Self {
         DiscordChannel {
             name: name.into(),
             session: SessionId::new(),
             channel_id,
+            channel_filter,
             token: Arc::new(Mutex::new(CancellationToken::new())),
             buffer: Mutex::new(String::new()),
             transport,
@@ -215,11 +232,19 @@ impl<T: DiscordTransport + 'static> ChannelContext for DiscordChannel<T> {
     }
 
     fn trust_tier(&self) -> TrustTier {
-        // Discord chat = authenticated user on a remote
-        // channel — same posture as Telegram. D4 `SemiTrusted`
-        // tier per the `docs/ADAPTER_PATTERN.md` tier-selection
-        // guidance.
-        TrustTier::SemiTrusted
+        // Security-audit fix (Task 10, 2026-09-16). Discord
+        // previously had no filter mechanism at all and always
+        // returned `SemiTrusted` regardless of which channel a
+        // message came from — the finding this task fixes.
+        // `THREAT_MODEL.md` §2 defines `SemiTrusted` as requiring an
+        // allowlisted chat/channel; `Untrusted` is the tier for
+        // everyone else, `None` (no filter configured) included. See
+        // `TelegramChannel::trust_tier()` for the identical reasoning
+        // mirrored here at Discord's own `channel_id` granularity.
+        match self.channel_filter {
+            Some(allowed) if allowed == self.channel_id => TrustTier::SemiTrusted,
+            _ => TrustTier::Untrusted,
+        }
     }
 
     fn session_id(&self) -> SessionId {
@@ -300,7 +325,11 @@ mod channel_tests {
 
     fn channel_with_empty_transport() -> DiscordChannel<ScriptedTransport> {
         let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
-        DiscordChannel::new("aivyx-discord-test", 12345, transport)
+        // `channel_filter: Some(12345)` matches `channel_id` below, so
+        // every existing test built on this helper keeps seeing
+        // `SemiTrusted`, exactly as it did before Task 10's
+        // trust_tier() fix.
+        DiscordChannel::new("aivyx-discord-test", 12345, Some(12345), transport)
     }
 
     // -- Identity surface ------------------------------------------------
@@ -315,6 +344,39 @@ mod channel_tests {
     fn channel_reports_semitrusted_tier() {
         let c = channel_with_empty_transport();
         assert_eq!(c.trust_tier(), TrustTier::SemiTrusted);
+    }
+
+    // Security-audit fix (Task 10, 2026-09-16). `THREAT_MODEL.md`
+    // defines `SemiTrusted` as requiring an allowlisted channel and
+    // `Untrusted` as the tier for anyone else — these three tests pin
+    // that distinction down at the `DiscordChannel::trust_tier()`
+    // level. Prior to this fix Discord had no filter mechanism at
+    // all and always returned `SemiTrusted`.
+
+    #[test]
+    fn allowlisted_channel_is_semitrusted() {
+        let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
+        let c = DiscordChannel::new("allow", 12345, Some(12345), transport);
+        assert_eq!(c.trust_tier(), TrustTier::SemiTrusted);
+    }
+
+    #[test]
+    fn non_allowlisted_channel_is_untrusted() {
+        let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
+        let c = DiscordChannel::new("deny", 99999, Some(12345), transport);
+        assert_eq!(c.trust_tier(), TrustTier::Untrusted);
+    }
+
+    #[test]
+    fn no_filter_configured_is_untrusted_by_default() {
+        // The important behavior-change assertion: per
+        // THREAT_MODEL.md, an unallowlisted-by-default channel (no
+        // filter set at all) is Untrusted, not SemiTrusted — closing
+        // the gap where "no config" silently meant "trust everyone
+        // as SemiTrusted."
+        let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
+        let c = DiscordChannel::new("nofilter", 55555, None, transport);
+        assert_eq!(c.trust_tier(), TrustTier::Untrusted);
     }
 
     #[test]
@@ -437,7 +499,7 @@ mod channel_tests {
     async fn finalize_drains_buffer_and_sends_one_message() {
         let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
         let c: DiscordChannel<ScriptedTransport> =
-            DiscordChannel::new("smoke", 4242, Arc::clone(&transport));
+            DiscordChannel::new("smoke", 4242, Some(4242), Arc::clone(&transport));
 
         c.stream_event(StreamEvent::Text("the answer is "))
             .await
@@ -464,7 +526,7 @@ mod channel_tests {
     async fn finalize_with_empty_payload_sends_placeholder() {
         let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
         let c: DiscordChannel<ScriptedTransport> =
-            DiscordChannel::new("smoke", 4242, Arc::clone(&transport));
+            DiscordChannel::new("smoke", 4242, Some(4242), Arc::clone(&transport));
 
         // No stream_event calls at all — agent completed without
         // speaking. finalize must still emit something Discord
@@ -486,7 +548,7 @@ mod channel_tests {
     async fn finalize_appends_outcome_footer_to_payload() {
         let transport = Arc::new(ScriptedTransport::with_queue(vec![]));
         let c: DiscordChannel<ScriptedTransport> =
-            DiscordChannel::new("smoke", 4242, Arc::clone(&transport));
+            DiscordChannel::new("smoke", 4242, Some(4242), Arc::clone(&transport));
 
         c.stream_event(StreamEvent::Text("partial"))
             .await

@@ -402,13 +402,26 @@ struct ChannelRoute {
 /// - `provider` / `audit` — shared across all inner tasks. The
 ///   audit log is the cross-channel audit chain that records
 ///   turns from every channel in interleaved order.
+/// - `channel_filter` — security-audit fix (Task 10, 2026-09-16).
+///   `Some(channel_id)` names the one Discord channel the operator
+///   has allowlisted as `SemiTrusted`; every other channel this bot
+///   receives messages from (`channel_filter` mismatched, or `None`
+///   meaning no channel is allowlisted at all) is `Untrusted`
+///   instead. Mirrors `aivyx_telegram`'s `chat_filter`. Unlike
+///   Telegram, this does not drop messages from non-matching
+///   channels at the routing layer — Discord's Gateway intents
+///   already gate which channels the bot's connection can see at
+///   all, so a mismatched/`None` channel is still processed, just at
+///   the `Untrusted` ceiling rather than silently trusted.
 /// - `shutdown` — ctrl-C-driven token. When cancelled, the
 ///   outer loop stops pumping the shard and drops all per-
 ///   channel mpsc senders, cascading into each inner task's
 ///   mailbox-close branch.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_discord_session(
     channel_name: impl Into<String> + Clone,
     token: &str,
+    channel_filter: Option<u64>,
     config: DiscordSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
@@ -419,6 +432,7 @@ pub async fn run_discord_session(
     run_discord_session_with_transport(
         channel_name,
         transport,
+        channel_filter,
         config,
         provider,
         audit,
@@ -432,13 +446,15 @@ pub async fn run_discord_session(
 /// go through [`run_discord_session`]; tests call this directly
 /// with a `ScriptedTransport`.
 ///
-/// Mirrors `aivyx_telegram::run_telegram_multi_session_with_transport`
-/// minus the `chat_filter` knob — Discord's intent flags on the
-/// Gateway connection already gate which channels the bot is
-/// allowed to see, so a per-process filter would be redundant.
+/// Mirrors `aivyx_telegram::run_telegram_multi_session_with_transport`'s
+/// `chat_filter` knob (security-audit fix, Task 10, 2026-09-16) —
+/// see `run_discord_session`'s doc for the one behavioral difference
+/// (no message-dropping at the routing layer).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_discord_session_with_transport<T>(
     channel_name: impl Into<String> + Clone,
     transport: Arc<T>,
+    channel_filter: Option<u64>,
     config: DiscordSessionConfig,
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
@@ -486,6 +502,7 @@ where
             let dchannel = Arc::new(DiscordChannel::new(
                 base_name.clone(),
                 channel_id,
+                channel_filter,
                 Arc::clone(&transport),
             ));
             let config_clone = config.clone();

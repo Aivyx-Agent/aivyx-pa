@@ -10163,6 +10163,9 @@ async fn run_async(
             let team_run_channel = dc.team_run_channel;
             let team_trigger_rate_limit = dc.team_trigger_rate_limit;
             let team_command_allowed_senders = dc.team_command_allowed_senders.clone();
+            // Security-audit fix (Task 10, 2026-09-16) — see
+            // `DiscordConfig::channel_filter`.
+            let channel_filter: Option<u64> = dc.channel_filter.map(|c| c.value);
 
             let shutdown = CancellationToken::new();
             let shutdown_for_signal = shutdown.clone();
@@ -10254,6 +10257,7 @@ async fn run_async(
             aivyx_discord::run_discord_session(
                 "aivyx-discord",
                 token_str,
+                channel_filter,
                 discord_config,
                 provider,
                 audit,
@@ -10293,6 +10297,10 @@ async fn run_async(
             let team_run_channel = sc.team_run_channel;
             let team_trigger_rate_limit = sc.team_trigger_rate_limit;
             let team_command_allowed_senders = sc.team_command_allowed_senders.clone();
+            // Security-audit fix (Task 10, 2026-09-16) — see
+            // `SlackConfig::team_id` / `SlackConfig::channel_filter`.
+            let team_filter: Option<String> = sc.team_id.clone().map(|t| t.value);
+            let channel_filter: Option<String> = sc.channel_filter.clone().map(|c| c.value);
 
             let shutdown = CancellationToken::new();
             let shutdown_for_signal = shutdown.clone();
@@ -10397,6 +10405,8 @@ async fn run_async(
                 "aivyx-slack",
                 bot_token_str,
                 app_token_str,
+                team_filter,
+                channel_filter,
                 slack_config,
                 provider,
                 audit,

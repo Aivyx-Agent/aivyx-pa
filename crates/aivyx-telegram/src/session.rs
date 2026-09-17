@@ -380,9 +380,19 @@ pub async fn run_telegram_session(
     shutdown: CancellationToken,
 ) -> Result<TelegramSessionReport, String> {
     let transport = Arc::new(ReqwestTransport::new(token));
+    // Security-audit fix (Task 10, 2026-09-16) — this legacy
+    // single-chat entry point (confirmed to have zero real callers in
+    // the workspace; the production binary always goes through
+    // `run_telegram_multi_session`) has no `chat_filter` knob of its
+    // own. It is inherently scoped to exactly the one `chat_id` the
+    // caller supplied, which is functionally the same thing an
+    // allowlist of one entry would express, so `Some(chat_id)` here
+    // keeps it at `SemiTrusted` rather than regressing it to
+    // `Untrusted`.
     let channel = Arc::new(TelegramChannel::new(
         channel_name,
         chat_id,
+        Some(chat_id),
         Arc::clone(&transport),
     ));
     run_telegram_session_with_transport(
@@ -1112,9 +1122,17 @@ where
             //     inner task also notices and exits
             let route = routes.entry(chat_id).or_insert_with(|| {
                 let (tx, rx) = mpsc::channel::<IncomingMessage>(CHAT_MAILBOX_CAPACITY);
+                // Security-audit fix (Task 10, 2026-09-16) — thread
+                // the multiplexer's own `chat_filter` onto the
+                // channel so `trust_tier()` can tell an allowlisted
+                // chat apart from one that merely reached this point
+                // because no filter was configured at all (`None`
+                // accepts every chat at the routing layer above, but
+                // must not silently grant it SemiTrusted).
                 let channel = Arc::new(TelegramChannel::new(
                     base_name.clone(),
                     chat_id,
+                    chat_filter,
                     Arc::clone(&transport),
                 ));
                 let config_clone = config.clone();
