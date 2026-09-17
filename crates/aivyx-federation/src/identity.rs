@@ -71,6 +71,19 @@ pub struct SignedHeader {
 /// nonces and rejects duplicates within the freshness window. Call
 /// [`check_and_record`](ReplayGuard::check_and_record) **after** signature
 /// verification succeeds.
+///
+/// **Process-local, not persisted.** This guard's state lives entirely in
+/// memory; a process restart reopens a full `MAX_REQUEST_AGE_SECS`-wide
+/// replay window for every nonce recorded before the restart (an attacker
+/// who captured a request just before a restart can replay it right after
+/// one). Deliberately out of scope for the 2026-09-16 security-audit fix
+/// that hardened this guard's in-memory eviction/skew/cap logic — this
+/// primitive isn't wired into any shipped transport yet (see
+/// `docs/FEDERATION.md` §2). **Revisit this before wiring `ReplayGuard`
+/// into a real transport** — either persist the seen-set (e.g. a small
+/// on-disk/redb-backed table, since the window is short enough that only
+/// recent entries matter) or accept the restart-reopens-the-window
+/// limitation explicitly in that transport's own threat model.
 pub struct ReplayGuard {
     /// nonce -> the header's own `timestamp` field (**not** the wall-clock
     /// instant this guard happened to record it at). Keying off the
@@ -140,7 +153,15 @@ impl ReplayGuard {
         // once we're at the cap, rather than unconditionally on every call;
         // the lazy per-nonce check above already gives correct replay
         // rejection regardless of whether a stale entry has been swept out
-        // of the map yet.
+        // of the map yet. This does mean reclamation is deliberately
+        // deferred, not eager: a peer that sends a burst of distinct
+        // nonces and then goes quiet leaves them resident in the map
+        // indefinitely (long past their own MAX_REQUEST_AGE_SECS
+        // expiry) until *some* caller's traffic pushes the map back up to
+        // the cap again. Correctness is unaffected (the lazy check above
+        // is authoritative regardless of how stale the map is), and
+        // memory stays bounded by the cap either way -- this is a
+        // deliberate latency/memory trade-off, not an oversight.
         if seen.len() >= MAX_REPLAY_GUARD_ENTRIES {
             seen.retain(|_, &mut ts| now.saturating_sub(ts) <= MAX_REQUEST_AGE_SECS);
         }
@@ -427,7 +448,20 @@ impl Identity {
         header: &SignedHeader,
         body: &[u8],
     ) -> Result<(), FederationError> {
-        let now = now_secs();
+        Self::verify_request_at(peer_public_key, header, body, now_secs())
+    }
+
+    /// [`Self::verify_request`] with an explicit `now`, so a boundary test
+    /// can pin an exact instant instead of racing the real wall clock —
+    /// `verify_request` itself calls `now_secs()` once and delegates here,
+    /// so this is the one real check both the production path and tests
+    /// exercise, not a parallel copy.
+    fn verify_request_at(
+        peer_public_key: &str,
+        header: &SignedHeader,
+        body: &[u8],
+        now: u64,
+    ) -> Result<(), FederationError> {
         let is_too_old = now.saturating_sub(header.timestamp) > MAX_REQUEST_AGE_SECS;
         let is_too_far_in_future = header.timestamp > now.saturating_add(FUTURE_SKEW_TOLERANCE_SECS);
         if is_too_old || is_too_far_in_future {
@@ -778,35 +812,62 @@ mod tests {
         // instead: a header exactly FUTURE_SKEW_TOLERANCE_SECS ahead of now
         // is accepted (clock-skew tolerance), one second further is
         // rejected.
+        //
+        // Review round 3 (Minor B): the first version of this test called
+        // `now_secs()` once for the "now" baseline and let `verify_request`
+        // call `now_secs()` again internally for each assertion -- if a
+        // real wall-clock second boundary fell between those calls (a rare
+        // but real ~100us window), the two `now` values would differ by 1,
+        // silently shifting both boundary checks and occasionally flipping
+        // the "rejected" assertion to "accepted". Driving both assertions
+        // from the same `now` via `verify_request_at` removes the race
+        // entirely -- this test can no longer flake on wall-clock timing.
         let id = Identity::generate("future-boundary".into()).unwrap();
         let body: &[u8] = b"body";
         let now = now_secs();
 
         let within_tolerance = sign_at(&id, body, now + FUTURE_SKEW_TOLERANCE_SECS);
-        Identity::verify_request(&id.public_key_base64(), &within_tolerance, body)
+        Identity::verify_request_at(&id.public_key_base64(), &within_tolerance, body, now)
             .expect("a header exactly FUTURE_SKEW_TOLERANCE_SECS ahead of now must be accepted");
 
         let one_past_tolerance = sign_at(&id, body, now + FUTURE_SKEW_TOLERANCE_SECS + 1);
         assert!(
-            Identity::verify_request(&id.public_key_base64(), &one_past_tolerance, body).is_err(),
+            Identity::verify_request_at(&id.public_key_base64(), &one_past_tolerance, body, now)
+                .is_err(),
             "a header one second past FUTURE_SKEW_TOLERANCE_SECS ahead of now must be rejected"
         );
     }
 
     #[test]
     fn the_seen_set_evicts_the_oldest_entries_first_and_stays_bounded() {
-        // Distinct, strictly increasing timestamps (not a single constant
-        // `now=0`) so this actually exercises "evict the oldest" -- a bug
-        // that evicted the newest entry instead would still have passed the
-        // previous version of this test, which inserted everything at the
-        // same instant and so could never tell the two apart.
+        // Review round 3 (Minor A): a strictly-increasing *call-time* `now`
+        // (the prior version of this test) lets the age-based `retain`
+        // sweep reclaim the whole backlog the moment the map first reaches
+        // the cap -- once that happens `len` never returns to the cap
+        // again, so the size-based `min_by_key` eviction branch never
+        // executes even once, and this test could pass under a mutant that
+        // evicts the *newest* entry, or even one with the size-cap eviction
+        // block deleted outright (verified by hand-simulating both
+        // mutants against the previous version of this test: neither
+        // failed it).
+        //
+        // Fixed by decoupling "what's fresh" from "what's distinct": every
+        // call passes the *same* `now` (so `now.saturating_sub(ts)`
+        // saturates to 0 -- well within the freshness window -- for every
+        // entry regardless of its own `header.timestamp`, meaning the
+        // age-based sweep can never reclaim anything here), while each
+        // entry's own stored `header.timestamp` still increases
+        // per-insertion (so `min_by_key`'s ordering has a genuine, checkable
+        // "oldest" to find). This forces every eviction past the cap to go
+        // through `min_by_key`, and lets this test actually distinguish
+        // oldest-first from any other order.
         let guard = ReplayGuard::new();
         let total = MAX_REPLAY_GUARD_ENTRIES + 50;
+        let now = 0u64;
         for i in 0..total {
-            let now = i as u64;
             let header = SignedHeader {
                 instance_id: "cap-test".into(),
-                timestamp: now,
+                timestamp: i as u64,
                 signature: format!("sig-{i}"),
             };
             guard
