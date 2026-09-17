@@ -89,7 +89,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use aivyx_capability::{Scope, TrustTier};
@@ -5649,7 +5649,7 @@ struct RawFailureOutcomesConfig {
 #[derive(Debug, Default, Deserialize)]
 struct RawAivyxPa {
     #[serde(default)]
-    passphrase: Option<String>,
+    passphrase: Option<SecretString>,
 }
 
 // --------------------------------------------------------------------
@@ -6200,9 +6200,8 @@ impl AivyxConfig {
             .or_else(|| {
                 toml.aivyx_pa
                     .passphrase
-                    .as_ref()
-                    .filter(|s| !s.is_empty())
-                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+                    .filter(|s| !s.expose_secret().is_empty())
+                    .map(|s| SourcedSecret::new(s, FieldSource::Toml))
             });
 
         // --- telegram ----------------------------------------------

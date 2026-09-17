@@ -387,6 +387,18 @@ passphrase = "toml-passphrase"
     drop(env);
 }
 
+/// Task 12 (MEDIUM, security audit 2026-09-16): `RawAivyxPa.passphrase`
+/// must deserialize straight into a [`secrecy::SecretString`], not a
+/// plain `String` that later gets cloned before being wrapped. This is
+/// primarily a compile-time property — the real assertion is that this
+/// test compiles at all — but it also exercises the value round-trip.
+#[test]
+fn raw_passphrase_field_is_secretstring_not_plain_string() {
+    let raw: crate::RawAivyxPa = toml::from_str(r#"passphrase = "test123""#).unwrap();
+    let secret: &secrecy::SecretString = raw.passphrase.as_ref().unwrap();
+    assert_eq!(secret.expose_secret(), "test123");
+}
+
 // ------------------------------------------------------------------
 // Task 10 fix round 3 (2026-09-16) — `chat_filter` as a TOML alias
 // for `chat_id`. An earlier `docs/INSTALL.md` example incorrectly
