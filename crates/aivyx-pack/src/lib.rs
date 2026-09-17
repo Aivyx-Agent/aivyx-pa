@@ -46,6 +46,22 @@ const SIGNATURE_NAME: &str = "signature.bin";
 const PUBLISHER_NAME: &str = "publisher.txt";
 const MANIFEST_NAME: &str = "manifest.toml";
 
+/// Outer bundle entries larger than this are refused before being read
+/// into memory. Generous for a real vertical-pack bundle, small enough to
+/// bound a deliberate memory/disk-fill attempt on an operator-supplied
+/// file that hasn't been signature-verified yet.
+const MAX_BUNDLE_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Payload decompression is refused once it has produced more than this
+/// multiple of the compressed input's size — closes a zip-bomb-style
+/// expansion attack.
+const MAX_DECOMPRESSION_RATIO: u64 = 20;
+
+/// Floor on the decompression budget so a tiny (sub-KB) compressed
+/// payload isn't capped down to something that can't even hold a
+/// legitimate manifest + small binary.
+const MIN_DECOMPRESSED_BYTES: u64 = 1024 * 1024;
+
 #[derive(Debug, Error)]
 pub enum PackError {
     #[error("io: {0}")]
@@ -319,6 +335,7 @@ pub fn write_bundle(
 // ---------------------------------------------------------------------------
 
 /// The three parts of a read bundle, pre-verification.
+#[derive(Debug)]
 pub struct ReadBundle {
     pub payload: Vec<u8>,
     pub signature: [u8; 64],
@@ -337,7 +354,19 @@ pub fn read_bundle(path: &Path) -> Result<ReadBundle, PackError> {
     for entry in archive.entries()? {
         let mut entry = entry?;
         let name = entry.path()?.to_string_lossy().into_owned();
-        let mut bytes = Vec::new();
+        let declared_size = entry.header().size()?;
+        if declared_size > MAX_BUNDLE_ENTRY_BYTES {
+            return Err(PackError::BadEntry(
+                "bundle",
+                format!(
+                    "entry {name:?} is {declared_size} bytes, exceeding the \
+                     {MAX_BUNDLE_ENTRY_BYTES}-byte limit"
+                ),
+            ));
+        }
+        // The tar entry reader is itself bounded to `declared_size`, so
+        // this can never read more than the cap just checked above.
+        let mut bytes = Vec::with_capacity(declared_size as usize);
         entry.read_to_end(&mut bytes)?;
         match name.as_str() {
             PAYLOAD_NAME => payload = Some(bytes),
@@ -425,11 +454,43 @@ pub fn safe_relative(rel: &Path) -> bool {
         && !rel.as_os_str().is_empty()
 }
 
+/// Wraps a decompressing reader and refuses to yield more than a fixed
+/// byte budget total, erroring rather than silently truncating — used to
+/// bound gzip expansion to a fixed multiple of the compressed input size
+/// (a zip-bomb-style attack otherwise has no ceiling since the archive
+/// entries stream straight to disk without ever being buffered whole).
+struct RatioCappedReader<R> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R: Read> Read for RatioCappedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n as u64 > self.remaining {
+            return Err(std::io::Error::other(
+                "pack payload exceeds the maximum allowed decompression ratio",
+            ));
+        }
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+
 /// Unpack a (verified) payload into `dest`. Every entry is sanitized;
-/// symlinks and unsafe paths abort the whole unpack.
+/// symlinks and unsafe paths abort the whole unpack. Total decompressed
+/// output across all entries is capped at `MAX_DECOMPRESSION_RATIO` times
+/// the compressed payload size, closing a zip-bomb-style expansion attack.
 pub fn unpack_payload(payload: &[u8], dest: &Path) -> Result<(), PackError> {
+    let max_decompressed = (payload.len() as u64)
+        .saturating_mul(MAX_DECOMPRESSION_RATIO)
+        .max(MIN_DECOMPRESSED_BYTES);
     let gz = flate2::read::GzDecoder::new(payload);
-    let mut archive = tar::Archive::new(gz);
+    let capped = RatioCappedReader {
+        inner: gz,
+        remaining: max_decompressed,
+    };
+    let mut archive = tar::Archive::new(capped);
     for entry in archive.entries()? {
         let mut entry = entry?;
         let rel = entry.path()?.into_owned();
@@ -633,5 +694,68 @@ bin = "aivyx-kitchen-toolkit"
         let a = build_payload(&staging).unwrap();
         let b = build_payload(&staging).unwrap();
         assert_eq!(a, b, "same staging tree must sign the same bytes");
+    }
+
+    #[test]
+    fn read_bundle_refuses_an_oversized_entry() {
+        // Hand-build an outer tar (bypassing write_bundle) with one entry
+        // whose header claims a size far larger than MAX_BUNDLE_ENTRY_BYTES.
+        // The actual bytes written are tiny — read_bundle must refuse
+        // based on the declared size alone, before ever trying to read
+        // (nonexistent) gigabytes off disk.
+        let path = tmpdir("oversized-entry").join("evil.aivyxpack");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut tarb = tar::Builder::new(file);
+        let claimed_size = MAX_BUNDLE_ENTRY_BYTES + 1;
+        let mut header = tar::Header::new_gnu();
+        header.set_size(claimed_size);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tarb.append_data(&mut header, PAYLOAD_NAME, b"tiny".as_slice())
+            .unwrap();
+        tarb.into_inner().unwrap().sync_all().unwrap();
+
+        let err = read_bundle(&path).unwrap_err();
+        match &err {
+            PackError::BadEntry(_, msg) => {
+                assert!(
+                    msg.contains(&MAX_BUNDLE_ENTRY_BYTES.to_string()),
+                    "error should mention the cap: {msg}"
+                );
+            }
+            other => panic!("expected BadEntry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unpack_payload_refuses_a_decompression_bomb() {
+        // A tar containing one large all-zero entry compresses enormously
+        // under gzip — a real, small zip-bomb-style fixture built
+        // deterministically rather than a committed binary file.
+        let big_zeroes = vec![0u8; 20 * 1024 * 1024];
+        let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        let mut tarb = tar::Builder::new(gz);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(big_zeroes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tarb.append_data(&mut header, "bin/huge", big_zeroes.as_slice())
+            .unwrap();
+        let payload = tarb.into_inner().unwrap().finish().unwrap();
+        assert!(
+            (payload.len() as u64) * MAX_DECOMPRESSION_RATIO < big_zeroes.len() as u64,
+            "fixture must actually exceed the ratio cap to be a meaningful test"
+        );
+
+        let dest = tmpdir("bomb-dest");
+        let err = unpack_payload(&payload, &dest).unwrap_err();
+        assert!(
+            matches!(err, PackError::Io(_)),
+            "expected an io error from the capped reader, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("decompression ratio"),
+            "error should explain the refusal: {err}"
+        );
     }
 }
