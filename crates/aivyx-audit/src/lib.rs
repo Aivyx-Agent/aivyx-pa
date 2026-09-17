@@ -754,6 +754,28 @@ pub enum AuditError {
     /// chain is the source of truth.
     #[error("corrupt stored entry at seq {seq}: {reason}")]
     CorruptStoredEntry { seq: u64, reason: String },
+
+    /// The persisted chain anchor (last known `seq` + `mac`, updated
+    /// after every durably-persisted append — see `persistent.rs`'s
+    /// module docs, invariant 6) disagrees with the real, freshly
+    /// re-verified tail found on disk: either fewer entries exist than
+    /// the anchor claims (`disk_seq` lower than `anchor_seq`, or
+    /// `None` on a fully-emptied store), or the same `anchor_seq` is
+    /// present but its MAC no longer matches. Distinct from
+    /// `ChainBroken`/`CorruptStoredEntry`, which are both derived
+    /// purely from *internal* consistency of whatever currently
+    /// happens to be on disk — a scan-position enumeration with the
+    /// tail cut off is, by construction, indistinguishable from "the
+    /// log never grew past that point" without this external anchor
+    /// to compare against.
+    #[error(
+        "audit chain tail truncation detected: anchor claims last seq {anchor_seq} \
+         but the real on-disk tail is {disk_seq:?}"
+    )]
+    TailTruncated {
+        anchor_seq: u64,
+        disk_seq: Option<u64>,
+    },
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,39 @@
 //!    `JoinHandle` is stored on the struct and `abort()`ed in `Drop`,
 //!    so a dropped `PersistentAuditLog` cannot leave a drain task alive
 //!    against a closed storage handle.
+//! 6. **The persisted chain anchor never claims a seq the disk doesn't
+//!    actually have yet.** `PersistentAuditLog::open`'s reopen-path
+//!    scan re-derives sequence numbers purely from scan position —
+//!    which means a *tail* truncation (deleting the last N on-disk
+//!    rows, leaving a shorter but otherwise perfectly self-consistent
+//!    chain) was structurally undetectable: "the log stopped growing
+//!    here" and "the log's tail was deleted" produce byte-identical
+//!    on-disk state. Closing that gap needs something outside the
+//!    scan itself to compare against — a small anchor record (last
+//!    known `seq` + `mac`) stored under a reserved key in the same
+//!    `KeyDomain::Audit` domain (see `CHAIN_ANCHOR_KEY`). The subtle
+//!    part is *when* that anchor gets written: it is updated from
+//!    inside the drain task, immediately **after** `handle.put` for
+//!    the corresponding entry has itself returned `Ok` (i.e. after
+//!    that entry is durably committed) — never synchronously inside
+//!    `append()`, where the entry is only chained in memory and not
+//!    yet even queued to the drain task's persistence path. Writing
+//!    the anchor any earlier would let a crash between "chain the
+//!    entry" and "the drain task persists it" leave an anchor that
+//!    claims a seq the disk never actually received, which is a false
+//!    positive on the very next open — exactly the kind of new
+//!    failure mode this mechanism must not introduce into the chain
+//!    it's meant to protect. The consequence of this ordering is that
+//!    the anchor can only ever *lag* the true on-disk tail (benign —
+//!    treated as "no news," not tamper evidence), never precede it;
+//!    `check_tail_anchor` only rejects an anchor that is *ahead of*,
+//!    or disagrees with, what a fresh scan actually finds. See
+//!    `PHASE_7.md` Q2 for the historical context: this was flagged at
+//!    design time as a known, narrower-than-feared gap ("an attacker
+//!    who deletes the most recent session entirely") and explicitly
+//!    deferred rather than solved by a new `ChainLinked` event
+//!    variant; this anchor closes it without touching the
+//!    `AuditEvent` schema.
 //!
 //! ## On-disk shape
 //!
@@ -64,7 +97,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use aivyx_storage::{KeyDomain, ScanRow, Storage};
+use aivyx_storage::{DomainHandle, KeyDomain, ScanRow, Storage};
 
 use crate::{
     AuditError, AuditEvent, AuditLog, AuditWriter, HmacChainLog, SignedEntry,
@@ -106,6 +139,97 @@ fn audit_key(seq: u64) -> Vec<u8> {
     key.extend_from_slice(AUDIT_KEY_PREFIX);
     key.extend_from_slice(&seq.to_be_bytes());
     key
+}
+
+// ---------------------------------------------------------------------------
+// Chain anchor — tail-truncation detection (Task 11, 2026-09-16 security
+// audit). See module docs, invariant 6, for the ordering rationale.
+// ---------------------------------------------------------------------------
+
+/// Reserved key for the persisted chain anchor. Deliberately **not**
+/// `AUDIT_KEY_PREFIX`-shaped: it starts with `z`, which sorts well
+/// outside `scan_prefix(AUDIT_KEY_PREFIX)`'s `[a\0, a\1)` range (see
+/// `next_lex`), so it can never be swept up by the entry scan or
+/// mistaken for an entry by `seq_from_key_bytes`.
+///
+/// Lives inside `KeyDomain::Audit` (via ordinary `DomainHandle::get`/
+/// `put`) rather than as a separate OS-level file: `PersistentAuditLog`
+/// only ever holds an opaque `Arc<dyn Storage>` — no filesystem path is
+/// available to it, and `Storage` is documented (D7) as the workspace's
+/// single storage surface, so extending its trait signature for one
+/// caller's sidecar file was rejected as disproportionate to a MEDIUM
+/// finding. Storing it as another key in the same domain keeps the
+/// change contained to this module and gets 0600-equivalent protection
+/// and encryption at rest for free from the domain it already lives in.
+const CHAIN_ANCHOR_KEY: &[u8] = b"z\0chain-anchor";
+
+/// The last known tail of the chain: the highest `seq` durably
+/// persisted, and its `mac`. Updated after every successful append
+/// (see `spawn_drain_task`), checked against the real on-disk tail on
+/// every `open`/`verify_from_disk` (see `check_tail_anchor`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ChainAnchor {
+    last_seq: u64,
+    last_mac: [u8; 32],
+}
+
+/// Persist `seq`/`mac` as the new chain anchor. Called only after the
+/// corresponding entry's own `handle.put` has already returned `Ok` —
+/// see invariant 6 in the module docs for why that ordering is load-
+/// bearing.
+async fn write_anchor(
+    handle: &DomainHandle,
+    seq: u64,
+    mac: [u8; 32],
+) -> Result<(), aivyx_storage::StorageError> {
+    let anchor = ChainAnchor { last_seq: seq, last_mac: mac };
+    let bytes = serde_json::to_vec(&anchor).expect("ChainAnchor always serializes");
+    handle.put(CHAIN_ANCHOR_KEY, &bytes).await
+}
+
+/// Read the persisted chain anchor, if one exists. `None` means either
+/// a brand-new store, or a store created before this fix landed — both
+/// are "no historical anchor to compare against," not tamper evidence.
+/// Any decode failure is likewise treated as "no anchor" rather than
+/// an error: the anchor is a best-effort accelerant for tail-
+/// truncation detection, not itself part of the chain's integrity
+/// proof, so a corrupt anchor record must never be the reason a
+/// legitimately-intact chain refuses to open.
+async fn read_anchor(handle: &DomainHandle) -> Option<ChainAnchor> {
+    let bytes = handle.get(CHAIN_ANCHOR_KEY).await.ok().flatten()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Compare the persisted anchor (if any) against the real, freshly
+/// re-verified tail of the chain. An anchor that is *behind* the real
+/// tail (`last.seq > anchor.last_seq`) is expected and benign — see
+/// invariant 6. Only an anchor that is *ahead* of the real tail (fewer
+/// entries on disk than the anchor claims) or that disagrees with the
+/// real tail's MAC at the same seq is tamper/truncation evidence.
+async fn check_tail_anchor(
+    handle: &DomainHandle,
+    entries: &[SignedEntry],
+) -> Result<(), AuditError> {
+    let Some(anchor) = read_anchor(handle).await else {
+        return Ok(());
+    };
+    match entries.last() {
+        None => Err(AuditError::TailTruncated {
+            anchor_seq: anchor.last_seq,
+            disk_seq: None,
+        }),
+        Some(last) if last.seq < anchor.last_seq => Err(AuditError::TailTruncated {
+            anchor_seq: anchor.last_seq,
+            disk_seq: Some(last.seq),
+        }),
+        Some(last) if last.seq == anchor.last_seq && last.mac != anchor.last_mac => {
+            Err(AuditError::TailTruncated {
+                anchor_seq: anchor.last_seq,
+                disk_seq: Some(last.seq),
+            })
+        }
+        Some(_) => Ok(()),
+    }
 }
 
 impl PersistentAuditLog {
@@ -441,7 +565,9 @@ async fn scan_decode_verify(
         .scan_prefix(AUDIT_KEY_PREFIX)
         .await
         .map_err(|e| AuditError::Storage(e.to_string()))?;
-    decode_and_validate_rows(audit_key, rows)
+    let entries = decode_and_validate_rows(audit_key, rows)?;
+    check_tail_anchor(&handle, &entries).await?;
+    Ok(entries)
 }
 
 fn decode_and_validate_rows(
@@ -606,6 +732,22 @@ fn spawn_drain_task(
                 let msg = format!("storage.put seq={}: {e}", entry.seq);
                 mark_unhealthy(&health, &first_error, &msg);
                 (on_error)(AuditError::Storage(msg));
+                continue;
+            }
+
+            // Invariant 6: only now — after the entry itself is
+            // durably persisted — record it as the new chain anchor.
+            // A failure here is deliberately non-fatal to health: the
+            // entry is already safely on disk, and a stale/behind
+            // anchor can only ever under-detect a future truncation
+            // (see `check_tail_anchor`), never produce a false
+            // positive. Still surfaced through the error handler so
+            // it isn't silently swallowed.
+            if let Err(e) = write_anchor(&handle, entry.seq, entry.mac).await {
+                (on_error)(AuditError::Storage(format!(
+                    "chain anchor put seq={}: {e}",
+                    entry.seq
+                )));
             }
         }
     })
@@ -760,6 +902,28 @@ mod tests {
         panic!("drain never persisted {expected} rows");
     }
 
+    /// Like `wait_for_disk`, but for the chain anchor specifically.
+    /// Needed because the anchor write happens in the drain task
+    /// *after* the corresponding entry's own `put` (invariant 6) — so
+    /// `wait_for_disk` returning (which only checks entry rows) can
+    /// race ahead of the anchor write for the same entry. Tests that
+    /// need the anchor to have caught up to a specific seq (not just
+    /// "behind or equal," which is always safe per `check_tail_anchor`)
+    /// must poll for it explicitly rather than relying on
+    /// `wait_for_disk` alone.
+    async fn wait_for_anchor(storage: &Arc<dyn Storage>, expected_seq: u64) {
+        let handle = storage.domain(KeyDomain::Audit);
+        for _ in 0..2000 {
+            if let Some(anchor) = read_anchor(&handle).await {
+                if anchor.last_seq == expected_seq {
+                    return;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        panic!("chain anchor never reached seq {expected_seq}");
+    }
+
     #[tokio::test]
     async fn open_on_empty_domain_yields_empty_chain() {
         let (_dir, storage, chain_key) = fresh_storage(1).await;
@@ -860,8 +1024,15 @@ mod tests {
         assert!(matches!(err, AuditError::ChainBroken { .. }));
     }
 
+    // Renamed from `truncated_tail_is_detected_as_seq_gap` (Task 11,
+    // 2026-09-16 security audit): this test always deleted the
+    // *middle* entry (seq=1 of 0..2), never the tail — the name
+    // claimed tail-truncation coverage this test never provided. The
+    // body is unchanged; it was always a correct test of the
+    // mid-sequence gap case, just mis-named. Genuine tail-truncation
+    // coverage is `genuine_tail_truncation_is_detected` below.
     #[tokio::test]
-    async fn truncated_tail_is_detected_as_seq_gap() {
+    async fn middle_entry_deletion_is_detected_as_seq_gap() {
         let (_dir, storage, chain_key) = fresh_storage(6).await;
         {
             let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
@@ -886,6 +1057,76 @@ mod tests {
             err,
             AuditError::CorruptStoredEntry { .. } | AuditError::ChainBroken { .. }
         ));
+    }
+
+    /// The real tail-truncation case the old (mis-named) test above
+    /// never covered: delete the LAST row and nothing else. The
+    /// remaining seq=0,1 rows are internally perfectly self-consistent
+    /// (no gap, chain replays cleanly from genesis) — before Task 11
+    /// this was silently accepted as a valid, shorter chain. The
+    /// persisted chain anchor (updated to seq=2 by the drain task
+    /// after the third append durably lands) is what makes the
+    /// missing seq=2 row observable on reopen.
+    #[tokio::test]
+    async fn genuine_tail_truncation_is_detected() {
+        let (_dir, storage, chain_key) = fresh_storage(24).await;
+        {
+            let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
+                .await
+                .unwrap();
+            log.append(sample_turn_started()).unwrap();
+            log.append(sample_tool_call()).unwrap();
+            log.append(sample_turn_ended()).unwrap();
+            wait_for_disk(&storage, 3).await;
+            // Not redundant with the line above: `wait_for_disk` only
+            // observes the three entry rows; the anchor write for the
+            // third entry happens in a subsequent await inside the
+            // same drain-task iteration (invariant 6) and can lag
+            // slightly behind. Without this, the test would flake
+            // depending on exactly when the drain task is aborted by
+            // the `drop(log)`-equivalent end of this block.
+            wait_for_anchor(&storage, 2).await;
+        }
+
+        // Delete the LAST row (seq=2) — genuine tail truncation, not
+        // the middle-entry-deletion case above.
+        let handle = storage.domain(KeyDomain::Audit);
+        handle.delete(&audit_key(2)).await.unwrap();
+
+        let err = PersistentAuditLog::open(storage, chain_key)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AuditError::TailTruncated { .. }),
+            "expected TailTruncated, got {err:?}"
+        );
+    }
+
+    /// A store created before this fix landed has entries but no
+    /// chain-anchor key. `read_anchor` returning `None` must be
+    /// treated as "no historical anchor to check against," never as
+    /// truncation — otherwise every pre-existing store would fail to
+    /// reopen the moment the binary upgrades to this fix.
+    #[tokio::test]
+    async fn missing_anchor_is_not_treated_as_truncation() {
+        let (_dir, storage, chain_key) = fresh_storage(25).await;
+        {
+            let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
+                .await
+                .unwrap();
+            log.append(sample_turn_started()).unwrap();
+            wait_for_disk(&storage, 1).await;
+        }
+
+        // Simulate "written before this fix existed": remove the
+        // anchor key entirely, leaving only the entry itself.
+        let handle = storage.domain(KeyDomain::Audit);
+        handle.delete(CHAIN_ANCHOR_KEY).await.unwrap();
+
+        let log = PersistentAuditLog::open(storage, chain_key)
+            .await
+            .expect("missing anchor must not block reopen of an intact chain");
+        assert_eq!(log.len(), 1);
     }
 
     #[tokio::test]

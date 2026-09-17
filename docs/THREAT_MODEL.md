@@ -158,6 +158,21 @@ subkey under `KeyDomain::Audit`. Tampering with any byte of any
 entry breaks the chain at the first modified row and trips
 `AuditError::ChainBroken` on the next open.
 
+Deleting rows from the *middle* of the chain is likewise caught —
+the reopen scan re-derives each row's expected `seq` from its scan
+position, so a gap surfaces as `AuditError::CorruptStoredEntry` or
+`ChainBroken`. A **tail** truncation (deleting only the most recent
+N rows, leaving the remaining rows a shorter but internally
+self-consistent chain) needed a separate mechanism, since "the log
+never grew past here" and "the log's tail was deleted" are
+byte-identical on disk from a pure scan-position replay. This is
+closed by a small persisted chain anchor — the last known `seq` +
+`mac`, written only after that entry is durably persisted, and
+checked against the real on-disk tail on every open/verify — that
+trips a distinct `AuditError::TailTruncated`
+(`aivyx-audit/src/persistent.rs`, Task 11 of the 2026-09-16 security
+audit).
+
 `aivyx-pa --verify-only` cold-verifies the full chain without an LLM
 API key, so audit verification works on a machine that has never
 been online.
