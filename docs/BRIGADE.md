@@ -148,6 +148,11 @@ command = "aivyx-kitchen-toolkit"
 # drops the write/order/haccp scopes so only the kitchen.read tools surface:
 # [tool_process.scope_overrides]
 # ...
+# Optional: a ceiling that refuses registration outright if the process's
+# self-declared scope isn't covered by what you expect (doesn't narrow,
+# just validates — see docs/TOOL_SDK.md §6):
+# [tool_process.expected_scopes]
+# kitchen = "kitchen.read"
 ```
 
 **3. Run the BOH brigade on it** — point the team at the bundled pack (Chapter

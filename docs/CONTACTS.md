@@ -155,6 +155,10 @@ command = "aivyx-contacts"
 # read-only). The tools declare contacts.read / contacts.write
 # themselves; the daemon checks them against the active role.
 # [tool_process.scope_overrides]
+# Optional per-tool expected-scope ceiling — validates (doesn't narrow)
+# the process's self-declared scope; registration is refused if it
+# isn't covered. See docs/TOOL_SDK.md §6.
+# [tool_process.expected_scopes]
 ```
 
 The fastest path is `aivyx-pa connect contacts`, which writes the

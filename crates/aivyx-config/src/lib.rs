@@ -4201,6 +4201,11 @@ struct RawMcpServer {
 /// # Optional environment additions.
 /// env = { LOG_LEVEL = "info" }
 ///
+/// enabled = true   # default — must appear before the [tool_process.*]
+///                  # sub-tables below, or it parses into whichever
+///                  # sub-table's HashMap comes first instead of this
+///                  # struct's own field.
+///
 /// # Optional per-tool scope narrowing. Keys are tool names declared
 /// # in the process's ToolRegister; values are scope strings that
 /// # must be granted by the declared scope.
@@ -4215,8 +4220,6 @@ struct RawMcpServer {
 /// # otherwise have their self-declared scope trusted verbatim.
 /// [tool_process.expected_scopes]
 /// wordcount = "memory.read"
-///
-/// enabled = true   # default
 /// ```
 /// `[applications]` deserialize target (Chapter Deckhand). Opt-in toggle for
 /// the `aivyx-apps` desktop tool process.

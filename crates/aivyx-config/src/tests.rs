@@ -2858,6 +2858,9 @@ LOG_LEVEL = "info"
 
 [tool_process.scope_overrides]
 wordcount = "memory.read:topic:wc/**"
+
+[tool_process.expected_scopes]
+wordcount = "memory.read"
 "#,
     )
     .unwrap();
@@ -2884,6 +2887,11 @@ wordcount = "memory.read:topic:wc/**"
     assert_eq!(
         t.scope_overrides.get("wordcount").map(String::as_str),
         Some("memory.read:topic:wc/**"),
+    );
+    assert_eq!(t.expected_scopes.len(), 1);
+    assert_eq!(
+        t.expected_scopes.get("wordcount").map(String::as_str),
+        Some("memory.read"),
     );
     drop(env);
 }

@@ -325,6 +325,44 @@ to its token dir + read-only system. (The residual "a malicious
 tool process abuses its own grant" case is the same class as
 §5.2 / §5.6 below — out of scope by the same reasoning.)
 
+**Known gap, tracked, not covered by the carve-out above (Task 15,
+security-audit-fixes 2026-09-16):** the "abuses its own grant"
+carve-out assumes the damage is bounded to the scope the tool
+itself declared and was granted. That assumption breaks down for
+the **default role** specifically. A `[[tool_process]]` entry's
+self-declared `required_scope` (sent over the wire in
+`ToolRegister`) is, absent an operator-configured
+`expected_scopes`/`scope_overrides` entry for that tool name (see
+`docs/TOOL_SDK.md` §6), trusted verbatim — and every trusted-
+verbatim scope base feeds `tool_scope_bases_for_floor` /
+`compute_backcompat_floor` (`crates/aivyx-cli/src/bin/aivyx.rs`),
+which the default role (no explicit `capability_scopes`
+configured) inherits *wholesale*. Concretely: a substituted tool-
+process binary that self-declares `git.write` can cause the
+backcompat floor to include it, which unlocks the daemon's own
+**built-in** `GitCommitTool` — a tool that deliberately withholds
+itself from auto-grant via `auto_grantable_in_backcompat_floor`
+(`crates/aivyx-core/src/tools/git.rs`, near line 530) specifically
+so committing to a repo always requires an explicit operator
+decision. That is strictly worse than "a tool misuses the one
+service it is authorized for" (this section's own framing above):
+it is escalation from a self-declared, unvalidated scope into the
+daemon's *own* built-in tool surface, not just misuse of the
+tool's declared scope. Task 15 shipped a cheap, non-breaking
+mitigation (an `eprintln!` warning at daemon startup naming the
+tool process, tool, and declared scope whenever neither
+`expected_scopes` nor `scope_overrides` covers it — see the
+registration loop in `crates/aivyx-cli/src/bin/aivyx.rs`) but did
+**not** close the gap itself, since doing so mandatorily would be a
+breaking change (every existing `[[tool_process]]` config with no
+override/expectation configured — the common case — would suddenly
+fail registration). This deserves its own dedicated future task:
+either make validation mandatory by default, or remove tool-
+process-declared scope bases from the backcompat-floor auto-grant
+specifically (keeping first-party built-in tools' own opt-in
+`auto_grantable_in_backcompat_floor` decisions as the only source
+of default-role floor grants). Not resolved here.
+
 ### 4.11 A web page in the operator's browser drives the daemon (cross-origin / DNS rebinding)
 
 **Mitigation:** The Studio web UI binds `127.0.0.1` only, but a

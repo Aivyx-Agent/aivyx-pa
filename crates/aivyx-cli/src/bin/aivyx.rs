@@ -5444,7 +5444,12 @@ async fn checkpointer_for(
 ///   declared scope must be `is_granted_by` it (declared ⊆
 ///   expected), or registration is refused. This is the check that
 ///   closes the gap for tools with no `scope_overrides` entry, which
-///   were previously trusted verbatim.
+///   were previously trusted verbatim. When the map is non-empty for
+///   this tool process, it also acts as a tool-*name* allowlist: a
+///   tool declaring a name absent from the map is refused too (not
+///   silently trusted), since otherwise a substituted binary could
+///   defeat the whole mechanism just by registering under a name the
+///   operator never configured an entry for.
 /// - `scope_overrides` — narrows: if set, it *becomes* the effective
 ///   scope, but only when it is itself `is_granted_by` the declared
 ///   scope (override ⊆ declared); otherwise the override is wider
@@ -5468,7 +5473,29 @@ fn resolve_tool_scope(
         }
     };
 
-    if let Some(expected_str) = tp_cfg.expected_scopes.get(tool_name) {
+    // Finding 1 (Task 15 review round 2): a non-empty `expected_scopes`
+    // map is an *allowlist* of tool names, not just a per-name scope
+    // check. If it were only consulted when a matching key exists, a
+    // substituted binary could trivially bypass a carefully configured
+    // `expected_scopes = { notion = "notion.read" }` by registering its
+    // tool under a name the operator never anticipated (e.g.
+    // "notion_v2") — the operator cannot enumerate names they've never
+    // seen, so a missing key must be a refusal, not a silent
+    // pass-through. When the map is empty (the default, unconfigured
+    // case), this branch is skipped entirely and behavior is unchanged
+    // — the field stays fully opt-in.
+    if !tp_cfg.expected_scopes.is_empty() {
+        let expected_str = match tp_cfg.expected_scopes.get(tool_name) {
+            Some(s) => s,
+            None => {
+                return Err(format!(
+                    "declares tool name {tool_name:?} which has no entry in the \
+                     configured expected_scopes allowlist for this tool process \
+                     (the allowlist is non-empty, so an unlisted tool name is \
+                     refused rather than trusted verbatim)"
+                ));
+            }
+        };
         let expected = match aivyx_capability::Scope::parse(expected_str) {
             Some(s) => s,
             None => {
@@ -8151,6 +8178,29 @@ async fn run_async(
                         continue;
                     }
                 };
+            // Finding 2(a) (Task 15 review round 2): the tool's
+            // self-declared scope was trusted completely verbatim here —
+            // neither `expected_scopes` nor `scope_overrides` has an
+            // entry for this tool name, so `resolve_tool_scope` had
+            // nothing to validate against. This is a real, currently
+            // unmitigated escalation surface (see `docs/THREAT_MODEL.md`
+            // near §4.10/§5.6): a substituted binary's declared scope can
+            // flow, unchecked, into the daemon's default-role
+            // backcompat floor. Warn on every daemon startup so an
+            // operator watching the log at least sees it happening, even
+            // though this doesn't block it — silence otherwise gives an
+            // operator no reason to ever configure the opt-in field.
+            if !tp_cfg.expected_scopes.contains_key(&descriptor.name)
+                && !tp_cfg.scope_overrides.contains_key(&descriptor.name)
+            {
+                eprintln!(
+                    "aivyx-pa: WARNING: tool process {:?} tool {:?} self-declared scope \
+                     {:?} with no expected_scopes/scope_overrides entry configured for it — \
+                     trusted verbatim; see docs/THREAT_MODEL.md §4.10/§5.6 and \
+                     docs/TOOL_SDK.md §6 to configure a ceiling for this tool",
+                    tp_cfg.name, descriptor.name, descriptor.required_scope,
+                );
+            }
 
             let proxy = aivyx_tool::ToolProxy::with_override_scope(
                 std::sync::Arc::clone(&bridge),
@@ -11951,6 +12001,61 @@ mod tests {
         assert_eq!(
             result,
             Ok(Scope::parse("fs.write:/home/project/**").unwrap())
+        );
+    }
+
+    #[test]
+    fn tool_registration_is_refused_when_tool_name_is_absent_from_a_nonempty_expected_scopes_allowlist()
+     {
+        // Finding 1 (Task 15 review round 2): expected_scopes must act as
+        // a tool-name allowlist once configured, not just a per-name
+        // scope check. Without this, a substituted binary defeats a
+        // carefully configured `expected_scopes = { notion = "notion.read" }`
+        // by simply registering its tool as "notion_v2" instead of
+        // "notion" — a name the operator never anticipated and so could
+        // never have added an entry for. Any declared scope (even a
+        // narrow one) must be refused when the tool's name isn't a key
+        // in a non-empty expected_scopes map.
+        let mut tp_cfg = fake_tp_cfg();
+        tp_cfg
+            .expected_scopes
+            .insert("notion".to_string(), "notion.read".to_string());
+
+        let result = resolve_tool_scope(&tp_cfg, "notion_v2", "notion.read");
+
+        assert!(
+            result.is_err(),
+            "a tool name absent from a non-empty expected_scopes allowlist must be refused, \
+             got {result:?}"
+        );
+        let reason = result.unwrap_err();
+        assert!(
+            reason.contains("expected_scopes allowlist"),
+            "the refusal reason should name the allowlist mechanism, got {reason:?}"
+        );
+    }
+
+    #[test]
+    fn tool_registration_is_refused_with_a_clear_error_when_expected_scope_is_unparseable() {
+        // Finding 5 (Task 15 review round 2): an operator typo in the
+        // expected_scopes config value (e.g. "notion.raed" instead of
+        // "notion.read") must be surfaced as a clear refusal, not a
+        // panic and not silently ignored.
+        let mut tp_cfg = fake_tp_cfg();
+        tp_cfg
+            .expected_scopes
+            .insert("notion".to_string(), "notion.raed".to_string());
+
+        let result = resolve_tool_scope(&tp_cfg, "notion", "notion.read");
+
+        assert!(
+            result.is_err(),
+            "an unparseable expected_scope value must be refused, got {result:?}"
+        );
+        let reason = result.unwrap_err();
+        assert!(
+            reason.contains("unparseable expected_scope"),
+            "the refusal reason should name the unparseable value, got {reason:?}"
         );
     }
 

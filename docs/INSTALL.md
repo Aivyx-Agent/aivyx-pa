@@ -3427,6 +3427,11 @@ command = "aivyx-gmail"
 # against the active role's envelope.
 # [tool_process.scope_overrides]
 # "gmail.send" = "email.send"  # no-op narrowing here; example
+# Optional per-tool expected-scope ceiling — validates (doesn't narrow)
+# the process's self-declared scope; registration is refused if it
+# isn't covered. See docs/TOOL_SDK.md §6.
+# [tool_process.expected_scopes]
+# "gmail.send" = "email.send"
 ```
 
 The daemon spawns `aivyx-gmail` at startup, performs the
