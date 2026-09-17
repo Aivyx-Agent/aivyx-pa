@@ -205,6 +205,54 @@ impl ToolProcessBridge {
                 c
             }
         };
+        // Task 13 (MEDIUM, 2026-09-16 audit) — clear the inherited
+        // environment before applying the operator-configured `env`
+        // map. Previously `cmd.envs(...)` only *added* to whatever
+        // the daemon process itself was running with, so every tool
+        // process (Gmail, Notion, n8n, ...) saw the daemon's entire
+        // environment: LLM API keys, the `daemon.env` passphrase
+        // variable, channel bot tokens — none of which that specific
+        // tool process has any business seeing.
+        //
+        // `env_clear()` also wipes `PATH`, which matters here: both
+        // `config.command` and `sandbox.wrapper` above are routinely
+        // bare executable names (see this file's own tests — `"python3"`,
+        // not an absolute path), resolved via `PATH` lookup at spawn
+        // time. Per `std::process::Command`'s documented behavior,
+        // that lookup uses the *child's* configured `PATH` (the one
+        // set on this `Command`), not the parent's raw environment —
+        // so without explicitly re-adding it here, clearing the
+        // environment would break every non-absolute-path tool-process
+        // spawn outright. We re-add the daemon's own inherited `PATH`
+        // (not the tool process's — the daemon is the one resolving
+        // `config.command`/`sandbox.wrapper` by name), which is not a
+        // secret and is required for the child to exist at all.
+        //
+        // `HOME` gets the same treatment for a different reason: it's
+        // not needed for spawning, but every first-party Google-OAuth-
+        // backed tool process (aivyx-gmail, aivyx-calendar, aivyx-drive,
+        // aivyx-contacts, ...) resolves its OAuth config/token storage
+        // path unconditionally from `$HOME` (e.g.
+        // `aivyx-gmail/src/auth_cli/config_file.rs::default_config_path`)
+        // with no override mechanism — an empty `HOME` doesn't fail
+        // safe, it makes the tool process unable to find its own
+        // config file at all. This is existing, load-bearing behavior
+        // in this codebase, not a hypothetical; re-adding it belongs
+        // in this minimal set rather than becoming a silent regression
+        // operators would have to work around via `config.env` on
+        // every Google-integration entry. No locale variable
+        // (`LANG`/`LC_ALL`/...) is read anywhere in the tool-process
+        // crates (checked), so nothing else goes in this list —
+        // anything else a specific tool process needs is the
+        // operator's job to set via that process's `[[tool_process]]
+        // .env` entry.
+        cmd.env_clear();
+        if let Ok(path) = std::env::var("PATH") {
+            cmd.env("PATH", path);
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            cmd.env("HOME", home);
+        }
         cmd.envs(config.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -753,6 +801,114 @@ sys.exit(0)
                 );
             }
             other => panic!("expected ToolBridgeError::Spawn, got {other:?}"),
+        }
+    }
+
+    // ---- Task 13 (MEDIUM, 2026-09-16 audit) — environment scrubbing ----
+
+    #[tokio::test]
+    async fn tool_process_does_not_inherit_an_unrelated_secret_env_var() {
+        // SAFETY: no other test in this process reads or writes this
+        // specific var name, so the mutation can't race a concurrent
+        // reader of it.
+        unsafe {
+            std::env::set_var("AIVYX_TEST_SECRET_SHOULD_NOT_LEAK", "leaked-value");
+        }
+
+        // A tool process that follows the real handshake protocol,
+        // then reports back (via its one tool's output) whatever it
+        // sees for the secret var. If `spawn()` ever stops clearing
+        // the environment before applying `config.env`, this comes
+        // back as "leaked-value" instead of "absent".
+        let script = r#"
+import sys, json, struct, os
+
+def read_frame():
+    hdr = sys.stdin.buffer.read(4)
+    if not hdr or len(hdr) < 4:
+        return None
+    (n,) = struct.unpack(">I", hdr)
+    return json.loads(sys.stdin.buffer.read(n).decode("utf-8"))
+
+def write_frame(msg):
+    body = json.dumps(msg).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+
+hello = read_frame()
+assert hello["type"] == "ToolHello"
+write_frame({
+    "type": "ToolRegister",
+    "tool_process_name": "env-check-tool",
+    "tools": [{
+        "name": "check_env",
+        "description": "Report the secret env var, if visible.",
+        "input_schema": {"type": "object"},
+        "required_scope": "memory.read"
+    }]
+})
+
+inv = read_frame()
+assert inv["type"] == "InvokeTool"
+write_frame({
+    "type": "ToolResult",
+    "call_id": inv["call_id"],
+    "verified": "NotApplicable",
+    "output": {
+        "secret": os.environ.get("AIVYX_TEST_SECRET_SHOULD_NOT_LEAK", "absent"),
+        "path_present": "PATH" in os.environ,
+    }
+})
+sys.exit(0)
+"#;
+        let config = ToolProcessConfig {
+            name: "env-check".into(),
+            command: "python3".into(),
+            args: vec!["-c".into(), script.into()],
+            // Deliberately empty — the operator configured nothing
+            // for this tool process, so it should see nothing beyond
+            // the minimal PATH/HOME re-add.
+            env: vec![],
+            sandbox: None,
+            notification_sink: None,
+        };
+        let bridge = match ToolProcessBridge::spawn(config).await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skipping: python3 unavailable: {e}");
+                unsafe {
+                    std::env::remove_var("AIVYX_TEST_SECRET_SHOULD_NOT_LEAK");
+                }
+                return;
+            }
+        };
+
+        let outcome = bridge
+            .invoke("check_env", serde_json::json!({}), "turn-1")
+            .await
+            .expect("invoke must succeed");
+
+        unsafe {
+            std::env::remove_var("AIVYX_TEST_SECRET_SHOULD_NOT_LEAK");
+        }
+
+        match outcome {
+            InvocationOutcome::Completed { output, .. } => {
+                assert_eq!(
+                    output["secret"], "absent",
+                    "tool process must not inherit the daemon's unrelated env vars"
+                );
+                // PATH must still be present — a fully-cleared
+                // environment with no PATH re-add would have broken
+                // this very spawn (python3 is a bare name, resolved
+                // via PATH), so getting this far already partially
+                // proves it, but assert explicitly for clarity.
+                assert_eq!(
+                    output["path_present"], true,
+                    "PATH must be explicitly re-added after env_clear()"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
         }
     }
 }
