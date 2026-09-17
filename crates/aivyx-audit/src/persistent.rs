@@ -69,7 +69,18 @@
 //!    the anchor can only ever *lag* the true on-disk tail (benign —
 //!    treated as "no news," not tamper evidence), never precede it;
 //!    `check_tail_anchor` only rejects an anchor that is *ahead of*,
-//!    or disagrees with, what a fresh scan actually finds. See
+//!    or disagrees with, what a fresh scan actually finds. The exact
+//!    bound on that lag: **up to one tail entry can go undetected if
+//!    the process is killed between that entry's own durable write
+//!    and the anchor's write** (a `Drop::abort()` mid-drain race,
+//!    same two-write window as invariant 5) — a truncation of that one
+//!    most-recent entry is indistinguishable from "the log never grew
+//!    past here," same as before this mechanism existed. Truncating
+//!    two or more tail entries is always caught, since the anchor from
+//!    the *previous* successful append is durably behind the deleted
+//!    range. This one-entry blind spot is an inherent trade-off of the
+//!    two-write design (entry, then anchor, as two separate `redb`
+//!    commits) against false positives, not an oversight. See
 //!    `PHASE_7.md` Q2 for the historical context: this was flagged at
 //!    design time as a known, narrower-than-feared gap ("an attacker
 //!    who deletes the most recent session entirely") and explicitly
@@ -187,17 +198,37 @@ async fn write_anchor(
     handle.put(CHAIN_ANCHOR_KEY, &bytes).await
 }
 
-/// Read the persisted chain anchor, if one exists. `None` means either
-/// a brand-new store, or a store created before this fix landed — both
-/// are "no historical anchor to compare against," not tamper evidence.
-/// Any decode failure is likewise treated as "no anchor" rather than
-/// an error: the anchor is a best-effort accelerant for tail-
-/// truncation detection, not itself part of the chain's integrity
-/// proof, so a corrupt anchor record must never be the reason a
-/// legitimately-intact chain refuses to open.
-async fn read_anchor(handle: &DomainHandle) -> Option<ChainAnchor> {
-    let bytes = handle.get(CHAIN_ANCHOR_KEY).await.ok().flatten()?;
-    serde_json::from_slice(&bytes).ok()
+/// Read the persisted chain anchor. `Ok(None)` means the key is
+/// genuinely absent — either a brand-new store, or a store created
+/// before this fix landed — both are "no historical anchor to compare
+/// against," not tamper evidence, and this case must stay silent (see
+/// `missing_anchor_is_not_treated_as_truncation`).
+///
+/// This is deliberately **not** the same as a storage error or a
+/// decode failure. A `Storage` read failure (e.g. an AEAD decrypt
+/// failure on the anchor's value — see `DomainHandle::get`'s own
+/// docs) or a value that decodes to something other than a
+/// `ChainAnchor` means the key *exists* but is unreadable/corrupt.
+/// Collapsing that into "no anchor" would let an attacker with write
+/// access to the store corrupt the anchor's bytes and have it
+/// silently treated as if no anchor had ever been written — the same
+/// class of bypass entry-row corruption is *not* allowed to have
+/// elsewhere in this file (see `decode_and_validate_rows`'s
+/// `CorruptStoredEntry` on a `serde_json` failure). So both failure
+/// modes propagate as a real `AuditError` instead.
+async fn read_anchor(handle: &DomainHandle) -> Result<Option<ChainAnchor>, AuditError> {
+    let bytes = match handle.get(CHAIN_ANCHOR_KEY).await {
+        Ok(None) => return Ok(None),
+        Ok(Some(bytes)) => bytes,
+        Err(e) => {
+            return Err(AuditError::Storage(format!(
+                "chain anchor read failed: {e}"
+            )));
+        }
+    };
+    serde_json::from_slice(&bytes).map(Some).map_err(|e| {
+        AuditError::Storage(format!("chain anchor decode failed: {e}"))
+    })
 }
 
 /// Compare the persisted anchor (if any) against the real, freshly
@@ -210,7 +241,7 @@ async fn check_tail_anchor(
     handle: &DomainHandle,
     entries: &[SignedEntry],
 ) -> Result<(), AuditError> {
-    let Some(anchor) = read_anchor(handle).await else {
+    let Some(anchor) = read_anchor(handle).await? else {
         return Ok(());
     };
     match entries.last() {
@@ -914,7 +945,7 @@ mod tests {
     async fn wait_for_anchor(storage: &Arc<dyn Storage>, expected_seq: u64) {
         let handle = storage.domain(KeyDomain::Audit);
         for _ in 0..2000 {
-            if let Some(anchor) = read_anchor(&handle).await {
+            if let Ok(Some(anchor)) = read_anchor(&handle).await {
                 if anchor.last_seq == expected_seq {
                     return;
                 }
@@ -1116,6 +1147,10 @@ mod tests {
                 .unwrap();
             log.append(sample_turn_started()).unwrap();
             wait_for_disk(&storage, 1).await;
+            // Prove the anchor actually existed before we delete it
+            // below — not just that deletion of a key that may or may
+            // not have been written yet happens to be harmless.
+            wait_for_anchor(&storage, 0).await;
         }
 
         // Simulate "written before this fix existed": remove the
@@ -1127,6 +1162,145 @@ mod tests {
             .await
             .expect("missing anchor must not block reopen of an intact chain");
         assert_eq!(log.len(), 1);
+    }
+
+    /// I1a (Task 11 round 2, security review): a *corrupt* anchor
+    /// value (key present, bytes undecodable) must never be
+    /// collapsed into "no anchor" the way a genuinely-absent key is —
+    /// that would let an attacker with write access to the store
+    /// corrupt the anchor and have it silently treated as a pre-fix
+    /// store. Distinguishes this from
+    /// `missing_anchor_is_not_treated_as_truncation` above: that test
+    /// deletes the key; this one corrupts its bytes so decoding
+    /// fails while the key still exists.
+    #[tokio::test]
+    async fn corrupt_anchor_value_surfaces_as_error() {
+        let (_dir, storage, chain_key) = fresh_storage(10).await;
+        {
+            let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
+                .await
+                .unwrap();
+            log.append(sample_turn_started()).unwrap();
+            wait_for_disk(&storage, 1).await;
+            wait_for_anchor(&storage, 0).await;
+        }
+
+        // Corrupt the anchor's bytes in place — not a delete. `put`
+        // re-seals whatever plaintext we hand it, so `get` will
+        // decrypt this back faithfully; it's `serde_json::from_slice`
+        // inside `read_anchor` that must now fail and propagate.
+        let handle = storage.domain(KeyDomain::Audit);
+        handle
+            .put(CHAIN_ANCHOR_KEY, b"not-a-valid-chain-anchor")
+            .await
+            .unwrap();
+
+        let err = PersistentAuditLog::open(storage, chain_key)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, AuditError::Storage(_)),
+            "expected a Storage error surfacing the corrupt anchor, got {err:?}"
+        );
+    }
+
+    /// M3 (Task 11 round 2, security review): the store is fully
+    /// emptied (every entry row deleted) while a stale anchor still
+    /// claims entries exist. `entries.last()` is `None`, which
+    /// `check_tail_anchor` must map to `TailTruncated { disk_seq: None, .. }`.
+    #[tokio::test]
+    async fn fully_emptied_store_with_stale_anchor_is_detected() {
+        let (_dir, storage, chain_key) = fresh_storage(26).await;
+        {
+            let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
+                .await
+                .unwrap();
+            log.append(sample_turn_started()).unwrap();
+            log.append(sample_tool_call()).unwrap();
+            wait_for_disk(&storage, 2).await;
+            wait_for_anchor(&storage, 1).await;
+        }
+
+        // Delete every entry row, leaving only the (now stale) anchor.
+        let handle = storage.domain(KeyDomain::Audit);
+        handle.delete(&audit_key(0)).await.unwrap();
+        handle.delete(&audit_key(1)).await.unwrap();
+
+        let err = PersistentAuditLog::open(storage, chain_key)
+            .await
+            .unwrap_err();
+        match err {
+            AuditError::TailTruncated { anchor_seq, disk_seq } => {
+                assert_eq!(anchor_seq, 1);
+                assert_eq!(disk_seq, None);
+            }
+            other => panic!("expected TailTruncated {{ disk_seq: None, .. }}, got {other:?}"),
+        }
+    }
+
+    /// M3 (Task 11 round 2, security review): a substitution, not a
+    /// deletion — the same `seq` appears on both anchor and disk, but
+    /// with a different `mac`, meaning the last entry's *content*
+    /// changed without its position changing. The replacement entry
+    /// is re-signed correctly (same `prev_mac`, freshly recomputed
+    /// `mac` over the new event bytes) so the on-disk chain still
+    /// replays perfectly from genesis — only the anchor, recorded when
+    /// the original content was durably written, still remembers the
+    /// original `mac`.
+    #[tokio::test]
+    async fn tail_entry_substitution_same_seq_different_mac_is_detected() {
+        use hmac::{Hmac, KeyInit, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        let (_dir, storage, chain_key) = fresh_storage(27).await;
+        {
+            let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
+                .await
+                .unwrap();
+            log.append(sample_turn_started()).unwrap();
+            log.append(sample_tool_call()).unwrap();
+            wait_for_disk(&storage, 2).await;
+            wait_for_anchor(&storage, 1).await;
+        }
+
+        let handle = storage.domain(KeyDomain::Audit);
+        let key1 = audit_key(1);
+        let val1 = handle.get(&key1).await.unwrap().unwrap();
+        let mut entry1: SignedEntry = serde_json::from_slice(&val1).unwrap();
+        let original_mac = entry1.mac;
+
+        // Swap the event content, keep `seq`/`prev_mac` untouched, and
+        // re-sign correctly with the real chain key.
+        entry1.event = sample_memory_access();
+        let event_bytes = serde_jcs::to_vec(&entry1.event).unwrap();
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(&chain_key)
+            .expect("HMAC accepts any key length");
+        mac.update(&entry1.prev_mac);
+        mac.update(&event_bytes);
+        let out = mac.finalize().into_bytes();
+        let mut new_mac = [0u8; 32];
+        new_mac.copy_from_slice(&out);
+        assert_ne!(new_mac, original_mac, "substitution must actually change the mac");
+        entry1.mac = new_mac;
+
+        handle
+            .put(&key1, &serde_json::to_vec(&entry1).unwrap())
+            .await
+            .unwrap();
+
+        let err = PersistentAuditLog::open(storage, chain_key)
+            .await
+            .unwrap_err();
+        match err {
+            AuditError::TailTruncated { anchor_seq, disk_seq } => {
+                assert_eq!(anchor_seq, 1);
+                assert_eq!(disk_seq, Some(1));
+            }
+            other => {
+                panic!("expected TailTruncated {{ disk_seq: Some(1), .. }}, got {other:?}")
+            }
+        }
     }
 
     #[tokio::test]

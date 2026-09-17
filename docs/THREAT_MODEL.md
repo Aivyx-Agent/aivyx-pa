@@ -165,13 +165,40 @@ position, so a gap surfaces as `AuditError::CorruptStoredEntry` or
 N rows, leaving the remaining rows a shorter but internally
 self-consistent chain) needed a separate mechanism, since "the log
 never grew past here" and "the log's tail was deleted" are
-byte-identical on disk from a pure scan-position replay. This is
-closed by a small persisted chain anchor — the last known `seq` +
-`mac`, written only after that entry is durably persisted, and
-checked against the real on-disk tail on every open/verify — that
-trips a distinct `AuditError::TailTruncated`
+byte-identical on disk from a pure scan-position replay. A small
+persisted chain anchor — the last known `seq` + `mac`, written only
+after that entry is durably persisted, and checked against the real
+on-disk tail on every open/verify — now detects exactly this case,
+tripping a distinct `AuditError::TailTruncated`
 (`aivyx-audit/src/persistent.rs`, Task 11 of the 2026-09-16 security
 audit).
+
+**Caveats.** The anchor is unauthenticated bookkeeping, not a
+cryptographic commitment: it is not itself HMAC'd, and — unlike
+every `SignedEntry` value — its key name (`CHAIN_ANCHOR_KEY`) is a
+fixed, source-visible constant. redb keys are never encrypted (only
+values are), so that key name is plaintext on disk to begin with;
+no master passphrase or audit HMAC key is needed to find it. What it
+does catch: a script or process that deletes/rewrites entry rows
+without knowing the anchor exists (accidental truncation, or a
+surgical attack limited to the entry keyspace), and — as of this
+finding's own fix — corruption of the anchor's own value (a decode
+failure now surfaces as an error rather than being silently treated
+as "no anchor"). What it does **not** catch: an attacker who is
+aware of the mechanism and has raw write access to the `.redb`
+file — the same attacker this section is otherwise about — can
+simply delete `CHAIN_ANCHOR_KEY` alongside the tail rows it would
+have flagged, restoring the pre-Task-11 blind spot at will. It also
+does not survive a whole-store rollback to an older backup copy of
+the `.redb` file: the anchor lives inside the same store rather than
+a separate sidecar file, so an older, still-internally-valid anchor
+rolls back right along with the tail it once caught. Both gaps are
+real and open, not hypothetical residual risk — closing either would
+need integrity information the attacker's write access can't also
+reach (an out-of-band sidecar file, or a signature under a key the
+store's own attacker model doesn't grant write access to), which is
+future work, not something this task's key-in-the-same-domain design
+delivers.
 
 `aivyx-pa --verify-only` cold-verifies the full chain without an LLM
 API key, so audit verification works on a machine that has never
