@@ -354,7 +354,16 @@ pub fn read_bundle(path: &Path) -> Result<ReadBundle, PackError> {
     for entry in archive.entries()? {
         let mut entry = entry?;
         let name = entry.path()?.to_string_lossy().into_owned();
-        let declared_size = entry.header().size()?;
+        // `Entry::size()` (not `Header::size()`) is what actually governs
+        // how many bytes `entry.read_to_end()` will read: a preceding PAX
+        // extended-header record can override the raw header's declared
+        // size, and `Entry::size()` is PAX-aware while `Header::size()`
+        // reads only the (possibly-lying) raw header field. An attacker
+        // fully controlling this not-yet-signature-verified bundle could
+        // set a tiny raw header size to slip under a check on
+        // `Header::size()` while a PAX record declares the real,
+        // arbitrarily large size that `read_to_end` will actually honor.
+        let declared_size = entry.size();
         if declared_size > MAX_BUNDLE_ENTRY_BYTES {
             return Err(PackError::BadEntry(
                 "bundle",
@@ -364,10 +373,17 @@ pub fn read_bundle(path: &Path) -> Result<ReadBundle, PackError> {
                 ),
             ));
         }
-        // The tar entry reader is itself bounded to `declared_size`, so
-        // this can never read more than the cap just checked above.
+        // Belt-and-suspenders: also hard-fence the read itself at the cap.
+        // The memory this function allocates should not depend entirely on
+        // trusting that `Entry::size()` never disagrees with the actual
+        // byte stream `tar` will hand back — if it ever did, `.take()`
+        // still bounds the allocation below regardless of what any
+        // size-reporting API claims.
         let mut bytes = Vec::with_capacity(declared_size as usize);
-        entry.read_to_end(&mut bytes)?;
+        entry
+            .by_ref()
+            .take(MAX_BUNDLE_ENTRY_BYTES)
+            .read_to_end(&mut bytes)?;
         match name.as_str() {
             PAYLOAD_NAME => payload = Some(bytes),
             SIGNATURE_NAME => {
@@ -721,6 +737,46 @@ bin = "aivyx-kitchen-toolkit"
                 assert!(
                     msg.contains(&MAX_BUNDLE_ENTRY_BYTES.to_string()),
                     "error should mention the cap: {msg}"
+                );
+            }
+            other => panic!("expected BadEntry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_bundle_refuses_an_entry_whose_pax_header_overrides_its_declared_size() {
+        // A PAX extended-header record can override an entry's declared
+        // size independently of the raw tar header field. Craft an entry
+        // whose raw header claims a tiny size (5 bytes — small enough that
+        // a check on `Header::size()` alone would wrongly pass it) but is
+        // preceded by a PAX extended header declaring the real size to be
+        // far larger than MAX_BUNDLE_ENTRY_BYTES. `Entry::size()` is
+        // PAX-aware and is what actually governs how much `tar` will let
+        // a reader pull from this entry — read_bundle must refuse based on
+        // that value, not the raw header field.
+        let path = tmpdir("pax-override-entry").join("evil.aivyxpack");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut tarb = tar::Builder::new(file);
+
+        let pax_size = MAX_BUNDLE_ENTRY_BYTES + 1;
+        tarb.append_pax_extensions([("size", pax_size.to_string().as_bytes())])
+            .unwrap();
+
+        let mut header = tar::Header::new_gnu();
+        header.set_size(5); // raw header claims a tiny size
+        header.set_mode(0o644);
+        header.set_cksum();
+        tarb.append_data(&mut header, PAYLOAD_NAME, b"tiny!".as_slice())
+            .unwrap();
+        tarb.into_inner().unwrap().sync_all().unwrap();
+
+        let err = read_bundle(&path).unwrap_err();
+        match &err {
+            PackError::BadEntry(_, msg) => {
+                assert!(
+                    msg.contains(&pax_size.to_string()),
+                    "error should mention the PAX-overridden size, not the tiny raw \
+                     header size: {msg}"
                 );
             }
             other => panic!("expected BadEntry, got {other:?}"),
