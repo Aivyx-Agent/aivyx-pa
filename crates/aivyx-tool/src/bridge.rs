@@ -246,12 +246,45 @@ impl ToolProcessBridge {
         // anything else a specific tool process needs is the
         // operator's job to set via that process's `[[tool_process]]
         // .env` entry.
+        // Task 13 review — proxy variables get the same treatment as
+        // `PATH`/`HOME`, for a reason specific to this codebase's real
+        // outbound-network behavior rather than a general "be safe"
+        // instinct: every first-party tool-process crate that makes
+        // outbound API calls (aivyx-gmail, aivyx-calendar, aivyx-drive,
+        // aivyx-contacts, aivyx-notion, aivyx-n8n, ...) does so via
+        // `reqwest::Client::new()`, and reqwest's `ClientBuilder`
+        // defaults `auto_sys_proxy: true` — it reads these exact env
+        // vars to route through an operator's egress proxy. Unlike
+        // `TMPDIR`/`TEMP` (considered and rejected: only read inside
+        // this codebase's own `#[cfg(test)]` scratch-dir helpers, not
+        // reachable in production), proxy routing is a genuine
+        // dependency-internal, production-reachable behavior this
+        // fix would otherwise silently break for any operator behind
+        // a corporate/VPS egress proxy — with no error, just outbound
+        // calls quietly stopping being proxied. Lowercase variants are
+        // included because `NO_PROXY`'s matcher (and some libcurl-
+        // influenced tooling) checks both cases.
+        const PROXY_ENV_VARS: &[&str] = &[
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        ];
         cmd.env_clear();
         if let Ok(path) = std::env::var("PATH") {
             cmd.env("PATH", path);
         }
         if let Ok(home) = std::env::var("HOME") {
             cmd.env("HOME", home);
+        }
+        for var in PROXY_ENV_VARS {
+            if let Ok(value) = std::env::var(var) {
+                cmd.env(var, value);
+            }
         }
         cmd.envs(config.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
@@ -906,6 +939,100 @@ sys.exit(0)
                 assert_eq!(
                     output["path_present"], true,
                     "PATH must be explicitly re-added after env_clear()"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_process_still_sees_the_daemons_http_proxy_config() {
+        // Task 13 review (Important) — HTTP_PROXY et al. must survive
+        // env_clear() the same way PATH/HOME do: every first-party
+        // tool-process crate makes outbound calls via
+        // reqwest::Client::new(), which auto-detects these vars by
+        // default, so silently dropping them would break every such
+        // tool process for an operator behind an egress proxy.
+        //
+        // SAFETY: no other test in this process reads or writes
+        // HTTP_PROXY, so the mutation can't race a concurrent reader.
+        unsafe {
+            std::env::set_var("HTTP_PROXY", "http://proxy.example:3128");
+        }
+
+        let script = r#"
+import sys, json, struct, os
+
+def read_frame():
+    hdr = sys.stdin.buffer.read(4)
+    if not hdr or len(hdr) < 4:
+        return None
+    (n,) = struct.unpack(">I", hdr)
+    return json.loads(sys.stdin.buffer.read(n).decode("utf-8"))
+
+def write_frame(msg):
+    body = json.dumps(msg).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+
+hello = read_frame()
+assert hello["type"] == "ToolHello"
+write_frame({
+    "type": "ToolRegister",
+    "tool_process_name": "proxy-check-tool",
+    "tools": [{
+        "name": "check_proxy",
+        "description": "Report the HTTP_PROXY var, if visible.",
+        "input_schema": {"type": "object"},
+        "required_scope": "memory.read"
+    }]
+})
+
+inv = read_frame()
+assert inv["type"] == "InvokeTool"
+write_frame({
+    "type": "ToolResult",
+    "call_id": inv["call_id"],
+    "verified": "NotApplicable",
+    "output": {"http_proxy": os.environ.get("HTTP_PROXY", "absent")}
+})
+sys.exit(0)
+"#;
+        let config = ToolProcessConfig {
+            name: "proxy-check".into(),
+            command: "python3".into(),
+            args: vec!["-c".into(), script.into()],
+            env: vec![],
+            sandbox: None,
+            notification_sink: None,
+        };
+        let bridge = match ToolProcessBridge::spawn(config).await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skipping: python3 unavailable: {e}");
+                unsafe {
+                    std::env::remove_var("HTTP_PROXY");
+                }
+                return;
+            }
+        };
+
+        let outcome = bridge
+            .invoke("check_proxy", serde_json::json!({}), "turn-1")
+            .await
+            .expect("invoke must succeed");
+
+        unsafe {
+            std::env::remove_var("HTTP_PROXY");
+        }
+
+        match outcome {
+            InvocationOutcome::Completed { output, .. } => {
+                assert_eq!(
+                    output["http_proxy"], "http://proxy.example:3128",
+                    "HTTP_PROXY must survive env_clear() so tool-process outbound \
+                     calls (via reqwest's auto_sys_proxy) still route through an \
+                     operator's configured egress proxy"
                 );
             }
             other => panic!("expected Completed, got {other:?}"),
