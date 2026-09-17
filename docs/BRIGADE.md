@@ -148,11 +148,18 @@ command = "aivyx-kitchen-toolkit"
 # drops the write/order/haccp scopes so only the kitchen.read tools surface:
 # [tool_process.scope_overrides]
 # ...
-# Optional: a ceiling that refuses registration outright if the process's
+# Optional: a ceiling that refuses registration outright if a tool's
 # self-declared scope isn't covered by what you expect (doesn't narrow,
-# just validates — see docs/TOOL_SDK.md §6):
+# just validates — see docs/TOOL_SDK.md §6). WARNING: once you add even
+# one entry here, EVERY tool name this process registers must have an
+# entry too, or that tool is refused — this toolkit registers 11
+# kitchen.* tools (kitchen.inventory.list/adjust/low_stock/value,
+# kitchen.order.draft/send, kitchen.recipe.search,
+# kitchen.batch.start/complete, kitchen.haccp.log,
+# kitchen.supplier.list), so a single-key example like the one below
+# would refuse the other 10:
 # [tool_process.expected_scopes]
-# kitchen = "kitchen.read"
+# "kitchen.inventory.list" = "kitchen.read"
 ```
 
 **3. Run the BOH brigade on it** — point the team at the bundled pack (Chapter

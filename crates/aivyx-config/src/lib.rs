@@ -1836,9 +1836,16 @@ pub struct McpServerConfig {
 /// verbatim (a substituted binary at `command` could declare any
 /// scope with nothing to check it against). Keys are tool names;
 /// values are scope strings the declared scope must be
-/// `is_granted_by` (declared ⊆ expected). Unset for a given tool
-/// name ⇒ no ceiling check for that tool (unchanged, pre-existing
-/// behavior).
+/// `is_granted_by` (declared ⊆ expected).
+///
+/// Fix round 2 — `expected_scopes` is also a tool-*name* allowlist
+/// once it holds any entry at all for this `[[tool_process]]`: a
+/// tool declaring a name absent from a non-empty map is refused too,
+/// not silently trusted (otherwise a substituted binary could bypass
+/// a configured entry just by registering under a name the operator
+/// never anticipated). Only when the map is empty — the default,
+/// fully-unconfigured case — is a tool name's absence a no-op
+/// (unchanged, pre-existing behavior).
 #[derive(Debug, Clone)]
 pub struct ToolProcessConfig {
     pub name: String,
@@ -4188,6 +4195,18 @@ struct RawMcpServer {
     sandbox: Option<RawSandbox>,
 }
 
+/// `[applications]` deserialize target (Chapter Deckhand). Opt-in toggle for
+/// the `aivyx-apps` desktop tool process.
+#[derive(Debug, Default, Deserialize)]
+struct RawApplications {
+    /// Master switch. Default off.
+    #[serde(default)]
+    enabled: Option<bool>,
+    /// Override the `aivyx-apps` binary path (default: `aivyx-apps` on PATH).
+    #[serde(default)]
+    binary_path: Option<String>,
+}
+
 /// One `[[tool_process]]` entry in the TOML file. Phase 49.
 ///
 /// Layout:
@@ -4202,9 +4221,13 @@ struct RawMcpServer {
 /// env = { LOG_LEVEL = "info" }
 ///
 /// enabled = true   # default — must appear before the [tool_process.*]
-///                  # sub-tables below, or it parses into whichever
-///                  # sub-table's HashMap comes first instead of this
-///                  # struct's own field.
+///                  # sub-tables below: TOML assigns a bare key to the
+///                  # most recently opened preceding table, so after
+///                  # [tool_process.scope_overrides]/.expected_scopes
+///                  # open, a later `enabled = true` here would parse
+///                  # into that sub-table's HashMap<String,String> and
+///                  # fail to deserialize (a hard error, not a silent
+///                  # value swap).
 ///
 /// # Optional per-tool scope narrowing. Keys are tool names declared
 /// # in the process's ToolRegister; values are scope strings that
@@ -4218,21 +4241,13 @@ struct RawMcpServer {
 /// # required_scope isn't covered by (is_granted_by) the value here.
 /// # Useful for tools with no scope_overrides entry, which would
 /// # otherwise have their self-declared scope trusted verbatim.
+/// # WARNING: once this table holds any entry at all, it becomes a
+/// # tool-*name* allowlist for the whole process — every tool name
+/// # this process registers needs its own entry here, or that tool
+/// # is refused (see docs/TOOL_SDK.md §6's "Ceiling rule").
 /// [tool_process.expected_scopes]
 /// wordcount = "memory.read"
 /// ```
-/// `[applications]` deserialize target (Chapter Deckhand). Opt-in toggle for
-/// the `aivyx-apps` desktop tool process.
-#[derive(Debug, Default, Deserialize)]
-struct RawApplications {
-    /// Master switch. Default off.
-    #[serde(default)]
-    enabled: Option<bool>,
-    /// Override the `aivyx-apps` binary path (default: `aivyx-apps` on PATH).
-    #[serde(default)]
-    binary_path: Option<String>,
-}
-
 #[derive(Debug, Default, Deserialize)]
 struct RawToolProcess {
     name: String,

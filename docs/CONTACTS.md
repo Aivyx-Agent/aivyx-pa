@@ -157,7 +157,10 @@ command = "aivyx-contacts"
 # [tool_process.scope_overrides]
 # Optional per-tool expected-scope ceiling — validates (doesn't narrow)
 # the process's self-declared scope; registration is refused if it
-# isn't covered. See docs/TOOL_SDK.md §6.
+# isn't covered. See docs/TOOL_SDK.md §6. WARNING: once you add even
+# one entry here, EVERY tool name this process registers needs an
+# entry too, or that tool is refused — aivyx-contacts registers all
+# six of contacts.list/get/search/create/update/delete.
 # [tool_process.expected_scopes]
 ```
 

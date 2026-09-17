@@ -334,8 +334,12 @@ self-declared `required_scope` (sent over the wire in
 `ToolRegister`) is, absent an operator-configured
 `expected_scopes`/`scope_overrides` entry for that tool name (see
 `docs/TOOL_SDK.md` §6), trusted verbatim — and every trusted-
-verbatim scope base feeds `tool_scope_bases_for_floor` /
-`compute_backcompat_floor` (`crates/aivyx-cli/src/bin/aivyx.rs`),
+verbatim scope base whose base isn't already `WITHHELD_INTEGRATION_BASES`
+(e.g. `email.write`/`send`, `drive.write`, `notion.write`,
+`obsidian.write`, `n8n.write`, `contacts.write`, `calendar.write` — see
+`aivyx-capability::WITHHELD_INTEGRATION_BASES`) feeds
+`tool_scope_bases_for_floor` / `compute_backcompat_floor`
+(`crates/aivyx-cli/src/bin/aivyx.rs`),
 which the default role (no explicit `capability_scopes`
 configured) inherits *wholesale*. Concretely: a substituted tool-
 process binary that self-declares `git.write` can cause the

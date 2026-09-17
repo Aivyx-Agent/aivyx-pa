@@ -357,9 +357,20 @@ wordcount = "tool.wordcount"
   `is_granted_by` the configured value (declared ⊆ expected), or
   registration for that tool is refused with a logged reason. This
   never changes what scope is granted — it is a pure validation gate,
-  independent of and composable with `scope_overrides` (both may be
-  set for the same tool name; the ceiling is checked against the raw
-  declared scope, then narrowing is applied as usual).
+  composable with `scope_overrides` for the same tool name (the
+  ceiling is checked against the raw declared scope, then narrowing
+  is applied as usual).
+- **`expected_scopes` is also a tool-*name* allowlist once any entry
+  exists for a `[[tool_process]]` entry.** A non-empty map means
+  every tool name you want that process to register — including
+  names you've *also* configured in `scope_overrides` — must appear
+  as a key in `expected_scopes`, or that tool is refused outright.
+  This is deliberate: without it, a substituted binary could defeat a
+  carefully configured `expected_scopes` entry by simply registering
+  its tool under a name the operator never anticipated. A tool
+  process with an *empty* `expected_scopes` map (the default,
+  unconfigured case) is unaffected — this rule only activates once
+  the operator opts in for at least one tool name from that process.
 
 Together these are the integration guarantee that makes
 operator-side scope confinement meaningful — a malicious tool
@@ -367,8 +378,14 @@ declaring overbroad scopes cannot trick the operator into granting
 them, because the operator's config is the floor, *provided the
 operator has configured `scope_overrides` and/or `expected_scopes`
 for that tool name*. A tool name with neither configured still has
-its self-declared scope trusted verbatim — operators who want the
-guarantee for a given tool process must configure one of the two.
+its self-declared scope trusted verbatim (the daemon logs a startup
+warning naming the tool and its self-declared scope when this
+happens, so it's visible even though it isn't blocked) — operators
+who want the guarantee for a given tool process must configure one
+of the two for every tool name that process registers. Once
+`expected_scopes` is used for *any* name in a process, remember it
+becomes an allowlist for *all* names in that process — see the
+allowlist bullet above.
 
 ---
 

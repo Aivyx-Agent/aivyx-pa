@@ -3429,7 +3429,11 @@ command = "aivyx-gmail"
 # "gmail.send" = "email.send"  # no-op narrowing here; example
 # Optional per-tool expected-scope ceiling — validates (doesn't narrow)
 # the process's self-declared scope; registration is refused if it
-# isn't covered. See docs/TOOL_SDK.md §6.
+# isn't covered. See docs/TOOL_SDK.md §6. WARNING: once you add even
+# one entry here, EVERY tool name this process registers needs an
+# entry too, or that tool is refused — aivyx-gmail registers all four
+# of gmail.send/search/read/draft, so listing only one here would
+# refuse the other three:
 # [tool_process.expected_scopes]
 # "gmail.send" = "email.send"
 ```
