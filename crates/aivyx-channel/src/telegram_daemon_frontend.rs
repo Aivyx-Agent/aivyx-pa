@@ -36,11 +36,28 @@ const LONG_POLL_TIMEOUT_SECS: u32 = 25;
 // TelegramDaemonChannel — identity stub for the daemon's ChannelFactory
 // ---------------------------------------------------------------------------
 
-/// Lightweight `ChannelContext` stub that returns `SemiTrusted` trust
-/// tier and `Telegram` platform. Used by the daemon's `ChannelFactory`
-/// when a `FrontendType::Telegram` connection arrives. The stub's
-/// `stream_event` and `finalize` are no-ops — the `IpcChannelBridge`
-/// handles forwarding those over IPC.
+/// Lightweight `ChannelContext` stub that reports `Telegram` platform
+/// and a trust tier derived from whether the operator has an allowlist
+/// (`[telegram] chat_filter`) configured at all. Used by the daemon's
+/// `ChannelFactory` when a `FrontendType::Telegram` connection arrives.
+/// The stub's `stream_event` and `finalize` are no-ops — the
+/// `IpcChannelBridge` handles forwarding those over IPC.
+///
+/// Daemon-first-path fix (2026-09-16, Task 10 fix round 2) — this used
+/// to unconditionally return `SemiTrusted` regardless of configuration,
+/// completely bypassing the per-sender authorization fix landed in
+/// `aivyx-telegram::TelegramChannel::trust_tier()` for the in-process
+/// path. Every daemon-routed Telegram session — the default runtime
+/// mode with no flags — got the operator's full `SemiTrusted` ceiling
+/// no matter what. See `run_telegram_daemon_multi_session`'s
+/// `chat_filter` routing-drop-filter (the other half of this fix): a
+/// message only ever reaches a session (and thus this stub) at all
+/// when either no filter is configured (routing accepts everyone,
+/// mirroring the pre-existing "Phase 8 compatibility knob" behavior)
+/// or the filter matched. `allowlist_configured` distinguishes those
+/// two cases for `trust_tier()`'s purposes: no allowlist configured
+/// means every reachable sender is untrusted; an allowlist configured
+/// means every message that reached this point already passed it.
 pub struct TelegramDaemonChannel {
     session: SessionId,
     /// Rotated per turn by [`reset_cancellation`] and fired by
@@ -50,20 +67,31 @@ pub struct TelegramDaemonChannel {
     /// single timeout would otherwise brick every subsequent
     /// turn in this session).
     token: Mutex<CancellationToken>,
+    /// Whether the operator has `[telegram] chat_filter` configured at
+    /// all (computed once in `aivyx.rs` from
+    /// `TelegramConfig::chat_filter.is_some()` and threaded through the
+    /// `ChannelFactory` closure). Drives `trust_tier()` — see the
+    /// struct doc comment above.
+    allowlist_configured: bool,
 }
 
 impl TelegramDaemonChannel {
-    pub fn new() -> Self {
+    pub fn new(allowlist_configured: bool) -> Self {
         TelegramDaemonChannel {
             session: SessionId::new(),
             token: Mutex::new(CancellationToken::new()),
+            allowlist_configured,
         }
     }
 }
 
 impl Default for TelegramDaemonChannel {
     fn default() -> Self {
-        Self::new()
+        // Safe default: no allowlist configured ⇒ Untrusted. Real
+        // construction always goes through `new()` via the
+        // `ChannelFactory` closure in `aivyx.rs`, which passes the
+        // operator's actual configuration.
+        Self::new(false)
     }
 }
 
@@ -78,7 +106,11 @@ impl ChannelContext for TelegramDaemonChannel {
     }
 
     fn trust_tier(&self) -> aivyx_capability::TrustTier {
-        aivyx_capability::TrustTier::SemiTrusted
+        if self.allowlist_configured {
+            aivyx_capability::TrustTier::SemiTrusted
+        } else {
+            aivyx_capability::TrustTier::Untrusted
+        }
     }
 
     fn session_id(&self) -> SessionId {
@@ -114,6 +146,18 @@ impl ChannelContext for TelegramDaemonChannel {
 struct ChatRoute {
     sender: tokio::sync::mpsc::Sender<IncomingMessage>,
     handle: tokio::task::JoinHandle<Result<(), DaemonError>>,
+}
+
+/// Routing-level drop-filter: `true` iff `chat_id` may be routed to a
+/// session. `filter: None` (no `[telegram] chat_filter` configured)
+/// accepts every chat — the pre-existing "Phase 8 compatibility knob"
+/// behavior. Extracted from the loop body in `run_telegram_daemon_multi_session`
+/// so it's directly unit-testable without a live transport/socket.
+fn telegram_chat_is_allowed(chat_id: i64, filter: Option<i64>) -> bool {
+    match filter {
+        Some(allowed) => chat_id == allowed,
+        None => true,
+    }
 }
 
 /// Drive a multi-chat Telegram frontend over the daemon IPC channel.
@@ -160,10 +204,8 @@ pub async fn run_telegram_daemon_multi_session(
         for msg in updates {
             offset = offset.max(msg.update_id + 1);
 
-            if let Some(allowed) = chat_filter {
-                if msg.chat_id != allowed {
-                    continue;
-                }
+            if !telegram_chat_is_allowed(msg.chat_id, chat_filter) {
+                continue;
             }
 
             let chat_id = msg.chat_id;
@@ -722,7 +764,7 @@ mod tests {
 
     #[test]
     fn cancel_inflight_cancels_the_current_token() {
-        let ch = TelegramDaemonChannel::new();
+        let ch = TelegramDaemonChannel::new(false);
         let token = ch.cancellation_token();
         assert!(!token.is_cancelled(), "fresh token must not be cancelled");
         ch.cancel_inflight();
@@ -734,7 +776,7 @@ mod tests {
 
     #[test]
     fn reset_cancellation_installs_a_fresh_token() {
-        let ch = TelegramDaemonChannel::new();
+        let ch = TelegramDaemonChannel::new(false);
         ch.cancel_inflight();
         let stale = ch.cancellation_token();
         assert!(stale.is_cancelled(), "post-cancel token is cancelled");
@@ -750,6 +792,58 @@ mod tests {
         assert!(
             stale.is_cancelled(),
             "the pre-reset token must remain cancelled"
+        );
+    }
+
+    // --- Task 10 fix round 2 (2026-09-16) — the daemon-first-path gap.
+    // The stub used to hardcode `SemiTrusted` unconditionally, bypassing
+    // the per-sender authorization fix entirely for every daemon-routed
+    // session (the default runtime mode). These tests lock in that the
+    // stub's own trust tier now actually depends on whether an
+    // allowlist is configured, mirroring the in-process
+    // `TelegramChannel::trust_tier()` semantics for messages that
+    // reach a session at all (see `telegram_chat_is_allowed` below for
+    // the routing-level half of this fix).
+
+    #[test]
+    fn stub_reports_untrusted_when_no_allowlist_configured() {
+        let ch = TelegramDaemonChannel::new(false);
+        assert_eq!(
+            ch.trust_tier(),
+            aivyx_capability::TrustTier::Untrusted,
+            "no chat_filter configured must mean every reachable sender is Untrusted"
+        );
+    }
+
+    #[test]
+    fn stub_reports_semitrusted_when_allowlist_configured() {
+        let ch = TelegramDaemonChannel::new(true);
+        assert_eq!(
+            ch.trust_tier(),
+            aivyx_capability::TrustTier::SemiTrusted,
+            "a configured chat_filter means messages reaching this stub already matched it"
+        );
+    }
+
+    // --- Routing-level drop-filter (the other half of Task 10 fix
+    // round 2). `telegram_chat_is_allowed` is the exact predicate used
+    // in `run_telegram_daemon_multi_session`'s loop before a message is
+    // ever routed to a per-chat session — proving a non-matching
+    // sender's message never reaches a session at all when a filter is
+    // configured, without needing a live transport/socket harness.
+
+    #[test]
+    fn chat_filter_none_allows_any_chat() {
+        assert!(telegram_chat_is_allowed(111, None));
+        assert!(telegram_chat_is_allowed(999, None));
+    }
+
+    #[test]
+    fn chat_filter_some_allows_only_the_matching_chat() {
+        assert!(telegram_chat_is_allowed(111, Some(111)));
+        assert!(
+            !telegram_chat_is_allowed(999, Some(111)),
+            "a non-matching chat must be dropped before reaching a session"
         );
     }
 

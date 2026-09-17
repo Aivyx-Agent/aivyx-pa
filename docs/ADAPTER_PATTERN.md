@@ -108,7 +108,21 @@ heuristic the two existing adapters use:
   instead. All three shipped adapters (`aivyx-telegram`,
   `aivyx-discord`, `aivyx-slack`) implement this the same way — see
   their `trust_tier()` for the exact match logic before copying the
-  pattern into a new adapter.
+  pattern into a new adapter. **This applies to the daemon-mode path
+  too, not just the in-process one** (fix round 2, 2026-09-16): each
+  platform's `*DaemonChannel` stub in `crates/aivyx-channel/src/
+  {telegram,discord,slack}_daemon_frontend.rs` (constructed by the
+  daemon's `ChannelFactory` in `aivyx.rs`) takes an
+  `allowlist_configured: bool` computed once from the same config and
+  returns `SemiTrusted`/`Untrusted` accordingly — mirroring, not
+  re-deriving, the in-process channel's match logic, since the stub
+  has no per-message identity of its own to check. See each daemon
+  frontend's own `run_*_daemon_multi_session` for the companion
+  routing-level drop-filter that keeps a non-matching sender's message
+  from ever reaching a session in the first place. A new daemon-mode
+  adapter needs both halves — the routing filter AND the
+  allowlist-aware stub construction — or it reintroduces this exact
+  gap.
 - **`Untrusted`** — anonymous or drive-by traffic. An unauthenticated
   HTTP POST endpoint, a public chatroom with no membership gating, a
   webhook from an external service. No adapter currently ships at

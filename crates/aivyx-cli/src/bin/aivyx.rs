@@ -9288,10 +9288,35 @@ async fn run_async(
         .apply(daemon_agent);
         let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
 
-        let channel_factory: ChannelFactory = Arc::new(|frontend_type| {
+        // Security-audit fix (Task 10 fix round 2, 2026-09-16) — computed
+        // once here, from the same loaded config already in scope, and
+        // captured (by value — all three are `bool`, `Copy`) into the
+        // `move` closure below. `TelegramDaemonChannel`/
+        // `DiscordDaemonChannel`/`SlackDaemonChannel` used to hardcode
+        // `SemiTrusted` regardless of configuration, which meant every
+        // daemon-routed session (the default runtime mode with no
+        // flags) got the operator's full `SemiTrusted` ceiling no
+        // matter what — completely bypassing the per-sender
+        // authorization fix in each platform's own in-process
+        // `trust_tier()`. Only borrowed here (`.as_ref()`) so the later
+        // `ChannelKind::{Telegram,Discord,Slack}` match arms further
+        // down in this function can still `.expect()`-move `telegram`/
+        // `discord`/`slack` out of their `Option`s — this code and
+        // those arms are mutually exclusive at runtime (this block sits
+        // inside the `mode == CliMode::DaemonRun` branch, which returns
+        // before that match is ever reached), but the compiler doesn't
+        // know that, so a move here would break the other branch.
+        let telegram_allowlist_configured =
+            telegram.as_ref().is_some_and(|t| t.chat_filter.is_some());
+        let discord_allowlist_configured =
+            discord.as_ref().is_some_and(|d| d.channel_filter.is_some());
+        let slack_allowlist_configured =
+            slack.as_ref().is_some_and(|s| s.channel_filter.is_some());
+
+        let channel_factory: ChannelFactory = Arc::new(move |frontend_type| {
             match frontend_type {
                 aivyx_channel::daemon_ipc::FrontendType::Telegram => {
-                    Arc::new(TelegramDaemonChannel::new())
+                    Arc::new(TelegramDaemonChannel::new(telegram_allowlist_configured))
                 }
                 aivyx_channel::daemon_ipc::FrontendType::Local => {
                     Arc::new(LocalChannel::new("aivyx-daemon", io::stdout()))
@@ -9304,14 +9329,18 @@ async fn run_async(
                 // discord_daemon_frontend.rs module wires the
                 // actual two-way bridge.
                 aivyx_channel::daemon_ipc::FrontendType::Discord => {
-                    Arc::new(aivyx_channel::discord_daemon_frontend::DiscordDaemonChannel::new())
+                    Arc::new(aivyx_channel::discord_daemon_frontend::DiscordDaemonChannel::new(
+                        discord_allowlist_configured,
+                    ))
                 }
                 // Phase 111 — Slack daemon-mode channel stub.
                 // Mirrors TelegramDaemonChannel and
                 // DiscordDaemonChannel; the slack_daemon_frontend.rs
                 // module wires the actual two-way bridge.
                 aivyx_channel::daemon_ipc::FrontendType::Slack => {
-                    Arc::new(aivyx_channel::slack_daemon_frontend::SlackDaemonChannel::new())
+                    Arc::new(aivyx_channel::slack_daemon_frontend::SlackDaemonChannel::new(
+                        slack_allowlist_configured,
+                    ))
                 }
             }
         });
@@ -10204,6 +10233,12 @@ async fn run_async(
 
                 match aivyx_channel::discord_daemon_frontend::run_discord_daemon_multi_session(
                     transport,
+                    // Security-audit fix (Task 10 fix round 2, 2026-09-16) —
+                    // the daemon-routed path had no routing-level filter of
+                    // any kind before this; without it, every Discord
+                    // channel the bot could see reached a session
+                    // regardless of `[discord] channel_filter`.
+                    channel_filter,
                     sp.clone(),
                     Some(active_role_name.clone()),
                     shutdown.clone(),
@@ -10343,6 +10378,14 @@ async fn run_async(
                         );
                         match aivyx_channel::slack_daemon_frontend::run_slack_daemon_multi_session(
                             transport,
+                            // Security-audit fix (Task 10 fix round 2, 2026-09-16) —
+                            // the daemon-routed path had no routing-level filter of
+                            // any kind before this; without it, every Slack channel
+                            // the bot could see reached a session regardless of
+                            // `[slack] channel_filter`. Cloned: `channel_filter`
+                            // (a `String`, not `Copy`) is still needed below by the
+                            // in-process fallback if the daemon path fails.
+                            channel_filter.clone(),
                             sp.clone(),
                             Some(active_role_name.clone()),
                             shutdown.clone(),

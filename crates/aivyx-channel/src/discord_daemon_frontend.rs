@@ -43,34 +43,49 @@ use std::time::Instant;
 // DiscordDaemonChannel — identity stub for the daemon's ChannelFactory
 // ---------------------------------------------------------------------------
 
-/// Lightweight `ChannelContext` stub that reports `SemiTrusted`
-/// trust tier and `Discord` platform. Used by the daemon's
-/// `ChannelFactory` when a `FrontendType::Discord` connection
-/// arrives. The stub's `stream_event` and `finalize` are
-/// no-ops — the daemon-side `IpcChannelBridge` handles
-/// forwarding events over IPC; this struct exists only so the
-/// daemon's `ChannelFactory` has a `ChannelContext` to hand to
-/// `ConcreteAgent` at construction time.
+/// Lightweight `ChannelContext` stub that reports `Discord` platform
+/// and a trust tier derived from whether the operator has an allowlist
+/// (`[discord] channel_filter`) configured at all. Used by the
+/// daemon's `ChannelFactory` when a `FrontendType::Discord` connection
+/// arrives. The stub's `stream_event` and `finalize` are no-ops — the
+/// daemon-side `IpcChannelBridge` handles forwarding events over IPC;
+/// this struct exists only so the daemon's `ChannelFactory` has a
+/// `ChannelContext` to hand to `ConcreteAgent` at construction time.
+///
+/// Daemon-first-path fix (2026-09-16, Task 10 fix round 2) — see
+/// `TelegramDaemonChannel`'s identical doc comment for the full
+/// rationale. This stub used to unconditionally return `SemiTrusted`,
+/// and Discord additionally had zero routing-level filtering of any
+/// kind in its daemon frontend before this fix (see
+/// `run_discord_daemon_multi_session`'s new `channel_filter`
+/// parameter).
 pub struct DiscordDaemonChannel {
     session: SessionId,
     /// Rotated per turn by [`reset_cancellation`] and fired by
     /// [`cancel_inflight`]. See `TelegramDaemonChannel::token` —
     /// same C1+H1 audit fix.
     token: Mutex<CancellationToken>,
+    /// Whether the operator has `[discord] channel_filter` configured
+    /// at all. See `TelegramDaemonChannel::allowlist_configured`.
+    allowlist_configured: bool,
 }
 
 impl DiscordDaemonChannel {
-    pub fn new() -> Self {
+    pub fn new(allowlist_configured: bool) -> Self {
         DiscordDaemonChannel {
             session: SessionId::new(),
             token: Mutex::new(CancellationToken::new()),
+            allowlist_configured,
         }
     }
 }
 
 impl Default for DiscordDaemonChannel {
     fn default() -> Self {
-        Self::new()
+        // Safe default: no allowlist configured ⇒ Untrusted. Real
+        // construction always goes through `new()` via the
+        // `ChannelFactory` closure in `aivyx.rs`.
+        Self::new(false)
     }
 }
 
@@ -85,7 +100,11 @@ impl ChannelContext for DiscordDaemonChannel {
     }
 
     fn trust_tier(&self) -> aivyx_capability::TrustTier {
-        aivyx_capability::TrustTier::SemiTrusted
+        if self.allowlist_configured {
+            aivyx_capability::TrustTier::SemiTrusted
+        } else {
+            aivyx_capability::TrustTier::Untrusted
+        }
     }
 
     fn session_id(&self) -> SessionId {
@@ -123,6 +142,20 @@ struct ChannelRoute {
     handle: tokio::task::JoinHandle<Result<(), DaemonError>>,
 }
 
+/// Routing-level drop-filter: `true` iff `channel_id` may be routed to
+/// a session. `filter: None` (no `[discord] channel_filter`
+/// configured) accepts every channel. Mirrors
+/// `telegram_daemon_frontend::telegram_chat_is_allowed` exactly;
+/// extracted so it's directly unit-testable without a live
+/// transport/socket. Task 10 fix round 2 (2026-09-16) — Discord had no
+/// routing-level filtering of any kind before this.
+fn discord_channel_is_allowed(channel_id: u64, filter: Option<u64>) -> bool {
+    match filter {
+        Some(allowed) => channel_id == allowed,
+        None => true,
+    }
+}
+
 /// Drive a multi-channel Discord frontend over the daemon IPC
 /// channel. Mirrors `run_telegram_daemon_multi_session` from
 /// Phase 19 exactly — same outer-loop shape, same per-route
@@ -130,6 +163,7 @@ struct ChannelRoute {
 #[allow(clippy::too_many_arguments)]
 pub async fn run_discord_daemon_multi_session(
     transport: Arc<TwilightTransport>,
+    channel_filter: Option<u64>,
     socket_path: PathBuf,
     role: Option<String>,
     shutdown: CancellationToken,
@@ -158,6 +192,10 @@ pub async fn run_discord_daemon_multi_session(
                 }
             }
         };
+
+        if !discord_channel_is_allowed(msg.channel_id, channel_filter) {
+            continue;
+        }
 
         let channel_id = msg.channel_id;
 
@@ -627,10 +665,52 @@ mod tests {
 
     #[test]
     fn discord_daemon_channel_reports_correct_identity() {
-        let c = DiscordDaemonChannel::new();
+        let c = DiscordDaemonChannel::new(true);
         assert_eq!(c.channel_name(), "aivyx-discord-daemon");
         assert_eq!(c.platform(), ChannelPlatform::Discord);
         assert_eq!(c.trust_tier(), aivyx_capability::TrustTier::SemiTrusted);
+    }
+
+    // --- Task 10 fix round 2 (2026-09-16) — the daemon-first-path gap.
+    // See `telegram_daemon_frontend`'s identical tests for the full
+    // rationale.
+
+    #[test]
+    fn stub_reports_untrusted_when_no_allowlist_configured() {
+        let c = DiscordDaemonChannel::new(false);
+        assert_eq!(
+            c.trust_tier(),
+            aivyx_capability::TrustTier::Untrusted,
+            "no channel_filter configured must mean every reachable sender is Untrusted"
+        );
+    }
+
+    #[test]
+    fn stub_reports_semitrusted_when_allowlist_configured() {
+        let c = DiscordDaemonChannel::new(true);
+        assert_eq!(
+            c.trust_tier(),
+            aivyx_capability::TrustTier::SemiTrusted,
+            "a configured channel_filter means messages reaching this stub already matched it"
+        );
+    }
+
+    // --- Routing-level drop-filter (the other half of Task 10 fix
+    // round 2). Discord had zero filtering of any kind before this.
+
+    #[test]
+    fn channel_filter_none_allows_any_channel() {
+        assert!(discord_channel_is_allowed(111, None));
+        assert!(discord_channel_is_allowed(999, None));
+    }
+
+    #[test]
+    fn channel_filter_some_allows_only_the_matching_channel() {
+        assert!(discord_channel_is_allowed(111, Some(111)));
+        assert!(
+            !discord_channel_is_allowed(999, Some(111)),
+            "a non-matching channel must be dropped before reaching a session"
+        );
     }
 
     // Audit C1+H1 regression — daemon /cancel must fire
@@ -638,7 +718,7 @@ mod tests {
     // it. Same shape as TelegramDaemonChannel's tests.
     #[test]
     fn cancel_inflight_then_reset_yields_fresh_token() {
-        let c = DiscordDaemonChannel::new();
+        let c = DiscordDaemonChannel::new(false);
         let stale = c.cancellation_token();
         assert!(!stale.is_cancelled());
         c.cancel_inflight();
