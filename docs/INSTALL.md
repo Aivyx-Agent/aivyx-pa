@@ -679,10 +679,10 @@ set for Nonagon team-mission control — `/team status [<id>]`,
 `/team abort <id>` — routed the same way, across all three
 channels (Telegram, Discord, Slack).
 
-**`chat_filter`/`channel_filter` now gate `SemiTrusted` itself, not
+**`chat_id`/`channel_filter` now gate `SemiTrusted` itself, not
 just `/team` (security fix, 2026-09-16).** Previously, Telegram,
 Discord, and Slack all granted every sender `SemiTrusted` tier
-unconditionally — `chat_filter` only decided whether a Telegram
+unconditionally — `chat_id` only decided whether a Telegram
 message was *routed* at all, and Discord/Slack had no filter
 concept whatsoever. **As of this fix, an operator who has NOT
 configured a sender/channel allowlist for a channel gets `Untrusted`
@@ -690,7 +690,7 @@ tier for every sender on that channel** (a near-empty capability
 ceiling — see `docs/THREAT_MODEL.md` §2) **instead of the previous
 `SemiTrusted`.** If you want your existing Telegram/Discord/Slack
 bot to keep its `SemiTrusted` capabilities, set that channel's
-`chat_filter` (Telegram) or `channel_filter` (Discord/Slack) to the
+`chat_id` (Telegram) or `channel_filter` (Discord/Slack) to the
 one chat/channel id you actually use — see the TOML examples below
 and in the Discord/Slack sections. This is separate from, and in
 addition to, the `team_command_allowed_senders` gate below, which
@@ -714,7 +714,7 @@ sender's numeric user id, Slack uses the sender's string user id
 ```toml
 [telegram]
 token = "your_bot_token_here"
-# chat_filter = 123456789     # RECOMMENDED: allowlist this one chat_id as SemiTrusted (see the trust-tier note above); default (unset) = every chat is Untrusted
+# chat_id = 123456789         # RECOMMENDED: allowlist this one chat_id as SemiTrusted (see the trust-tier note above); default (unset) = every chat is Untrusted
 # team_run_channel = true          # optional: let this channel start team missions via /team run <goal> (default false)
 # team_trigger_rate_limit = 5      # optional: max confirmed /team run starts per rolling hour from this channel (default unlimited)
 # team_command_allowed_senders = [123456789]  # REQUIRED to use any /team command: Telegram user ids, deny-by-default

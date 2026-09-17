@@ -10386,6 +10386,13 @@ async fn run_async(
                             // (a `String`, not `Copy`) is still needed below by the
                             // in-process fallback if the daemon path fails.
                             channel_filter.clone(),
+                            // Task 10 fix round 3 (2026-09-16) — the routing
+                            // filter ignored `[slack] team_id` entirely,
+                            // leaving a gap for a channel-id collision across
+                            // two workspaces. Cloned for the same reason as
+                            // `channel_filter` above: `team_filter` is still
+                            // needed below by the in-process fallback.
+                            team_filter.clone(),
                             sp.clone(),
                             Some(active_role_name.clone()),
                             shutdown.clone(),

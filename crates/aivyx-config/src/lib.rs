@@ -4726,7 +4726,21 @@ struct RawMemory {
 struct RawTelegram {
     #[serde(default)]
     token: Option<String>,
-    #[serde(default)]
+    /// Real TOML key is `chat_id` (see `docs/INSTALL.md`'s Telegram
+    /// example). `#[serde(alias = "chat_filter")]` is a backward-
+    /// compatibility safety net (Task 10 fix round 3, 2026-09-16):
+    /// an earlier version of `docs/INSTALL.md` incorrectly documented
+    /// this key as `chat_filter` (the internal Rust field name on
+    /// `TelegramConfig`, which this raw key deserializes into), and
+    /// `RawTelegram` has no `deny_unknown_fields`, so an operator who
+    /// copied that example — or just guessed the field name from the
+    /// internal `chat_filter` terminology used throughout this
+    /// codebase's comments — would have had their `chat_filter` key
+    /// silently discarded, leaving no allowlist configured at all.
+    /// Since Task 10 round 2, "no allowlist configured" means
+    /// `Untrusted` for every sender, so that silent typo now has a
+    /// real security consequence instead of just being inert.
+    #[serde(default, alias = "chat_filter")]
     chat_id: Option<i64>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
     /// from this channel. Absent/false: the command is recognized but

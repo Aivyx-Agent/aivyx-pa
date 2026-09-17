@@ -388,6 +388,61 @@ passphrase = "toml-passphrase"
 }
 
 // ------------------------------------------------------------------
+// Task 10 fix round 3 (2026-09-16) — `chat_filter` as a TOML alias
+// for `chat_id`. An earlier `docs/INSTALL.md` example incorrectly
+// documented the Telegram allowlist key as `chat_filter` (the
+// internal Rust field name); `RawTelegram` has no
+// `deny_unknown_fields`, so that typo would silently discard the
+// operator's allowlist. The real key is `chat_id`; `chat_filter`
+// must keep working as a backward-compatible alias so operators who
+// already wrote it (from the old docs, or a natural guess) don't
+// silently lose their allowlist — see THREAT_MODEL.md: since Task 10
+// round 2, no allowlist configured means `Untrusted` for everyone.
+// ------------------------------------------------------------------
+
+#[test]
+fn telegram_chat_id_and_chat_filter_alias_deserialize_to_the_same_value() {
+    let env = EnvScope::new();
+
+    let via_chat_id = load_with_toml(
+        r#"
+        [telegram]
+        token = "t"
+        chat_id = 99
+    "#,
+        "telegram-chat-id-key",
+    );
+    let via_chat_filter = load_with_toml(
+        r#"
+        [telegram]
+        token = "t"
+        chat_filter = 99
+    "#,
+        "telegram-chat-filter-alias-key",
+    );
+
+    let tg_chat_id = via_chat_id.telegram.expect("telegram section present");
+    let tg_chat_filter = via_chat_filter
+        .telegram
+        .expect("telegram section present");
+
+    assert_eq!(
+        tg_chat_id.chat_filter.as_ref().expect("chat set").value,
+        99
+    );
+    assert_eq!(
+        tg_chat_filter.chat_filter.as_ref().expect("chat set").value,
+        99
+    );
+    assert_eq!(
+        tg_chat_id.chat_filter.as_ref().unwrap().value,
+        tg_chat_filter.chat_filter.as_ref().unwrap().value,
+    );
+
+    drop(env);
+}
+
+// ------------------------------------------------------------------
 // Piece C Task 2 — team_run_channel / team_trigger_rate_limit
 // ------------------------------------------------------------------
 

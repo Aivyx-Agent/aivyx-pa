@@ -157,20 +157,36 @@ struct PartitionRoute {
 /// Routing-level drop-filter: `true` iff `channel_id` may be routed to
 /// a session. `filter: None` (no `[slack] channel_filter` configured)
 /// accepts every channel. Mirrors
-/// `telegram_daemon_frontend::telegram_chat_is_allowed` exactly;
-/// extracted so it's directly unit-testable without a live
-/// transport/socket. Checks `channel_id` only (not the full
-/// `team_id:channel_id` partition key) — matching
-/// `SlackChannel::trust_tier()`'s own in-process semantics, where
-/// `channel_filter` is what grants `SemiTrusted` and `team_id` is a
-/// separate, optional defense-in-depth check consulted only there.
-/// Task 10 fix round 2 (2026-09-16) — Slack had no routing-level
-/// filtering of any kind before this.
-fn slack_channel_is_allowed(channel_id: &str, filter: Option<&str>) -> bool {
-    match filter {
+/// `telegram_daemon_frontend::telegram_chat_is_allowed`; extended in
+/// Task 10 fix round 3 (2026-09-16) to also check `team_id`, closing
+/// a gap round 2 left open — extracted so it's directly unit-testable
+/// without a live transport/socket. Matches
+/// `SlackChannel::trust_tier()`'s own in-process semantics: a message
+/// is routable when its `channel_id` matches the configured
+/// `channel_filter` (or no `channel_filter` is configured at all) AND
+/// its `team_id` matches the configured `team_filter` (or no
+/// `team_filter` is configured). Round 2 checked `channel_filter`
+/// only; an operator who configured both a `channel_filter` and a
+/// `team_filter` (defense in depth against a channel-id collision
+/// across two workspaces the bot is installed in) got a real gap in
+/// daemon mode — a colliding channel id from the wrong workspace
+/// passed this routing filter and reached `SemiTrusted`, where the
+/// in-process path would have correctly rejected it as `Untrusted`.
+fn slack_channel_is_allowed(
+    channel_id: &str,
+    channel_filter: Option<&str>,
+    team_id: &str,
+    team_filter: Option<&str>,
+) -> bool {
+    let channel_ok = match channel_filter {
         Some(allowed) => channel_id == allowed,
         None => true,
-    }
+    };
+    let team_ok = match team_filter {
+        Some(allowed) => team_id == allowed,
+        None => true,
+    };
+    channel_ok && team_ok
 }
 
 /// Drive a multi-channel Slack frontend over the daemon IPC
@@ -183,6 +199,10 @@ fn slack_channel_is_allowed(channel_id: &str, filter: Option<&str>) -> bool {
 pub async fn run_slack_daemon_multi_session(
     transport: Arc<SlackMorphismTransport>,
     channel_filter: Option<String>,
+    // Optional workspace (`team_id`) constraint, mirroring
+    // `SlackChannel::team_filter` — see `slack_channel_is_allowed`.
+    // Task 10 fix round 3 (2026-09-16).
+    team_filter: Option<String>,
     socket_path: PathBuf,
     role: Option<String>,
     shutdown: CancellationToken,
@@ -212,7 +232,12 @@ pub async fn run_slack_daemon_multi_session(
             }
         };
 
-        if !slack_channel_is_allowed(&msg.channel_id, channel_filter.as_deref()) {
+        if !slack_channel_is_allowed(
+            &msg.channel_id,
+            channel_filter.as_deref(),
+            &msg.team_id,
+            team_filter.as_deref(),
+        ) {
             continue;
         }
 
@@ -732,17 +757,47 @@ mod tests {
 
     #[test]
     fn channel_filter_none_allows_any_channel() {
-        assert!(slack_channel_is_allowed("C111", None));
-        assert!(slack_channel_is_allowed("C999", None));
+        assert!(slack_channel_is_allowed("C111", None, "T01", None));
+        assert!(slack_channel_is_allowed("C999", None, "T01", None));
     }
 
     #[test]
     fn channel_filter_some_allows_only_the_matching_channel() {
-        assert!(slack_channel_is_allowed("C111", Some("C111")));
+        assert!(slack_channel_is_allowed("C111", Some("C111"), "T01", None));
         assert!(
-            !slack_channel_is_allowed("C999", Some("C111")),
+            !slack_channel_is_allowed("C999", Some("C111"), "T01", None),
             "a non-matching channel must be dropped before reaching a session"
         );
+    }
+
+    // Task 10 fix round 3 (2026-09-16) — `team_filter` parity with
+    // the in-process `SlackChannel::trust_tier()`. Round 2 only
+    // checked `channel_filter`, leaving a gap for a channel-id
+    // collision across two different workspaces.
+
+    #[test]
+    fn team_filter_none_allows_any_workspace() {
+        assert!(slack_channel_is_allowed("C111", Some("C111"), "T01", None));
+        assert!(slack_channel_is_allowed("C111", Some("C111"), "T99", None));
+    }
+
+    #[test]
+    fn team_filter_mismatch_denies_even_with_matching_channel_filter() {
+        assert!(
+            !slack_channel_is_allowed("C111", Some("C111"), "T99", Some("T01")),
+            "a colliding channel id from the wrong workspace must be dropped, \
+             not routed to a session"
+        );
+    }
+
+    #[test]
+    fn team_filter_and_channel_filter_both_matching_allows() {
+        assert!(slack_channel_is_allowed(
+            "C111",
+            Some("C111"),
+            "T01",
+            Some("T01")
+        ));
     }
 
     // Audit C1+H1 regression — same coverage as the

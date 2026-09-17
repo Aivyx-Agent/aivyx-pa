@@ -122,7 +122,16 @@ heuristic the two existing adapters use:
   from ever reaching a session in the first place. A new daemon-mode
   adapter needs both halves — the routing filter AND the
   allowlist-aware stub construction — or it reintroduces this exact
-  gap.
+  gap. Note the cross-process assumption this pair relies on: the
+  routing filter runs in the frontend process, while the
+  `allowlist_configured` bool the stub uses comes from the *daemon*
+  process's own independent config load — nothing verifies the two
+  processes were launched against the same config file, so the
+  daemon and its frontend(s) must be launched against the same
+  config for the two halves to agree; a mismatch fails toward
+  `Untrusted` (safe) rather than toward silently widening trust, but
+  is still worth knowing about when operating a daemon and frontend
+  as separate processes.
 - **`Untrusted`** — anonymous or drive-by traffic. An unauthenticated
   HTTP POST endpoint, a public chatroom with no membership gating, a
   webhook from an external service. No adapter currently ships at
