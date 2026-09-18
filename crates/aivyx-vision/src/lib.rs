@@ -6,3 +6,4 @@
 
 pub mod config;
 pub mod text_completer;
+pub mod tools;

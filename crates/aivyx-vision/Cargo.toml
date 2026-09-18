@@ -22,6 +22,7 @@ path = "src/main.rs"
 # dependencies: aivyx-core/aivyx-tool/aivyx-llm are internal path deps with
 # no [workspace.dependencies] entry, consistent with every other consumer
 # in this workspace (see e.g. aivyx-toolkit's own Cargo.toml).
+aivyx-capability = { path = "../aivyx-capability" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-tool = { path = "../aivyx-tool" }
 # Task 3 wires a real LlmProvider from this crate's own config

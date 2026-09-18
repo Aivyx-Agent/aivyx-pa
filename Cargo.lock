@@ -794,6 +794,7 @@ version = "0.9.4"
 name = "aivyx-vision"
 version = "0.9.4"
 dependencies = [
+ "aivyx-capability",
  "aivyx-core",
  "aivyx-llm",
  "aivyx-tool",
