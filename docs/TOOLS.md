@@ -256,17 +256,19 @@ windows are a documented limitation. Both bases are Trusted-only and the
 | `app.focus` | `app.control` | Trusted | raise/focus a window (reversible) |
 | `app.type` / `app.key` / `app.click` | `app.input` | Trusted | inject input — **confirm-first** (irreversible) |
 
-## Aivyx-Vision (tool process `aivyx-vision`, Milestone 1 — 2026-09-18)
+## Aivyx-Vision (tool process `aivyx-vision`, Milestone 1 — 2026-09-18; Milestone 2 Pass A — 2026-09-18)
 
-One base for the one tool this milestone adds; later milestones'
-`vision.generate_image` / `vision.generate_3d` tools will share the same
-base (nothing to read separately from what's generated). SemiTrusted:
-narrower and safer than `llm.call` (constrained prompt, sanitized output),
-which is itself already SemiTrusted-reachable.
+One base shared by all three generation domains (vector/SVG, image, 3D)
+— nothing to read separately from what's generated. SemiTrusted: narrower
+and safer than `llm.call` (constrained prompt / bounded local generation,
+sanitized or locally-written output), which is itself already
+SemiTrusted-reachable.
 
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
 | `vision.generate_svg` | `vision.generate` | SemiTrusted | LLM-generated SVG from a text prompt (constrained prompt, sanitized output) |
+| `vision.generate_image` | `vision.generate` | SemiTrusted | Local image generation via `mold serve` (requires `[mold]` config; writes a file under `output_dir`, returns its path) |
+| `vision.generate_3d` | `vision.generate` | SemiTrusted | Local 3D model generation — **not yet implemented** (mold's Pass B); always fails today with a clear error |
 
 ---
 
