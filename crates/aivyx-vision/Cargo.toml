@@ -61,6 +61,17 @@ toml = "0.8"
 # aivyx-core/aivyx-team's own dev-dependency version.
 tempfile = "3.27.0"
 
+# aivyx-vision-core's `FakeGenerationProvider` test double is gated behind
+# its own `testing` Cargo feature (`#[cfg(any(test, feature = "testing"))]`
+# in that crate -- `test` there only applies to aivyx-vision-core's own
+# `cargo test`, not to this crate's). Listed here, in [dev-dependencies]
+# only, so the feature is enabled for this crate's own test builds without
+# leaking into normal (non-test) builds of aivyx-vision or anything that
+# depends on it -- resolver "2" (this workspace's resolver, and required by
+# edition 2024) keeps dev-dependency feature unification scoped to this
+# package's own test target.
+aivyx-vision-core = { workspace = true, features = ["testing"] }
+
 # Excluded from `dist` releases — only the top-level `aivyx` binary is
 # published as a release artifact. This tool-process binary ships with
 # the daemon / is built from source, not as a standalone download.

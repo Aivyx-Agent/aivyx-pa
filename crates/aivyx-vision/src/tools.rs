@@ -81,7 +81,7 @@ fn input_schema() -> Value {
     })
 }
 
-fn required_string(input: &Value, field: &str) -> Result<String, String> {
+pub(crate) fn required_string(input: &Value, field: &str) -> Result<String, String> {
     let s = input
         .get(field)
         .and_then(|v| v.as_str())
@@ -92,12 +92,12 @@ fn required_string(input: &Value, field: &str) -> Result<String, String> {
     Ok(s.to_string())
 }
 
-fn failed(id: ToolId, detail: String) -> ToolOutcome {
+pub(crate) fn failed(id: ToolId, detail: String) -> ToolOutcome {
     ToolOutcome::Failed(AivyxError::Tool { tool: id, detail })
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
 
@@ -138,7 +138,7 @@ mod tests {
     /// rather than invented fresh. `calc.eval`'s own tests never call
     /// `execute()` at all (they test `evaluate()` + metadata
     /// separately), so that crate offered no precedent either way.
-    fn dummy_context<'a>() -> ToolContext<'a> {
+    pub(crate) fn dummy_context<'a>() -> ToolContext<'a> {
         use aivyx_core::{AgentId, CancellationToken, NullAuditHook, SessionId, TurnId};
 
         struct NoopChannel;
