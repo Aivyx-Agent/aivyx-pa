@@ -44,7 +44,7 @@ impl Tool for GenerateSvgTool {
     }
     fn required_scope(&self, _input: &Value) -> Scope {
         Scope::parse("vision.generate")
-            .expect("vision.generate must parse -- it is in KNOWN_BASES (Task 1)")
+            .expect("vision.generate must parse -- it is in aivyx-capability's KNOWN_BASES")
     }
     async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         let prompt = match required_string(&input, "prompt") {

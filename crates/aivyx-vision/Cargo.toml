@@ -25,8 +25,8 @@ path = "src/main.rs"
 aivyx-capability = { path = "../aivyx-capability" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-tool = { path = "../aivyx-tool" }
-# Task 3 wires a real LlmProvider from this crate's own config
-# (build_provider), so all three concrete providers' feature gates need to
+# text_completer::build_provider wires a real LlmProvider from this
+# crate's own config, so all three concrete providers' feature gates need to
 # be on -- each of aivyx-llm's `ollama`/`anthropic`/`openai` modules is
 # itself `#[cfg(feature = "provider-*")]`.
 aivyx-llm = { path = "../aivyx-llm", features = [

@@ -1,9 +1,10 @@
 //! `aivyx-vision` binary entry point.
 //!
 //! The daemon spawns this via `[[tool_process]]` in `aivyx-pa.toml`; on
-//! startup: load config (Task 2), build the LLM provider it names
-//! (Task 3), wrap it in `LlmTextCompleter`, register `vision.generate_svg`
-//! (Task 4), hand off to the multi-tool IPC harness.
+//! startup: load config (`config.rs`), build the LLM provider it names
+//! (`text_completer::build_provider`), wrap it in `LlmTextCompleter`,
+//! register `vision.generate_svg` (`tools::GenerateSvgTool`), hand off
+//! to the multi-tool IPC harness.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -45,8 +46,7 @@ async fn main() -> ExitCode {
     ));
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(GenerateSvgTool::new(completer))];
 
-    // Matches aivyx-toolkit's own main.rs call shape exactly (verified
-    // against its real source during this plan's own research):
+    // Matches aivyx-toolkit's own main.rs call shape exactly:
     // run_multi_tool_subprocess(tools, name, notify_receiver). No
     // DispatchNotification wire frame needed here, unlike aivyx-toolkit's
     // health-check-alert use of the third argument, hence `None`.

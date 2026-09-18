@@ -1,6 +1,6 @@
 //! Adapts `aivyx-llm`'s `LlmProvider` to `aivyx-vision-svg`'s
 //! `TextCompleter` seam, and builds the real provider from this
-//! tool-process's own config (Task 2) -- deliberately separate from
+//! tool-process's own config (`config.rs`) -- deliberately separate from
 //! whichever provider the daemon itself is using, since a tool process
 //! runs in its own OS process and can't share the daemon's in-memory
 //! provider.
