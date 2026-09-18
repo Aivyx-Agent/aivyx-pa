@@ -502,6 +502,15 @@ const KNOWN_BASES: &[&str] = &[
     // rationale: a SemiTrusted tool process must not be able to push
     // arbitrary content to an operator-configured target).
     "notify.dispatch",
+    // Aivyx-Vision Milestone 1 (2026-09-18) — vision.generate_svg tool
+    // process. One base for the one tool this milestone adds; later
+    // milestones' vision.generate_image / vision.generate_3d tools will
+    // share this same base (nothing to read separately from what's
+    // generated). Reachable at SemiTrusted: narrower and safer than
+    // llm.call (constrained prompt, sanitized output), which is itself
+    // already SemiTrusted-reachable. See aivyx-ecosystem/docs/superpowers/
+    // specs/2026-09-18-aivyx-vision-v1-design.md.
+    "vision.generate",
 ];
 
 /// The capability bases whose actions are **irreversible, outbound, or
@@ -1187,6 +1196,13 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "calc.eval",
         "convert.units",
         "date.compute",
+        // Aivyx-Vision Milestone 1 (2026-09-18) — vision.generate_svg tool
+        // process. Listed here so Trusted (and Kernel) hold it too, but its
+        // real home is CEILING_SEMITRUSTED below, same pattern as
+        // calc.eval/convert.units/date.compute just above: a sanitized,
+        // constrained LLM call is safe below the Trusted tier the rest of
+        // the toolkit pins to.
+        "vision.generate",
         // Phase 128 — Google Calendar third-party tool
         // process (Chapter F #2). Two bases for the
         // five-tool surface (Q3b); Trusted-only default
@@ -1312,6 +1328,12 @@ static CEILING_SEMITRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "calc.eval",
         "convert.units",
         "date.compute",
+        // Aivyx-Vision Milestone 1 (2026-09-18) — vision.generate_svg tool
+        // process. Reachable at SemiTrusted: narrower and safer than
+        // llm.call (constrained prompt, sanitized output), which is
+        // itself already SemiTrusted-reachable. See the KNOWN_BASES doc
+        // comment for the full rationale.
+        "vision.generate",
     ])
 });
 
@@ -2387,13 +2409,44 @@ mod tests {
         // a tool process's own unprompted DispatchNotification wire
         // frame (distinct from the model-invoked notify.send tool),
         // Trusted-tier-only at the ceiling like notify.send itself.
+        // Aivyx-Vision Milestone 1 adds vision.generate — the
+        // vision.generate_svg tool process's one base (SemiTrusted-reachable,
+        // see the KNOWN_BASES doc comment for why).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            95,
+            96,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
+        );
+    }
+
+    #[test]
+    fn vision_generate_is_a_known_base_reachable_at_semitrusted() {
+        // Aivyx-Vision Milestone 1 — vision.generate must parse (it's a
+        // real KNOWN_BASES entry now) and must be reachable at SemiTrusted:
+        // it's a narrower, sanitized form of llm.call, which is already
+        // SemiTrusted-reachable. Assertion shape matches this file's own
+        // precedent for other SemiTrusted-reachable toolkit bases (e.g.
+        // `graph_read_base_parses_and_is_trusted_only`,
+        // `contacts_bases_are_trusted_only`): `CapabilitySet::grants`, not
+        // `Scope::is_granted_by` (a different, scope-vs-scope check) and
+        // not a nonexistent `CapabilitySet::contains`.
+        let scope = Scope::parse("vision.generate").expect("must be a known base");
+        assert!(
+            CEILING_SEMITRUSTED.grants(&scope),
+            "vision.generate must be reachable at SemiTrusted -- it's a narrower, \
+             sanitized form of llm.call, which is already SemiTrusted-reachable"
+        );
+    }
+
+    #[test]
+    fn vision_generate_is_absent_from_untrusted_ceiling() {
+        let scope = Scope::parse("vision.generate").expect("must be a known base");
+        assert!(
+            !CEILING_UNTRUSTED.grants(&scope),
+            "vision.generate must not be reachable at Untrusted by default"
         );
     }
 

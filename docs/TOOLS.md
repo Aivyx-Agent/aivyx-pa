@@ -256,6 +256,18 @@ windows are a documented limitation. Both bases are Trusted-only and the
 | `app.focus` | `app.control` | Trusted | raise/focus a window (reversible) |
 | `app.type` / `app.key` / `app.click` | `app.input` | Trusted | inject input — **confirm-first** (irreversible) |
 
+## Aivyx-Vision (tool process `aivyx-vision`, Milestone 1 — 2026-09-18)
+
+One base for the one tool this milestone adds; later milestones'
+`vision.generate_image` / `vision.generate_3d` tools will share the same
+base (nothing to read separately from what's generated). SemiTrusted:
+narrower and safer than `llm.call` (constrained prompt, sanitized output),
+which is itself already SemiTrusted-reachable.
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `vision.generate_svg` | `vision.generate` | SemiTrusted | LLM-generated SVG from a text prompt (constrained prompt, sanitized output) |
+
 ---
 
 ## Tool-name → capability-scope mapping
