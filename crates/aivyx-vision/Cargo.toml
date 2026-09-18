@@ -24,10 +24,15 @@ path = "src/main.rs"
 # in this workspace (see e.g. aivyx-toolkit's own Cargo.toml).
 aivyx-core = { path = "../aivyx-core" }
 aivyx-tool = { path = "../aivyx-tool" }
-# No provider-* feature enabled here: this task only scaffolds the crate
-# and its operator-facing config (ProviderChoice/VisionConfig). Wiring an
-# actual LlmProvider from that config is later work.
-aivyx-llm = { path = "../aivyx-llm" }
+# Task 3 wires a real LlmProvider from this crate's own config
+# (build_provider), so all three concrete providers' feature gates need to
+# be on -- each of aivyx-llm's `ollama`/`anthropic`/`openai` modules is
+# itself `#[cfg(feature = "provider-*")]`.
+aivyx-llm = { path = "../aivyx-llm", features = [
+    "provider-ollama",
+    "provider-anthropic",
+    "provider-openai",
+] }
 
 # Standalone SVG-generation backend this tool process wraps.
 aivyx-vision-svg = { workspace = true }
@@ -40,6 +45,7 @@ thiserror = { workspace = true }
 # feature set (see [workspace.dependencies] in the root Cargo.toml), so no
 # extra features are needed here.
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 secrecy = { workspace = true }
 
 # Not a workspace dependency — pinned directly per-crate, matching every

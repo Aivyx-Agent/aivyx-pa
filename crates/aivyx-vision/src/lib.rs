@@ -5,3 +5,4 @@
 //! 2026-09-18-aivyx-vision-v1-design.md` for the full design.
 
 pub mod config;
+pub mod text_completer;
