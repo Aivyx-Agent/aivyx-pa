@@ -129,20 +129,24 @@ mod tests {
     };
     use tokio_util::sync::CancellationToken;
 
-    /// A fake `LlmProvider` returning one canned text response, for
-    /// testing the adapter without a real backend.
+    /// A fake `LlmProvider` streaming a canned sequence of text chunks,
+    /// for testing the adapter without a real backend. A `Vec` (rather
+    /// than one `String`) so tests can prove `complete()` concatenates
+    /// every chunk in order, not just returns whichever chunk happens to
+    /// be emitted -- a single-chunk fake could pass even if `complete()`
+    /// kept only the last chunk instead of accumulating all of them.
     struct FakeProvider {
-        text: String,
+        chunks: Vec<String>,
     }
 
     struct FakeStream {
-        remaining: Option<String>,
+        remaining: std::collections::VecDeque<String>,
     }
 
     #[async_trait::async_trait]
     impl LlmStream for FakeStream {
         async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
-            Ok(self.remaining.take().map(LlmStreamEvent::TextChunk))
+            Ok(self.remaining.pop_front().map(LlmStreamEvent::TextChunk))
         }
 
         async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
@@ -161,7 +165,7 @@ mod tests {
             _cancellation: &CancellationToken,
         ) -> Result<Box<dyn LlmStream>, LlmError> {
             Ok(Box::new(FakeStream {
-                remaining: Some(self.text.clone()),
+                remaining: self.chunks.iter().cloned().collect(),
             }))
         }
     }
@@ -169,10 +173,28 @@ mod tests {
     #[tokio::test]
     async fn complete_returns_the_provider_s_full_text() {
         let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider {
-            text: "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>".to_string(),
+            chunks: vec!["<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>".to_string()],
         });
         let completer = LlmTextCompleter::new(provider, "test-model".to_string(), 2048);
         let result = completer.complete("draw a circle").await.unwrap();
         assert_eq!(result, "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>");
+    }
+
+    #[tokio::test]
+    async fn complete_concatenates_multiple_streamed_chunks_in_order() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(FakeProvider {
+            chunks: vec![
+                "<svg xmlns=\"".to_string(),
+                "http://www.w3.org/2000/svg\">".to_string(),
+                "<circle r=\"5\"/>".to_string(),
+                "</svg>".to_string(),
+            ],
+        });
+        let completer = LlmTextCompleter::new(provider, "test-model".to_string(), 2048);
+        let result = completer.complete("draw a circle").await.unwrap();
+        assert_eq!(
+            result,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"5\"/></svg>"
+        );
     }
 }
