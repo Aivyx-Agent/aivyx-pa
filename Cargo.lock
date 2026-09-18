@@ -798,6 +798,8 @@ dependencies = [
  "aivyx-core",
  "aivyx-llm",
  "aivyx-tool",
+ "aivyx-vision-core",
+ "aivyx-vision-mold",
  "aivyx-vision-svg",
  "async-trait",
  "secrecy",
@@ -811,9 +813,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-vision-core"
+version = "0.1.0"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=caed4c0875a19ef5c7f4059ddda8cd6364f9fda4#caed4c0875a19ef5c7f4059ddda8cd6364f9fda4"
+dependencies = [
+ "async-trait",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "aivyx-vision-mold"
+version = "0.1.0"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=caed4c0875a19ef5c7f4059ddda8cd6364f9fda4#caed4c0875a19ef5c7f4059ddda8cd6364f9fda4"
+dependencies = [
+ "aivyx-vision-core",
+ "async-trait",
+ "base64 0.22.1",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid 1.23.0",
+]
+
+[[package]]
 name = "aivyx-vision-svg"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=a80be4709b41382ef62c20545bb706e18a1d5ee3#a80be4709b41382ef62c20545bb706e18a1d5ee3"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=caed4c0875a19ef5c7f4059ddda8cd6364f9fda4#caed4c0875a19ef5c7f4059ddda8cd6364f9fda4"
 dependencies = [
  "async-trait",
  "svg-hush",

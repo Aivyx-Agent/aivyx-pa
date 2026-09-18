@@ -37,6 +37,8 @@ aivyx-llm = { path = "../aivyx-llm", features = [
 
 # Standalone SVG-generation backend this tool process wraps.
 aivyx-vision-svg = { workspace = true }
+aivyx-vision-core = { workspace = true }
+aivyx-vision-mold = { workspace = true }
 
 async-trait = { workspace = true }
 serde = { workspace = true }
