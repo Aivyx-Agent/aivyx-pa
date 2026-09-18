@@ -17,6 +17,7 @@ members = [
     "crates/aivyx-tool",
     "crates/aivyx-gmail",
     "crates/aivyx-toolkit",
+    "crates/aivyx-vision",
     "crates/aivyx-dataread",
     "crates/aivyx-calendar",
     "crates/aivyx-google-oauth",
@@ -73,6 +74,7 @@ default-members = [
     "crates/aivyx-tool",
     "crates/aivyx-gmail",
     "crates/aivyx-toolkit",
+    "crates/aivyx-vision",
     "crates/aivyx-dataread",
     "crates/aivyx-calendar",
     "crates/aivyx-google-oauth",
@@ -319,6 +321,15 @@ aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "d62cb9d
 # default-features/target-gating split is needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
 aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "ad9141c6ca242532db7b8e34eff423084e1eba4d" }
+
+# Standalone SVG-generation backend for the aivyx-vision tool process's
+# `vision.generate_svg` (Chapter design doc:
+# aivyx-ecosystem/docs/superpowers/specs/2026-09-18-aivyx-vision-v1-design.md).
+# Not on crates.io — pinned by commit SHA, same as aivyx-checkpoint/
+# aivyx-confine/aivyx-kvcache/aivyx-injection-guard above. No
+# platform-specific backend, so no target-gating needed.
+# MUST stay a public repo — see the aivyx-confine entry above for why.
+aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "a80be4709b41382ef62c20545bb706e18a1d5ee3" }
 
 # The profile that 'dist' will build with
 [profile.dist]

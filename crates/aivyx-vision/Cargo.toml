@@ -1,0 +1,59 @@
+[package]
+name = "aivyx-vision"
+description = "Tool process exposing vision.generate_svg, backed by the standalone aivyx-vision-svg crate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aivyx-vision"
+path = "src/main.rs"
+
+[dependencies]
+# Tool process SDK — same shape as aivyx-toolkit/aivyx-gmail. Not workspace
+# dependencies: aivyx-core/aivyx-tool/aivyx-llm are internal path deps with
+# no [workspace.dependencies] entry, consistent with every other consumer
+# in this workspace (see e.g. aivyx-toolkit's own Cargo.toml).
+aivyx-core = { path = "../aivyx-core" }
+aivyx-tool = { path = "../aivyx-tool" }
+# No provider-* feature enabled here: this task only scaffolds the crate
+# and its operator-facing config (ProviderChoice/VisionConfig). Wiring an
+# actual LlmProvider from that config is later work.
+aivyx-llm = { path = "../aivyx-llm" }
+
+# Standalone SVG-generation backend this tool process wraps.
+aivyx-vision-svg = { workspace = true }
+
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# rt-multi-thread + macros are already part of the workspace's base tokio
+# feature set (see [workspace.dependencies] in the root Cargo.toml), so no
+# extra features are needed here.
+tokio = { workspace = true }
+secrecy = { workspace = true }
+
+# Not a workspace dependency — pinned directly per-crate, matching every
+# other TOML-config-reading tool process (aivyx-toolkit, aivyx-gmail,
+# aivyx-calendar, aivyx-notion, ...).
+toml = "0.8"
+
+[dev-dependencies]
+# Not a workspace dependency — pinned directly per-crate, matching
+# aivyx-core/aivyx-team's own dev-dependency version.
+tempfile = "3.27.0"
+
+# Excluded from `dist` releases — only the top-level `aivyx` binary is
+# published as a release artifact. This tool-process binary ships with
+# the daemon / is built from source, not as a standalone download.
+[package.metadata.dist]
+dist = false

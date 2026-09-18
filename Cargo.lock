@@ -791,6 +791,34 @@ name = "aivyx-verticals-placeholder"
 version = "0.9.4"
 
 [[package]]
+name = "aivyx-vision"
+version = "0.9.4"
+dependencies = [
+ "aivyx-core",
+ "aivyx-llm",
+ "aivyx-tool",
+ "aivyx-vision-svg",
+ "async-trait",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.8.23",
+]
+
+[[package]]
+name = "aivyx-vision-svg"
+version = "0.1.0"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=a80be4709b41382ef62c20545bb706e18a1d5ee3#a80be4709b41382ef62c20545bb706e18a1d5ee3"
+dependencies = [
+ "async-trait",
+ "svg-hush",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "aivyx-voice"
 version = "0.9.4"
 dependencies = [
@@ -2841,6 +2869,12 @@ name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
+
+[[package]]
+name = "data-url"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "dbus"
@@ -10442,6 +10476,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "svg-hush"
+version = "0.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e690409a034dc81758d2986dcc0e01ffe4a77c65902a120777f5182dd40b1f7f"
+dependencies = [
+ "base64 0.22.1",
+ "data-url",
+ "quick-error",
+ "url",
+ "xml",
+]
+
+[[package]]
 name = "symphonia"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13278,6 +13325,12 @@ name = "xkeysym"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
+
+[[package]]
+name = "xml"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f45bb2c13fec6a6cb4c0f76a7e94839e110a14ec803ec2940777a94c347bc52"
 
 [[package]]
 name = "xxhash-rust"
