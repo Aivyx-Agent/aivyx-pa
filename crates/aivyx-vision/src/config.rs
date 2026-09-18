@@ -33,7 +33,9 @@ use thiserror::Error;
 pub enum ConfigFileError {
     #[error("config file I/O failed at {path:?}: {source}")]
     Io { path: PathBuf, source: io::Error },
-    #[error("config file at {path:?} not found -- create it with an LLM provider/model (see aivyx-vision's own README)")]
+    #[error(
+        "config file at {path:?} not found -- create it with an LLM provider/model (see aivyx-vision's own README)"
+    )]
     NotFound { path: PathBuf },
     #[error("config file at {path:?} failed to parse as TOML: {reason}")]
     Parse { path: PathBuf, reason: String },
@@ -104,20 +106,18 @@ pub fn load_config(path: &Path) -> Result<VisionConfig, ConfigFileError> {
             base_url: raw.base_url,
         },
         RawProvider::Anthropic => ProviderChoice::Anthropic {
-            api_key: raw
-                .api_key
-                .map(SecretString::from)
-                .ok_or_else(|| ConfigFileError::MissingApiKey {
+            api_key: raw.api_key.map(SecretString::from).ok_or_else(|| {
+                ConfigFileError::MissingApiKey {
                     provider: "anthropic".to_string(),
-                })?,
+                }
+            })?,
         },
         RawProvider::Openai => ProviderChoice::Openai {
-            api_key: raw
-                .api_key
-                .map(SecretString::from)
-                .ok_or_else(|| ConfigFileError::MissingApiKey {
+            api_key: raw.api_key.map(SecretString::from).ok_or_else(|| {
+                ConfigFileError::MissingApiKey {
                     provider: "openai".to_string(),
-                })?,
+                }
+            })?,
         },
     };
 
@@ -138,7 +138,10 @@ mod tests {
         std::fs::write(&path, "provider = \"ollama\"\nmodel = \"qwen3:8b\"\n").unwrap();
         let config = load_config(&path).unwrap();
         assert_eq!(config.model, "qwen3:8b");
-        assert!(matches!(config.provider, ProviderChoice::Ollama { base_url: None }));
+        assert!(matches!(
+            config.provider,
+            ProviderChoice::Ollama { base_url: None }
+        ));
     }
 
     #[test]
@@ -161,7 +164,34 @@ mod tests {
     fn anthropic_without_api_key_is_a_clear_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "provider = \"anthropic\"\nmodel = \"claude-3-5-sonnet-20241022\"\n").unwrap();
+        std::fs::write(
+            &path,
+            "provider = \"anthropic\"\nmodel = \"claude-3-5-sonnet-20241022\"\n",
+        )
+        .unwrap();
+        let err = load_config(&path).unwrap_err();
+        assert!(matches!(err, ConfigFileError::MissingApiKey { .. }));
+    }
+
+    #[test]
+    fn loads_a_valid_openai_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "provider = \"openai\"\nmodel = \"gpt-4o\"\napi_key = \"sk-test\"\n",
+        )
+        .unwrap();
+        let config = load_config(&path).unwrap();
+        assert_eq!(config.model, "gpt-4o");
+        assert!(matches!(config.provider, ProviderChoice::Openai { .. }));
+    }
+
+    #[test]
+    fn openai_without_api_key_is_a_clear_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "provider = \"openai\"\nmodel = \"gpt-4o\"\n").unwrap();
         let err = load_config(&path).unwrap_err();
         assert!(matches!(err, ConfigFileError::MissingApiKey { .. }));
     }
