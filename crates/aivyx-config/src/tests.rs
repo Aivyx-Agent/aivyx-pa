@@ -8647,6 +8647,43 @@ fn skill_authoring_section_parses_and_defaults() {
 }
 
 #[test]
+fn skill_defaults_config_is_none_when_section_absent() {
+    let _env = EnvScope::new();
+    let off = load_with_toml("\n", "skd-absent");
+    assert!(off.skill_defaults.is_none());
+}
+
+#[test]
+fn skill_defaults_config_arms_on_project_dir_alone() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[skill_defaults]\nproject_dir = \"/tmp/my-skills\"\n",
+        "skd-project-only",
+    );
+    let sd = cfg.skill_defaults.expect("skill_defaults must be Some");
+    assert_eq!(
+        sd.project_dir.unwrap().value,
+        PathBuf::from("/tmp/my-skills")
+    );
+    assert!(sd.user_dir.is_none());
+}
+
+#[test]
+fn skill_defaults_config_arms_on_user_dir_alone() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[skill_defaults]\nuser_dir = \"/tmp/user-skills\"\n",
+        "skd-user-only",
+    );
+    let sd = cfg.skill_defaults.expect("skill_defaults must be Some");
+    assert!(sd.project_dir.is_none());
+    assert_eq!(
+        sd.user_dir.unwrap().value,
+        PathBuf::from("/tmp/user-skills")
+    );
+}
+
+#[test]
 fn skill_refinement_section_parses_and_defaults() {
     let _env = EnvScope::new();
     // Absent → None.

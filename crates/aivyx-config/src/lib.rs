@@ -1045,6 +1045,15 @@ pub struct AivyxConfig {
     /// (no knowledge-derived authoring pass). `Some` only arms it; no-ops
     /// unless `enabled = true`.
     pub skill_authoring: Option<SkillAuthoringConfig>,
+    /// Aivyx-Skills Part 3 — `[skill_defaults]` section. `None` when
+    /// absent (bundled skills only, no overlay directories). `Some`
+    /// only when at least one of `project_dir`/`user_dir` is set — the
+    /// bundled default skills and their tools are always available
+    /// regardless of whether this section exists at all (matching
+    /// `skills.list`/`skills.invoke`'s own "registration is
+    /// unconditional" precedent); this config only ever adds overlay
+    /// directories on top.
+    pub skill_defaults: Option<SkillDefaultsConfig>,
     /// Chapter Synapse — `[memory] profile`. `Off` (default) ⇒ today's
     /// behavior; `Smart` expands the coherent memory bundle into the
     /// `[embedding]` / `[recall_cluster]` / `[wiki]` / `[graph]` fields
@@ -2807,6 +2816,19 @@ impl Default for SkillAuthoringConfig {
     }
 }
 
+/// Aivyx-Skills Part 3 — `[skill_defaults]` config. Optional project/user
+/// overlay directories for the shared `aivyx-skills` default skill
+/// library. Each directory must directly contain one
+/// `<skill-name>/SKILL.md` subdirectory per skill — the same shape
+/// `aivyx_skills::SkillLoader::with_project_dir`'s own doc comment
+/// requires. Absence of either field is not an error; only the 5
+/// bundled defaults are available in that case.
+#[derive(Debug, Clone)]
+pub struct SkillDefaultsConfig {
+    pub project_dir: Option<Sourced<std::path::PathBuf>>,
+    pub user_dir: Option<Sourced<std::path::PathBuf>>,
+}
+
 /// Chapter Synapse — the `[memory] profile` activation switch. One knob
 /// that expands into the coherent bundle of memory settings, so an
 /// operator opts into the full self-organizing memory stack
@@ -3916,6 +3938,9 @@ struct RawToml {
     /// `[skill_authoring]` section. Chapter Praxis.
     #[serde(default)]
     skill_authoring: RawSkillAuthoring,
+    /// `[skill_defaults]` section. Aivyx-Skills Part 3.
+    #[serde(default)]
+    skill_defaults: RawSkillDefaults,
     /// `[persona_consolidation]` section. Phase 87 —
     /// pattern-driven Persona proposals.
     #[serde(default)]
@@ -5251,6 +5276,35 @@ fn build_skill_authoring_config(
     })
 }
 
+/// Aivyx-Skills Part 3 — `[skill_defaults]` deserialize target. Absent
+/// section → `skill_defaults: None` (bundled skills only).
+#[derive(Debug, Default, Deserialize)]
+struct RawSkillDefaults {
+    #[serde(default)]
+    project_dir: Option<String>,
+    #[serde(default)]
+    user_dir: Option<String>,
+}
+
+/// Aivyx-Skills Part 3 — build the `[skill_defaults]` config. `None`
+/// only when the section is entirely absent (or present but both
+/// fields unset); either field alone is enough to arm it.
+fn build_skill_defaults_config(raw: &RawSkillDefaults) -> Option<SkillDefaultsConfig> {
+    if raw.project_dir.is_none() && raw.user_dir.is_none() {
+        return None;
+    }
+    Some(SkillDefaultsConfig {
+        project_dir: raw
+            .project_dir
+            .as_ref()
+            .map(|s| Sourced::new(std::path::PathBuf::from(s), FieldSource::Toml)),
+        user_dir: raw
+            .user_dir
+            .as_ref()
+            .map(|s| Sourced::new(std::path::PathBuf::from(s), FieldSource::Toml)),
+    })
+}
+
 /// Phase 87 — `[persona_consolidation]` deserialize target.
 /// Absent section → all-`None` via `Default` → the loader
 /// maps to `persona_consolidation: None` (off; Persona
@@ -6500,6 +6554,7 @@ impl AivyxConfig {
             build_skill_refinement_config(&toml.skill_refinement);
         let skill_authoring =
             build_skill_authoring_config(&toml.skill_authoring);
+        let skill_defaults = build_skill_defaults_config(&toml.skill_defaults);
         let persona_consolidation =
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
@@ -7814,6 +7869,7 @@ impl AivyxConfig {
             graph,
             skill_refinement,
             skill_authoring,
+            skill_defaults,
             memory_profile,
             persona_consolidation,
             correction_consolidation,
