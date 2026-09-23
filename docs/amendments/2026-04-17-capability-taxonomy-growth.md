@@ -807,30 +807,6 @@ compound.)
 base). The `known_bases_count_matches_phase_143_a3_addendum` test pins
 the new total at **95**, so this addendum and the runtime stay in sync.
 
-## Aivyx-Vision Milestone 1 addendum — `vision.generate` (2026-09-18)
-
-> *Added for Milestone 1 of the Aivyx-Vision initiative (local-first
-> generation toolset for image, 3D model, vector/graphic-design output).
-> One base, `vision.generate`, gates the `vision.generate_svg` tool
-> process's single tool (`vision.generate_svg`; later milestones will add
-> `vision.generate_image` / `vision.generate_3d` sharing this same base).
-> Reachable at SemiTrusted: narrower and safer than `llm.call` (constrained
-> prompt, sanitized output, no user-provided context leakage), which is
-> itself already SemiTrusted-reachable. So it grows `KNOWN_BASES` **without
-> a P10 substrate-count amendment** (same precedent as every tool-process
-> base). See
-> `aivyx-ecosystem/docs/superpowers/specs/2026-09-18-aivyx-vision-v1-design.md`.*
-
-| Chapter | Bases added | Provenance |
-|---|---|---|
-| Aivyx-Vision M1 | `vision.generate` | Gates `vision.generate_svg` and future `vision.generate_image` / `vision.generate_3d` tools; tool-process tier (no P10 amendment), SemiTrusted-reachable (narrower/safer than `llm.call`) |
-
-### Running count
-
-`KNOWN_BASES.len()` moves **95 → 96** (the one new `vision.generate`
-base). The `known_bases_count_matches_phase_143_a3_addendum` test pins
-the new total at **96**, so this addendum and the runtime stay in sync.
-
 ## Aivyx-Skills Part 3 addendum — `skill_defaults.*` (2026-09-23)
 
 > *Added for Part 3 of the cross-repo Aivyx-Skills initiative (Parts 1/2
@@ -859,6 +835,15 @@ the new total at **96**, so this addendum and the runtime stay in sync.
 `skill_defaults.*` infrastructure bases). The
 `known_bases_count_matches_phase_143_a3_addendum` test pins the new
 total at **98**, so this addendum and the runtime stay in sync.
+(This file's own local running-count chain above jumps from Phase
+191's **95** straight to this section's **96**: the one-base gap in
+between is `vision.generate`, added for Aivyx-Vision Milestone 1
+[2026-09-18] — a real, already-shipped `KNOWN_BASES` addition, but one
+this file no longer carries its own addendum section for, so the
+narrative skips a step here even though both endpoints are correct. A
+pre-existing-gap situation this entry doesn't attempt to reconcile,
+only to not compound — same posture as the Piece C addendum's own note
+above.)
 
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
