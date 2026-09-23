@@ -56,8 +56,9 @@ pub use tools::{
     FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
     FsReadToolConfig, FsWriteTool, FsWriteToolConfig, GitCommitTool, GitDiffTool,
     GitReadToolConfig, GitStatusTool, GitWriteToolConfig, NetDnsTool, ShellExecTool,
-    ShellExecToolConfig, SkillReader, SkillsInvokeTool, SkillsListTool, WebExtractTool,
-    WebExtractToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
+    ShellExecToolConfig, SkillDefaultsListTool, SkillDefaultsReadTool, SkillReader,
+    SkillsInvokeTool, SkillsListTool, WebExtractTool, WebExtractToolConfig, WebFetchTool,
+    WebFetchToolConfig, WebPostTool, WebPostToolConfig, render_default_skills_section,
 };
 
 use std::sync::Arc;
