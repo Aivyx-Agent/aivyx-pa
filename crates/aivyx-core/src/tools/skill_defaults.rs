@@ -85,6 +85,19 @@ impl Tool for SkillDefaultsListTool {
         true
     }
 
+    // Chapter Bulwark — this tool's output can include overlay-sourced
+    // skill descriptions read from an operator-configured directory on
+    // disk, exactly like SkillDefaultsReadTool's own body content (see
+    // that impl's own output_is_untrusted() for the identical rationale).
+    // Unconditionally true (bundled results included) — matching every
+    // other list-shaped tool in this codebase that reads external content
+    // (aivyx-calendar/aivyx-contacts/aivyx-drive/aivyx-notion/aivyx-n8n's
+    // own list tools all do the same). Picket/Bulwark cover every call's
+    // output automatically; no bespoke scanning needed here.
+    fn output_is_untrusted(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         let skills: Vec<Value> = self
             .loader
@@ -438,6 +451,24 @@ mod skill_defaults_tests {
     fn read_output_is_marked_untrusted() {
         let tool = SkillDefaultsReadTool::new(Arc::new(SkillLoader::new()));
         assert!(tool.output_is_untrusted());
+    }
+
+    #[test]
+    fn list_output_is_marked_untrusted() {
+        let tool = SkillDefaultsListTool::new(Arc::new(SkillLoader::new()));
+        assert!(tool.output_is_untrusted());
+    }
+
+    #[test]
+    fn list_is_auto_grantable_in_backcompat_floor() {
+        let tool = SkillDefaultsListTool::new(Arc::new(SkillLoader::new()));
+        assert!(tool.auto_grantable_in_backcompat_floor());
+    }
+
+    #[test]
+    fn read_is_auto_grantable_in_backcompat_floor() {
+        let tool = SkillDefaultsReadTool::new(Arc::new(SkillLoader::new()));
+        assert!(tool.auto_grantable_in_backcompat_floor());
     }
 
     #[test]
