@@ -85,6 +85,7 @@ pub fn assemble_session_prompt(
         role_name,
         role_system_prompt,
         None,
+        None,
     )
 }
 
@@ -103,6 +104,7 @@ pub fn assemble_session_prompt_with_relevance(
     role_name: &str,
     role_system_prompt: &str,
     relevance_section: Option<&str>,
+    default_skills_section: Option<&str>,
 ) -> String {
     let profile_active = profile.is_operator_declared();
     // Phase 110 — skills get their own `## Learned skills`
@@ -118,8 +120,13 @@ pub fn assemble_session_prompt_with_relevance(
     let relevance_active = relevance_section
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
+    let default_skills_active = default_skills_section
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
 
-    if !profile_active && !persona_active && !skills_active && !relevance_active {
+    if !profile_active && !persona_active && !skills_active && !relevance_active
+        && !default_skills_active
+    {
         return role_system_prompt.to_string();
     }
 
@@ -136,6 +143,12 @@ pub fn assemble_session_prompt_with_relevance(
     if skills_active {
         // Same Some-guarantee — `skills_active` requires Some.
         out.push_str(&render_skills_section(persona.unwrap()));
+        out.push_str("\n\n");
+    }
+    if default_skills_active {
+        // Safe to unwrap — `default_skills_active` requires Some
+        // AND non-empty.
+        out.push_str(default_skills_section.unwrap().trim_end());
         out.push_str("\n\n");
     }
     if relevance_active {
@@ -1078,6 +1091,7 @@ mod tests {
             "default",
             "role-instructions",
             None,
+            None,
         );
         assert_eq!(without, with_none);
     }
@@ -1094,6 +1108,7 @@ mod tests {
             "researcher",
             "Be thorough.",
             Some(section),
+            None,
         );
         let relevance_pos = out
             .find("## Tools recently used for similar tasks")
@@ -1119,6 +1134,7 @@ mod tests {
             "default",
             "role",
             Some(""),
+            None,
         );
         assert!(!out.contains("Tools recently used"));
 
@@ -1128,6 +1144,7 @@ mod tests {
             "default",
             "role",
             Some("   \n  "),
+            None,
         );
         assert!(!out_ws.contains("Tools recently used"));
     }
@@ -1145,9 +1162,70 @@ mod tests {
             "default",
             "role",
             Some(section),
+            None,
         );
         assert!(out.contains("Tools recently used"));
         assert!(out.contains("## Active role: default"));
+    }
+
+    #[test]
+    fn assemble_with_default_skills_section_slots_before_active_role() {
+        let profile = Profile::default();
+        let section = "## Default skills\n\n- systematic-debugging: ...\n";
+        let out = assemble_session_prompt_with_relevance(
+            &profile,
+            None,
+            "researcher",
+            "Be thorough.",
+            None,
+            Some(section),
+        );
+        let skills_pos = out
+            .find("## Default skills")
+            .expect("default skills section present");
+        let role_pos = out
+            .find("## Active role: researcher")
+            .expect("active role marker present");
+        assert!(
+            skills_pos < role_pos,
+            "default skills section must come before active role: {out}"
+        );
+        assert!(out.contains("systematic-debugging"));
+    }
+
+    #[test]
+    fn assemble_with_default_skills_and_relevance_both_present_orders_default_skills_first() {
+        let profile = Profile::default();
+        let relevance = "## Tools recently used for similar tasks\n\nTools:\n- memory.read\n";
+        let skills = "## Default skills\n\n- systematic-debugging: ...\n";
+        let out = assemble_session_prompt_with_relevance(
+            &profile,
+            None,
+            "default",
+            "role",
+            Some(relevance),
+            Some(skills),
+        );
+        let relevance_pos = out.find("## Tools recently used").unwrap();
+        let skills_pos = out.find("## Default skills").unwrap();
+        assert!(
+            skills_pos < relevance_pos,
+            "default skills section must come before relevance: {out}"
+        );
+    }
+
+    #[test]
+    fn assemble_with_empty_default_skills_string_falls_back_to_no_section() {
+        let profile = Profile::default();
+        let out = assemble_session_prompt_with_relevance(
+            &profile, None, "default", "role", None, Some(""),
+        );
+        assert!(!out.contains("Default skills"));
+
+        let out_ws = assemble_session_prompt_with_relevance(
+            &profile, None, "default", "role", None, Some("   \n  "),
+        );
+        assert!(!out_ws.contains("Default skills"));
     }
 
     // ----- Phase 122 Task 3 — append_tool_catalog -----
