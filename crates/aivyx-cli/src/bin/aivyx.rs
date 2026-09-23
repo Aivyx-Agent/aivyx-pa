@@ -7304,6 +7304,12 @@ async fn run_async(
                 if let Some(stat) = &persona_selection_stat {
                     r = r.with_stat(stat.clone());
                 }
+                // Aivyx-Skills Part 3 — without this, the `##
+                // Default skills` section silently disappears
+                // from every turn this refiner engages on (it
+                // rebuilds the prompt from scratch rather than
+                // composing onto an existing base).
+                r = r.with_default_skills_section(default_skills_section.clone());
                 // Phase 86 — same shared conversational-window
                 // handle the recall provider above uses; the
                 // adaptive Persona selection now considers the

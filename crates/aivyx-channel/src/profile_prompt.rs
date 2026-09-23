@@ -286,23 +286,36 @@ pub fn reduce_persona(
 
 /// Assemble the turn's system prompt with only the
 /// contextually-selected Persona facets. Thin wrapper:
-/// [`reduce_persona`] (invariant enforced) → the **unchanged**
-/// [`assemble_session_prompt`]. Used by the Phase 79 refiner;
-/// kept here so the reduction and the invariant are tested in
-/// one place.
+/// [`reduce_persona`] (invariant enforced) →
+/// [`assemble_session_prompt_with_relevance`]. Used by the
+/// Phase 79 refiner; kept here so the reduction and the
+/// invariant are tested in one place.
+///
+/// `default_skills_section` — Aivyx-Skills Part 3's optional
+/// pre-rendered `## Default skills` section. The Phase 79
+/// refiner REBUILDS the prompt from scratch rather than
+/// composing onto an existing base, so this must be threaded
+/// through explicitly here (and by the caller, from its own
+/// pre-rendered section) or the section silently disappears
+/// from every turn the refiner engages on, even though it's
+/// threaded correctly everywhere else. `None`/empty is
+/// byte-identical to the pre-Aivyx-Skills-Part-3 output.
 pub fn assemble_session_prompt_selected(
     profile: &Profile,
     full_persona: &EffectivePersona,
     keep: &dyn Fn(&str) -> bool,
     role_name: &str,
     role_system_prompt: &str,
+    default_skills_section: Option<&str>,
 ) -> String {
     let reduced = reduce_persona(full_persona, keep);
-    assemble_session_prompt(
+    assemble_session_prompt_with_relevance(
         profile,
         Some(&reduced),
         role_name,
         role_system_prompt,
+        None,
+        default_skills_section,
     )
 }
 
@@ -1055,7 +1068,7 @@ mod tests {
         let keep = |s: &str| s == "oncall";
 
         let via_wrapper = assemble_session_prompt_selected(
-            &profile, &full, &keep, "default", "role prompt",
+            &profile, &full, &keep, "default", "role prompt", None,
         );
         let manual = assemble_session_prompt(
             &profile,

@@ -116,6 +116,16 @@ pub struct PersonaContextRefiner {
     /// until the running estimate fits. The Phase 79
     /// selection stat sees the post-budget set.
     recall_token_budget: u32,
+    /// Aivyx-Skills Part 3 — optional pre-rendered `##
+    /// Default skills` section, threaded through to
+    /// `assemble_session_prompt_selected` so it survives a
+    /// turn this refiner engages on. This refiner rebuilds
+    /// the prompt from scratch rather than composing onto an
+    /// existing base, so without this field the section would
+    /// silently vanish whenever adaptive selection fires.
+    /// `None` (the default) is byte-identical to
+    /// pre-Aivyx-Skills-Part-3 output.
+    default_skills_section: Option<String>,
 }
 
 impl PersonaContextRefiner {
@@ -144,7 +154,23 @@ impl PersonaContextRefiner {
             recall_window_turns: 1,
             recall_gate_min_chars: 0,
             recall_token_budget: 0,
+            default_skills_section: None,
         }
+    }
+
+    /// Aivyx-Skills Part 3 — attach the pre-rendered `##
+    /// Default skills` section (built once at daemon startup,
+    /// same as every other caller of
+    /// `assemble_session_prompt_with_relevance`). Builder; the
+    /// binary calls this with its own `default_skills_section`
+    /// local so the section survives turns this refiner
+    /// engages on instead of silently disappearing.
+    pub fn with_default_skills_section(
+        mut self,
+        section: String,
+    ) -> Self {
+        self.default_skills_section = Some(section);
+        self
     }
 
     /// Phase 97 — set the token-cost budget on adaptive
@@ -367,6 +393,7 @@ impl SystemPromptRefiner for PersonaContextRefiner {
             &keep,
             &self.role_name,
             &self.role_prompt,
+            self.default_skills_section.as_deref(),
         ))
     }
 }
@@ -820,5 +847,48 @@ mod tests {
         // soft-facet selection, never the protected core.
         assert!(out.contains("never deploy without approval"));
         assert!(out.contains("Ada"));
+    }
+
+    /// Aivyx-Skills Part 3 — a `## Default skills` section
+    /// attached via `with_default_skills_section` must survive
+    /// a refined (adaptive-selection) prompt, not just the
+    /// unrefined base prompt. Guards against the refiner's
+    /// from-scratch rebuild silently dropping the section.
+    #[tokio::test]
+    async fn refine_keeps_default_skills_section_when_attached() {
+        let r = refiner(big_persona(), false, 12)
+            .with_default_skills_section(
+                "## Default skills\n\n- systematic-debugging: \
+                 use when investigating a bug\n"
+                    .to_string(),
+            );
+        let out = r
+            .refine("how do I deploy", aivyx_core::SessionId::new(), "")
+            .await
+            .expect("large persona + ok embed → Some");
+
+        assert!(
+            out.contains("## Default skills"),
+            "the Default skills section must survive a refined \
+             prompt, not just the unrefined base: {out}"
+        );
+        assert!(out.contains("systematic-debugging"));
+        // Sanity: the rest of the refiner's normal behavior is
+        // unaffected by attaching the section.
+        assert!(out.contains("deploy runbook lives in wiki"));
+    }
+
+    /// Without `with_default_skills_section` (the default,
+    /// `None`), the refined prompt is byte-identical to
+    /// pre-Aivyx-Skills-Part-3 output — no `## Default skills`
+    /// heading appears.
+    #[tokio::test]
+    async fn refine_omits_default_skills_section_when_not_attached() {
+        let out = refiner(big_persona(), false, 12)
+            .refine("how do I deploy", aivyx_core::SessionId::new(), "")
+            .await
+            .expect("large persona + ok embed → Some");
+
+        assert!(!out.contains("## Default skills"));
     }
 }
