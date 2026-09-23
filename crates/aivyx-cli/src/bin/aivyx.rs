@@ -5844,6 +5844,30 @@ async fn run_async(
     // both the kvcache construction and the Ward `SensitivePolicy` wiring
     // further down can reuse it after the destructure consumes `config`.
     let kvcache_store_path = effective_kvcache_store_path(&config);
+    // Aivyx-Skills Part 3 — the default skill library loader is built
+    // once, here, early enough to be in scope for every downstream
+    // `assemble_session_prompt_with_relevance` call in this function
+    // (including the very first one) and for the tool registration
+    // further down. Both `skill_defaults_loader` and
+    // `default_skills_section` are cheap, static, and shared for the
+    // rest of this process's lifetime. Read via `&config` (like
+    // `kvcache_store_path` above) because the destructure below moves
+    // `config` field-by-field into the individual locals the rest of
+    // this function reaches for.
+    let skill_defaults_loader: Arc<aivyx_skills::SkillLoader> = {
+        let mut loader = aivyx_skills::SkillLoader::new();
+        if let Some(sd) = &config.skill_defaults {
+            if let Some(dir) = &sd.project_dir {
+                loader = loader.with_project_dir(dir.value.clone());
+            }
+            if let Some(dir) = &sd.user_dir {
+                loader = loader.with_user_dir(dir.value.clone());
+            }
+        }
+        Arc::new(loader)
+    };
+    let default_skills_section: String =
+        aivyx_core::render_default_skills_section(&skill_defaults_loader);
     let AivyxConfig {
         anthropic_api_key,
         openai_api_key,
@@ -6112,6 +6136,10 @@ async fn run_async(
         // team-mission build site below: a configured/conventional file
         // loads via TeamConfig::load, else the built-in default_nonagon().
         team_config_path: config_team_config_path,
+        // Aivyx-Skills Part 3 — already read via `&config.skill_defaults`
+        // above (before this destructure moved `config`), to build
+        // `skill_defaults_loader`/`default_skills_section`.
+        skill_defaults: _,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -6331,11 +6359,13 @@ async fn run_async(
         let persona_snapshot = shared_persona
             .read()
             .expect("persona lock not poisoned at startup");
-        aivyx_channel::assemble_session_prompt(
+        aivyx_channel::profile_prompt::assemble_session_prompt_with_relevance(
             &profile,
             Some(&*persona_snapshot),
             &active_role_name,
             &role.system_prompt.value,
+            None,
+            Some(default_skills_section.as_str()),
         )
     };
     let tool_allowlist: Option<std::collections::BTreeSet<String>> = match role.tool_allowlist.value
@@ -7567,6 +7597,18 @@ async fn run_async(
     tool_list
         .push(Arc::new(aivyx_core::SkillsInvokeTool::new(skills_reader.clone())) as Arc<dyn Tool>);
 
+    // Aivyx-Skills Part 3 — the default skill library tools.
+    // Registration is unconditional, same posture as skills.list/
+    // skills.invoke above: the Trusted-tier ceiling (Task 1) is the
+    // only real gate. `skill_defaults_loader` was built once, earlier
+    // in this function (Step 1), from `config.skill_defaults`.
+    tool_list.push(Arc::new(aivyx_core::SkillDefaultsListTool::new(
+        Arc::clone(&skill_defaults_loader),
+    )) as Arc<dyn Tool>);
+    tool_list.push(Arc::new(aivyx_core::SkillDefaultsReadTool::new(
+        Arc::clone(&skill_defaults_loader),
+    )) as Arc<dyn Tool>);
+
     // Vitrine §5 fix — structural skill use. Compose the trigger-
     // injection provider with auto-recall into the single planner
     // context slot: every turn now sees its best trigger-matching
@@ -8690,6 +8732,10 @@ async fn run_async(
     // combined (potentially Phase 117 + Phase 79) refiner;
     // sub-agents inherit the same composition.
     let persona_refiner_for_factory = system_prompt_refiner.clone();
+    // Aivyx-Skills Part 3 — same reasoning as the Profile/Persona
+    // clones above: the `move` closure needs its own clone of the
+    // rendered `## Default skills` section.
+    let default_skills_section_for_factory = default_skills_section.clone();
 
     // Chapter N — each prompt-assembly closure owns its own cheap Arc
     // clone of the fs root (a `move` closure can't borrow the outer one).
@@ -8740,11 +8786,13 @@ async fn run_async(
         let persona_snapshot = persona_for_factory
             .read()
             .expect("persona lock not poisoned at child session build");
-        let child_assembled = aivyx_channel::assemble_session_prompt(
+        let child_assembled = aivyx_channel::profile_prompt::assemble_session_prompt_with_relevance(
             &profile_for_factory,
             Some(&*persona_snapshot),
             target,
             &target_role.system_prompt.value,
+            None,
+            Some(default_skills_section_for_factory.as_str()),
         );
         drop(persona_snapshot);
         let child_tool_allowlist: Option<std::collections::BTreeSet<String>> =
@@ -8826,16 +8874,22 @@ async fn run_async(
         // re-assembly.
         let child_refresher_catalog = child_prompt_tool_catalog.clone();
         let prompt_fs_root_cpf = prompt_fs_root_cf.clone();
+        // Aivyx-Skills Part 3 — same reasoning as the other
+        // `child_refresher_*` clones: this `move` closure needs its
+        // own clone of the rendered `## Default skills` section.
+        let child_refresher_default_skills_section = default_skills_section_for_factory.clone();
         let child_planner_factory = move || {
             let mut cfg = planner_config.clone();
             let snap = child_refresher_shared
                 .read()
                 .expect("persona lock not poisoned at child turn build");
-            let assembled = aivyx_channel::assemble_session_prompt(
+            let assembled = aivyx_channel::profile_prompt::assemble_session_prompt_with_relevance(
                 &child_refresher_profile,
                 Some(&*snap),
                 &child_refresher_role_name,
                 &child_refresher_role_prompt,
+                None,
+                Some(child_refresher_default_skills_section.as_str()),
             );
             cfg.system_prompt = Some(aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
                 &assembled,
@@ -9161,17 +9215,23 @@ async fn run_async(
         // block. Empty when strategy is `None` → no-op append.
         let daemon_refresher_catalog = prompt_tool_catalog.clone();
         let prompt_fs_root_pf = prompt_fs_root.clone();
+        // Aivyx-Skills Part 3 — same reasoning as the other
+        // `daemon_refresher_*` clones: this `move` closure needs its
+        // own clone of the rendered `## Default skills` section.
+        let daemon_refresher_default_skills_section = default_skills_section.clone();
         let planner_factory = move || {
             let mut cfg = planner_config.clone();
             // Per-turn rebuild from current Persona state.
             let snap = daemon_refresher_shared
                 .read()
                 .expect("persona lock not poisoned at turn build");
-            let assembled = aivyx_channel::assemble_session_prompt(
+            let assembled = aivyx_channel::profile_prompt::assemble_session_prompt_with_relevance(
                 &daemon_refresher_profile,
                 Some(&*snap),
                 &daemon_refresher_role_name,
                 &daemon_refresher_role_prompt,
+                None,
+                Some(daemon_refresher_default_skills_section.as_str()),
             );
             cfg.system_prompt = Some(aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
                 &assembled,
@@ -10078,16 +10138,23 @@ async fn run_async(
             // block on every per-turn re-assembly.
             let refresher_catalog = prompt_tool_catalog.clone();
             let prompt_fs_root_r1 = prompt_fs_root.clone();
+            // Aivyx-Skills Part 3 — same reasoning as the other
+            // `refresher_*` clones: this `move` closure needs its own
+            // clone of the rendered `## Default skills` section.
+            let refresher_default_skills_section = default_skills_section.clone();
             let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
                 let snap = refresher_shared
                     .read()
                     .expect("persona lock not poisoned at turn build");
-                let assembled = aivyx_channel::assemble_session_prompt(
-                    &refresher_profile,
-                    Some(&*snap),
-                    &refresher_role_name,
-                    &refresher_role_prompt,
-                );
+                let assembled =
+                    aivyx_channel::profile_prompt::assemble_session_prompt_with_relevance(
+                        &refresher_profile,
+                        Some(&*snap),
+                        &refresher_role_name,
+                        &refresher_role_prompt,
+                        None,
+                        Some(refresher_default_skills_section.as_str()),
+                    );
                 aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
                     &assembled,
                     &refresher_catalog,
@@ -10629,16 +10696,23 @@ async fn run_async(
                 let refresher_shared = shared_persona.clone();
                 let refresher_catalog = prompt_tool_catalog.clone();
                 let prompt_fs_root_r2 = prompt_fs_root.clone();
+                // Aivyx-Skills Part 3 — same reasoning as the other
+                // `refresher_*` clones: this `move` closure needs its
+                // own clone of the rendered `## Default skills` section.
+                let refresher_default_skills_section = default_skills_section.clone();
                 let prompt_refresher: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
                     let snap = refresher_shared
                         .read()
                         .expect("persona lock not poisoned at turn build");
-                    let assembled = aivyx_channel::assemble_session_prompt(
-                        &refresher_profile,
-                        Some(&*snap),
-                        &refresher_role_name,
-                        &refresher_role_prompt,
-                    );
+                    let assembled =
+                        aivyx_channel::profile_prompt::assemble_session_prompt_with_relevance(
+                            &refresher_profile,
+                            Some(&*snap),
+                            &refresher_role_name,
+                            &refresher_role_prompt,
+                            None,
+                            Some(refresher_default_skills_section.as_str()),
+                        );
                     aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
                         &assembled,
                         &refresher_catalog,

@@ -229,6 +229,7 @@ dependencies = [
  "aivyx-mcp",
  "aivyx-memory",
  "aivyx-pack",
+ "aivyx-skills",
  "aivyx-slack",
  "aivyx-storage",
  "aivyx-team",

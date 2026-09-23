@@ -77,6 +77,7 @@ aivyx-tui = { path = "../aivyx-tui" }
 # dependency set, now relocated here with the binary.
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+aivyx-skills = { workspace = true }
 # Chapter Sheaf — structured-data reader tools (data.csv, …); reuse the
 # fs.read capability + sandbox, registered beside fs.read below.
 aivyx-dataread = { path = "../aivyx-dataread" }
