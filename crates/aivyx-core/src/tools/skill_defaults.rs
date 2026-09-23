@@ -75,6 +75,16 @@ impl Tool for SkillDefaultsListTool {
             .expect("skill_defaults.list must parse — it is in KNOWN_BASES")
     }
 
+    // Read-only over a server-side-fixed skill set with no model-supplied
+    // path (the same risk profile as skills.list, already floored) --
+    // included in the zero-config default role's capability floor so a
+    // fresh install can actually call the tool the system prompt
+    // advertises. See compute_backcompat_floor's own doc comment in
+    // aivyx.rs for the floor/ceiling distinction this closes a gap in.
+    fn auto_grantable_in_backcompat_floor(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         let skills: Vec<Value> = self
             .loader
@@ -146,6 +156,16 @@ impl Tool for SkillDefaultsReadTool {
     fn required_scope(&self, _input: &Value) -> Scope {
         Scope::parse("skill_defaults.read")
             .expect("skill_defaults.read must parse — it is in KNOWN_BASES")
+    }
+
+    // Read-only over a server-side-fixed skill set with no model-supplied
+    // path (the same risk profile as skills.list, already floored) --
+    // included in the zero-config default role's capability floor so a
+    // fresh install can actually call the tool the system prompt
+    // advertises. See compute_backcompat_floor's own doc comment in
+    // aivyx.rs for the floor/ceiling distinction this closes a gap in.
+    fn auto_grantable_in_backcompat_floor(&self) -> bool {
+        true
     }
 
     // Chapter Bulwark — this tool's output can carry content from an

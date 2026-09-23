@@ -11810,6 +11810,12 @@ mod tests {
             // like the one already passed via fs_read_scope below — proves
             // the exclusion list keeps this from ALSO being granted bare.
             Scope::parse("fs.read:/tmp/proj/**").unwrap(),
+            // Aivyx-Skills Part 3 — the two skill_defaults tools opt into
+            // the floor (read-only over a server-side-fixed set, same
+            // risk profile as skills.list). Proves the generic sweep
+            // picks them up like any other opted-in tool.
+            Scope::parse("skill_defaults.list").unwrap(),
+            Scope::parse("skill_defaults.read").unwrap(),
         ];
         let floor = compute_backcompat_floor(
             Scope::parse("fs.read:/tmp/proj/**").unwrap(),
@@ -11868,6 +11874,8 @@ mod tests {
                 "ollama.list",
                 "ollama.pull",
                 "ollama.show",
+                "skill_defaults.list",
+                "skill_defaults.read",
                 "loop.next",
                 "loop.complete",
                 "loop.note",
