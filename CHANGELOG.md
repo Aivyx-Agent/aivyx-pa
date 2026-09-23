@@ -37,6 +37,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **A shared default skill library (Aivyx-Skills Part 3) — two new
+  read-only tools plus a `## Default skills` system-prompt section.**
+  `skill_defaults.list` / `skill_defaults.read` expose the 5 skills
+  bundled in the new `aivyx-skills` crate (e.g. `systematic-debugging`,
+  `writing-plans`) — the same small, shared `SKILL.md`-format library
+  crate adopted by `aivyx-coder`, distinct from the agent's own
+  persona-chain `LearnedSkill`/`skills.*` system. Both tools are
+  Trusted-tier and included in the zero-config default role's
+  capability floor (read-only over a server-side-fixed set, no
+  model-supplied path). A new, optional `[skill_defaults]` config
+  section lets an operator layer `project_dir`/`user_dir` overlay
+  directories on top of the bundled defaults (project overrides user
+  overrides bundled, per same-named skill) — see `examples/aivyx-pa.toml`
+  for the required `<dir>/<skill-name>/SKILL.md` directory shape.
 - **`aivyx federation yubikey-init` — hardware-backed federation identity
   provisioning (Chapter Passport, Task 8).** Discovers a connected
   YubiKey's OpenPGP card, refuses to proceed on a still-factory-default

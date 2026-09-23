@@ -1518,6 +1518,36 @@ parent_role = "researcher"
 # max_per_cycle = 1        # optional — cap authored skills per cycle
 
 # ----------------------------------------------------------------
+# Default skill library overlays (Aivyx-Skills Part 3) — [skill_defaults]
+# ----------------------------------------------------------------
+#
+# Distinct from Whetstone/Praxis above (which refine/author the agent's
+# own learned, persona-chain skills) and from `skills.*` (that same
+# learned-skill surface). This is the shared, system-level `SKILL.md`
+# library from the `aivyx-skills` crate: 5 bundled defaults (e.g.
+# systematic-debugging, writing-plans) always available read-only via
+# the `skill_defaults.list` / `skill_defaults.read` tools and rendered
+# into a `## Default skills` system-prompt section. No config is needed
+# for the bundled 5; this section only adds your OWN overlay
+# directories on top of them (project overrides user overrides bundled,
+# per same-named skill):
+#
+# [skill_defaults]
+# project_dir = "/path/to/repo/.aivyx/skills"   # optional
+# user_dir = "/home/you/.config/aivyx-pa/skills" # optional
+#
+# Each directory must DIRECTLY contain one <skill-name>/SKILL.md
+# subdirectory per skill (e.g. `project_dir/my-skill/SKILL.md`) — the
+# same shape the bundled library itself uses. Do not point either knob
+# at a project root or any other directory that doesn't directly
+# contain skill subdirectories in that exact shape: a wrong shape
+# silently yields ZERO overlays, not an error, so double-check the
+# directory layout if an overlay skill doesn't show up in
+# `skill_defaults.list`. A directory that doesn't exist is likewise
+# just "no overrides from this source," not an error. Both fields are
+# optional and independent; either or both may be set.
+
+# ----------------------------------------------------------------
 # Persistent helpfulness ledger (Phase 82) — no config; automatic
 # ----------------------------------------------------------------
 #
