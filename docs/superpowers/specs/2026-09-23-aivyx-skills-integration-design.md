@@ -208,21 +208,53 @@ run" reasoning Part 2 already established for `aivyx-coder`'s own
 isn't picked up until the daemon restarts — the same disclosed,
 accepted residual-risk shape Part 2 landed on for the analogous gap in
 `load_skill.rs`'s own tool description.
+`assemble_session_prompt` itself — the simpler 4-argument wrapper every
+current production call site actually uses — keeps its existing
+signature unchanged (avoiding churn across its own ~15+ existing test
+call sites and every production caller not otherwise touched by this
+work). Every production call site that needs the new section instead
+switches from calling `assemble_session_prompt(...)` to calling
+`assemble_session_prompt_with_relevance(..., None, default_skills_section)`
+directly — passing `None` for `relevance_section` (matching that
+argument's real, already-existing production value today; no production
+code currently constructs a relevance section) and the new pre-rendered
+string for the new parameter.
 
 **5. The `## Default skills` render scans each overlay-sourced
 (`SkillSource::User`/`SkillSource::Project`) entry's composed
-`name: description` text for injection markers before including it**,
-via `aivyx_injection_guard::scan_for_injection_markers` directly (already
-a dependency of `aivyx-core`, already used by Picket) with a fixed
-diagnostic label — not one field alone, and not a label that interpolates
-the (overlay-controlled) skill name — learning directly from Part 2's own
-final-review correction instead of repeating it. Bundled entries
-(`SkillSource::Bundled`) are never scanned. This is the *only* place in
-this design that calls `scan_for_injection_markers` directly outside
-Picket's own call site — `skill_defaults.read`'s tool output needs no
-scan of its own (Decision 1's `output_is_untrusted()` already covers it
-generically), exactly mirroring why Part 2's `load_skill` tool needed
-none either.
+`name: description` text for injection markers before including it, via
+`aivyx_injection_guard::scan_for_injection_markers` directly — but with
+no `InjectionTaint`-equivalent to flag.** Picket (`check_for_injection`)
+is turn-scoped: it runs inside the live turn loop and escalates through
+that turn's own outcome recording. The `## Default skills` listing is
+composed once at daemon startup, before any turn exists, so there is no
+turn-scoped mechanism available to flag into at that point (unlike Part
+2's `aivyx-coder`, where `InjectionTaint` is a persistent, agent-attached
+handle a startup-time computation can reach). So a match's effect is
+narrower and fail-closed instead: that one entry is **excluded from the
+rendered listing** (never advertised in the system prompt) and logged via
+`tracing::warn!` at startup — it is not, on its own, escalated as a live
+security event, since there is no turn to escalate within yet. This is
+not a coverage gap for the entry's *body*, though: if the model still
+calls `skill_defaults.read` for that same (now-unlisted) name — by
+guessing it, or being told it out of band — Decision 1's
+`output_is_untrusted() == true` means Picket/Bulwark cover that real,
+turn-scoped call exactly as they cover any other tool result, with full
+escalation. Bundled entries (`SkillSource::Bundled`) are never scanned.
+This is the *only* place in this design that calls
+`scan_for_injection_markers` directly outside Picket's own call site —
+`skill_defaults.read`'s tool output needs no scan of its own beyond what
+Decision 1 already gives it generically, exactly mirroring why Part 2's
+`load_skill` tool needed none either. The render function lives in
+`crates/aivyx-core/src/tools/skill_defaults.rs` (same file as the two
+tools, Decision 1) rather than in `aivyx-channel`'s `profile_prompt.rs` —
+`aivyx-core` already depends on both `aivyx-skills` and
+`aivyx-injection-guard`, while `aivyx-channel` currently depends on
+neither; keeping the scan there avoids adding a new dependency edge.
+`aivyx.rs` calls this function once at startup and hands the resulting
+`String` into `assemble_session_prompt_with_relevance` (Decision 4) as a
+plain, already-composed `Option<&str>` — `profile_prompt.rs` itself does
+no scanning and gains no new dependency.
 
 **6. No new `AuditTag` variant.** `skill_defaults.read` emits only the
 turn loop's normal per-tool-call audit entry (D1's contract — every tool
