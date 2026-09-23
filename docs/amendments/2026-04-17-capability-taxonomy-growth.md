@@ -807,6 +807,59 @@ compound.)
 base). The `known_bases_count_matches_phase_143_a3_addendum` test pins
 the new total at **95**, so this addendum and the runtime stay in sync.
 
+## Aivyx-Vision Milestone 1 addendum — `vision.generate` (2026-09-18)
+
+> *Added for Milestone 1 of the Aivyx-Vision initiative (local-first
+> generation toolset for image, 3D model, vector/graphic-design output).
+> One base, `vision.generate`, gates the `vision.generate_svg` tool
+> process's single tool (`vision.generate_svg`; later milestones will add
+> `vision.generate_image` / `vision.generate_3d` sharing this same base).
+> Reachable at SemiTrusted: narrower and safer than `llm.call` (constrained
+> prompt, sanitized output, no user-provided context leakage), which is
+> itself already SemiTrusted-reachable. So it grows `KNOWN_BASES` **without
+> a P10 substrate-count amendment** (same precedent as every tool-process
+> base). See
+> `aivyx-ecosystem/docs/superpowers/specs/2026-09-18-aivyx-vision-v1-design.md`.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Aivyx-Vision M1 | `vision.generate` | Gates `vision.generate_svg` and future `vision.generate_image` / `vision.generate_3d` tools; tool-process tier (no P10 amendment), SemiTrusted-reachable (narrower/safer than `llm.call`) |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **95 → 96** (the one new `vision.generate`
+base). The `known_bases_count_matches_phase_143_a3_addendum` test pins
+the new total at **96**, so this addendum and the runtime stay in sync.
+
+## Aivyx-Skills Part 3 addendum — `skill_defaults.*` (2026-09-23)
+
+> *Added for Part 3 of the cross-repo Aivyx-Skills initiative (Parts 1/2
+> — the shared `aivyx-skills` crate itself, and `aivyx-coder`'s own
+> integration — already shipped in their respective repos).
+> `skill_defaults.list` / `skill_defaults.read` gate two read-only tools
+> over the compiled-in default skill library (plus optional
+> `[skill_defaults]` project/user overlay directories) from the pinned
+> `aivyx-skills` crate. **Infrastructure, not substrate:** the agent
+> reading its own bundled, self-contained procedure library — the same
+> precedent as `skills.list` / `graph.read` — not a new operator-owned
+> resource primitive. So it grows `KNOWN_BASES` **without a P10
+> substrate-count amendment**. Bare bases (like `skills.list`),
+> `CEILING_TRUSTED` only; SemiTrusted does not get them by default. No
+> `PathGlob` qualifier — the tools take a skill name, never a path, so
+> the reachable set is fixed entirely by server-side `[skill_defaults]`
+> config, not by anything the model can widen.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Aivyx-Skills Part 3 | `skill_defaults.list`, `skill_defaults.read` | Gates the default-skill-library read tools; infrastructure (no P10 amendment), Trusted-tier-only at the ceiling |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **96 → 98** (the two new
+`skill_defaults.*` infrastructure bases). The
+`known_bases_count_matches_phase_143_a3_addendum` test pins the new
+total at **98**, so this addendum and the runtime stay in sync.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

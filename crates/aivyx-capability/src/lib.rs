@@ -355,6 +355,17 @@ const KNOWN_BASES: &[&str] = &[
     // derived from memory, not a new operator-owned resource).
     // Trusted-tier only (reflection-layer read).
     "graph.read",
+    // Aivyx-Skills Part 3 — `skill_defaults.list` / `skill_defaults.read`
+    // substrate tools. Read-only enumeration and on-demand body
+    // rendering of the compiled-in default skill library (plus
+    // optional [skill_defaults] project/user overlay directories) from
+    // the shared `aivyx-skills` crate. Infrastructure, not substrate —
+    // same precedent as `skills.list`/`graph.read`: the agent reading
+    // its own bundled/self-contained procedure library, not a new
+    // operator-owned resource. Trusted-tier only; SemiTrusted does not
+    // get these by default.
+    "skill_defaults.list",
+    "skill_defaults.read",
     // Phase 184 — Conversational skill-teaching. `skills.write`
     // gates the operator-authored edit tools (`skills.teach` /
     // `skills.update` / `skills.forget`) that append LearnedSkill
@@ -1146,6 +1157,12 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // Trusted-tier only, like the other reflection-layer reads;
         // SemiTrusted does not get it by default.
         "graph.read",
+        // Aivyx-Skills Part 3 — see the KNOWN_BASES doc comment above
+        // for the infrastructure-classification rationale. Trusted
+        // tier only, same posture as skills.list/skills.invoke/
+        // graph.read; SemiTrusted does not get these by default.
+        "skill_defaults.list",
+        "skill_defaults.read",
         // Phase 184 — operator-authored skill editing (Trusted
         // only; identity-modifying).
         "skills.write",
@@ -2412,11 +2429,13 @@ mod tests {
         // Aivyx-Vision Milestone 1 adds vision.generate — the
         // vision.generate_svg tool process's one base (SemiTrusted-reachable,
         // see the KNOWN_BASES doc comment for why).
+        // Aivyx-Skills Part 3 adds skill_defaults.list + skill_defaults.read — the default skill library
+        // read gates (infrastructure, no P10 amendment).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            96,
+            98,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
@@ -2473,6 +2492,33 @@ mod tests {
         assert!(
             !CEILING_SEMITRUSTED.grants(&g),
             "SemiTrusted ceiling must deny graph.read by default"
+        );
+    }
+
+    #[test]
+    fn skill_defaults_bases_parse_and_are_trusted_only() {
+        // Aivyx-Skills Part 3 — both new bases parse (bare, like
+        // skills.list/graph.read) and sit at Trusted+ only.
+        let list = Scope::parse("skill_defaults.list").expect("skill_defaults.list");
+        assert_eq!(list.base(), "skill_defaults.list");
+        assert!(
+            CEILING_TRUSTED.grants(&list),
+            "Trusted ceiling must grant skill_defaults.list"
+        );
+        assert!(
+            !CEILING_SEMITRUSTED.grants(&list),
+            "SemiTrusted ceiling must deny skill_defaults.list by default"
+        );
+
+        let read = Scope::parse("skill_defaults.read").expect("skill_defaults.read");
+        assert_eq!(read.base(), "skill_defaults.read");
+        assert!(
+            CEILING_TRUSTED.grants(&read),
+            "Trusted ceiling must grant skill_defaults.read"
+        );
+        assert!(
+            !CEILING_SEMITRUSTED.grants(&read),
+            "SemiTrusted ceiling must deny skill_defaults.read by default"
         );
     }
 

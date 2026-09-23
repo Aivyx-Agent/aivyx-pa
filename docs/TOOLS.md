@@ -147,6 +147,7 @@ base, Trusted-tier only. See the Lattice addendum in
 |---|---|---|---|
 | `skills.list` / `skills.invoke` | `skills.list`, `skills.invoke` | Trusted | enumerate / run learned skills |
 | `skills.teach` / `skills.update` / `skills.forget` / `skills.propose` | `skills.write`, `skills.propose` | Trusted | manage learned skills |
+| `skill_defaults.list` / `skill_defaults.read` | `skill_defaults.list`, `skill_defaults.read` | Trusted | enumerate / render compiled-in default skill library (Aivyx-Skills Part 3) |
 | `reflection.propose` / `reflection.apply` | `reflection.propose`, `reflection.apply` | Trusted | self-improvement proposals |
 | `persona.propose` | `persona.propose` | Trusted | persona-evolution proposals |
 | `role.switch` | `role.switch` | Trusted | sub-agent role switching |
