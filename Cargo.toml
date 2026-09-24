@@ -277,7 +277,7 @@ crossterm = "0.29"
 # outright (E0425). The only one of the four shipped targets
 # aivyx-confine had never actually been cross-compiled for before --
 # it wasn't adopted until 2026-08-17, after aivyx's last real release.
-aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "8ee18f20e247121df55ee0cf22947d22754271b2", default-features = false }
+aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "fd9f1b4b825641e3ed9d3f4f7532e44dee8a5d6b", default-features = false }
 
 # Shared git-ref checkpoint/rollback for fs_root's mutating tools
 # (fs.write, fs.delete, shell.exec), adopted from the sibling aivyx-coder
@@ -288,7 +288,7 @@ aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "8
 # MUST stay a public repo — see the aivyx-confine entry above for why;
 # this was the specific dependency whose private-repo auth failure was
 # traced and fixed in Phase 192 (Chapter N).
-aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "1292d6cbda34aa514856b81e11635f7385a4d168" }
+aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "f3faa026bdedc3e6810e69035efc350675d1da90" }
 
 # KV-cache persistence against a llama-server backend (LlmPlanner/
 # SpecialistFactory `with_kv_cache`), adopted from the sibling aivyx-coder
@@ -298,7 +298,7 @@ aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", re
 # 2026-08-27 — previously duplicated verbatim across aivyx-core, aivyx-team,
 # aivyx-cli, and aivyx-channel's own Cargo.toml files.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "e1b06c9960ee98841d9b91978a11dd99ed388490" }
+aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "02d96f05aa3a5655a7e59b92d17c1ca19b27c4cb" }
 
 # Hardware-backed Ed25519 signing via a YubiKey's OpenPGP card applet
 # (Chapter Passport's optional hardware-identity backend, aivyx-federation's
@@ -310,7 +310,7 @@ aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "e
 # consuming crate (not here) because it transitively needs `libpcsclite` at
 # build time via `pcsc-sys` — gated behind the `yubikey` Cargo feature,
 # off by default, so the default workspace build never touches it.
-aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "d62cb9d91f9100cc349eac0125efcc89e464e52d" }
+aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "b99159d7a9e7b36950e9ddfe50ae13001069af35" }
 
 # Prompt-injection phrase-list tripwire (Chapter Picket) for untrusted
 # tool output (fs.read, web.fetch, every tool-process/MCP tool),
@@ -320,8 +320,8 @@ aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "d62cb9d
 # aivyx-confine/aivyx-kvcache above. No platform-specific backend, so no
 # default-features/target-gating split is needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "ad9141c6ca242532db7b8e34eff423084e1eba4d" }
-aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "99a0298828d80bb18175671ef66b61d5e0133bf7" }
+aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "bcd98e98f3b6aaa4c09dee50c56b2d00230d0e4a" }
+aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "78779dbfced43fcfbeee869a0a0f385f89a51e72" }
 
 # Standalone generation backends for the aivyx-vision tool process's
 # vision.generate_svg / vision.generate_image / vision.generate_3d
@@ -334,9 +334,9 @@ aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "99a
 # out of lockstep with each other. No platform-specific backend, so no
 # target-gating needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "caed4c0875a19ef5c7f4059ddda8cd6364f9fda4" }
-aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "caed4c0875a19ef5c7f4059ddda8cd6364f9fda4" }
-aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "caed4c0875a19ef5c7f4059ddda8cd6364f9fda4" }
+aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "1a09b6a1d978ae789edb5a25523fa7580fa80714" }
+aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "1a09b6a1d978ae789edb5a25523fa7580fa80714" }
+aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "1a09b6a1d978ae789edb5a25523fa7580fa80714" }
 
 # The profile that 'dist' will build with
 [profile.dist]
