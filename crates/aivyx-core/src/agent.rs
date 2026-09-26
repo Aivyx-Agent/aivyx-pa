@@ -442,9 +442,9 @@ impl ConcreteAgent {
 
     /// Model routing Part 3b — mark the turn's session routing-tainted via
     /// `sink` whenever a tool whose name starts with one of `prefixes`
-    /// **completes** (`ToolOutcome::Completed` is the only outcome that
-    /// puts the tool's own output in front of the model; every other
-    /// outcome reaches it as a dispatch-layer error envelope). Reason:
+    /// actually runs — `Completed` or `Failed` (a sensitive tool's own
+    /// error text can carry private detail); outcomes where it never ran
+    /// (denied, not in role, rate-limited, escalated) don't taint. Reason:
     /// `"<tool name> output"`. Not attaching one (the default) runs no
     /// taint machinery.
     pub fn with_taint(mut self, sink: Arc<dyn crate::TaintSink>, prefixes: Vec<String>) -> Self {
@@ -1662,13 +1662,14 @@ impl ConcreteAgent {
             extracted_from_text,
         });
 
-        // Model routing Part 3b — a completed sensitive tool's output is
-        // about to enter the model's context, so taint the conversation
-        // before the planner's next model call. Only `Completed` carries
-        // the tool's own output; every other outcome reaches the model as
-        // a dispatch-layer error envelope (see `render_tool_result`).
+        // Model routing Part 3b — a sensitive tool that actually ran is
+        // about to put its output (or its own error text, which can carry
+        // private detail such as a subject or file name) into the model's
+        // context, so taint the conversation before the planner's next
+        // model call. Fail safe: only outcomes where the tool never ran
+        // (denied, not in role, rate-limited, escalated) don't taint.
         if let Some(sink) = &self.taint
-            && matches!(outcome, ToolOutcome::Completed { .. })
+            && matches!(outcome, ToolOutcome::Completed { .. } | ToolOutcome::Failed(_))
             && crate::is_sensitive_tool(tool_name, &self.taint_tool_prefixes)
         {
             sink.mark(
@@ -6707,13 +6708,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_sensitive_call_does_not_mark() {
+    async fn a_failed_sensitive_call_still_marks() {
+        // The tool ran and its error text reaches the model; a sensitive
+        // tool's error can carry private detail (a subject, a file name),
+        // so the conversation is tainted — fail safe.
         let tool = Arc::new(FailingTool {
             id: ToolId::new(),
             schema: json!({}),
         });
-        let (marks, _) = run_tainted(tool, memory_read_caps()).await;
-        assert!(marks.is_empty(), "got {marks:?}");
+        let (marks, session) = run_tainted(tool, memory_read_caps()).await;
+        assert_eq!(marks.len(), 1, "got {marks:?}");
+        assert_eq!(marks[0].0, session.to_string());
     }
 
     #[tokio::test]
