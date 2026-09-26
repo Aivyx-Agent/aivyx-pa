@@ -3,9 +3,11 @@
 //! `wrap_with_routing` hands back the configured provider untouched.
 //!
 //! The default endpoint (`default`) is `[agent] provider` + `model`. Extra
-//! `[routing.endpoints.*]` must be local in 3a: cloud candidates are only
-//! allowed on the default endpoint, and only when the configured provider
-//! itself is cloud.
+//! `[routing.endpoints.*]` may be cloud (`anthropic`/`openai`) only when
+//! `[routing.escalation] mode` isn't `never` (Part 3b), and then only with
+//! the operator's own API key for that kind. Their models are kept out of
+//! the local router: cloud candidates there stay limited to the default
+//! endpoint, and only when the configured provider itself is cloud.
 //!
 //! Also the offline `aivyx-pa routing status|explain` subcommand: `status`
 //! runs the same discovery + merge without a daemon; `explain` scans the
@@ -15,7 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use aivyx_audit::{AuditEvent, PersistentAuditLog, SignedEntry};
-use aivyx_config::ProviderKind;
+use aivyx_config::{EscalationConfig, EscalationMode, ProviderKind};
+use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::ollama::{AUTO_NUM_CTX_CAP, OllamaConfig, OllamaProvider};
 use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::{LlmProvider, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider};
@@ -24,6 +27,7 @@ use aivyx_route::{
     ModelProfile, RosterEntry, Router, RoutingConfig, find, merge,
 };
 use aivyx_storage::Storage;
+use secrecy::SecretString;
 
 /// The `[agent] provider` + `model`, as a routing endpoint name.
 pub(crate) const DEFAULT_ENDPOINT: &str = "default";
@@ -56,8 +60,33 @@ fn is_loopback_url(url: &str) -> bool {
         .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "::1"))
 }
 
-/// 3a allows no new cloud destinations, and `default` names `[agent]`.
-pub(crate) fn check_routing_config(cfg: &RoutingConfig) -> Result<(), String> {
+/// `[routing.escalation]` plus the operator's own cloud API keys: what a
+/// `[routing.endpoints.*]` cloud endpoint needs. The keys are the same
+/// `anthropic_api_key`/`openai_api_key` the `[agent]` provider uses.
+#[derive(Clone, Default)]
+pub(crate) struct CloudAccess {
+    pub escalation: EscalationConfig,
+    pub anthropic_key: Option<SecretString>,
+    pub openai_key: Option<SecretString>,
+}
+
+impl CloudAccess {
+    /// The key a cloud endpoint kind needs, and its config name.
+    fn key_for(&self, kind: EndpointKind) -> Option<(Option<&SecretString>, &'static str)> {
+        match kind {
+            EndpointKind::Anthropic => Some((self.anthropic_key.as_ref(), "anthropic_api_key")),
+            EndpointKind::Openai => Some((self.openai_key.as_ref(), "openai_api_key")),
+            EndpointKind::Ollama | EndpointKind::LlamaRouter | EndpointKind::OpenaiCompat => None,
+        }
+    }
+}
+
+/// Cloud endpoints only under escalation (`mode` not `never`), and
+/// `default` names `[agent]`.
+pub(crate) fn check_routing_config(
+    cfg: &RoutingConfig,
+    escalation: &EscalationConfig,
+) -> Result<(), String> {
     for (name, endpoint) in &cfg.endpoints {
         if name == DEFAULT_ENDPOINT {
             return Err(format!(
@@ -65,11 +94,26 @@ pub(crate) fn check_routing_config(cfg: &RoutingConfig) -> Result<(), String> {
                  provider and model; give this endpoint another name"
             ));
         }
-        if endpoint.kind.locality() == Locality::Cloud {
+        if endpoint.kind.locality() == Locality::Cloud && escalation.mode == EscalationMode::Never {
             return Err(format!(
-                "[routing.endpoints.{name}] is a cloud endpoint; cloud endpoints arrive with \
-                 consent-gated escalation in a later release — remove it (routing may already \
-                 pick other models on a cloud [agent] provider via [[routing.models]])"
+                "[routing.endpoints.{name}] is a cloud endpoint, but [routing.escalation] mode \
+                 is \"never\" — set it to \"ask\" or \"auto\" to allow escalating to it, or \
+                 remove the endpoint (routing may already pick other models on a cloud [agent] \
+                 provider via [[routing.models]])"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Every cloud endpoint has the operator's key for its kind.
+pub(crate) fn check_cloud_keys(cfg: &RoutingConfig, access: &CloudAccess) -> Result<(), String> {
+    for (name, endpoint) in &cfg.endpoints {
+        if let Some((None, key_name)) = access.key_for(endpoint.kind) {
+            return Err(format!(
+                "[routing.endpoints.{name}] is a cloud endpoint but no {key_name} is \
+                 configured — set it (the same key the [agent] provider would use) or remove \
+                 the endpoint"
             ));
         }
     }
@@ -109,13 +153,35 @@ pub(crate) fn provider_base_url(base: &str) -> String {
 
 /// Builds the provider for one `[routing.endpoints.*]` entry. The default
 /// endpoint never reaches here (`RoutedProvider` serves it with the
-/// configured provider), and no API key is ever sent to a routing endpoint.
-pub(crate) fn provider_factory(cfg: &RoutingConfig) -> ProviderFactory {
+/// configured provider). Local endpoints never get an API key; a cloud
+/// endpoint gets the operator's own key for its kind (and, for `openai`,
+/// its `base_url` if set).
+pub(crate) fn provider_factory(cfg: &RoutingConfig, access: &CloudAccess) -> ProviderFactory {
     let endpoints = cfg.endpoints.clone();
+    let access = access.clone();
     Box::new(move |endpoint: &EndpointRef| {
         let config = endpoints
             .get(endpoint.as_str())
             .ok_or_else(|| format!("no [routing.endpoints.{endpoint}] is configured"))?;
+        let err = |e| format!("[routing.endpoints.{endpoint}]: {e}");
+        if let Some((key, key_name)) = access.key_for(config.kind) {
+            let key = key.cloned().ok_or_else(|| {
+                format!(
+                    "[routing.endpoints.{endpoint}] is a cloud endpoint but no {key_name} is \
+                     configured"
+                )
+            })?;
+            let provider: Arc<dyn LlmProvider> = if config.kind == EndpointKind::Anthropic {
+                Arc::new(AnthropicProvider::new(AnthropicConfig::new(key)).map_err(err)?)
+            } else {
+                let mut openai = OpenAiConfig::new(key);
+                if let Some(base) = config.base_url() {
+                    openai = openai.with_base_url(provider_base_url(base));
+                }
+                Arc::new(OpenAiProvider::new(openai).map_err(err)?)
+            };
+            return Ok(provider);
+        }
         let base = provider_base_url(
             config
                 .base_url()
@@ -124,18 +190,12 @@ pub(crate) fn provider_factory(cfg: &RoutingConfig) -> ProviderFactory {
         let provider: Arc<dyn LlmProvider> = match config.kind {
             EndpointKind::Ollama => Arc::new(
                 OllamaProvider::new(OllamaConfig::default_local().with_base_url(base))
-                    .map_err(|e| format!("[routing.endpoints.{endpoint}]: {e}"))?,
+                    .map_err(err)?,
             ),
-            EndpointKind::LlamaRouter | EndpointKind::OpenaiCompat => Arc::new(
+            _ => Arc::new(
                 OpenAiProvider::new(OpenAiConfig::without_api_key().with_base_url(base))
-                    .map_err(|e| format!("[routing.endpoints.{endpoint}]: {e}"))?,
+                    .map_err(err)?,
             ),
-            EndpointKind::Anthropic | EndpointKind::Openai => {
-                return Err(format!(
-                    "[routing.endpoints.{endpoint}] is a cloud endpoint, which routing does \
-                     not dispatch to yet"
-                ));
-            }
         };
         Ok(provider)
     })
@@ -182,8 +242,22 @@ impl ProfileRefresher for DiscoveryRefresher {
         };
         let mut profiles = merge(&self.config, &self.default_endpoint, &reports);
         clamp_ollama_windows(&mut profiles, &self.config);
+        without_cloud_endpoints(&mut profiles, &self.config);
         profiles
     }
+}
+
+/// Drops the models on `[routing.endpoints.*]` cloud endpoints: they're
+/// escalation targets, never local-router candidates, so the local router
+/// behaves exactly as 3a's whether or not a cloud endpoint is configured.
+/// (Cloud models on the default endpoint are unaffected.)
+fn without_cloud_endpoints(profiles: &mut Vec<ModelProfile>, config: &RoutingConfig) {
+    profiles.retain(|p| {
+        config
+            .endpoints
+            .get(p.endpoint.as_str())
+            .is_none_or(|e| e.kind.locality() != Locality::Cloud)
+    });
 }
 
 /// Routed Ollama endpoints run with `OllamaConfig::default_local()`, whose
@@ -218,11 +292,13 @@ struct Prepared {
 /// merge once.
 async fn prepare(
     routing: &RoutingConfig,
+    access: &CloudAccess,
     kind: ProviderKind,
     base_url: Option<&str>,
     model: &str,
 ) -> Result<Prepared, String> {
-    check_routing_config(routing)?;
+    check_routing_config(routing, &access.escalation)?;
+    check_cloud_keys(routing, access)?;
     let config = effective_routing_config(routing, model);
     let default = default_endpoint(kind, base_url);
     for issue in config.validate(&default) {
@@ -252,6 +328,7 @@ async fn prepare(
 /// endpoint is `provider` serving `model`.
 pub(crate) async fn wrap_with_routing(
     routing: Option<&RoutingConfig>,
+    access: &CloudAccess,
     kind: ProviderKind,
     base_url: Option<&str>,
     model: &str,
@@ -267,14 +344,19 @@ pub(crate) async fn wrap_with_routing(
         default_key,
         refresher,
         profiles,
-    } = prepare(routing, kind, base_url, model).await?;
+    } = prepare(routing, access, kind, base_url, model).await?;
     if let Some(warning) = backend_caps_undeclared_warning(&profiles, &default_key) {
         eprintln!("aivyx-pa: routing: {warning}");
     }
     let router = Router::new(profiles, config.tasks.clone())
         .with_allow_cloud(default.kind.locality() == Locality::Cloud);
-    let mut routed = RoutedProvider::new(default_key, provider, router, provider_factory(&config))
-        .with_refresher(refresher);
+    let mut routed = RoutedProvider::new(
+        default_key,
+        provider,
+        router,
+        provider_factory(&config, access),
+    )
+    .with_refresher(refresher);
     if let Some(observer) = observer {
         routed = routed.with_observer(observer);
     }
@@ -377,6 +459,7 @@ fn fmt_age(d: Duration) -> String {
 /// and print the candidates.
 pub(crate) async fn run_routing_status(
     routing: Option<&RoutingConfig>,
+    access: &CloudAccess,
     kind: ProviderKind,
     base_url: Option<&str>,
     model: &str,
@@ -388,7 +471,7 @@ pub(crate) async fn run_routing_status(
         );
         return Ok(());
     };
-    let prepared = prepare(routing, kind, base_url, model).await?;
+    let prepared = prepare(routing, access, kind, base_url, model).await?;
     let warning = backend_caps_undeclared_warning(&prepared.profiles, &prepared.default_key);
     print!(
         "{}",
@@ -534,21 +617,71 @@ mod tests {
         );
     }
 
+    fn escalation(mode: EscalationMode) -> EscalationConfig {
+        EscalationConfig {
+            mode,
+            ..EscalationConfig::default()
+        }
+    }
+
+    /// Escalation at its default (`ask`) with both cloud keys present.
+    fn cloud_access() -> CloudAccess {
+        CloudAccess {
+            escalation: EscalationConfig::default(),
+            anthropic_key: Some(SecretString::from("sk-ant-test")),
+            openai_key: Some(SecretString::from("sk-test")),
+        }
+    }
+
     #[test]
-    fn cloud_endpoints_and_the_reserved_name_are_rejected() {
+    fn cloud_endpoints_need_escalation_and_the_reserved_name_is_rejected() {
+        let never = escalation(EscalationMode::Never);
         for kind in ["anthropic", "openai"] {
             let cfg = parse(&format!("[routing.endpoints.claude]\nkind = \"{kind}\"\n"));
-            let err = check_routing_config(&cfg).unwrap_err();
+            let err = check_routing_config(&cfg, &never).unwrap_err();
             assert!(err.contains("claude"), "{err}");
-            assert!(err.contains("consent-gated escalation"), "{err}");
+            assert!(err.contains("[routing.escalation] mode"), "{err}");
+            for mode in [EscalationMode::Ask, EscalationMode::Auto] {
+                assert!(
+                    check_routing_config(&cfg, &escalation(mode)).is_ok(),
+                    "{kind} under {mode:?}"
+                );
+            }
         }
 
-        let cfg = parse("[routing.endpoints.default]\nkind = \"ollama\"\n");
-        let err = check_routing_config(&cfg).unwrap_err();
-        assert!(err.contains("reserved"), "{err}");
+        for mode in [EscalationMode::Never, EscalationMode::Ask] {
+            let cfg = parse("[routing.endpoints.default]\nkind = \"ollama\"\n");
+            let err = check_routing_config(&cfg, &escalation(mode)).unwrap_err();
+            assert!(err.contains("reserved"), "{err}");
 
+            // Local endpoints never need escalation.
+            let cfg = parse("[routing.endpoints.gpu]\nkind = \"ollama\"\n");
+            assert!(check_routing_config(&cfg, &escalation(mode)).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_cloud_endpoint_without_its_key_is_an_error_naming_the_key() {
+        for (kind, key_name) in [
+            ("anthropic", "anthropic_api_key"),
+            ("openai", "openai_api_key"),
+        ] {
+            let cfg = parse(&format!("[routing.endpoints.cloud]\nkind = \"{kind}\"\n"));
+            let err = check_cloud_keys(&cfg, &CloudAccess::default()).unwrap_err();
+            assert!(err.contains(key_name), "{err}");
+            assert!(err.contains("cloud"), "{err}");
+            assert!(check_cloud_keys(&cfg, &cloud_access()).is_ok(), "{kind}");
+        }
+        // Only the key the endpoint's kind needs.
+        let cfg = parse("[routing.endpoints.cloud]\nkind = \"anthropic\"\n");
+        let only_anthropic = CloudAccess {
+            openai_key: None,
+            ..cloud_access()
+        };
+        assert!(check_cloud_keys(&cfg, &only_anthropic).is_ok());
+        // Local endpoints need no key.
         let cfg = parse("[routing.endpoints.gpu]\nkind = \"ollama\"\n");
-        assert!(check_routing_config(&cfg).is_ok());
+        assert!(check_cloud_keys(&cfg, &CloudAccess::default()).is_ok());
     }
 
     #[test]
@@ -640,10 +773,42 @@ mod tests {
             let mut cfg = RoutingConfig::default();
             cfg.endpoints
                 .insert("gpu".into(), endpoint(kind, Some(&base)));
-            let provider = provider_factory(&cfg)(&EndpointRef::new("gpu")).unwrap();
+            let provider =
+                provider_factory(&cfg, &CloudAccess::default())(&EndpointRef::new("gpu")).unwrap();
             let line = request_line(listener, provider).await;
             assert!(line.starts_with(expected), "{kind:?}: {line}");
         }
+    }
+
+    #[test]
+    fn the_factory_builds_an_anthropic_provider_with_the_operators_key() {
+        let mut cfg = RoutingConfig::default();
+        cfg.endpoints
+            .insert("claude".into(), endpoint(EndpointKind::Anthropic, None));
+        let factory = provider_factory(&cfg, &cloud_access());
+        assert!(factory(&EndpointRef::new("claude")).is_ok());
+        // No key, no provider (the startup key check is the first line).
+        let err = provider_factory(&cfg, &CloudAccess::default())(&EndpointRef::new("claude"))
+            .err()
+            .unwrap();
+        assert!(err.contains("anthropic_api_key"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_factory_builds_an_openai_provider_on_the_endpoints_base_url() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let mut cfg = RoutingConfig::default();
+        cfg.endpoints
+            .insert("gpt".into(), endpoint(EndpointKind::Openai, Some(&base)));
+        let provider = provider_factory(&cfg, &cloud_access())(&EndpointRef::new("gpt")).unwrap();
+        let line = request_line(listener, provider).await;
+        assert!(line.starts_with("POST /v1/chat/completions "), "{line}");
+
+        let err = provider_factory(&cfg, &CloudAccess::default())(&EndpointRef::new("gpt"))
+            .err()
+            .unwrap();
+        assert!(err.contains("openai_api_key"), "{err}");
     }
 
     #[test]
@@ -651,7 +816,7 @@ mod tests {
         let mut cfg = RoutingConfig::default();
         cfg.endpoints
             .insert("bare".into(), endpoint(EndpointKind::OpenaiCompat, None));
-        let factory = provider_factory(&cfg);
+        let factory = provider_factory(&cfg, &CloudAccess::default());
         let err = factory(&EndpointRef::new("nowhere")).err().unwrap();
         assert!(err.contains("nowhere"), "{err}");
         let err = factory(&EndpointRef::new("bare")).err().unwrap();
@@ -701,6 +866,7 @@ mod tests {
         let provider = unused_provider();
         let (wrapped, routed) = wrap_with_routing(
             None,
+            &CloudAccess::default(),
             ProviderKind::Ollama,
             None,
             "qwen3:8b",
@@ -717,6 +883,7 @@ mod tests {
         assert!(!cfg.enabled);
         let (wrapped, routed) = wrap_with_routing(
             Some(&cfg),
+            &CloudAccess::default(),
             ProviderKind::Ollama,
             None,
             "qwen3:8b",
@@ -738,6 +905,7 @@ mod tests {
         let provider = unused_provider();
         let (wrapped, routed) = wrap_with_routing(
             Some(&cfg),
+            &CloudAccess::default(),
             ProviderKind::Ollama,
             None,
             "qwen3:8b",
@@ -766,6 +934,7 @@ mod tests {
         );
         let (_, routed) = wrap_with_routing(
             Some(&cfg),
+            &CloudAccess::default(),
             kind,
             None,
             "claude-small",
@@ -797,21 +966,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cloud_endpoint_fails_startup() {
+    async fn a_cloud_endpoint_fails_startup_under_mode_never_or_without_its_key() {
         let cfg =
             parse("[routing]\nenabled = true\n[routing.endpoints.claude]\nkind = \"anthropic\"\n");
-        let err = wrap_with_routing(
-            Some(&cfg),
-            ProviderKind::Ollama,
-            None,
-            "qwen3:8b",
-            unused_provider(),
-            None,
-        )
-        .await
-        .err()
-        .unwrap();
-        assert!(err.contains("consent-gated escalation"), "{err}");
+        let never = CloudAccess {
+            escalation: escalation(EscalationMode::Never),
+            ..cloud_access()
+        };
+        let keyless = CloudAccess::default();
+        for (access, expected) in [
+            (&never, "[routing.escalation] mode"),
+            (&keyless, "anthropic_api_key"),
+        ] {
+            let err = wrap_with_routing(
+                Some(&cfg),
+                access,
+                ProviderKind::Ollama,
+                None,
+                "qwen3:8b",
+                unused_provider(),
+                None,
+            )
+            .await
+            .err()
+            .unwrap();
+            assert!(err.contains(expected), "{err}");
+        }
+    }
+
+    /// Until escalation dispatch lands (a separate escalation router), a
+    /// configured cloud endpoint's models stay out of the local router:
+    /// routing behaves exactly as 3a's.
+    #[tokio::test]
+    async fn cloud_endpoint_models_are_kept_out_of_the_local_router() {
+        let local = "[routing]\nenabled = true\ndiscover = false\n\
+             [[routing.models]]\nid = \"qwen3:32b\"\ntier = \"large\"\n";
+        let with_cloud = format!(
+            "{local}[routing.endpoints.claude]\nkind = \"anthropic\"\n\
+             [[routing.models]]\nid = \"claude-big\"\nendpoint = \"claude\"\ntier = \"large\"\n\
+             capabilities = [\"completion\", \"tools\"]\ncontext_window = 200000\n"
+        );
+        let mut keys_per_config = Vec::new();
+        for src in [local.to_string(), with_cloud] {
+            let cfg = parse(&src);
+            let (_, routed) = wrap_with_routing(
+                Some(&cfg),
+                &cloud_access(),
+                ProviderKind::Ollama,
+                None,
+                "qwen3:8b",
+                unused_provider(),
+                None,
+            )
+            .await
+            .unwrap();
+            let routed = routed.expect("routing is on");
+            let keys: Vec<String> = routed
+                .router()
+                .profiles()
+                .iter()
+                .map(|p| p.key().to_string())
+                .collect();
+            keys_per_config.push(keys);
+        }
+        assert_eq!(
+            keys_per_config[0],
+            vec!["qwen3:32b@default", "qwen3:8b@default"]
+        );
+        assert_eq!(keys_per_config[1], keys_per_config[0]);
     }
     #[test]
     fn render_status_prints_one_line_per_candidate_and_marks_the_default() {

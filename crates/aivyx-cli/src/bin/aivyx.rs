@@ -1112,8 +1112,14 @@ fn run() -> Result<(), String> {
             .enable_all()
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        let access = routing::CloudAccess {
+            escalation: config.routing_escalation.clone(),
+            anthropic_key: config.anthropic_api_key.as_ref().map(|k| k.value.clone()),
+            openai_key: config.openai_api_key.as_ref().map(|k| k.value.clone()),
+        };
         return rt.block_on(routing::run_routing_status(
             config.routing.as_ref(),
+            &access,
             config.provider.value,
             config.openai_base_url.as_ref().map(|s| s.value.as_str()),
             &config.model.value,
@@ -6253,6 +6259,11 @@ async fn run_async(
         // Model routing Part 3a — wraps the provider built below in a
         // `RoutedProvider` when `[routing] enabled` (aivyx_modules/routing.rs).
         routing: config_routing,
+        // Model routing Part 3b — `[routing.escalation]` gates cloud
+        // `[routing.endpoints.*]` (checked in `wrap_with_routing` below).
+        routing_escalation: config_routing_escalation,
+        // Model routing Part 3b — `[routing.sensitive]`; not consumed yet.
+        routing_sensitive: _,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -6522,6 +6533,13 @@ async fn run_async(
     // routing needs it to tell a local OpenAI-compatible server from the
     // real (cloud) OpenAI API.
     let routing_base_url: Option<String> = openai_base_url.as_ref().map(|s| s.value.clone());
+    // Model routing Part 3b — likewise the API keys: a cloud
+    // `[routing.endpoints.*]` uses the operator's own key for its kind.
+    let routing_access = routing::CloudAccess {
+        escalation: config_routing_escalation,
+        anthropic_key: anthropic_api_key.as_ref().map(|k| k.value.clone()),
+        openai_key: openai_api_key.as_ref().map(|k| k.value.clone()),
+    };
     let provider: Arc<dyn LlmProvider> = match provider_kind.value {
         ProviderKind::Anthropic => {
             let api_key = anthropic_api_key
@@ -6851,6 +6869,7 @@ async fn run_async(
     let (provider, routed): (Arc<dyn LlmProvider>, Option<Arc<aivyx_llm::RoutedProvider>>) =
         routing::wrap_with_routing(
             config_routing.as_ref(),
+            &routing_access,
             provider_kind.value,
             routing_base_url.as_deref(),
             &model,

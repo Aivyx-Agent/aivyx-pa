@@ -8707,14 +8707,160 @@ fn routing_section_parses_roster_entries() {
 }
 
 #[test]
-fn routing_section_ignores_unknown_escalation_subsection() {
+fn routing_section_with_escalation_subsection_still_parses() {
     let _env = EnvScope::new();
     let cfg = load_with_toml(
         "\n[routing]\nenabled = true\n[routing.escalation]\nmode = \"ask\"\n",
         "routing-escalation-ignored",
     );
+    assert_eq!(cfg.routing_escalation.mode, crate::EscalationMode::Ask);
     let routing = cfg.routing.expect("routing must be Some");
     assert!(routing.enabled);
+}
+
+// ------------------------------------------------------------------
+// Model routing Part 3b — [routing.escalation] / [routing.sensitive]
+// ------------------------------------------------------------------
+
+fn default_sensitive_prefixes() -> Vec<String> {
+    [
+        "gmail.",
+        "calendar.",
+        "contacts.",
+        "drive.",
+        "memory.",
+        "notion.",
+        "obsidian.",
+        "fs.read",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+#[test]
+fn routing_escalation_and_sensitive_default_when_routing_absent() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml("\n[agent]\nprovider = \"ollama\"\n", "routing-esc-absent");
+    assert!(cfg.routing.is_none());
+    assert_eq!(cfg.routing_escalation, crate::EscalationConfig::default());
+    assert_eq!(cfg.routing_escalation.mode, crate::EscalationMode::Ask);
+    assert!(cfg.routing_escalation.no_local_candidate);
+    assert!(cfg.routing_escalation.tiers.is_empty());
+    assert_eq!(
+        cfg.routing_sensitive.tool_prefixes,
+        default_sensitive_prefixes()
+    );
+    assert!(cfg.routing_sensitive.channels.is_empty());
+}
+
+#[test]
+fn routing_escalation_and_sensitive_default_when_subsections_absent() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml("\n[routing]\nenabled = true\n", "routing-esc-subabsent");
+    assert!(cfg.routing.expect("routing must be Some").enabled);
+    assert_eq!(cfg.routing_escalation, crate::EscalationConfig::default());
+    assert_eq!(cfg.routing_sensitive, crate::SensitiveConfig::default());
+    assert_eq!(
+        cfg.routing_sensitive.tool_prefixes,
+        default_sensitive_prefixes()
+    );
+}
+
+#[test]
+fn routing_escalation_fields_parse() {
+    let _env = EnvScope::new();
+    for (mode, expected) in [
+        ("never", crate::EscalationMode::Never),
+        ("ask", crate::EscalationMode::Ask),
+        ("auto", crate::EscalationMode::Auto),
+    ] {
+        let cfg = load_with_toml(
+            &format!(
+                "\n[routing]\nenabled = true\n[routing.escalation]\nmode = \"{mode}\"\n\
+                 no_local_candidate = false\ntiers = [\"plan\", \"code_edit\"]\n"
+            ),
+            "routing-esc-fields",
+        );
+        let esc = &cfg.routing_escalation;
+        assert_eq!(esc.mode, expected, "{mode}");
+        assert!(!esc.no_local_candidate);
+        assert_eq!(esc.tiers, vec!["plan".to_string(), "code_edit".to_string()]);
+        // The shared [routing] shape is undisturbed.
+        assert!(cfg.routing.as_ref().expect("routing must be Some").enabled);
+    }
+}
+
+/// The shared `[routing]` keys parse exactly as the shared type parses
+/// them on its own, with aivyx-pa's sub-tables alongside (the flattened
+/// wrapper must not lose or mistype any of them).
+#[test]
+fn routing_shared_keys_are_undisturbed_by_the_escalation_subtables() {
+    let _env = EnvScope::new();
+    let shared = "\n[routing]\nenabled = true\ndiscover = false\n\
+         [routing.endpoints.gpu]\nkind = \"ollama\"\nbase_url = \"http://127.0.0.1:11434\"\n\
+         [routing.endpoints.claude]\nkind = \"anthropic\"\n\
+         [routing.tasks.plan]\ntier = \"large\"\n\
+         [[routing.models]]\nid = \"qwen3:32b\"\nendpoint = \"gpu\"\ntier = \"large\"\n\
+         priority = -2\ncapabilities = [\"completion\", \"tools\"]\ncontext_window = 32768\n";
+    let cfg = load_with_toml(
+        &format!("{shared}[routing.escalation]\nmode = \"auto\"\n"),
+        "routing-flatten",
+    );
+    #[derive(serde::Deserialize)]
+    struct Doc {
+        routing: aivyx_route::RoutingConfig,
+    }
+    let direct = toml::from_str::<Doc>(shared).unwrap().routing;
+    assert_eq!(cfg.routing, Some(direct));
+    assert_eq!(cfg.routing_escalation.mode, crate::EscalationMode::Auto);
+}
+
+#[test]
+fn routing_sensitive_fields_parse() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[routing]\n[routing.sensitive]\ntool_prefixes = [\"gmail.\"]\n\
+         channels = [\"telegram\"]\n",
+        "routing-sensitive-fields",
+    );
+    assert_eq!(
+        cfg.routing_sensitive.tool_prefixes,
+        vec!["gmail.".to_string()]
+    );
+    assert_eq!(cfg.routing_sensitive.channels, vec!["telegram".to_string()]);
+    // The other sub-section still defaults.
+    assert_eq!(cfg.routing_escalation, crate::EscalationConfig::default());
+}
+
+#[test]
+fn routing_escalation_rejects_an_unknown_mode() {
+    let _env = EnvScope::new();
+    let r = load_with_toml_result(
+        "\n[routing]\n[routing.escalation]\nmode = \"sometimes\"\n",
+        "routing-esc-bad-mode",
+    );
+    assert!(r.is_err(), "mode = \"sometimes\" must be a config error");
+}
+
+#[test]
+fn routing_escalation_rejects_unknown_keys() {
+    let _env = EnvScope::new();
+    for key in ["on_failure = true", "mdoe = \"never\""] {
+        let r = load_with_toml_result(
+            &format!("\n[routing]\n[routing.escalation]\n{key}\n"),
+            "routing-esc-unknown-key",
+        );
+        assert!(r.is_err(), "`{key}` must be a config error");
+    }
+    let r = load_with_toml_result(
+        "\n[routing]\n[routing.sensitive]\ntool_prefix = [\"gmail.\"]\n",
+        "routing-sensitive-unknown-key",
+    );
+    assert!(
+        r.is_err(),
+        "a typo under [routing.sensitive] must be a config error"
+    );
 }
 
 #[test]

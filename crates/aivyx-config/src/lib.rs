@@ -1059,8 +1059,15 @@ pub struct AivyxConfig {
     /// exactly as before. Parsed verbatim from the shared
     /// `aivyx_route::RoutingConfig` shape (no `Sourced` provenance —
     /// it's the shared crate's type, not this crate's own schema); its
-    /// unknown keys (e.g. a future `[routing.escalation]`) are ignored.
+    /// unknown keys are ignored. aivyx-pa's own sub-tables are parsed
+    /// into the two fields below instead.
     pub routing: Option<aivyx_route::RoutingConfig>,
+    /// Model routing Part 3b — `[routing.escalation]`, defaulted when
+    /// absent (including when `[routing]` itself is absent).
+    pub routing_escalation: EscalationConfig,
+    /// Model routing Part 3b — `[routing.sensitive]`, defaulted when
+    /// absent (including when `[routing]` itself is absent).
+    pub routing_sensitive: SensitiveConfig,
     /// Chapter Synapse — `[memory] profile`. `Off` (default) ⇒ today's
     /// behavior; `Smart` expands the coherent memory bundle into the
     /// `[embedding]` / `[recall_cluster]` / `[wiki]` / `[graph]` fields
@@ -2836,6 +2843,84 @@ pub struct SkillDefaultsConfig {
     pub user_dir: Option<Sourced<std::path::PathBuf>>,
 }
 
+/// Model routing Part 3b — `[routing.escalation] mode`: whether a
+/// conversation may escalate to a `[routing.endpoints.*]` cloud
+/// endpoint. `Never` forbids cloud endpoints outright; `Ask` (the
+/// default) stops the turn for the operator's per-conversation consent;
+/// `Auto` escalates without asking. No mode bypasses the sensitivity
+/// taint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EscalationMode {
+    Never,
+    #[default]
+    Ask,
+    Auto,
+}
+
+/// Model routing Part 3b — `[routing.escalation]`. Only matters when a
+/// cloud endpoint is configured under `[routing.endpoints]`. Unknown keys
+/// (e.g. the deferred `on_failure`) are a config error, so a typo can't
+/// silently weaken a privacy setting.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EscalationConfig {
+    pub mode: EscalationMode,
+    /// Escalate when no local candidate can serve the call.
+    pub no_local_candidate: bool,
+    /// `TaskKind` names (`[routing.tasks]` keys, e.g. `"plan"`) that
+    /// always prefer a cloud endpoint.
+    pub tiers: Vec<String>,
+}
+
+impl Default for EscalationConfig {
+    fn default() -> Self {
+        EscalationConfig {
+            mode: EscalationMode::Ask,
+            no_local_candidate: true,
+            tiers: Vec::new(),
+        }
+    }
+}
+
+/// Model routing Part 3b — `[routing.sensitive]`: what taints a
+/// conversation so it never escalates. A tool whose name starts with one
+/// of `tool_prefixes`, or a turn arriving on one of `channels`, marks it.
+/// Unknown keys are a config error, like `[routing.escalation]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SensitiveConfig {
+    pub tool_prefixes: Vec<String>,
+    pub channels: Vec<String>,
+}
+
+/// `[routing.sensitive] tool_prefixes` default — each matches real tools
+/// in `docs/TOOLS.md` (personal data: mail, calendar, contacts, files,
+/// memory, notes).
+pub const DEFAULT_SENSITIVE_TOOL_PREFIXES: &[&str] = &[
+    "gmail.",
+    "calendar.",
+    "contacts.",
+    "drive.",
+    "memory.",
+    "notion.",
+    "obsidian.",
+    "fs.read",
+];
+
+impl Default for SensitiveConfig {
+    fn default() -> Self {
+        SensitiveConfig {
+            tool_prefixes: DEFAULT_SENSITIVE_TOOL_PREFIXES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            // aivyx-pa has no email-backed channel today.
+            channels: Vec::new(),
+        }
+    }
+}
+
 /// Chapter Synapse — the `[memory] profile` activation switch. One knob
 /// that expands into the coherent bundle of memory settings, so an
 /// operator opts into the full self-organizing memory stack
@@ -3952,8 +4037,10 @@ struct RawToml {
     /// `aivyx_route::RoutingConfig` shape verbatim (so `aivyx-coder` and
     /// `aivyx-pa` configs look alike). `None` when the section is
     /// absent; unknown keys within it are ignored by the shared type.
+    /// Part 3b adds aivyx-pa's own `escalation`/`sensitive` sub-tables
+    /// alongside it (see [`RawRouting`]).
     #[serde(default)]
-    routing: Option<aivyx_route::RoutingConfig>,
+    routing: Option<RawRouting>,
     /// `[persona_consolidation]` section. Phase 87 —
     /// pattern-driven Persona proposals.
     #[serde(default)]
@@ -5299,6 +5386,20 @@ struct RawSkillDefaults {
     user_dir: Option<String>,
 }
 
+/// Model routing Part 3b — the `[routing]` deserialize target: the shared
+/// `aivyx_route::RoutingConfig` shape (flattened, so its keys stay at the
+/// top of `[routing]`) plus aivyx-pa's own sub-tables, which the shared
+/// type ignores.
+#[derive(Debug, Deserialize)]
+struct RawRouting {
+    #[serde(flatten)]
+    shared: aivyx_route::RoutingConfig,
+    #[serde(default)]
+    escalation: EscalationConfig,
+    #[serde(default)]
+    sensitive: SensitiveConfig,
+}
+
 /// Aivyx-Skills Part 3 — build the `[skill_defaults]` config. `None`
 /// only when the section is entirely absent (or present but both
 /// fields unset); either field alone is enough to arm it.
@@ -6571,7 +6672,19 @@ impl AivyxConfig {
         // Model routing, Part 3a — [routing] parses directly into the
         // shared aivyx_route::RoutingConfig; passed through verbatim,
         // no extra validation at this layer (that's the router's job).
-        let routing = toml.routing.clone();
+        // Part 3b — its escalation/sensitive sub-tables default when
+        // absent, and when [routing] itself is absent.
+        let routing = toml.routing.as_ref().map(|r| r.shared.clone());
+        let routing_escalation = toml
+            .routing
+            .as_ref()
+            .map(|r| r.escalation.clone())
+            .unwrap_or_default();
+        let routing_sensitive = toml
+            .routing
+            .as_ref()
+            .map(|r| r.sensitive.clone())
+            .unwrap_or_default();
         let persona_consolidation =
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
@@ -7888,6 +8001,8 @@ impl AivyxConfig {
             skill_authoring,
             skill_defaults,
             routing,
+            routing_escalation,
+            routing_sensitive,
             memory_profile,
             persona_consolidation,
             correction_consolidation,
