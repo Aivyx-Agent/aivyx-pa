@@ -558,12 +558,17 @@ pub(crate) async fn run_routing_status(
             warning.as_deref()
         )
     );
+    if escalation_active(Some(routing), &access.escalation) {
+        let cloud = cloud_candidates(&prepared.config, &prepared.default);
+        print!("{}", render_escalation(&access.escalation, &cloud));
+    }
     Ok(())
 }
 
 /// `aivyx-pa routing explain [--limit N]` — offline, the same cold-start
-/// posture as `aivyx-pa cost`: scan the audit chain's `ModelRouted`
-/// entries and print the newest `limit` of them.
+/// posture as `aivyx-pa cost`: scan the audit chain's routing entries
+/// (`ModelRouted`, and Part 3b's escalation / consent / taint entries) and
+/// print the newest `limit` of them.
 pub(crate) async fn run_routing_explain(
     storage: Arc<dyn Storage>,
     audit_chain_key: [u8; 32],
@@ -591,25 +596,91 @@ pub(crate) async fn run_routing_explain(
     Ok(())
 }
 
-/// A `ModelRouted` entry, else `None`.
+/// A routing-related entry — `ModelRouted`, or (Part 3b)
+/// `CloudEscalation` / `CloudConsentGranted` / `ConversationTainted`
+/// shown with `escalation` / `consent` / `taint` in the task column —
+/// else `None`. Never includes content (escalations carry only a hash).
 fn routed_entry(entry: &SignedEntry) -> Option<RoutedEntry> {
-    let AuditEvent::ModelRouted {
-        session_id,
-        model,
-        task,
-        reason,
-    } = &entry.event
-    else {
-        return None;
+    let (session_id, model, task, reason) = match &entry.event {
+        AuditEvent::ModelRouted {
+            session_id,
+            model,
+            task,
+            reason,
+        } => (session_id.clone(), model.clone(), task.clone(), reason.clone()),
+        AuditEvent::CloudEscalation {
+            session_id,
+            model,
+            trigger,
+            mode,
+            outcome,
+            payload_hash,
+        } => (
+            session_id.clone(),
+            model.clone().unwrap_or_else(|| "-".to_string()),
+            "escalation".to_string(),
+            format!(
+                "{outcome} (trigger {trigger}, mode {mode}; payload {})",
+                &payload_hash[..payload_hash.len().min(12)]
+            ),
+        ),
+        AuditEvent::CloudConsentGranted { session_id, via } => (
+            Some(session_id.clone()),
+            "-".to_string(),
+            "consent".to_string(),
+            format!("cloud escalation allowed via {via}"),
+        ),
+        AuditEvent::ConversationTainted { session_id, reason } => (
+            Some(session_id.clone()),
+            "-".to_string(),
+            "taint".to_string(),
+            format!("tainted by {reason} — never escalates to the cloud"),
+        ),
+        _ => return None,
     };
     Some(RoutedEntry {
         seq: entry.seq,
         appended_at: entry.appended_at,
-        session_id: session_id.clone(),
-        model: model.clone(),
-        task: task.clone(),
-        reason: reason.clone(),
+        session_id,
+        model,
+        task,
+        reason,
     })
+}
+
+/// Part 3b — the escalation section of `aivyx-pa routing status`. Pure.
+pub(crate) fn render_escalation(esc: &EscalationConfig, cloud: &[ModelProfile]) -> String {
+    let mode = match esc.mode {
+        EscalationMode::Never => "never",
+        EscalationMode::Ask => "ask",
+        EscalationMode::Auto => "auto",
+    };
+    let mut out = format!(
+        "\nCloud escalation: mode {mode}; triggers: {}{}\n",
+        if esc.no_local_candidate {
+            "no_local_candidate"
+        } else {
+            "(no_local_candidate off)"
+        },
+        if esc.tiers.is_empty() {
+            String::new()
+        } else {
+            format!(", tiers [{}]", esc.tiers.join(", "))
+        }
+    );
+    for p in cloud {
+        out.push_str(&format!("  {} (cloud)\n", p.key()));
+    }
+    if esc.mode == EscalationMode::Ask {
+        out.push_str(
+            "  In `ask` mode a turn that needs the cloud stops and asks; send /allow-cloud in \
+             that conversation (or `aivyx-pa routing allow-cloud <session>`), then resend.\n",
+        );
+    }
+    out.push_str(
+        "  A conversation that touched sensitive data never escalates, in any mode.\n",
+    );
+    out
 }
 
 /// `aivyx-pa routing allow-cloud <session>` — allow cloud escalation for
@@ -1349,6 +1420,88 @@ mod tests {
             },
         );
         assert_eq!(routed_entry(&unrelated), None);
+    }
+
+    #[test]
+    fn escalation_consent_and_taint_entries_are_extracted_without_content() {
+        let entry = |seq, event| SignedEntry {
+            seq,
+            appended_at: std::time::UNIX_EPOCH,
+            event,
+            prev_mac: [0; 32],
+            mac: [0; 32],
+        };
+        let esc = routed_entry(&entry(
+            7,
+            AuditEvent::CloudEscalation {
+                session_id: Some("s".into()),
+                model: Some("claude@cloud".into()),
+                trigger: "no_local_candidate".into(),
+                mode: "ask".into(),
+                outcome: "consent_requested".into(),
+                payload_hash: "ab".repeat(32),
+            },
+        ))
+        .expect("CloudEscalation is extracted");
+        assert_eq!(esc.task, "escalation");
+        assert_eq!(esc.model, "claude@cloud");
+        assert_eq!(esc.session_id.as_deref(), Some("s"));
+        assert!(esc.reason.contains("consent_requested"), "{}", esc.reason);
+        assert!(esc.reason.contains("no_local_candidate"), "{}", esc.reason);
+        assert!(esc.reason.contains("ask"), "{}", esc.reason);
+
+        let blocked = routed_entry(&entry(
+            8,
+            AuditEvent::CloudEscalation {
+                session_id: Some("s".into()),
+                model: None,
+                trigger: "tier".into(),
+                mode: "auto".into(),
+                outcome: "blocked_taint".into(),
+                payload_hash: "cd".repeat(32),
+            },
+        ))
+        .unwrap();
+        assert_eq!(blocked.model, "-");
+
+        let consent = routed_entry(&entry(
+            9,
+            AuditEvent::CloudConsentGranted {
+                session_id: "s".into(),
+                via: "chat".into(),
+            },
+        ))
+        .unwrap();
+        assert_eq!(consent.task, "consent");
+        assert!(consent.reason.contains("chat"), "{}", consent.reason);
+
+        let taint = routed_entry(&entry(
+            10,
+            AuditEvent::ConversationTainted {
+                session_id: "s".into(),
+                reason: "gmail.search output".into(),
+            },
+        ))
+        .unwrap();
+        assert_eq!(taint.task, "taint");
+        assert!(taint.reason.contains("gmail.search output"), "{}", taint.reason);
+    }
+
+    #[test]
+    fn render_status_lists_escalation_settings_and_cloud_candidates() {
+        let mut claude = ModelProfile::new("claude-big", EndpointRef::new("claude"));
+        claude.capabilities.insert(Capability::Tools);
+        let esc = EscalationConfig {
+            mode: EscalationMode::Ask,
+            no_local_candidate: true,
+            tiers: vec!["plan".into()],
+        };
+        let text = render_escalation(&esc, &[claude]);
+        assert!(text.contains("mode ask"), "{text}");
+        assert!(text.contains("no_local_candidate"), "{text}");
+        assert!(text.contains("plan"), "{text}");
+        assert!(text.contains("claude-big@claude"), "{text}");
+        assert!(text.contains("/allow-cloud"), "{text}");
     }
 
     #[test]

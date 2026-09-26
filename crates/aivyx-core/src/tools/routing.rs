@@ -85,39 +85,66 @@ impl Tool for RoutingStatusTool {
         true
     }
 
-    async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, _input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let candidates: Vec<Value> = self
             .routed
             .router()
             .profiles()
             .iter()
-            .map(|p| {
-                json!({
-                    "model": p.key().to_string(),
-                    "tier": p.tier.to_string(),
-                    "capabilities": p
-                        .capabilities
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>(),
-                    "unknown_capabilities": p
-                        .unknown_capabilities
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>(),
-                    "context_window": p.context_window,
-                    "availability": p.availability,
-                })
-            })
+            .map(candidate_json)
             .collect();
+        // Model routing Part 3b — escalation settings and this
+        // conversation's taint / consent (`null` when not configured).
+        let escalation = match self.routed.escalation_settings() {
+            None => Value::Null,
+            Some((mode, no_local_candidate, tiers)) => {
+                let (tainted, cloud_allowed) = self
+                    .routed
+                    .escalation_state(&ctx.session_id.to_string())
+                    .await
+                    .unwrap_or((None, false));
+                json!({
+                    "mode": mode.name(),
+                    "no_local_candidate": no_local_candidate,
+                    "tiers": tiers.iter().map(|t| t.name()).collect::<Vec<_>>(),
+                    "cloud_candidates": self
+                        .routed
+                        .escalation_candidates()
+                        .iter()
+                        .map(candidate_json)
+                        .collect::<Vec<_>>(),
+                    "this_conversation": {
+                        "tainted": tainted,
+                        "cloud_allowed": cloud_allowed,
+                    },
+                })
+            }
+        };
         ToolOutcome::Completed {
             output: json!({
                 "default": self.routed.default_key().to_string(),
                 "candidates": candidates,
+                "escalation": escalation,
             }),
             verified: Verification::Verified,
         }
     }
+}
+
+/// One routing candidate as `routing.status` reports it.
+fn candidate_json(p: &aivyx_route::ModelProfile) -> Value {
+    json!({
+        "model": p.key().to_string(),
+        "tier": p.tier.to_string(),
+        "capabilities": p.capabilities.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "unknown_capabilities": p
+            .unknown_capabilities
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        "context_window": p.context_window,
+        "availability": p.availability,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +444,65 @@ mod routing_tool_tests {
             .expect("small@default listed");
         assert_eq!(small["unknown_capabilities"], json!(["tools"]));
         assert_eq!(small["context_window"], Value::Null);
+    }
+
+    struct GuardFor {
+        tainted: String,
+        allowed: String,
+    }
+
+    #[async_trait]
+    impl aivyx_llm::EscalationGuard for GuardFor {
+        async fn taint(&self, session: &str) -> Option<String> {
+            (session == self.tainted).then(|| "gmail.search output".to_string())
+        }
+        fn consented(&self, session: &str) -> bool {
+            session == self.allowed
+        }
+    }
+
+    #[tokio::test]
+    async fn status_reports_no_escalation_when_none_is_configured() {
+        let tool = RoutingStatusTool::new(routed());
+        let output = completed(run_execute(&tool, SessionId::new(), json!({})).await);
+        assert_eq!(output["escalation"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn status_reports_escalation_and_this_conversations_state() {
+        let tainted = SessionId::new();
+        let allowed = SessionId::new();
+        let mut claude = ModelProfile::new("claude", EndpointRef::new("cloud"));
+        claude.tier = Tier::Large;
+        claude.capabilities.insert(Capability::Completion);
+        claude.locality = aivyx_route::Locality::Cloud;
+        let base = Arc::try_unwrap(routed()).ok().expect("sole owner");
+        let routed = Arc::new(base.with_escalation(aivyx_llm::EscalationSetup {
+            router: Router::new(vec![claude], TaskOverrides::default()).with_allow_cloud(true),
+            mode: aivyx_llm::EscalationMode::Ask,
+            no_local_candidate: true,
+            tiers: vec![TaskKind::Plan],
+            guard: Arc::new(GuardFor {
+                tainted: tainted.to_string(),
+                allowed: allowed.to_string(),
+            }),
+            observer: Arc::new(|_: &aivyx_llm::EscalationRecord| {}),
+        }));
+        let tool = RoutingStatusTool::new(Arc::clone(&routed));
+
+        let output = completed(run_execute(&tool, tainted, json!({})).await);
+        let esc = &output["escalation"];
+        assert_eq!(esc["mode"], "ask");
+        assert_eq!(esc["no_local_candidate"], true);
+        assert_eq!(esc["tiers"], json!(["plan"]));
+        assert_eq!(esc["cloud_candidates"][0]["model"], "claude@cloud");
+        assert_eq!(esc["this_conversation"]["tainted"], "gmail.search output");
+        assert_eq!(esc["this_conversation"]["cloud_allowed"], false);
+
+        let output = completed(run_execute(&tool, allowed, json!({})).await);
+        let this = &output["escalation"]["this_conversation"];
+        assert_eq!(this["tainted"], Value::Null);
+        assert_eq!(this["cloud_allowed"], true);
     }
 
     #[tokio::test]

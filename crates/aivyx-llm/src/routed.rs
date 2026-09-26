@@ -102,6 +102,22 @@ impl RoutedProvider {
         self
     }
 
+    /// The escalation settings (Part 3b), `None` when escalation isn't
+    /// configured: mode, `no_local_candidate`, and the tier task kinds.
+    pub fn escalation_settings(&self) -> Option<(EscalationMode, bool, Vec<TaskKind>)> {
+        self.escalation
+            .as_ref()
+            .map(|esc| (esc.mode, esc.no_local_candidate, esc.tiers.clone()))
+    }
+
+    /// `session`'s escalation state (Part 3b) — its taint reason, if any,
+    /// and whether cloud escalation is allowed for it — or `None` when
+    /// escalation isn't configured.
+    pub async fn escalation_state(&self, session: &str) -> Option<(Option<String>, bool)> {
+        let esc = self.escalation.as_ref()?;
+        Some((esc.guard.taint(session).await, esc.guard.consented(session)))
+    }
+
     /// The cloud escalation candidates (Part 3b), empty when escalation
     /// isn't configured. For `routing.status`.
     pub fn escalation_candidates(&self) -> Vec<ModelProfile> {
