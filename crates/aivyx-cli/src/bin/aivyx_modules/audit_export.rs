@@ -221,6 +221,8 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::LlmCost { .. } => "LlmCost",
         AuditEvent::ModelRouted { .. } => "ModelRouted",
         AuditEvent::ConversationTainted { .. } => "ConversationTainted",
+        AuditEvent::CloudEscalation { .. } => "CloudEscalation",
+        AuditEvent::CloudConsentGranted { .. } => "CloudConsentGranted",
         AuditEvent::MemoryAccess { .. } => "MemoryAccess",
         AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",

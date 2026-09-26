@@ -176,6 +176,26 @@ pub enum AuditEvent {
     /// canonicalize unchanged.
     ConversationTainted { session_id: String, reason: String },
 
+    /// Model routing Part 3b (A15) — one cloud-escalation decision (see
+    /// `aivyx_core::AuditTag::CloudEscalation`). Never carries content:
+    /// `payload_hash` is a hex SHA-256 of the would-be outbound request.
+    /// Additive; `session_id`/`model` are omitted when `None`.
+    CloudEscalation {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        trigger: String,
+        mode: String,
+        outcome: String,
+        payload_hash: String,
+    },
+
+    /// Model routing Part 3b (A15) — the operator allowed cloud escalation
+    /// for conversation `session_id` (`via` = `"chat"` or `"ipc"`).
+    /// Additive.
+    CloudConsentGranted { session_id: String, via: String },
+
     /// Dedicated view of a memory operation. Redundant with `ToolCall`
     /// (every memory op *is* also a tool call), but indexed for fast
     /// memory-specific queries. D4 justifies this as the one deviation
@@ -1138,6 +1158,24 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
             },
             AuditTag::ConversationTainted { session_id, reason } => {
                 AuditEvent::ConversationTainted { session_id, reason }
+            }
+            AuditTag::CloudEscalation {
+                session_id,
+                model,
+                trigger,
+                mode,
+                outcome,
+                payload_hash,
+            } => AuditEvent::CloudEscalation {
+                session_id,
+                model,
+                trigger,
+                mode,
+                outcome,
+                payload_hash,
+            },
+            AuditTag::CloudConsentGranted { session_id, via } => {
+                AuditEvent::CloudConsentGranted { session_id, via }
             }
             AuditTag::ToolCall {
                 turn_id,
@@ -2497,6 +2535,76 @@ mod tests {
                 reason: "only candidate".into(),
             }
         );
+    }
+
+    #[test]
+    fn cloud_escalation_round_trips_and_omits_absent_fields() {
+        let event = AuditEvent::CloudEscalation {
+            session_id: Some("sess-1".into()),
+            model: Some("claude@cloud".into()),
+            trigger: "no_local_candidate".into(),
+            mode: "ask".into(),
+            outcome: "consent_requested".into(),
+            payload_hash: "ab".repeat(32),
+        };
+        let bytes = serde_jcs::to_vec(&event).expect("jcs must accept");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["kind"], "CloudEscalation");
+        assert_eq!(json["outcome"], "consent_requested");
+        let decoded: AuditEvent = serde_json::from_slice(&bytes).expect("round trip");
+        assert_eq!(decoded, event);
+
+        let bare = AuditEvent::CloudEscalation {
+            session_id: None,
+            model: None,
+            trigger: "tier".into(),
+            mode: "auto".into(),
+            outcome: "disabled".into(),
+            payload_hash: "00".repeat(32),
+        };
+        let json: serde_json::Value =
+            serde_json::from_slice(&serde_jcs::to_vec(&bare).unwrap()).unwrap();
+        assert!(json.get("session_id").is_none());
+        assert!(json.get("model").is_none());
+    }
+
+    #[test]
+    fn cloud_escalation_and_consent_tags_bridge_field_for_field() {
+        let event: AuditEvent = aivyx_core::AuditTag::CloudEscalation {
+            session_id: Some("s".into()),
+            model: None,
+            trigger: "tier".into(),
+            mode: "auto".into(),
+            outcome: "blocked_taint".into(),
+            payload_hash: "h".into(),
+        }
+        .into();
+        assert_eq!(
+            event,
+            AuditEvent::CloudEscalation {
+                session_id: Some("s".into()),
+                model: None,
+                trigger: "tier".into(),
+                mode: "auto".into(),
+                outcome: "blocked_taint".into(),
+                payload_hash: "h".into(),
+            }
+        );
+        let event: AuditEvent = aivyx_core::AuditTag::CloudConsentGranted {
+            session_id: "s".into(),
+            via: "chat".into(),
+        }
+        .into();
+        assert_eq!(
+            event,
+            AuditEvent::CloudConsentGranted {
+                session_id: "s".into(),
+                via: "chat".into(),
+            }
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&serde_jcs::to_vec(&event).unwrap()).unwrap();
+        assert_eq!(json["kind"], "CloudConsentGranted");
     }
 
     #[test]

@@ -897,6 +897,7 @@ async fn two_concurrent_connections() {
             seed_draft_llm: None,
             document_roots: Default::default(),
             reminder_store: None,
+            routing_guard: None,
             wiki_sweep: None,
             wiki_store: None,
             graph_sweep: None,
@@ -1239,6 +1240,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             seed_draft_llm: None,
             document_roots: Default::default(),
             reminder_store: None,
+            routing_guard: None,
             wiki_sweep: None,
             wiki_store: None,
             graph_sweep: None,
@@ -1377,6 +1379,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             seed_draft_llm: None,
             document_roots: Default::default(),
             reminder_store: None,
+            routing_guard: None,
             wiki_sweep: None,
             wiki_store: None,
             graph_sweep: None,
@@ -1860,6 +1863,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             seed_draft_llm: None,
             document_roots: Default::default(),
             reminder_store: None,
+            routing_guard: None,
             wiki_sweep: None,
             wiki_store: None,
             graph_sweep: None,
@@ -2178,6 +2182,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             seed_draft_llm: None,
             document_roots: Default::default(),
             reminder_store: None,
+            routing_guard: None,
             wiki_sweep: None,
             wiki_store: None,
             graph_sweep: None,
@@ -2715,6 +2720,7 @@ async fn mission_queries_round_trip_over_ipc() {
             seed_draft_llm: None,
             document_roots: Default::default(),
             reminder_store: None,
+            routing_guard: None,
             wiki_sweep: None,
             wiki_store: None,
             graph_sweep: None,
@@ -3182,6 +3188,7 @@ async fn audit_queries_round_trip_over_ipc() {
             seed_draft_llm: None,
             document_roots: Default::default(),
             reminder_store: None,
+            routing_guard: None,
             wiki_sweep: None,
             wiki_store: None,
             graph_sweep: None,
@@ -3399,4 +3406,84 @@ async fn audit_queries_without_log_return_query_error() {
         .await;
     shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
+// ---------------------------------------------------------------------------
+// Model routing Part 3b (A15) — `/allow-cloud` is a command, not a turn.
+// ---------------------------------------------------------------------------
+
+/// Counts its turns; answers like `FakeStreamingAgent` otherwise.
+struct CountingAgent {
+    id: AgentId,
+    caps: CapabilitySet,
+    turns: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl Agent for CountingAgent {
+    fn id(&self) -> AgentId {
+        self.id
+    }
+
+    fn capabilities(&self) -> &CapabilitySet {
+        &self.caps
+    }
+
+    async fn turn(&self, _message: Message, _channel: &dyn ChannelContext) -> TurnOutcome {
+        self.turns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        TurnOutcome::Completed {
+            final_message: "a real turn".into(),
+            tool_calls_made: 0,
+            duration: Duration::from_millis(1),
+        }
+    }
+}
+
+#[tokio::test]
+async fn allow_cloud_records_consent_without_running_a_turn() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+    let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let agent: Arc<dyn Agent> = Arc::new(CountingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+        turns: Arc::clone(&turns),
+    });
+    let storage = aivyx_storage::RedbStorage::open(
+        aivyx_storage::StorageConfig::new(scratch.path.join("store.redb")),
+        aivyx_crypto::MasterKey::from_raw([3; 32]),
+    )
+    .await
+    .expect("storage opens");
+    let guard = Arc::new(aivyx_channel::routing_guard::RoutingGuard::new(storage));
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+
+    let daemon_socket = socket_path.clone();
+    let daemon_guard = Arc::clone(&guard);
+    let daemon_handle = tokio::spawn(async move {
+        aivyx_channel::daemon_server::run_poc_daemon_with_routing_guard(
+            &daemon_socket,
+            agent,
+            channel,
+            daemon_guard,
+        )
+        .await
+        .expect("daemon must complete successfully");
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let result = run_poc_client(&socket_path, None, "/allow-cloud".to_string())
+        .await
+        .expect("client must complete successfully");
+    daemon_handle.await.expect("daemon task");
+
+    assert!(
+        result.outcome.contains("Cloud escalation allowed"),
+        "{}",
+        result.outcome
+    );
+    assert!(result.events.is_empty(), "{:?}", result.events);
+    assert_eq!(turns.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let session = aivyx_core::SessionId(result.session_id.parse().expect("uuid")).to_string();
+    assert!(guard.consented(&session));
 }

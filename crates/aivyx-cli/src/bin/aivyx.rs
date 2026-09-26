@@ -854,6 +854,16 @@ fn run() -> Result<(), String> {
     // Phase 78 — `aivyx-pa learning`: read-only window into the
     // self-learning loop. IPC-backed; terminal parity with the
     // Web UI Learning pane.
+    // Model routing Part 3b — `aivyx-pa routing allow-cloud <session>`:
+    // talks to the running daemon (no passphrase, no store).
+    if let CliMode::Routing(RoutingSubcommand::AllowCloud { session }) = &mode {
+        let session = session.clone();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async move { routing::run_allow_cloud(&session).await });
+    }
     if let CliMode::Learning { window_secs } = mode {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1116,6 +1126,7 @@ fn run() -> Result<(), String> {
             escalation: config.routing_escalation.clone(),
             anthropic_key: config.anthropic_api_key.as_ref().map(|k| k.value.clone()),
             openai_key: config.openai_api_key.as_ref().map(|k| k.value.clone()),
+            ..routing::CloudAccess::default()
         };
         return rt.block_on(routing::run_routing_status(
             config.routing.as_ref(),
@@ -2113,6 +2124,9 @@ enum RoutingSubcommand {
     Status,
     /// The newest `limit` routing decisions on the audit chain.
     Explain { limit: usize },
+    /// Part 3b (A15) — allow cloud escalation for one conversation on the
+    /// running daemon (the same as `/allow-cloud` in that conversation).
+    AllowCloud { session: String },
 }
 
 /// Chapter Keyring — `aivyx-pa keyring <subcommand>`.
@@ -3816,10 +3830,20 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
                 RoutingSubcommand::Explain { limit }
             }
+            Some("allow-cloud") => match &args[2..] {
+                [session] => RoutingSubcommand::AllowCloud {
+                    session: session.clone(),
+                },
+                _ => {
+                    return Err(
+                        "usage: `aivyx-pa routing allow-cloud <session-id>`".to_string()
+                    );
+                }
+            },
             other => {
                 return Err(format!(
                     "unknown `aivyx-pa routing` subcommand `{}` (expected: status | explain \
-                     [--limit N])",
+                     [--limit N] | allow-cloud <session-id>)",
                     other.unwrap_or("")
                 ));
             }
@@ -6536,10 +6560,12 @@ async fn run_async(
     let routing_base_url: Option<String> = openai_base_url.as_ref().map(|s| s.value.clone());
     // Model routing Part 3b — likewise the API keys: a cloud
     // `[routing.endpoints.*]` uses the operator's own key for its kind.
-    let routing_access = routing::CloudAccess {
+    let mut routing_access = routing::CloudAccess {
         escalation: config_routing_escalation,
         anthropic_key: anthropic_api_key.as_ref().map(|k| k.value.clone()),
         openai_key: openai_api_key.as_ref().map(|k| k.value.clone()),
+        // Set below, once the routing guard and the audit log exist.
+        ..routing::CloudAccess::default()
     };
     let provider: Arc<dyn LlmProvider> = match provider_kind.value {
         ProviderKind::Anthropic => {
@@ -6846,6 +6872,49 @@ async fn run_async(
     let persistent_audit_for_query: Arc<PersistentAuditLog> = Arc::clone(&persistent_audit);
     let audit: Arc<dyn AuditHook> = persistent_audit;
 
+    // ---- Model routing Part 3b: routing taint ------------------------
+    // Only when cloud escalation is active (a cloud `[routing.endpoints.*]`
+    // and `[routing.escalation] mode` not `never`); otherwise no taint
+    // machinery runs at all (the compatibility invariant). ONE
+    // `RoutingGuard` for the whole process — write-once and the
+    // once-per-session `ConversationTainted` entry hold per instance — and
+    // one audited sink over it, shared by the daemon agent, the role-switch
+    // child and all their planners.
+    let routing_guard: Option<Arc<aivyx_channel::routing_guard::RoutingGuard>> =
+        if routing::escalation_active(config_routing.as_ref(), &routing_access.escalation) {
+            Some(Arc::new(aivyx_channel::routing_guard::RoutingGuard::new(
+                Arc::clone(&storage),
+            )))
+        } else {
+            None
+        };
+    let taint_sink: Option<Arc<dyn aivyx_core::TaintSink>> = routing_guard.as_ref().map(|guard| {
+        Arc::new(aivyx_core::AuditedTaintSink::new(
+            Arc::clone(guard) as Arc<dyn aivyx_core::TaintSink>,
+            Arc::clone(&audit),
+        )) as Arc<dyn aivyx_core::TaintSink>
+    });
+
+    // Part 3b (A15) — the escalation layer consults the same guard (taint +
+    // consent) and audits every escalation decision.
+    if let Some(guard) = &routing_guard {
+        routing_access.escalation_guard =
+            Some(Arc::clone(guard) as Arc<dyn aivyx_llm::EscalationGuard>);
+        let audit = Arc::clone(&audit);
+        routing_access.escalation_observer = Some(Arc::new(
+            move |rec: &aivyx_llm::EscalationRecord| {
+                audit.on_event(aivyx_core::AuditTag::CloudEscalation {
+                    session_id: rec.session_id.clone(),
+                    model: rec.model.clone(),
+                    trigger: rec.trigger.name().to_string(),
+                    mode: rec.mode.name().to_string(),
+                    outcome: rec.outcome.to_string(),
+                    payload_hash: rec.payload_hash.clone(),
+                })
+            },
+        ));
+    }
+
     // ---- Model routing Part 3a ----------------------------------------
     // `[routing]` absent or `enabled = false` ⇒ `provider` comes back as
     // the very same `Arc`. Otherwise it becomes a `RoutedProvider` whose
@@ -6886,29 +6955,6 @@ async fn run_async(
             routed.default_key()
         );
     }
-
-    // ---- Model routing Part 3b: routing taint ------------------------
-    // Only when cloud escalation is active (a cloud `[routing.endpoints.*]`
-    // and `[routing.escalation] mode` not `never`); otherwise no taint
-    // machinery runs at all (the compatibility invariant). ONE
-    // `RoutingGuard` for the whole process — write-once and the
-    // once-per-session `ConversationTainted` entry hold per instance — and
-    // one audited sink over it, shared by the daemon agent, the role-switch
-    // child and all their planners.
-    let routing_guard: Option<Arc<aivyx_channel::routing_guard::RoutingGuard>> =
-        if routing::escalation_active(config_routing.as_ref(), &routing_access.escalation) {
-            Some(Arc::new(aivyx_channel::routing_guard::RoutingGuard::new(
-                Arc::clone(&storage),
-            )))
-        } else {
-            None
-        };
-    let taint_sink: Option<Arc<dyn aivyx_core::TaintSink>> = routing_guard.as_ref().map(|guard| {
-        Arc::new(aivyx_core::AuditedTaintSink::new(
-            Arc::clone(guard) as Arc<dyn aivyx_core::TaintSink>,
-            Arc::clone(&audit),
-        )) as Arc<dyn aivyx_core::TaintSink>
-    });
 
     // ---- Chapter O: provision the agent's personal workspace ----------
     // Idempotent: creates `~/.aivyx-pa/workspace` + seed structure if absent.
@@ -10076,6 +10122,7 @@ async fn run_async(
             // built above (used to wire the `remind.*` tools + spawn the
             // reminder driver) is also the `GetReminders` query's source.
             reminder_store: Some(Arc::clone(&reminder_store)),
+            routing_guard: routing_guard.clone(),
             // Chapter L (L.5) — the team-mission service built above.
             team_missions,
             // Chapter H — the daemon's default gate posture. Interactive for
@@ -14130,6 +14177,14 @@ mod tests {
                 .mode,
             CliMode::Routing(RoutingSubcommand::Explain { limit: 5 })
         );
+        assert_eq!(
+            parse_cli_args_from(&argv(&["routing", "allow-cloud", "0b5c7d2e-0000-4000-8000-000000000000"]))
+                .unwrap()
+                .mode,
+            CliMode::Routing(RoutingSubcommand::AllowCloud {
+                session: "0b5c7d2e-0000-4000-8000-000000000000".into()
+            })
+        );
     }
 
     #[test]
@@ -14141,6 +14196,8 @@ mod tests {
             &["routing", "explain", "--limit"],
             &["routing", "explain", "--limit", "zero"],
             &["routing", "explain", "--limit", "0"],
+            &["routing", "allow-cloud"],
+            &["routing", "allow-cloud", "a", "b"],
         ] {
             assert!(
                 parse_cli_args_from(&argv(args)).is_err(),

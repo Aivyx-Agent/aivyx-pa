@@ -767,6 +767,23 @@ pub enum AuditTag {
     /// recall", a channel), never content. Emitted once per session, by
     /// [`AuditedTaintSink`], only when the mark was new.
     ConversationTainted { session_id: String, reason: String },
+    /// Model routing Part 3b (A15) — one cloud-escalation decision: a
+    /// trigger fired and escalation was allowed, stopped for consent,
+    /// blocked by taint, or disabled for this call. `payload_hash` is a
+    /// hex SHA-256 of the would-be outbound request; content is never
+    /// recorded. `model` is the cloud model, where one was chosen.
+    CloudEscalation {
+        session_id: Option<String>,
+        model: Option<String>,
+        trigger: String,
+        mode: String,
+        outcome: String,
+        payload_hash: String,
+    },
+    /// Model routing Part 3b (A15) — the operator allowed cloud escalation
+    /// for conversation `session_id` (in-memory, this process only).
+    /// `via` is `"chat"` (`/allow-cloud`) or `"ipc"`.
+    CloudConsentGranted { session_id: String, via: String },
     ToolCall {
         turn_id: TurnId,
         tool_id: ToolId,

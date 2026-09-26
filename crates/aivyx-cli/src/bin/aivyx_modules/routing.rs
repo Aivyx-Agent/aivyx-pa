@@ -68,6 +68,12 @@ pub(crate) struct CloudAccess {
     pub escalation: EscalationConfig,
     pub anthropic_key: Option<SecretString>,
     pub openai_key: Option<SecretString>,
+    /// The daemon's one routing guard (taint + consent), when escalation is
+    /// active. Without it no escalation layer is built — the offline
+    /// `routing status` path and tests leave it `None`.
+    pub escalation_guard: Option<Arc<dyn aivyx_llm::EscalationGuard>>,
+    /// Receives every escalation decision (the daemon audits through it).
+    pub escalation_observer: Option<aivyx_llm::EscalationObserver>,
 }
 
 impl CloudAccess {
@@ -264,6 +270,29 @@ impl ProfileRefresher for DiscoveryRefresher {
     }
 }
 
+/// The models on `[routing.endpoints.*]` cloud endpoints — the escalation
+/// candidates. Cloud endpoints are never probed, so these are exactly the
+/// roster entries naming them (merged as unverified).
+fn cloud_candidates(config: &RoutingConfig, default: &DefaultEndpoint) -> Vec<ModelProfile> {
+    merge(config, default, &[])
+        .into_iter()
+        .filter(|p| {
+            config
+                .endpoints
+                .get(p.endpoint.as_str())
+                .is_some_and(|e| e.kind.locality() == Locality::Cloud)
+        })
+        .collect()
+}
+
+fn llm_mode(mode: EscalationMode) -> aivyx_llm::EscalationMode {
+    match mode {
+        EscalationMode::Never => aivyx_llm::EscalationMode::Never,
+        EscalationMode::Ask => aivyx_llm::EscalationMode::Ask,
+        EscalationMode::Auto => aivyx_llm::EscalationMode::Auto,
+    }
+}
+
 /// Drops the models on `[routing.endpoints.*]` cloud endpoints: they're
 /// escalation targets, never local-router candidates, so the local router
 /// behaves exactly as 3a's whether or not a cloud endpoint is configured.
@@ -376,6 +405,37 @@ pub(crate) async fn wrap_with_routing(
     .with_refresher(refresher);
     if let Some(observer) = observer {
         routed = routed.with_observer(observer);
+    }
+    // Part 3b — escalation only when it's active and the daemon handed us
+    // its guard; the cloud models live on their own router, never the
+    // local one.
+    if escalation_active(Some(routing), &access.escalation)
+        && let Some(guard) = &access.escalation_guard
+    {
+        let cloud = cloud_candidates(&config, &default);
+        if cloud.is_empty() {
+            eprintln!(
+                "aivyx-pa: routing: a cloud [routing.endpoints] entry is configured but no \
+                 [[routing.models]] entry names it — nothing to escalate to"
+            );
+        } else {
+            let esc = &access.escalation;
+            routed = routed.with_escalation(aivyx_llm::EscalationSetup {
+                router: Router::new(cloud, config.tasks.clone()).with_allow_cloud(true),
+                mode: llm_mode(esc.mode),
+                no_local_candidate: esc.no_local_candidate,
+                tiers: esc
+                    .tiers
+                    .iter()
+                    .map(|t| t.parse().unwrap_or_else(|never| match never {}))
+                    .collect(),
+                guard: Arc::clone(guard),
+                observer: access
+                    .escalation_observer
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(|_: &aivyx_llm::EscalationRecord| {})),
+            });
+        }
     }
     let routed = Arc::new(routed);
     Ok((Arc::clone(&routed) as Arc<dyn LlmProvider>, Some(routed)))
@@ -552,6 +612,26 @@ fn routed_entry(entry: &SignedEntry) -> Option<RoutedEntry> {
     })
 }
 
+/// `aivyx-pa routing allow-cloud <session>` — allow cloud escalation for
+/// one conversation on the running daemon (in-memory there; a daemon
+/// restart re-asks). Never overrides a routing taint.
+pub(crate) async fn run_allow_cloud(session: &str) -> Result<(), String> {
+    let socket_path = aivyx_channel::daemon_ipc::default_socket_path()?;
+    if !aivyx_channel::daemon_client::daemon_is_running(&socket_path).await {
+        return Err("the daemon isn't running — start it, then allow cloud escalation for the \
+                    conversation (or send /allow-cloud in it)"
+            .to_string());
+    }
+    match aivyx_channel::daemon_client::allow_cloud_escalation(&socket_path, session).await {
+        Ok(true) => {
+            println!("Cloud escalation allowed for conversation {session} (until the daemon restarts).");
+            Ok(())
+        }
+        Ok(false) => Err("cloud escalation is not enabled on the running daemon".to_string()),
+        Err(e) => Err(format!("failed to reach the daemon: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,6 +727,7 @@ mod tests {
             escalation: EscalationConfig::default(),
             anthropic_key: Some(SecretString::from("sk-ant-test")),
             openai_key: Some(SecretString::from("sk-test")),
+            ..CloudAccess::default()
         }
     }
 
@@ -1047,6 +1128,63 @@ mod tests {
     /// Until escalation dispatch lands (a separate escalation router), a
     /// configured cloud endpoint's models stay out of the local router:
     /// routing behaves exactly as 3a's.
+    struct NoTaint;
+
+    #[async_trait::async_trait]
+    impl aivyx_llm::EscalationGuard for NoTaint {
+        async fn taint(&self, _session: &str) -> Option<String> {
+            None
+        }
+        fn consented(&self, _session: &str) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn escalation_gets_the_cloud_endpoint_models_only_with_a_guard() {
+        let cfg = parse(
+            "[routing]\nenabled = true\ndiscover = false\n\
+             [routing.endpoints.claude]\nkind = \"anthropic\"\n\
+             [[routing.models]]\nid = \"claude-big\"\nendpoint = \"claude\"\ntier = \"large\"\n\
+             capabilities = [\"completion\", \"tools\"]\n",
+        );
+        let with_guard = CloudAccess {
+            escalation_guard: Some(Arc::new(NoTaint)),
+            ..cloud_access()
+        };
+        for (access, expected) in [
+            (with_guard, vec!["claude-big@claude".to_string()]),
+            (cloud_access(), vec![]),
+        ] {
+            let (_, routed) = wrap_with_routing(
+                Some(&cfg),
+                &access,
+                ProviderKind::Ollama,
+                None,
+                "qwen3:8b",
+                unused_provider(),
+                None,
+            )
+            .await
+            .unwrap();
+            let routed = routed.expect("routing is on");
+            let cloud: Vec<String> = routed
+                .escalation_candidates()
+                .iter()
+                .map(|p| p.key().to_string())
+                .collect();
+            assert_eq!(cloud, expected);
+            // Never on the local router.
+            assert!(
+                routed
+                    .router()
+                    .profiles()
+                    .iter()
+                    .all(|p| p.endpoint.as_str() != "claude")
+            );
+        }
+    }
+
     #[tokio::test]
     async fn cloud_endpoint_models_are_kept_out_of_the_local_router() {
         let local = "[routing]\nenabled = true\ndiscover = false\n\

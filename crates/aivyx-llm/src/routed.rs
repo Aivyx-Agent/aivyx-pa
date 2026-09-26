@@ -102,6 +102,15 @@ impl RoutedProvider {
         self
     }
 
+    /// The cloud escalation candidates (Part 3b), empty when escalation
+    /// isn't configured. For `routing.status`.
+    pub fn escalation_candidates(&self) -> Vec<ModelProfile> {
+        self.escalation
+            .as_ref()
+            .map(|esc| esc.router.profiles())
+            .unwrap_or_default()
+    }
+
     /// The model that served `session`'s last routed call (local or
     /// escalated), if any.
     pub fn last_served(&self, session: &str) -> Option<ModelKey> {

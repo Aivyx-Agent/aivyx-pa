@@ -145,6 +145,38 @@ impl RoutingGuard {
 
 /// Lock a std mutex, recovering from poisoning: both guarded sets only
 /// ever grow, so a panicked holder can't leave them inconsistent.
+/// Model routing Part 3b — the chat command that allows cloud escalation
+/// for the conversation it's sent in. Only the whole message counts.
+pub const ALLOW_CLOUD_COMMAND: &str = "/allow-cloud";
+
+/// Is `text` exactly the `/allow-cloud` command (surrounding whitespace
+/// aside)? Anything else is a normal turn.
+pub fn is_allow_cloud_command(text: &str) -> bool {
+    text.trim() == ALLOW_CLOUD_COMMAND
+}
+
+/// Grants cloud-escalation consent for `session` when escalation is
+/// configured (`guard` is `Some`), and returns whether it was recorded and
+/// the reply for the operator. Consent is in-memory and never clears a
+/// taint.
+pub fn allow_cloud_reply(guard: Option<&RoutingGuard>, session: &str) -> (bool, &'static str) {
+    match guard {
+        Some(guard) => {
+            guard.allow(session);
+            (
+                true,
+                "Cloud escalation allowed for this conversation (until the daemon restarts). \
+                 Resend your message.",
+            )
+        }
+        None => (
+            false,
+            "Cloud escalation is not enabled — it needs a cloud [routing.endpoints] entry and \
+             [routing.escalation] mode \"ask\" or \"auto\".",
+        ),
+    }
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -315,5 +347,30 @@ mod tests {
         assert_eq!(read.taint("s1").await.as_deref(), Some("first"));
         guard.allow("s1");
         assert!(read.consented("s1"));
+    }
+
+    #[test]
+    fn allow_cloud_is_the_whole_message_only() {
+        assert!(is_allow_cloud_command("/allow-cloud"));
+        assert!(is_allow_cloud_command("  /allow-cloud\n"));
+        assert!(!is_allow_cloud_command("/allow-cloud please"));
+        assert!(!is_allow_cloud_command("please /allow-cloud"));
+        assert!(!is_allow_cloud_command("/ALLOW-CLOUD"));
+        assert!(!is_allow_cloud_command("allow-cloud"));
+    }
+
+    #[tokio::test]
+    async fn allow_cloud_reply_records_consent_only_when_enabled() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 1).await);
+        let (granted, reply) = allow_cloud_reply(Some(&guard), "s");
+        assert!(granted);
+        assert!(guard.consented("s"));
+        assert!(reply.contains("allowed"), "{reply}");
+        assert!(reply.contains("Resend"), "{reply}");
+
+        let (granted, reply) = allow_cloud_reply(None, "s");
+        assert!(!granted);
+        assert!(reply.contains("not enabled"), "{reply}");
     }
 }

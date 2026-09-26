@@ -539,6 +539,14 @@ pub enum QueryPayload {
     /// small-cycle breaker. Takes effect on the next daemon start. Responds with
     /// [`QueryResponsePayload::SettingsApplied`] (or `QueryError`).
     SetCycleDetection { enabled: bool },
+    /// Model routing Part 3b (A15) — allow cloud escalation for one
+    /// conversation, in this daemon process only (a restart re-asks). The
+    /// same effect as sending `/allow-cloud` in that conversation. Never
+    /// overrides a routing taint. Responds with
+    /// [`QueryResponsePayload::CloudEscalationAllowed`], or
+    /// [`QueryResponsePayload::CloudEscalationNotEnabled`] when no cloud
+    /// escalation is configured.
+    AllowCloudEscalation { session_id: String },
     /// Chapter Reins — rewrite `[autonomy] level`. `level` is one of `manual |
     /// assisted | supervised | autonomous | unleashed`. `confirm` MUST be `true`
     /// for the autonomy-granting levels (`autonomous` / `unleashed`) — the
@@ -1472,6 +1480,12 @@ pub enum QueryResponsePayload {
         settings: SettingsSnapshot,
         restart_required: bool,
     },
+    /// Response to [`QueryPayload::AllowCloudEscalation`]: consent recorded
+    /// for `session_id` (in-memory, this daemon process only).
+    CloudEscalationAllowed { session_id: String },
+    /// Response to [`QueryPayload::AllowCloudEscalation`] when the daemon
+    /// has no cloud escalation configured (nothing was recorded).
+    CloudEscalationNotEnabled,
     /// Response to [`QueryPayload::SetProfile`]. Chapter V — carries the
     /// **fresh** `ProfileSummary` (re-read from disk so the editor re-renders
     /// from authoritative state) and `restart_required` (always `true` today —
@@ -4707,6 +4721,30 @@ mod tests {
             let frame = encode_frame(&msg).expect("encode");
             let (decoded, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
             assert_eq!(decoded, msg, "settings query round-trips");
+        }
+    }
+
+    #[test]
+    fn allow_cloud_escalation_round_trips() {
+        let msg = FrontendMessage::Query {
+            id: "q".into(),
+            payload: QueryPayload::AllowCloudEscalation {
+                session_id: "0b5c7d2e-0000-4000-8000-000000000000".into(),
+            },
+        };
+        let frame = encode_frame(&msg).expect("encode");
+        let (decoded, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+        assert_eq!(decoded, msg);
+
+        for payload in [
+            QueryResponsePayload::CloudEscalationAllowed {
+                session_id: "s".into(),
+            },
+            QueryResponsePayload::CloudEscalationNotEnabled,
+        ] {
+            let frame = encode_frame(&payload).expect("encode");
+            let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, payload);
         }
     }
 

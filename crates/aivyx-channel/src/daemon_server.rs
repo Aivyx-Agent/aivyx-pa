@@ -521,6 +521,11 @@ pub struct DaemonConfig {
     /// query returns an empty list rather than erroring — matches the
     /// existing `remind.*` tools' own degrade-gracefully posture.
     pub reminder_store: Option<crate::reminder_tool::SharedReminderStore>,
+    /// Model routing Part 3b — the process's ONE routing guard, when cloud
+    /// escalation is active: `/allow-cloud` and the `AllowCloudEscalation`
+    /// query record consent on it. `None` ⇒ escalation isn't configured and
+    /// both answer "not enabled".
+    pub routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
 }
 
 /// Chapter X — the provider + model the daemon uses for one-shot persona-seed
@@ -796,6 +801,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         seed_draft_llm,
         document_roots,
         reminder_store,
+        routing_guard,
         wiki_sweep,
         wiki_store,
         graph_sweep,
@@ -1760,6 +1766,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             document_roots: document_roots.clone(),
             reminder_store: reminder_store.clone(),
             comfyui_base_url: comfyui_base_url.clone(),
+            routing_guard: routing_guard.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -2072,6 +2079,8 @@ struct ConnectionContext {
     document_roots: DocumentRoots,
     /// Phase 186 — see `DaemonConfig::reminder_store`'s own doc comment.
     reminder_store: Option<crate::reminder_tool::SharedReminderStore>,
+    /// Model routing Part 3b — see `DaemonConfig::routing_guard`.
+    routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
     /// Studio Gallery — base URL of the `comfyui` `[[mcp_server]]`'s
     /// backing ComfyUI instance, for the `GetGallery` query handler.
     comfyui_base_url: Option<String>,
@@ -2130,6 +2139,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         document_roots,
         reminder_store,
         comfyui_base_url,
+        routing_guard,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -2277,6 +2287,28 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 .parse::<uuid::Uuid>()
                                 .map(aivyx_core::SessionId)
                                 .unwrap_or_else(|_| aivyx_core::SessionId::new());
+                            // Model routing Part 3b (A15) — `/allow-cloud`
+                            // is a command, not a turn: record consent for
+                            // this conversation (when escalation is
+                            // configured), audit it, and answer without
+                            // touching the agent, the history or the model.
+                            if crate::routing_guard::is_allow_cloud_command(&text) {
+                                let key = session.to_string();
+                                let (granted, reply) = crate::routing_guard::allow_cloud_reply(
+                                    routing_guard.as_deref(),
+                                    &key,
+                                );
+                                if granted {
+                                    audit_consent(audit_log.as_deref(), &key, "chat");
+                                }
+                                let resp = DaemonMessage::TurnComplete {
+                                    session_id: sid,
+                                    outcome: format!("completed: {reply}"),
+                                };
+                                let frame = encode_frame(&resp)?;
+                                writer.write_all(&frame).await?;
+                                continue;
+                            }
                             // Phase 86 — keep the user text for the
                             // conversation-window write site below
                             // (Message::text consumes it).
@@ -2920,6 +2952,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 seed_draft_llm.as_ref(),
                                 comfyui_base_url.as_deref(),
                                 reminder_store.as_ref(),
+                                routing_guard.as_deref(),
+                                audit_log.as_deref(),
                             )
                             .await;
                             let resp = DaemonMessage::QueryResponse {
@@ -3694,7 +3728,20 @@ pub async fn run_poc_daemon<C: ChannelContext + Send + Sync + 'static>(
 ) -> Result<(), DaemonError> {
     let channel: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
-    run_single_connection_daemon(socket_path, agent, factory).await
+    run_single_connection_daemon(socket_path, agent, factory, None).await
+}
+
+/// [`run_poc_daemon`] with a model-routing guard attached, so a test can
+/// drive `/allow-cloud` end to end (Part 3b).
+pub async fn run_poc_daemon_with_routing_guard<C: ChannelContext + Send + Sync + 'static>(
+    socket_path: &Path,
+    agent: Arc<dyn Agent>,
+    channel: Arc<C>,
+    routing_guard: Arc<crate::routing_guard::RoutingGuard>,
+) -> Result<(), DaemonError> {
+    let channel: Arc<dyn ChannelContext + Send + Sync> = channel;
+    let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
+    run_single_connection_daemon(socket_path, agent, factory, Some(routing_guard)).await
 }
 
 /// Accept exactly one connection, serve it to completion, then return.
@@ -3703,6 +3750,7 @@ async fn run_single_connection_daemon(
     socket_path: &Path,
     agent: Arc<dyn Agent>,
     channel_factory: ChannelFactory,
+    routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
 ) -> Result<(), DaemonError> {
     let _ = std::fs::remove_file(socket_path);
 
@@ -3779,6 +3827,7 @@ async fn run_single_connection_daemon(
         document_roots: Default::default(),
         reminder_store: None,
         comfyui_base_url: None,
+        routing_guard,
     })
     .await
 }
@@ -3874,6 +3923,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         seed_draft_llm: None,
         document_roots: Default::default(),
         reminder_store: None,
+        routing_guard: None,
         wiki_sweep: None,
         graph_sweep: None,
     })
@@ -4056,6 +4106,19 @@ fn detect_crash_recovery(state_path: &Path) -> Option<DaemonState> {
 // Phase 47 — query dispatch
 // ---------------------------------------------------------------------------
 
+/// Model routing Part 3b — audit a cloud-escalation consent grant
+/// (`via` = `"chat"` or `"ipc"`). A failed append is logged, not fatal.
+fn audit_consent(audit: Option<&PersistentAuditLog>, session: &str, via: &str) {
+    if let Some(log) = audit
+        && let Err(e) = log.append(aivyx_audit::AuditEvent::CloudConsentGranted {
+            session_id: session.to_string(),
+            via: via.to_string(),
+        })
+    {
+        eprintln!("aivyx-pa daemon: failed to audit cloud consent for {session}: {e}");
+    }
+}
+
 /// Phase 47 — answer a [`QueryPayload`] from the daemon's in-memory state
 /// and persistent stores.
 ///
@@ -4137,6 +4200,11 @@ async fn handle_query(
     comfyui_base_url: Option<&str>,
     // Phase 186 — see `DaemonConfig::reminder_store`'s own doc comment.
     reminder_store: Option<&crate::reminder_tool::SharedReminderStore>,
+    // Model routing Part 3b — see `DaemonConfig::routing_guard`.
+    routing_guard: Option<&crate::routing_guard::RoutingGuard>,
+    // The audit log again, for `CloudConsentGranted` (the parameter above
+    // is shared with the read-only audit queries).
+    consent_audit: Option<&PersistentAuditLog>,
 ) -> QueryResponsePayload {
     /// Phase 47 Q3 — server-side cap on caller-supplied `limit` for
     /// audit queries. Prevents a single query from monopolizing the
@@ -4295,6 +4363,22 @@ async fn handle_query(
             }
         }
         QueryPayload::GetReminders => reminders_query_response(reminder_store).await,
+        QueryPayload::AllowCloudEscalation { session_id } => {
+            let Ok(uuid) = session_id.parse::<uuid::Uuid>() else {
+                return QueryResponsePayload::QueryError {
+                    code: "invalid_session".into(),
+                    message: format!("`{session_id}` is not a session id"),
+                };
+            };
+            let session = aivyx_core::SessionId(uuid).to_string();
+            match crate::routing_guard::allow_cloud_reply(routing_guard, &session).0 {
+                true => {
+                    audit_consent(consent_audit, &session, "ipc");
+                    QueryResponsePayload::CloudEscalationAllowed { session_id: session }
+                }
+                false => QueryResponsePayload::CloudEscalationNotEnabled,
+            }
+        }
         QueryPayload::DumpToolRelevance { keyword_key_filter } => {
             let Some(ledger) = tool_relevance_ledger else {
                 return QueryResponsePayload::QueryError {
@@ -7535,6 +7619,8 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::LlmCost { .. } => "LlmCost",
         aivyx_audit::AuditEvent::ModelRouted { .. } => "ModelRouted",
         aivyx_audit::AuditEvent::ConversationTainted { .. } => "ConversationTainted",
+        aivyx_audit::AuditEvent::CloudEscalation { .. } => "CloudEscalation",
+        aivyx_audit::AuditEvent::CloudConsentGranted { .. } => "CloudConsentGranted",
         aivyx_audit::AuditEvent::MemoryAccess { .. } => "MemoryAccess",
         aivyx_audit::AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         aivyx_audit::AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",
