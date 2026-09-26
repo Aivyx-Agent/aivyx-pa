@@ -845,6 +845,34 @@ pre-existing-gap situation this entry doesn't attempt to reconcile,
 only to not compound — same posture as the Piece C addendum's own note
 above.)
 
+## Model routing Part 3a addendum — `routing.*` (2026-09-26)
+
+> *Added for Part 3a of the cross-repo model-routing initiative (the
+> shared `aivyx-route` crate's `Router`, wrapped by `aivyx-llm`'s
+> `RoutedProvider`). `routing.status` / `routing.read` gate two read-only
+> tools over the daemon's own model router: `routing.status` lists the
+> routing candidates (model id@endpoint, tier, known/unknown
+> capabilities, context window, availability) and `routing.explain`
+> (scope `routing.read`) returns the router's last decision for a
+> session. **Infrastructure, not substrate:** the agent reading its own
+> runtime's model-selection state — the same precedent as
+> `skill_defaults.*` / `graph.read` — not a new operator-owned resource
+> primitive. So it grows `KNOWN_BASES` **without a P10 substrate-count
+> amendment**. Bare bases, `CEILING_TRUSTED` only; SemiTrusted does not
+> get them by default. Both tools opt into the zero-config backcompat
+> floor (read-only), and are registered only when `[routing] enabled`.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Model routing Part 3a | `routing.status`, `routing.read` | Gates the router status / decision-explain read tools; infrastructure (no P10 amendment), Trusted-tier-only at the ceiling |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **98 → 100** (the two new `routing.*`
+infrastructure bases). The
+`known_bases_count_matches_phase_143_a3_addendum` test pins the new
+total at **100**, so this addendum and the runtime stay in sync.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

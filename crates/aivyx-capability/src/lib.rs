@@ -366,6 +366,16 @@ const KNOWN_BASES: &[&str] = &[
     // get these by default.
     "skill_defaults.list",
     "skill_defaults.read",
+    // Model routing Part 3a — `routing.status` / `routing.explain`
+    // tools. `routing.status` gates the router's candidate list (model
+    // ids, tiers, capabilities, availability); `routing.read` gates the
+    // router's last decision for a session. Read-only views of the
+    // daemon's own model router — infrastructure, not substrate, same
+    // precedent as `skill_defaults.*`/`graph.read`: no new
+    // operator-owned resource. Trusted-tier only; SemiTrusted does not
+    // get these by default.
+    "routing.status",
+    "routing.read",
     // Phase 184 — Conversational skill-teaching. `skills.write`
     // gates the operator-authored edit tools (`skills.teach` /
     // `skills.update` / `skills.forget`) that append LearnedSkill
@@ -1163,6 +1173,12 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // graph.read; SemiTrusted does not get these by default.
         "skill_defaults.list",
         "skill_defaults.read",
+        // Model routing Part 3a — see the KNOWN_BASES doc comment above
+        // for the infrastructure-classification rationale. Trusted tier
+        // only, same posture as skill_defaults.*; SemiTrusted does not
+        // get these by default.
+        "routing.status",
+        "routing.read",
         // Phase 184 — operator-authored skill editing (Trusted
         // only; identity-modifying).
         "skills.write",
@@ -2431,11 +2447,14 @@ mod tests {
         // see the KNOWN_BASES doc comment for why).
         // Aivyx-Skills Part 3 adds skill_defaults.list + skill_defaults.read — the default skill library
         // read gates (infrastructure, no P10 amendment).
+        // Model routing Part 3a adds routing.status + routing.read — the
+        // router's candidate list and per-session decision read gates
+        // (infrastructure, no P10 amendment).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            98,
+            100,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
@@ -2520,6 +2539,24 @@ mod tests {
             !CEILING_SEMITRUSTED.grants(&read),
             "SemiTrusted ceiling must deny skill_defaults.read by default"
         );
+    }
+
+    #[test]
+    fn routing_bases_parse_and_are_trusted_only() {
+        // Model routing Part 3a — both new bases parse (bare, like
+        // skill_defaults.list) and sit at Trusted+ only.
+        for base in ["routing.status", "routing.read"] {
+            let scope = Scope::parse(base).expect(base);
+            assert_eq!(scope.base(), base);
+            assert!(
+                CEILING_TRUSTED.grants(&scope),
+                "Trusted ceiling must grant {base}"
+            );
+            assert!(
+                !CEILING_SEMITRUSTED.grants(&scope),
+                "SemiTrusted ceiling must deny {base} by default"
+            );
+        }
     }
 
     #[test]
