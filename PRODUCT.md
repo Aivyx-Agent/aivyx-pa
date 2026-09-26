@@ -217,8 +217,9 @@ prevents drift away from the target.
   > (A15) — consent-gated cloud escalation: a local-first
   > configuration may send a specific conversation's call to a
   > cloud endpoint the operator configured, under six privacy
-  > rules (tainted conversations never escalate; no Aivyx-hosted
-  > component, key proxying or telemetry). Model routing Part 3b.*
+  > rules (e.g. tainted conversations never escalate); N5
+  > unchanged — no Aivyx-hosted component, key proxying or
+  > telemetry. Model routing Part 3b.*
 
 - **G7 — Third-party tool SDK.** Tools follow a documented
   contract any third party can implement to add new capabilities

@@ -98,8 +98,9 @@ amendment.
 1. **A tainted conversation never escalates, in any mode.** `auto` does
    not bypass taint. There is no per-conversation override. When a
    trigger fires on a tainted conversation, the call falls back to the
-   best local model, or fails with a clear error if there is none, and
-   the reason is surfaced to the operator and audited.
+   best local model, or fails with a clear error if there is none. The
+   block is audited, and when no local model can serve the call, the
+   reason is surfaced in the error.
 2. **Taint is persisted and never cleared for that session.** It
    survives a daemon restart and survives compaction. It is recorded on
    the conversation, deliberately *not* re-derived from current history,
@@ -108,7 +109,7 @@ amendment.
 3. **Calls without a conversation session never escalate.** Judges,
    mission planning, and any other call made outside a conversation
    session have no taint record, so their taint cannot be known; they
-   stay local.
+   are never sent to a cloud escalation endpoint.
 4. **Escalation goes only to endpoints the operator configured, with
    the operator's own keys.** A cloud endpoint exists only if the
    operator wrote it into `[routing.endpoints]`, and it authenticates
@@ -117,18 +118,21 @@ amendment.
    cloud destination.
 5. **Every escalation decision other than "no escalation needed" writes
    an audit entry** (for example: allowed, awaiting consent, or
-   blocked), recording the model, trigger, mode and outcome, and **a
-   hash of the outbound payload, never its content.**
+   blocked), recording the model (where one was chosen), trigger, mode
+   and outcome, and **a hash of the outbound payload, never its
+   content.**
 6. **Consent grants are in-memory only and per conversation.** A grant
    covers one conversation; it is never written to disk, so a restart
    re-asks. It never carries over to another conversation.
 
 N5 is unchanged and applies in full: **no Aivyx-hosted component** sits
 in the escalation path, the operator's key is **never proxied**, prompts
-are never batched or stored on anyone else's servers, and there is **no
-telemetry**. An escalated call goes from the operator's machine directly
-to the provider the operator configured, exactly as a cloud `[agent]`
-call already does under G6.
+are never batched or stored on Aivyx servers (there are none in the
+path), and there is **no telemetry**. What the cloud provider itself
+retains is governed by that provider's own terms with the operator.
+An escalated call goes from the operator's machine directly to the
+provider the operator configured, exactly as a cloud `[agent]` call
+already does under G6.
 
 ---
 
