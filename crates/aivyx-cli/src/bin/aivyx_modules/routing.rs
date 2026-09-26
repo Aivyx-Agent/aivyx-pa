@@ -210,15 +210,22 @@ pub(crate) fn provider_factory(cfg: &RoutingConfig, access: &CloudAccess) -> Pro
                 .base_url()
                 .ok_or_else(|| format!("[routing.endpoints.{endpoint}] has no base_url"))?,
         );
+        // Every kind listed explicitly: a new cloud kind must not fall into
+        // the keyless local branch.
         let provider: Arc<dyn LlmProvider> = match config.kind {
             EndpointKind::Ollama => Arc::new(
                 OllamaProvider::new(OllamaConfig::default_local().with_base_url(base))
                     .map_err(err)?,
             ),
-            _ => Arc::new(
+            EndpointKind::LlamaRouter | EndpointKind::OpenaiCompat => Arc::new(
                 OpenAiProvider::new(OpenAiConfig::without_api_key().with_base_url(base))
                     .map_err(err)?,
             ),
+            EndpointKind::Anthropic | EndpointKind::Openai => {
+                return Err(format!(
+                    "[routing.endpoints.{endpoint}] is a cloud endpoint with no key mapping"
+                ));
+            }
         };
         Ok(provider)
     })
@@ -293,16 +300,20 @@ fn llm_mode(mode: EscalationMode) -> aivyx_llm::EscalationMode {
     }
 }
 
-/// Drops the models on `[routing.endpoints.*]` cloud endpoints: they're
-/// escalation targets, never local-router candidates, so the local router
-/// behaves exactly as 3a's whether or not a cloud endpoint is configured.
-/// (Cloud models on the default endpoint are unaffected.)
+/// Keeps only local-router candidates: models on the `default` endpoint
+/// or on a configured local `[routing.endpoints.*]` entry. Cloud-endpoint
+/// models are escalation targets, never local candidates (so the local
+/// router behaves exactly as 3a's whether or not a cloud endpoint is
+/// configured), and a model naming an endpoint that isn't configured at
+/// all is dropped too — `merge` marks it cloud (fail closed), and on a
+/// cloud `[agent]` provider the local router would otherwise allow it.
 fn without_cloud_endpoints(profiles: &mut Vec<ModelProfile>, config: &RoutingConfig) {
     profiles.retain(|p| {
-        config
-            .endpoints
-            .get(p.endpoint.as_str())
-            .is_none_or(|e| e.kind.locality() != Locality::Cloud)
+        p.endpoint.as_str() == DEFAULT_ENDPOINT
+            || config
+                .endpoints
+                .get(p.endpoint.as_str())
+                .is_some_and(|e| e.kind.locality() != Locality::Cloud)
     });
 }
 
@@ -1209,6 +1220,36 @@ mod tests {
         fn consented(&self, _session: &str) -> bool {
             false
         }
+    }
+
+    #[tokio::test]
+    async fn a_roster_entry_on_an_unconfigured_endpoint_never_reaches_the_local_router() {
+        // On a cloud default, allow_cloud is on for the local router; a
+        // typo'd endpoint's model (fail-closed Cloud locality from merge)
+        // must still not be a candidate.
+        let cfg = parse(
+            "[routing]\nenabled = true\ndiscover = false\n\
+             [[routing.models]]\nid = \"mystery\"\nendpoint = \"nowhere\"\ntier = \"large\"\n",
+        );
+        let (_, routed) = wrap_with_routing(
+            Some(&cfg),
+            &cloud_access(),
+            ProviderKind::Anthropic,
+            None,
+            "claude-small",
+            unused_provider(),
+            None,
+        )
+        .await
+        .unwrap();
+        let keys: Vec<String> = routed
+            .expect("routing is on")
+            .router()
+            .profiles()
+            .iter()
+            .map(|p| p.key().to_string())
+            .collect();
+        assert_eq!(keys, vec!["claude-small@default"]);
     }
 
     #[tokio::test]
