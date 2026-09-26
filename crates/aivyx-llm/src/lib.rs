@@ -121,7 +121,7 @@ pub mod verify;
 /// tagged request with `aivyx-route`'s shared `Router`. Ungated: it
 /// dispatches through providers the caller builds.
 pub mod routed;
-pub use routed::{ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider};
+pub use routed::{ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider, is_routable};
 
 // ---------------------------------------------------------------------------
 // Conversation messages

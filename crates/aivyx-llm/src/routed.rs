@@ -114,10 +114,13 @@ fn has_image(messages: &[LlmMessage]) -> bool {
     user_blocks_any(messages, |b| matches!(b, ContentBlock::ImageBase64 { .. }))
 }
 
-/// OpenAI-compatible providers drop document blocks, so a PDF must stay
-/// on the configured model.
-fn has_document(messages: &[LlmMessage]) -> bool {
-    user_blocks_any(messages, |b| {
+/// Whether a tagged request over `messages` is routed at all. A request
+/// carrying a PDF (a `DocumentBase64` block in any user message) is not:
+/// OpenAI-compatible providers drop document blocks, so it stays on the
+/// configured model, and the router's state is left untouched. Callers
+/// attributing a step to a model must apply the same rule.
+pub fn is_routable(messages: &[LlmMessage]) -> bool {
+    !user_blocks_any(messages, |b| {
         matches!(b, ContentBlock::DocumentBase64 { .. })
     })
 }
@@ -140,7 +143,7 @@ impl LlmProvider for RoutedProvider {
         cancellation: &CancellationToken,
     ) -> Result<Box<dyn LlmStream>, LlmError> {
         let hint = match request.route.clone() {
-            Some(hint) if !has_document(request.messages) => hint,
+            Some(hint) if is_routable(request.messages) => hint,
             // Untagged, or carrying a PDF: the configured provider, as-is.
             _ => {
                 return self

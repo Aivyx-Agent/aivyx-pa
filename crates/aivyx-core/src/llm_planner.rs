@@ -994,6 +994,20 @@ impl LlmPlanner {
         self.tools.iter().map(|t| t.name.as_str()).collect()
     }
 
+    /// The model that served the latest step: the router's last decision
+    /// for this session when the step was routed, else the configured
+    /// model. A step over a history `RoutedProvider` won't route (a PDF)
+    /// went to the configured model even though the request was tagged —
+    /// and `last_decision` still names an earlier turn's model.
+    fn served_model(&self) -> String {
+        self.routing
+            .as_ref()
+            .filter(|_| aivyx_llm::is_routable(&self.history))
+            .and_then(|(r, _)| r.router().last_decision(self.route_session.as_deref()?))
+            .map(|rec| rec.model.id)
+            .unwrap_or_else(|| self.config.model.clone())
+    }
+
     /// Add a step's usage to the running total, and to the per-model
     /// total of the model that served the step — the router's last
     /// decision for this session when routed, else the configured model.
@@ -1003,12 +1017,7 @@ impl LlmPlanner {
         self.accumulated_usage.cache_creation_input_tokens += usage.cache_creation_input_tokens;
         self.accumulated_usage.cache_read_input_tokens += usage.cache_read_input_tokens;
 
-        let served = self
-            .routing
-            .as_ref()
-            .and_then(|(r, _)| r.router().last_decision(self.route_session.as_deref()?))
-            .map(|rec| rec.model.id)
-            .unwrap_or_else(|| self.config.model.clone());
+        let served = self.served_model();
         let step = crate::TokenUsage::from(usage);
         match self
             .turn_costs
@@ -1462,15 +1471,8 @@ impl TurnPlanner for LlmPlanner {
                     // back to the default permissive scan.
                     // Routed: ask about the model that actually served
                     // the step, not the configured one.
-                    let served = self
-                        .routing
-                        .as_ref()
-                        .and_then(|(r, _)| r.router().last_decision(self.route_session.as_deref()?))
-                        .map(|rec| rec.model.id);
-                    let family_hint = self
-                        .provider
-                        .tool_call_family_hint(served.as_deref().unwrap_or(&self.config.model))
-                        .await;
+                    let served = self.served_model();
+                    let family_hint = self.provider.tool_call_family_hint(&served).await;
                     let extracted = crate::textual_tool_call::extract_tool_calls_with_hint(
                         &text,
                         family_hint.as_deref(),
@@ -5601,6 +5603,55 @@ mod tests {
 
         assert_eq!(gpu.hints.lock().unwrap().clone(), vec!["big".to_string()]);
         assert!(default.hints.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_pdf_turn_after_a_routed_one_is_billed_and_hinted_as_the_configured_model() {
+        let default = FakeLlmProvider::new(vec![final_step(20, 2)]);
+        let gpu = FakeLlmProvider::new(vec![final_step(10, 5)]);
+        let routed = routed_over(default.clone(), gpu.clone());
+        let session = SessionId::new();
+        let planner_for = || {
+            let registry = Arc::new(ToolRegistry::new(vec![
+                Arc::new(FakeTool::new("echo")) as Arc<dyn Tool>
+            ]));
+            LlmPlanner::new(
+                Arc::clone(&routed) as Arc<dyn LlmProvider>,
+                registry,
+                LlmPlannerConfig::new("default"),
+            )
+            .with_routing(Arc::clone(&routed), aivyx_route::TaskKind::Chat)
+        };
+        let channel = RecChannel::new();
+
+        // Turn 1: routed to `big`.
+        let mut first = planner_for();
+        first
+            .begin_turn(&Message::text(session, "hi"), TurnId::new())
+            .await;
+        let _ = first.next_step(&[], &channel).await;
+        assert_eq!(first.turn_costs()[0].0, "big");
+
+        // Turn 2, same session, carrying a PDF: served by the default,
+        // though the router's last decision for the session is `big`.
+        let mut second = planner_for();
+        second
+            .begin_turn(
+                &Message::document(session, "application/pdf", b"%PDF-".to_vec()),
+                TurnId::new(),
+            )
+            .await;
+        let _ = second.next_step(&[], &channel).await;
+
+        assert_eq!(default.routes.lock().unwrap()[0].0, "default");
+        let usage = second.turn_usage();
+        assert_eq!(usage.input_tokens, 20);
+        assert_eq!(second.turn_costs(), vec![("default".to_string(), usage)]);
+        assert_eq!(gpu.hints.lock().unwrap().clone(), vec!["big".to_string()]);
+        assert_eq!(
+            default.hints.lock().unwrap().clone(),
+            vec!["default".to_string()]
+        );
     }
 
     #[tokio::test]
