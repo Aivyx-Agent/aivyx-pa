@@ -149,6 +149,8 @@ mod persona;
 mod profile;
 #[path = "aivyx_modules/role.rs"]
 mod role;
+#[path = "aivyx_modules/routing.rs"]
+mod routing;
 #[path = "aivyx_modules/skills.rs"]
 mod skills;
 #[path = "aivyx_modules/team.rs"]
@@ -6140,9 +6142,9 @@ async fn run_async(
         // above (before this destructure moved `config`), to build
         // `skill_defaults_loader`/`default_skills_section`.
         skill_defaults: _,
-        // Model routing Part 3a — read via `config.routing` where needed
-        // (Task 5 wires it into the daemon's provider construction).
-        routing: _,
+        // Model routing Part 3a — wraps the provider built below in a
+        // `RoutedProvider` when `[routing] enabled` (aivyx_modules/routing.rs).
+        routing: config_routing,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -6408,6 +6410,10 @@ async fn run_async(
     // `LlmPlanner::with_broker_slot_hint` on the daemon's own planner
     // factory.
     let mut broker_slot_hint_mode = false;
+    // Model routing Part 3a — the match below consumes `openai_base_url`;
+    // routing needs it to tell a local OpenAI-compatible server from the
+    // real (cloud) OpenAI API.
+    let routing_base_url: Option<String> = openai_base_url.as_ref().map(|s| s.value.clone());
     let provider: Arc<dyn LlmProvider> = match provider_kind.value {
         ProviderKind::Anthropic => {
             let api_key = anthropic_api_key
@@ -6616,6 +6622,31 @@ async fn run_async(
             Arc::new(p)
         }
     };
+
+    // ---- Model routing Part 3a ----------------------------------------
+    // `[routing]` absent or `enabled = false` ⇒ `provider` comes back as
+    // the very same `Arc`. Otherwise it becomes a `RoutedProvider` whose
+    // default endpoint is the provider just built; untagged requests still
+    // reach it unchanged. `routed` is kept for the audit observer (Task 6)
+    // and the routing IPC surface (Task 8).
+    let (provider, routed): (Arc<dyn LlmProvider>, Option<Arc<aivyx_llm::RoutedProvider>>) =
+        routing::wrap_with_routing(
+            config_routing.as_ref(),
+            provider_kind.value,
+            routing_base_url.as_deref(),
+            &model,
+            provider,
+            None,
+        )
+        .await
+        .map_err(|e| format!("routing: {e}"))?;
+    if let Some(routed) = &routed {
+        eprintln!(
+            "aivyx-pa daemon: model routing enabled ({} candidate model(s), default `{}`)",
+            routed.router().profiles().len(),
+            routed.default_key()
+        );
+    }
 
     // ---- kvcache (Task 5) — build the shared slot pool + slot store, ----
     // only when this run actually selected the LlamaCpp provider. The

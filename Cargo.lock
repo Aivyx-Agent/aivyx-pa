@@ -229,6 +229,7 @@ dependencies = [
  "aivyx-mcp",
  "aivyx-memory",
  "aivyx-pack",
+ "aivyx-route",
  "aivyx-skills",
  "aivyx-slack",
  "aivyx-storage",
@@ -251,6 +252,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "toml 0.8.23",
  "toml_edit 0.22.27",
  "uuid 1.23.0",
 ]
@@ -659,7 +661,9 @@ name = "aivyx-route"
 version = "0.1.0"
 source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=07defbfa3b2b21ef1bca05a5e719e3e6d326c707#07defbfa3b2b21ef1bca05a5e719e3e6d326c707"
 dependencies = [
+ "reqwest 0.13.4",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

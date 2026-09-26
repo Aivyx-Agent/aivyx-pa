@@ -108,6 +108,10 @@ aivyx-llm = { path = "../aivyx-llm", features = [
 # Same pin aivyx-core (Task 4) already depends on, via the workspace root's
 # [workspace.dependencies].
 aivyx-kvcache = { workspace = true }
+# Model routing Part 3a — `[routing]` builds a `RoutedProvider` around the
+# configured provider at startup (`aivyx_modules/routing.rs`). `discovery`
+# probes the extra `[routing.endpoints.*]` for their models.
+aivyx-route = { workspace = true, features = ["discovery"] }
 aivyx-telegram = { path = "../aivyx-telegram" }
 aivyx-discord = { path = "../aivyx-discord" }
 aivyx-slack = { path = "../aivyx-slack" }
@@ -156,3 +160,5 @@ base64 = { workspace = true, optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
 serde_json = { workspace = true }
+# routing.rs tests parse `[routing]` snippets into aivyx-route's own type.
+toml = "0.8"
