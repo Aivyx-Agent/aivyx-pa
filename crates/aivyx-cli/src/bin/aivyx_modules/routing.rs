@@ -442,8 +442,9 @@ impl ResidencySources {
 /// scores as if it needed a load — and, with `vram_bytes` set, can be
 /// outranked by a small cold model. For every Ollama endpoint, this adds an
 /// untagged alias of each `X:latest` entry, unless an explicit `X` entry is
-/// already present (which always wins). Only Ollama has this suffix
-/// convention — no other endpoint kind is touched.
+/// already present (which always wins). A loaded alias carries no
+/// `vram_bytes`, so the model's VRAM isn't counted twice. Only Ollama has
+/// this suffix convention — no other endpoint kind is touched.
 fn alias_untagged_ollama_latest(
     snap: &mut ResidencySnapshot,
     endpoints: &[(EndpointRef, EndpointConfig)],
@@ -459,12 +460,18 @@ fn alias_untagged_ollama_latest(
         .filter(|(key, _)| ollama_endpoints.contains(&key.endpoint))
         .filter_map(|(key, residency)| {
             let untagged = key.id.strip_suffix(":latest")?;
+            // The same model under a second name: its VRAM is already
+            // counted (as evictable) on the `:latest` entry.
+            let residency = match residency {
+                ModelResidency::Loaded { .. } => ModelResidency::Loaded { vram_bytes: None },
+                other => *other,
+            };
             Some((
                 ModelKey {
                     endpoint: key.endpoint.clone(),
                     id: untagged.to_string(),
                 },
-                *residency,
+                residency,
             ))
         })
         .collect();
@@ -2011,6 +2018,36 @@ mod tests {
             ModelResidency::Loaded { vram_bytes: None },
         );
         alias_untagged_ollama_latest(&mut snap, &endpoints);
+        assert_eq!(
+            snap.models[&key("default", "llama3.2")],
+            ModelResidency::Loaded { vram_bytes: None }
+        );
+    }
+
+    /// Re-review R1 — the alias names the same loaded model, so its VRAM
+    /// must not be counted twice as evictable.
+    #[test]
+    fn the_alias_does_not_double_count_vram() {
+        let endpoints = vec![(
+            EndpointRef::new("default"),
+            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
+        )];
+        let mut snap = ResidencySnapshot {
+            vram: Some(aivyx_route::Vram {
+                total_bytes: 24 << 30,
+                used_bytes: 10 << 30,
+            }),
+            ..ResidencySnapshot::default()
+        };
+        snap.models.insert(
+            key("default", "llama3.2:latest"),
+            ModelResidency::Loaded {
+                vram_bytes: Some(8 << 30),
+            },
+        );
+        let before = snap.available_vram();
+        alias_untagged_ollama_latest(&mut snap, &endpoints);
+        assert_eq!(snap.available_vram(), before);
         assert_eq!(
             snap.models[&key("default", "llama3.2")],
             ModelResidency::Loaded { vram_bytes: None }
