@@ -49,7 +49,8 @@ use aivyx_llm::{
 
 use crate::planner::{NextStep, StepObservation, ToolCallRequest, ToolRegistry, TurnPlanner};
 use crate::{
-    ChannelContext, ContentPart, Message, MessageContent, StreamEvent, ToolId, ToolOutcome,
+    ChannelContext, ContentPart, Message, MessageContent, SessionId, StreamEvent, ToolId,
+    ToolOutcome,
 };
 
 // ---------------------------------------------------------------------------
@@ -538,9 +539,14 @@ pub struct LlmPlanner {
     /// kind, and each step's usage is priced against the model the
     /// router actually used.
     routing: Option<(Arc<aivyx_llm::RoutedProvider>, aivyx_route::TaskKind)>,
-    /// The router's stickiness key for this turn — the turn message's
-    /// session id, set in `begin_turn`.
+    /// The router's stickiness, taint and consent key for this turn — the
+    /// conversation from `set_conversation` (the channel's session, the
+    /// key the agent taints under), else the turn message's session id;
+    /// set in `begin_turn`.
     route_session: Option<String>,
+    /// The conversation from `TurnPlanner::set_conversation`, if the turn
+    /// loop supplied one.
+    conversation: Option<SessionId>,
     /// Per-model token usage for this turn, one entry per model that
     /// served a step (see `TurnPlanner::turn_costs`).
     turn_costs: Vec<(String, crate::TokenUsage)>,
@@ -721,6 +727,7 @@ impl LlmPlanner {
             broker_slot_hint: false,
             routing: None,
             route_session: None,
+            conversation: None,
             turn_costs: Vec::new(),
             taint: None,
         }
@@ -1250,8 +1257,13 @@ impl LlmPlanner {
 
 #[async_trait]
 impl TurnPlanner for LlmPlanner {
+    fn set_conversation(&mut self, session: SessionId) {
+        self.conversation = Some(session);
+    }
+
     async fn begin_turn(&mut self, message: &Message, turn_id: crate::TurnId) {
-        self.route_session = Some(message.session_id.to_string());
+        let conversation = self.conversation.unwrap_or(message.session_id);
+        self.route_session = Some(conversation.to_string());
         self.ensure_kv_slot_checked_out().await;
         let mut content = match &message.content {
             MessageContent::Text(text) => vec![ContentBlock::text(text)],
@@ -1322,8 +1334,7 @@ impl TurnPlanner for LlmPlanner {
                     // the conversation before any model call sees it.
                     if sensitive && !block.trim().is_empty() {
                         if let Some(sink) = &self.taint {
-                            sink.mark(&message.session_id.to_string(), "memory recall")
-                                .await;
+                            sink.mark(&conversation.to_string(), "memory recall").await;
                         }
                     }
                     content.insert(0, ContentBlock::text(block));
@@ -5871,6 +5882,131 @@ mod tests {
         assert_eq!(usage.input_tokens, 30);
         assert_eq!(planner.turn_costs(), vec![("claude".to_string(), usage)]);
         assert_eq!(cloud.hints.lock().unwrap().clone(), vec!["claude".to_string()]);
+    }
+
+    /// One store for both sides, as the daemon's `RoutingGuard` is:
+    /// the agent marks through `TaintSink`, the router reads through
+    /// `EscalationGuard`.
+    #[derive(Default)]
+    struct SharedTaint(Mutex<std::collections::HashMap<String, String>>);
+
+    #[async_trait]
+    impl crate::TaintSink for SharedTaint {
+        async fn mark(&self, session: &str, reason: &str) -> bool {
+            let mut m = self.0.lock().unwrap();
+            if m.contains_key(session) {
+                return false;
+            }
+            m.insert(session.to_string(), reason.to_string());
+            true
+        }
+    }
+
+    #[async_trait]
+    impl aivyx_llm::EscalationGuard for SharedTaint {
+        async fn taint(&self, session: &str) -> Option<String> {
+            self.0.lock().unwrap().get(session).cloned()
+        }
+        fn consented(&self, _session: &str) -> bool {
+            false
+        }
+    }
+
+    /// Final-review C1 — triggers and gate resumes send a message whose
+    /// session differs from the channel's. The agent taints the channel's
+    /// session; the router must check that same conversation, so a
+    /// sensitive tool's output never follows an escalated first step to
+    /// the cloud, even under `auto`.
+    #[tokio::test]
+    async fn sensitive_output_blocks_escalation_when_the_message_session_differs() {
+        use crate::Agent;
+        let cloud = FakeLlmProvider::new(vec![
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "toolu_01".to_string(),
+                        tool_name: "gmail.search".to_string(),
+                        input: json!({}),
+                        name_resolution: aivyx_llm::NameResolution::Known,
+                    }],
+                    text_so_far: String::new(),
+                    usage: zero_usage(),
+                },
+            },
+            final_step(1, 1),
+        ]);
+        let guard = Arc::new(SharedTaint::default());
+        let local = aivyx_route::Router::new(
+            vec![routing_profile("default", "default", &[])],
+            aivyx_route::TaskOverrides::default(),
+        );
+        let mut claude = routing_profile("cloud", "claude", &[aivyx_route::Capability::Tools]);
+        claude.locality = aivyx_route::Locality::Cloud;
+        let cloud_for_factory = Arc::clone(&cloud);
+        let factory: aivyx_llm::ProviderFactory =
+            Box::new(move |_endpoint: &aivyx_route::EndpointRef| {
+                Ok(Arc::clone(&cloud_for_factory) as Arc<dyn LlmProvider>)
+            });
+        let routed = Arc::new(
+            aivyx_llm::RoutedProvider::new(
+                aivyx_route::ModelKey {
+                    endpoint: aivyx_route::EndpointRef::new("default"),
+                    id: "default".into(),
+                },
+                FakeLlmProvider::new(vec![]) as Arc<dyn LlmProvider>,
+                local,
+                factory,
+            )
+            .with_escalation(aivyx_llm::EscalationSetup {
+                router: aivyx_route::Router::new(vec![claude], aivyx_route::TaskOverrides::default())
+                    .with_allow_cloud(true),
+                mode: aivyx_llm::EscalationMode::Auto,
+                no_local_candidate: true,
+                tiers: vec![],
+                guard: Arc::clone(&guard) as Arc<dyn aivyx_llm::EscalationGuard>,
+                observer: Arc::new(|_: &aivyx_llm::EscalationRecord| {}),
+            }),
+        );
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Arc::new(FakeTool::new("gmail.search")) as Arc<dyn Tool>
+        ]));
+        let planner_registry = Arc::clone(&registry);
+        let agent = crate::ConcreteAgent::new(
+            crate::AgentId::new(),
+            aivyx_capability::CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            registry,
+            Arc::new(crate::NullAuditHook),
+            move || {
+                Box::new(
+                    LlmPlanner::new(
+                        Arc::clone(&routed) as Arc<dyn LlmProvider>,
+                        Arc::clone(&planner_registry),
+                        LlmPlannerConfig::new("default"),
+                    )
+                    .with_routing(Arc::clone(&routed), aivyx_route::TaskKind::Chat),
+                ) as Box<dyn TurnPlanner>
+            },
+        )
+        .with_taint(
+            Arc::clone(&guard) as Arc<dyn crate::TaintSink>,
+            vec!["gmail.".to_string()],
+        );
+
+        let channel = RecChannel::new();
+        let _ = agent
+            .turn(Message::text(SessionId::new(), "summarize my email"), &channel)
+            .await;
+
+        assert!(
+            guard.0.lock().unwrap().contains_key(&channel.session.to_string()),
+            "the conversation is tainted"
+        );
+        assert_eq!(
+            cloud.routes.lock().unwrap().len(),
+            1,
+            "only the untainted first step may reach the cloud"
+        );
     }
 
     #[tokio::test]

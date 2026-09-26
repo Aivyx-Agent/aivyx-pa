@@ -108,6 +108,14 @@ pub trait TurnPlanner: Send + Sync {
     /// `TurnEnded` pair.
     async fn begin_turn(&mut self, _message: &Message, _turn_id: crate::TurnId) {}
 
+    /// Model routing Part 3b — the conversation this turn belongs to,
+    /// called just before [`Self::begin_turn`] with the channel's session
+    /// id. That is the key taint is written under, so a planner that
+    /// routes (and so checks taint and consent) must key by it rather
+    /// than by `Message::session_id`, which trigger and gate-resume turns
+    /// mint fresh. Planners that don't route ignore it.
+    fn set_conversation(&mut self, _session: crate::SessionId) {}
+
     /// Return the next step given everything observed so far. The
     /// `channel` handle is available for planners that want to relay
     /// mid-step output (LLM token streaming); planners that don't

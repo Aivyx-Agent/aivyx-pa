@@ -501,6 +501,7 @@ impl Agent for ConcreteAgent {
         }
 
         let mut planner = (self.planner_factory)();
+        planner.set_conversation(session_id);
         planner.begin_turn(&message, turn_id).await;
 
         // Chapter Throttle (TH.3) — reset per-turn tool-call quotas at the turn
