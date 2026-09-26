@@ -123,6 +123,12 @@ pub mod verify;
 pub mod routed;
 pub use routed::{ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider, is_routable};
 
+/// Model routing Part 3b — consent-gated cloud escalation. For now just
+/// the read-side [`escalation::EscalationGuard`] trait (per-conversation
+/// taint + consent) that `RoutedProvider` consults.
+pub mod escalation;
+pub use escalation::EscalationGuard;
+
 // ---------------------------------------------------------------------------
 // Conversation messages
 // ---------------------------------------------------------------------------

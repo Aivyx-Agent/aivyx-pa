@@ -1103,6 +1103,29 @@ impl From<ChannelError> for AivyxError {
 }
 
 // ---------------------------------------------------------------------------
+// TaintSink — model routing Part 3b
+// ---------------------------------------------------------------------------
+
+/// Write side of the per-conversation routing taint (model routing Part
+/// 3b, G6). The turn loop / planner calls [`TaintSink::mark`] when a
+/// conversation touches sensitive data (a sensitive tool, a sensitive
+/// channel); a tainted conversation never escalates to a cloud endpoint.
+///
+/// Forward-declared here, like [`AuditHook`], so core code can mark a
+/// session without depending on the persisted implementation
+/// (`aivyx_channel::routing_guard::RoutingGuard`). The read side is
+/// `aivyx_llm::escalation::EscalationGuard`.
+#[async_trait]
+pub trait TaintSink: Send + Sync {
+    /// Mark `session` tainted with `reason` — a short label (e.g. the
+    /// sensitive tool name), never conversation content. Write-once: the
+    /// first reason is kept and the taint is never cleared. Returns `true`
+    /// only when this call newly tainted the session, so the caller can
+    /// audit the transition exactly once.
+    async fn mark(&self, session: &str, reason: &str) -> bool;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

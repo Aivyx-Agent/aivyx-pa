@@ -63,6 +63,7 @@ pub mod team_mission_driver;
 /// `aivyx_core::BudgetGate` trait.
 pub mod budget_gate;
 pub mod rate_gate;
+pub mod routing_guard;
 pub mod cooccurrence_ledger;
 pub mod graph_query_tool;
 pub mod conflict_dismissals;

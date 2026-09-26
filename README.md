@@ -35,7 +35,7 @@ verifiable offline.
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 95 |
-| Encrypted storage domains | 26 |
+| Encrypted storage domains | 27 |
 
 ## Five-minute setup
 
@@ -296,7 +296,7 @@ Forty crates in the workspace. The substrate core:
 | `aivyx-core` | `Agent` / `Tool` traits, turn loop, the 15 substrate tools (incl. `web.extract`, `git.commit`) |
 | `aivyx-capability` | `Scope`, `CapabilitySet`, `TrustTier`, the active scope bases |
 | `aivyx-crypto` | Argon2id, HKDF-SHA256, ChaCha20-Poly1305 |
-| `aivyx-storage` | redb-backed encrypted store, 23 key domains |
+| `aivyx-storage` | redb-backed encrypted store, 27 key domains |
 | `aivyx-audit` | HMAC-chained audit log, offline verification |
 | `aivyx-config` | TOML + env loader with source provenance |
 | `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama impls |

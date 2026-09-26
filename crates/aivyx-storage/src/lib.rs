@@ -243,6 +243,13 @@ pub enum KeyDomain {
     /// not a secret); isolated so a corrupt row degrades only conflict
     /// dismissal, never memory or any other signal.
     ConflictDismissals,
+    /// Model routing Part 3b — the per-conversation routing taint. One row
+    /// per tainted conversation, keyed by the session id, holding the first
+    /// recorded reason (a short label, never content). Write-once and never
+    /// cleared: a tainted conversation must never escalate to a cloud
+    /// endpoint, across restarts and compaction (G6). Isolated so the taint
+    /// set is HKDF-separated from the session rows it shadows.
+    RoutingTaint,
 }
 
 impl KeyDomain {
@@ -280,6 +287,7 @@ impl KeyDomain {
             KeyDomain::SkillHelpfulnessLedger => b"skill-helpfulness-ledger",
             KeyDomain::LoopState => b"loop-state",
             KeyDomain::ConflictDismissals => b"conflict-dismissals",
+            KeyDomain::RoutingTaint => b"routing-taint",
         }
     }
 
@@ -328,12 +336,13 @@ impl KeyDomain {
             KeyDomain::ConflictDismissals => {
                 "aivyx_conflict_dismissals_v1"
             }
+            KeyDomain::RoutingTaint => "aivyx_routing_taint_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 26] = [
+    pub const ALL: [KeyDomain; 27] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -360,6 +369,7 @@ impl KeyDomain {
         KeyDomain::SkillHelpfulnessLedger,
         KeyDomain::LoopState,
         KeyDomain::ConflictDismissals,
+        KeyDomain::RoutingTaint,
     ];
 }
 
@@ -545,7 +555,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 26],
+    subkeys: [SubKey; 27],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -622,7 +632,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 26], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 27], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -665,6 +675,7 @@ impl RedbStorage {
             master.derive_subkey(
                 KeyDomain::ConflictDismissals.as_bytes(),
             )?,
+            master.derive_subkey(KeyDomain::RoutingTaint.as_bytes())?,
         ])
     }
 
@@ -699,6 +710,7 @@ impl RedbStorage {
             KeyDomain::SkillHelpfulnessLedger => &self.subkeys[23],
             KeyDomain::LoopState => &self.subkeys[24],
             KeyDomain::ConflictDismissals => &self.subkeys[25],
+            KeyDomain::RoutingTaint => &self.subkeys[26],
         }
     }
 }
@@ -1077,7 +1089,7 @@ mod tests {
         // "Encrypted storage domains" row + the `aivyx-storage` line in
         // `README.md`, and the storage-domain figure in
         // `docs/BACKEND_AUDIT_*.md`.**
-        assert_eq!(KeyDomain::ALL.len(), 26, "encrypted storage domain count");
+        assert_eq!(KeyDomain::ALL.len(), 27, "encrypted storage domain count");
     }
 
     #[test]
@@ -1143,7 +1155,8 @@ mod tests {
                 | KeyDomain::KnowledgeGraph
                 | KeyDomain::SkillHelpfulnessLedger
                 | KeyDomain::LoopState
-                | KeyDomain::ConflictDismissals => {}
+                | KeyDomain::ConflictDismissals
+                | KeyDomain::RoutingTaint => {}
             }
         }
     }
@@ -1405,6 +1418,44 @@ mod tests {
             cooc.get(key).await.unwrap(),
             Some(b"a pair row".to_vec()),
             "CooccurrenceLedger returned the helpfulness value"
+        );
+    }
+
+    // ---- Model routing Part 3b — RoutingTaint domain ---------------
+
+    #[test]
+    fn routing_taint_domain_has_stable_metadata() {
+        assert_eq!(KeyDomain::RoutingTaint.as_bytes(), b"routing-taint");
+        assert_eq!(
+            KeyDomain::RoutingTaint.table_name(),
+            "aivyx_routing_taint_v1"
+        );
+        assert!(KeyDomain::ALL.contains(&KeyDomain::RoutingTaint));
+    }
+
+    #[tokio::test]
+    async fn routing_taint_domain_isolates_from_sessions() {
+        // A session's taint row shares its key (the session id) with
+        // the session's own row; the two must never alias.
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(84)).await;
+
+        let sessions = store.domain(KeyDomain::Sessions);
+        let taint = store.domain(KeyDomain::RoutingTaint);
+
+        let key = b"session-1";
+        sessions.put(key, b"a session row").await.unwrap();
+        taint.put(key, b"a taint row").await.unwrap();
+
+        assert_eq!(
+            sessions.get(key).await.unwrap(),
+            Some(b"a session row".to_vec()),
+            "Sessions returned the taint value"
+        );
+        assert_eq!(
+            taint.get(key).await.unwrap(),
+            Some(b"a taint row".to_vec()),
+            "RoutingTaint returned the session value"
         );
     }
 
