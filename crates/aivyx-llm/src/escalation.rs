@@ -108,7 +108,9 @@ pub struct EscalationRecord {
     pub model: Option<String>,
     pub trigger: Trigger,
     pub mode: EscalationMode,
-    /// `"allowed"`, `"consent_requested"`, `"blocked_taint"` or `"disabled"`.
+    /// `"allowed"`, `"allowed_failed"` (allowed, but the call failed —
+    /// possibly after the cloud received it), `"consent_requested"`,
+    /// `"no_cloud_model"`, `"blocked_taint"` or `"disabled"`.
     pub outcome: &'static str,
     /// Hex SHA-256 of the would-be outbound request (system + messages).
     pub payload_hash: String,

@@ -768,8 +768,9 @@ pub enum AuditTag {
     /// [`AuditedTaintSink`], only when the mark was new.
     ConversationTainted { session_id: String, reason: String },
     /// Model routing Part 3b (A15) — one cloud-escalation decision: a
-    /// trigger fired and escalation was allowed, stopped for consent,
-    /// blocked by taint, or disabled for this call. `payload_hash` is a
+    /// trigger fired and escalation was allowed (and succeeded or
+    /// failed), stopped for consent, found no cloud model, was blocked by
+    /// taint, or was disabled for this call. `payload_hash` is a
     /// hex SHA-256 of the would-be outbound request; content is never
     /// recorded. `model` is the cloud model, where one was chosen.
     CloudEscalation {

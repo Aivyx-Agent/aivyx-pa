@@ -261,7 +261,10 @@ impl RoutedProvider {
             EscalationVerdict::NeedsConsent => {
                 let plan = match esc.router.plan(query, Instant::now()) {
                     Ok(plan) => plan,
-                    Err(e) => return Escalated::Done(Err(no_cloud_model(&e))),
+                    Err(e) => {
+                        (esc.observer)(&record(None, "no_cloud_model"));
+                        return Escalated::Done(Err(no_cloud_model(&e)));
+                    }
                 };
                 let model = plan.chain[0].to_string();
                 (esc.observer)(&record(Some(model.clone()), "consent_requested"));
@@ -275,7 +278,10 @@ impl RoutedProvider {
             EscalationVerdict::Proceed => {
                 let plan = match esc.router.plan(query, Instant::now()) {
                     Ok(plan) => plan,
-                    Err(e) => return Escalated::Done(Err(no_cloud_model(&e))),
+                    Err(e) => {
+                        (esc.observer)(&record(None, "no_cloud_model"));
+                        return Escalated::Done(Err(no_cloud_model(&e)));
+                    }
                 };
                 match self.dispatch(&esc.router, &plan, request, cancellation).await {
                     Ok((stream, route_record)) => {
@@ -285,7 +291,12 @@ impl RoutedProvider {
                         }
                         Escalated::Done(Ok(stream))
                     }
-                    Err(err) => Escalated::Done(Err(err)),
+                    // Allowed, but the call failed — possibly after the
+                    // cloud received the request, so it's still recorded.
+                    Err(err) => {
+                        (esc.observer)(&record(Some(plan.chain[0].to_string()), "allowed_failed"));
+                        Escalated::Done(Err(err))
+                    }
                 }
             }
         }
@@ -1135,7 +1146,17 @@ mod tests {
         tiers: Vec<TaskKind>,
         guard: Arc<dyn EscalationGuard>,
     ) -> (Fixture, Arc<Scripted>, Arc<Mutex<Vec<EscalationRecord>>>) {
-        let cloud = Scripted::ok();
+        escalating_to(Scripted::ok(), mode, no_local_candidate, tiers, guard)
+    }
+
+    /// [`escalating`], with `cloud` serving the cloud endpoint.
+    fn escalating_to(
+        cloud: Arc<Scripted>,
+        mode: EscalationMode,
+        no_local_candidate: bool,
+        tiers: Vec<TaskKind>,
+        guard: Arc<dyn EscalationGuard>,
+    ) -> (Fixture, Arc<Scripted>, Arc<Mutex<Vec<EscalationRecord>>>) {
         let mut f = fixture(vec![default_profile()], vec![("cloud", Arc::clone(&cloud))]);
         let records: Arc<Mutex<Vec<EscalationRecord>>> = Arc::default();
         let sink = Arc::clone(&records);
@@ -1154,6 +1175,27 @@ mod tests {
     fn with_tools(session: Option<&str>) -> (Vec<LlmMessage>, RouteHint, Vec<LlmToolDescriptor>) {
         let (messages, hint) = routed(TaskKind::Chat, session);
         (messages, hint, vec![tool()])
+    }
+
+    /// Final-review I1 — the request reached the cloud even though the
+    /// call failed, so the escalation is still on the audit chain.
+    #[tokio::test]
+    async fn a_sent_escalation_that_fails_is_still_recorded() {
+        let (f, cloud, records) = escalating_to(
+            Scripted::failing(529),
+            EscalationMode::Auto,
+            true,
+            vec![],
+            Arc::new(FakeGuard::default()),
+        );
+        let (messages, hint, tools) = with_tools(Some("s"));
+        assert!(call(&f.routed, request(&messages, &tools, Some(hint))).await.is_err());
+        assert_eq!(cloud.seen().len(), 1, "the request was sent");
+        let recs = records.lock().unwrap().clone();
+        assert_eq!(recs.len(), 1, "got {recs:?}");
+        assert_eq!(recs[0].outcome, "allowed_failed");
+        assert_eq!(recs[0].model.as_deref(), Some("claude@cloud"));
+        assert_eq!(recs[0].payload_hash, payload_hash(None, &messages));
     }
 
     #[tokio::test]
