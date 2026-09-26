@@ -1719,7 +1719,9 @@ parent_role = "researcher"
 #
 # [routing.endpoints.claude]
 # kind = "anthropic"          # uses your anthropic_api_key (required)
-# # kind = "openai"           # uses your openai_api_key; optional base_url
+# # kind = "openai"           # uses your openai_api_key
+# # base_url = "https://…"    # optional, either kind: your gateway instead
+# #                           # of the public API
 #
 # [[routing.models]]
 # id = "claude-sonnet-5"

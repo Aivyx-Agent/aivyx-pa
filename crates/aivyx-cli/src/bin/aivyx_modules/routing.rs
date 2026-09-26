@@ -177,8 +177,8 @@ pub(crate) fn provider_base_url(base: &str) -> String {
 /// Builds the provider for one `[routing.endpoints.*]` entry. The default
 /// endpoint never reaches here (`RoutedProvider` serves it with the
 /// configured provider). Local endpoints never get an API key; a cloud
-/// endpoint gets the operator's own key for its kind (and, for `openai`,
-/// its `base_url` if set).
+/// endpoint gets the operator's own key for its kind and its `base_url`
+/// if set.
 pub(crate) fn provider_factory(cfg: &RoutingConfig, access: &CloudAccess) -> ProviderFactory {
     let endpoints = cfg.endpoints.clone();
     let access = access.clone();
@@ -195,7 +195,11 @@ pub(crate) fn provider_factory(cfg: &RoutingConfig, access: &CloudAccess) -> Pro
                 )
             })?;
             let provider: Arc<dyn LlmProvider> = if config.kind == EndpointKind::Anthropic {
-                Arc::new(AnthropicProvider::new(AnthropicConfig::new(key)).map_err(err)?)
+                let mut anthropic = AnthropicConfig::new(key);
+                if let Some(base) = config.base_url() {
+                    anthropic = anthropic.with_base_url(provider_base_url(base));
+                }
+                Arc::new(AnthropicProvider::new(anthropic).map_err(err)?)
             } else {
                 let mut openai = OpenAiConfig::new(key);
                 if let Some(base) = config.base_url() {
@@ -1005,6 +1009,21 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("anthropic_api_key"), "{err}");
+    }
+
+    /// Final-review I2 — an operator's gateway (zero-retention, regional)
+    /// is where escalated content goes, not the public API.
+    #[tokio::test]
+    async fn the_factory_builds_an_anthropic_provider_on_the_endpoints_base_url() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let mut cfg = RoutingConfig::default();
+        cfg.endpoints
+            .insert("claude".into(), endpoint(EndpointKind::Anthropic, Some(&base)));
+        let provider =
+            provider_factory(&cfg, &cloud_access())(&EndpointRef::new("claude")).unwrap();
+        let line = request_line(listener, provider).await;
+        assert!(line.starts_with("POST /v1/messages "), "{line}");
     }
 
     #[tokio::test]
