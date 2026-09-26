@@ -55,8 +55,12 @@ All notable changes to Aivyx are recorded here. This project adheres to
   and fall back to the next candidate. New read-only, Trusted-tier tools
   `routing.status` / `routing.explain` (registered only when routing is
   on; in the default role's backcompat floor), new offline `aivyx-pa routing status` and `aivyx-pa routing
-  explain [--limit N]` commands, a `ModelRouted` audit entry per routed
-  call, and `LlmCost` recorded per model actually used. Declare your
+  explain [--limit N]` commands, a `ModelRouted` audit entry per successfully
+  routed call, and `LlmCost` recorded per model actually used. A request
+  carrying a PDF is never routed (it goes to the `[agent]` model), and
+  models on routed Ollama endpoints are assumed to have the window
+  aivyx-pa serves them with — `num_ctx = min(trained window, 16384)` —
+  unless the roster declares `context_window`. Declare your
   `[agent]` model's `capabilities` and `context_window` in
   `[[routing.models]]`, or it ranks below discovered tool-capable models
   (startup warns). See `examples/aivyx-pa.toml` for the full reference.

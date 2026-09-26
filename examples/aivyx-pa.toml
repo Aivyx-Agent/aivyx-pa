@@ -1619,20 +1619,31 @@ parent_role = "researcher"
 #   * Routed Ollama / OpenAI-compatible endpoints use the provider's
 #     DEFAULT settings — your [ollama] tuning (e.g. num_ctx) applies
 #     only to the `default` endpoint.
+#   * "Local" means the endpoint KIND: an "openai_compat" base_url
+#     that points at a remote host is your own choice and is treated
+#     as local.
+#   * Don't point a routing endpoint at the llama-server that
+#     aivyx-broker fronts — routed requests go straight to it and
+#     bypass the broker's slot coordination.
 #
 # DECLARE YOUR [agent] MODEL'S capabilities AND context_window. The
 # router ranks a model whose capabilities are unknown below every model
 # known to have them, so an undeclared default model loses every
 # tool-using call to any discovered tool-capable model. Startup (and
-# `aivyx-pa routing status`) warns when this happens. Note that
-# Ollama's discovered context window is the model's TRAINED maximum,
-# not the num_ctx it is actually served with — declare the served
-# window in the roster if it's smaller. (Routed Ollama endpoints are
-# served with the Ollama server's own default context, so set it there
-# — Modelfile or OLLAMA_CONTEXT_LENGTH — and declare the same value.) Also note: a misspelled key
-# directly under [routing] (e.g. `enable = true`) is silently ignored,
-# so routing stays off — check the startup line "model routing
-# enabled (N candidate model(s), default `…`)".
+# `aivyx-pa routing status`) warns when this happens.
+#
+# Context windows on routed Ollama endpoints: aivyx-pa sends num_ctx
+# on every request, which overrides the server's own default (a
+# Modelfile or OLLAMA_CONTEXT_LENGTH has no effect here). A routed
+# Ollama endpoint is served with num_ctx = min(the model's trained
+# window, 16384), and the router assumes that window for its models
+# unless you declare `context_window` for that (endpoint, id) in the
+# roster. `[ollama] num_ctx` applies only to the `default` endpoint.
+#
+# Also note: a misspelled key directly under [routing] (e.g.
+# `enable = true`) is silently ignored, so routing stays off — check
+# the startup line "model routing enabled (N candidate model(s),
+# default `…`)".
 #
 # Which calls are routed (tagged with a task kind):
 #   * daemon conversation turns — `chat`, sticky per conversation (a
@@ -1648,7 +1659,9 @@ parent_role = "researcher"
 # wiki / graph / correction side calls, the standalone Telegram /
 # Slack / Discord session paths, KV warm-up, and Ensemble per-role
 # models. A request carrying an image only goes to a model with (or
-# possibly with) vision; the same holds for tools. If no candidate
+# possibly with) vision; the same holds for tools. A request carrying
+# a PDF is not routed at all — it goes to the [agent] model (routed
+# OpenAI-compatible endpoints would drop the document). If no candidate
 # qualifies — or every candidate fails — the call fails with a routing
 # error.
 #
@@ -1681,6 +1694,14 @@ parent_role = "researcher"
 #     model actually used, so spend is priced correctly; `aivyx-pa
 #     cost` may count a turn answered by two models twice in its turn
 #     total.
+#
+# Cost caveats (cloud [agent] provider):
+#   * The judge and mission-planning side calls don't record `LlmCost`
+#     (true without routing too); routing them to a larger model
+#     spends more than `aivyx-pa cost` shows.
+#   * The [budget] pre-call gate prices a turn at the [agent] model;
+#     routing to a pricier model on the same provider can overshoot a
+#     cap by at most one turn (see docs/COST_GOVERNANCE.md).
 
 # ----------------------------------------------------------------
 # Persistent helpfulness ledger (Phase 82) — no config; automatic

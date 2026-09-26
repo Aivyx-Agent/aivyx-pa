@@ -104,6 +104,12 @@ impl BudgetEnforcer {
 - **Deny is a pre-call gate**: checked *before* an LLM call so the cap is a
   ceiling, not a post-hoc notice. (The loop's existing post-iteration token
   stop stays; the $ pre-call gate is additive.)
+- **Model routing and the gate.** With `[routing]` on, the pre-call gate
+  still prices a turn at the configured `[agent]` model. On a cloud
+  provider, routing a turn to a pricier model on that same provider can
+  overshoot a cap by at most one turn. The judge and mission-planning side calls record
+  no `LlmCost` at all (pre-existing, routing or not), so routing them to a
+  larger cloud model spends more than `aivyx-pa cost` reports.
 - **Concurrency (teams).** A team runs specialists **concurrently**, so two
   in-flight calls can both pass a naive check and jointly bust the cap. K.3
   carries the archive's **reservation** idea (reserve an estimated cost

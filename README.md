@@ -206,6 +206,11 @@ For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
   auto-approving), with **cost governance** (per-turn dollar pricing and
   `[budget]` caps) and **tool-call rate limits** (`[rate_limit]` per-turn /
   per-tool / sliding-window quotas that alert or deny).
+- **Model routing (opt-in).** Off by default. A `[routing]` section lets the
+  daemon pick a model per call — by tool/vision needs, context size and task
+  tier — across your `[agent]` model and other local models or servers, with
+  cooldown + fallback when one fails. See `[routing]` in
+  [`examples/aivyx-pa.toml`](examples/aivyx-pa.toml).
 
 The full phase-by-phase arc lives in [`docs/ROADMAP.md`](docs/ROADMAP.md); the
 recent-release narrative in [`CHANGELOG.md`](CHANGELOG.md).
