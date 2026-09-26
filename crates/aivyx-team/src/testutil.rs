@@ -147,6 +147,40 @@ impl LlmStream for FakeStream {
     }
 }
 
+/// Model routing Part 3a — a one-shot fake that records the request's
+/// `route` hint, so `planner.rs`'s tests can assert the mission planner's
+/// decomposition request is tagged `TaskKind::Plan`.
+pub struct RouteCapturingFakeProvider {
+    reply: String,
+    route_seen: Arc<Mutex<Option<aivyx_llm::RouteHint>>>,
+}
+
+impl RouteCapturingFakeProvider {
+    pub fn says(text: &str, route_seen: Arc<Mutex<Option<aivyx_llm::RouteHint>>>) -> Self {
+        RouteCapturingFakeProvider { reply: text.to_string(), route_seen }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for RouteCapturingFakeProvider {
+    async fn chat_stream(
+        &self,
+        request: LlmRequest<'_>,
+        _cancel: &CancellationToken,
+    ) -> Result<Box<dyn LlmStream>, LlmError> {
+        *self.route_seen.lock().unwrap() = request.route.clone();
+        Ok(Box::new(one_shot_stream(&self.reply)))
+    }
+}
+
+fn one_shot_stream(text: &str) -> FakeStream {
+    let step = one_shot(text);
+    FakeStream {
+        events: step.events.into_iter(),
+        terminal: Some(step.terminal),
+    }
+}
+
 // --- a fake lead channel ---------------------------------------------------
 
 pub struct FakeLeadChannel {

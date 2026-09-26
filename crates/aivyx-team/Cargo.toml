@@ -23,6 +23,9 @@ aivyx-capability = { path = "../aivyx-capability" }
 aivyx-team-types = { path = "../aivyx-team-types" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-llm = { path = "../aivyx-llm" }
+# Model routing Part 3a — tags the mission planner's decomposition request
+# `TaskKind::Plan` (a no-op on a non-routed provider).
+aivyx-route = { workspace = true }
 # KV-cache persistence against a llama-server backend (`SpecialistFactory::with_kv_cache`).
 # Pinned by commit, not a version, since this crate isn't published — see
 # aivyx-kvcache's own CLAUDE.md for the repo's release status. Pin lives in

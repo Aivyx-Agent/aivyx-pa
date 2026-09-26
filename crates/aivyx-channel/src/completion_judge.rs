@@ -78,6 +78,12 @@ pub struct CompletionJudge {
     /// also snapshots the most-recently-written files there, so a story that
     /// produced a FILE is judged on disk contents, not just the summary.
     workspace_root: Option<std::path::PathBuf>,
+    /// Model routing Part 3a — set only via `with_route_task`, only when the
+    /// daemon's provider is a `RoutedProvider` (routing is on). When set,
+    /// `verify`'s request carries a `RouteHint` for this task so the router
+    /// can pick the judge's model; `None` leaves `route: None` (untagged),
+    /// matching every other provider's "untagged ⇒ unchanged" behavior.
+    route_task: Option<aivyx_route::TaskKind>,
 }
 
 impl CompletionJudge {
@@ -87,7 +93,17 @@ impl CompletionJudge {
             model: model.into(),
             memory: None,
             workspace_root: None,
+            route_task: None,
         }
+    }
+
+    /// Tags every `verify()` call's request for model routing (only ever
+    /// called when routing is on): the request carries `RouteHint { task,
+    /// session: None, estimated_prompt_tokens }`. Not called ⇒ `route: None`,
+    /// unchanged from pre-routing behavior.
+    pub fn with_route_task(mut self, task: aivyx_route::TaskKind) -> Self {
+        self.route_task = Some(task);
+        self
     }
 
     /// Ground completion verdicts on the actual memory artifact (#17b): the
@@ -159,6 +175,14 @@ impl CompletionJudge {
             if criteria.trim().is_empty() { "(none given beyond the title)" } else { criteria },
             if summary.trim().is_empty() { "(the agent provided no summary)" } else { summary },
         );
+        // Estimate = (system prompt chars + user prompt chars) / 4 — cheap
+        // and consistent with the rest of model routing Part 3a; only
+        // computed when routing tagged this judge at all.
+        let route = self.route_task.clone().map(|task| aivyx_llm::RouteHint {
+            task,
+            session: None,
+            estimated_prompt_tokens: ((JUDGE_SYSTEM.len() + user.len()) / 4) as u32,
+        });
         let messages = vec![LlmMessage::user_text(user)];
         let request = LlmRequest {
             model: &self.model,
@@ -169,7 +193,7 @@ impl CompletionJudge {
             temperature: Some(0.0),
         id_slot: None,
         slot_hint: None,
-        route: None,
+        route,
         };
         let cancel = CancellationToken::new();
         let text = match self.provider.chat_stream(request, &cancel).await {
@@ -403,6 +427,24 @@ mod tests {
         }
     }
 
+    /// A provider that records the request's `route` hint — lets a test
+    /// assert whether `with_route_task` actually tagged the outgoing request
+    /// (model routing Part 3a).
+    struct RouteCapturingProvider {
+        route_seen: Arc<Mutex<Option<aivyx_llm::RouteHint>>>,
+    }
+    #[async_trait]
+    impl LlmProvider for RouteCapturingProvider {
+        async fn chat_stream(
+            &self,
+            request: LlmRequest<'_>,
+            _cancel: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            *self.route_seen.lock().unwrap() = request.route.clone();
+            Ok(Box::new(OneShot { text: Some("PASS — ok".into()) }))
+        }
+    }
+
     #[test]
     fn extract_goal_identifiers_finds_deliberate_caps_only() {
         let ids = extract_goal_identifiers(
@@ -553,6 +595,36 @@ mod tests {
         let _ = judge.verify("t", "c", "s").await;
         let prompt = seen.lock().unwrap().clone();
         assert!(!prompt.contains("ground-truth evidence"), "no evidence block");
+    }
+
+    #[tokio::test]
+    async fn verify_tags_the_request_when_with_route_task_is_set() {
+        // Model routing Part 3a — a judge built `with_route_task(Judge)`
+        // sends a `RouteHint` for that task; a non-routed provider ignores
+        // it (it's just an extra field), but a `RoutedProvider` reads it.
+        let route_seen = Arc::new(Mutex::new(None));
+        let judge = CompletionJudge::new(
+            Arc::new(RouteCapturingProvider { route_seen: Arc::clone(&route_seen) }),
+            "test-model",
+        )
+        .with_route_task(aivyx_route::TaskKind::Judge);
+        let _ = judge.verify("t", "c", "s").await;
+        let seen = route_seen.lock().unwrap().clone().expect("route hint present");
+        assert_eq!(seen.task, aivyx_route::TaskKind::Judge);
+        assert_eq!(seen.session, None);
+        assert!(seen.estimated_prompt_tokens > 0, "got {seen:?}");
+    }
+
+    #[tokio::test]
+    async fn verify_leaves_route_none_without_with_route_task() {
+        // Untagged ⇒ unchanged: no `with_route_task` call ⇒ `route == None`.
+        let route_seen = Arc::new(Mutex::new(None));
+        let judge = CompletionJudge::new(
+            Arc::new(RouteCapturingProvider { route_seen: Arc::clone(&route_seen) }),
+            "test-model",
+        );
+        let _ = judge.verify("t", "c", "s").await;
+        assert!(route_seen.lock().unwrap().is_none());
     }
 
     #[test]

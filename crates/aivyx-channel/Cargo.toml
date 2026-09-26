@@ -123,6 +123,10 @@ aivyx-ipc = { path = "../aivyx-ipc" }
 # startup loop uses.
 aivyx-mcp = { path = "../aivyx-mcp" }
 aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic", "provider-openai", "provider-ollama"] }
+# Model routing Part 3a — `CompletionJudge::with_route_task` tags the loop
+# completion judge's request `TaskKind::Judge` (a no-op on a non-routed
+# provider).
+aivyx-route = { workspace = true }
 # KV-cache persistence against a llama-server backend — `TeamRunDeps.kv_cache_handles`
 # threads the daemon's shared pool/store through to every team mission's
 # specialist turns. Pinned by commit, not a version, since this crate isn't

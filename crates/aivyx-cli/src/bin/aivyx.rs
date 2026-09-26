@@ -7899,6 +7899,16 @@ async fn run_async(
         if let Some(ref ws) = workspace_root {
             judge_builder = judge_builder.with_workspace(ws.clone());
         }
+        // Model routing Part 3a — this judge has no operator-configurable
+        // model override of its own (unlike the skill auto-proposer's
+        // `judge_model`, which stays untagged per the compatibility
+        // invariant when explicitly set): it always follows the daemon's
+        // main configured model, so "judge_model left unset" holds
+        // vacuously here. Tag it `Judge` whenever routing is on so the
+        // router can still pick its model.
+        if routed.is_some() {
+            judge_builder = judge_builder.with_route_task(aivyx_route::TaskKind::Judge);
+        }
         let judge = Arc::new(judge_builder);
         let _ = loop_complete_tool.set_judge(judge);
         eprintln!("aivyx-pa loop: completion verification ON — an LLM judge gates loop.complete");

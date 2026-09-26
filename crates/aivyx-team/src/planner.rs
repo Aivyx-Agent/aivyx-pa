@@ -45,6 +45,14 @@ pub async fn decompose_goal(
     }
     let system = planner_system_prompt(config, allow_gates);
     let user = format!("Mission goal:\n{goal}\n\nReturn the plan as JSON now.");
+    // Model routing Part 3a — always tagged `Plan`: harmless (an unread
+    // extra field) on a non-routed provider, lets a `RoutedProvider` pick
+    // the planning model when routing is on.
+    let route = Some(aivyx_llm::RouteHint {
+        task: aivyx_route::TaskKind::Plan,
+        session: None,
+        estimated_prompt_tokens: ((system.len() + user.len()) / 4) as u32,
+    });
     let messages = vec![LlmMessage::user_text(user)];
     let request = LlmRequest {
         model,
@@ -55,7 +63,7 @@ pub async fn decompose_goal(
         temperature: Some(0.2),
     id_slot: None,
     slot_hint: None,
-    route: None,
+    route,
     };
 
     let mut stream = provider
@@ -245,6 +253,31 @@ mod tests {
             "read-only Verifier gets no write tag: {p}"
         );
         assert!(p.contains("CAPABILITY MATCH"), "routing rule present");
+    }
+
+    #[tokio::test]
+    async fn decompose_goal_tags_the_request_plan() {
+        // Model routing Part 3a — the mission planner's decomposition
+        // request always carries `RouteHint { task: Plan, .. }`; harmless
+        // (and unread) on a non-routed provider.
+        use crate::testutil::RouteCapturingFakeProvider;
+        let route_seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let provider =
+            RouteCapturingFakeProvider::says(plan_json(), std::sync::Arc::clone(&route_seen));
+        let _ = decompose_goal(
+            &provider,
+            "test-model",
+            "close the kitchen",
+            &default_nonagon(),
+            &CancellationToken::new(),
+            true,
+        )
+        .await
+        .expect("plan decodes");
+        let seen = route_seen.lock().unwrap().clone().expect("route hint present");
+        assert_eq!(seen.task, aivyx_route::TaskKind::Plan);
+        assert_eq!(seen.session, None);
+        assert!(seen.estimated_prompt_tokens > 0, "got {seen:?}");
     }
 
     #[tokio::test]
