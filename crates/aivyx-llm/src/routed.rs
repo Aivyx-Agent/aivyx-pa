@@ -7,10 +7,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use aivyx_route::{EndpointRef, ModelKey, ModelProfile, RouteQuery, RouteRecord, Router};
+use aivyx_route::{
+    EndpointRef, ModelKey, ModelProfile, RoutePlan, RouteQuery, RouteRecord, Router, TaskKind,
+};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use crate::escalation::{
+    EscalationGuard, EscalationMode, EscalationObserver, EscalationRecord, EscalationVerdict,
+    Trigger, decide_escalation, payload_hash,
+};
 use crate::{ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStream};
 
 /// Builds the provider for one endpoint. One provider serves every model
@@ -28,6 +34,32 @@ pub trait ProfileRefresher: Send + Sync {
     async fn refresh(&self) -> Vec<ModelProfile>;
 }
 
+/// Model routing Part 3b — consent-gated cloud escalation. A separate,
+/// cloud-only router (built `with_allow_cloud(true)` over the
+/// `[routing.endpoints.*]` cloud models) that a call reaches only through
+/// [`decide_escalation`]; the local router never sees these models.
+pub struct EscalationSetup {
+    pub router: Router,
+    pub mode: EscalationMode,
+    /// `[routing.escalation] no_local_candidate`.
+    pub no_local_candidate: bool,
+    /// `[routing.escalation] tiers` — task kinds that go straight to cloud.
+    pub tiers: Vec<TaskKind>,
+    pub guard: Arc<dyn EscalationGuard>,
+    /// Every escalation decision (the daemon audits through it).
+    pub observer: EscalationObserver,
+}
+
+/// What an escalation attempt came to.
+enum Escalated {
+    /// The call was dispatched to cloud, or stopped for consent: done.
+    Done(Result<Box<dyn LlmStream>, LlmError>),
+    /// Tainted: never escalate. The reason names the source.
+    Blocked(String),
+    /// Escalation can't happen for this call (no session, or `never`).
+    Disabled,
+}
+
 pub struct RoutedProvider {
     default_key: ModelKey,
     default_provider: Arc<dyn LlmProvider>,
@@ -36,6 +68,11 @@ pub struct RoutedProvider {
     pool: Mutex<HashMap<EndpointRef, Arc<dyn LlmProvider>>>,
     refresher: Option<Arc<dyn ProfileRefresher>>,
     observer: Option<RouteObserver>,
+    escalation: Option<EscalationSetup>,
+    /// Session → the model that served its last routed call, local or
+    /// escalated. What a caller attributing a step to a model must read
+    /// (the local router's last decision doesn't see escalated calls).
+    last_served: Mutex<HashMap<String, ModelKey>>,
 }
 
 impl RoutedProvider {
@@ -53,6 +90,30 @@ impl RoutedProvider {
             pool: Mutex::new(HashMap::new()),
             refresher: None,
             observer: None,
+            escalation: None,
+            last_served: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Enables consent-gated cloud escalation (Part 3b). Without it,
+    /// behaviour is exactly Part 3a's.
+    pub fn with_escalation(mut self, setup: EscalationSetup) -> Self {
+        self.escalation = Some(setup);
+        self
+    }
+
+    /// The model that served `session`'s last routed call (local or
+    /// escalated), if any.
+    pub fn last_served(&self, session: &str) -> Option<ModelKey> {
+        self.last_served.lock().unwrap().get(session).cloned()
+    }
+
+    fn note_served(&self, session: Option<&str>, key: &ModelKey) {
+        if let Some(session) = session {
+            self.last_served
+                .lock()
+                .unwrap()
+                .insert(session.to_string(), key.clone());
         }
     }
 
@@ -84,6 +145,125 @@ impl RoutedProvider {
         let count = profiles.len();
         self.router.set_profiles(profiles);
         Ok(count)
+    }
+
+    /// Walks `plan`'s chain on `router` with fallback + cooldown; on
+    /// success records it on `router` and in `last_served`.
+    async fn dispatch(
+        &self,
+        router: &Router,
+        plan: &RoutePlan,
+        request: &LlmRequest<'_>,
+        cancellation: &CancellationToken,
+    ) -> Result<(Box<dyn LlmStream>, RouteRecord), LlmError> {
+        let session = request.route.as_ref().and_then(|h| h.session.as_deref());
+        let mut failures: Vec<String> = Vec::new();
+        for key in &plan.chain {
+            if cancellation.is_cancelled() {
+                return Err(LlmError::Cancelled);
+            }
+            let provider = match self.provider_for(&key.endpoint) {
+                Ok(provider) => provider,
+                Err(why) => {
+                    router.failed(key, Instant::now());
+                    failures.push(format!("`{key}` ({why})"));
+                    continue;
+                }
+            };
+            let mut attempt = request.clone();
+            attempt.model = &key.id;
+            if *key != self.default_key {
+                // Slot ids/hints describe the default server's KV cache.
+                attempt.id_slot = None;
+                attempt.slot_hint = None;
+            }
+            match provider.chat_stream(attempt, cancellation).await {
+                Ok(stream) => {
+                    let record = router.succeeded(plan, key, &failures);
+                    self.note_served(session, key);
+                    return Ok((stream, record));
+                }
+                // Not the model's fault: don't cool it.
+                Err(_) if cancellation.is_cancelled() => return Err(LlmError::Cancelled),
+                Err(err) if is_retryable(&err) => {
+                    router.failed(key, Instant::now());
+                    failures.push(format!("`{key}` ({err})"));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(LlmError::Routing(format!(
+            "every candidate failed: {}",
+            failures.join(", ")
+        )))
+    }
+
+    /// Model routing Part 3b — one escalation attempt for `trigger`:
+    /// decide (taint, consent, mode, session), record the decision, and
+    /// dispatch to the cloud router only on `Proceed`.
+    async fn escalate(
+        &self,
+        esc: &EscalationSetup,
+        trigger: Trigger,
+        query: &RouteQuery,
+        request: &LlmRequest<'_>,
+        cancellation: &CancellationToken,
+    ) -> Escalated {
+        let session = query.session.as_deref();
+        let taint = match session {
+            Some(s) => esc.guard.taint(s).await,
+            None => None,
+        };
+        let consented = session.is_some_and(|s| esc.guard.consented(s));
+        let verdict = decide_escalation(esc.mode, session, consented, taint.as_deref());
+        let record = |model: Option<String>, outcome: &'static str| EscalationRecord {
+            session_id: session.map(str::to_string),
+            model,
+            trigger,
+            mode: esc.mode,
+            outcome,
+            payload_hash: payload_hash(request.system, request.messages),
+        };
+        match verdict {
+            EscalationVerdict::Disabled => {
+                (esc.observer)(&record(None, "disabled"));
+                Escalated::Disabled
+            }
+            EscalationVerdict::Blocked(reason) => {
+                (esc.observer)(&record(None, "blocked_taint"));
+                Escalated::Blocked(reason)
+            }
+            EscalationVerdict::NeedsConsent => {
+                let plan = match esc.router.plan(query, Instant::now()) {
+                    Ok(plan) => plan,
+                    Err(e) => return Escalated::Done(Err(no_cloud_model(&e))),
+                };
+                let model = plan.chain[0].to_string();
+                (esc.observer)(&record(Some(model.clone()), "consent_requested"));
+                Escalated::Done(Err(LlmError::Routing(format!(
+                    "this needs a cloud model: `{model}` ({}), about {} tokens would be sent. \
+                     Send /allow-cloud to allow it for this conversation, then resend your message.",
+                    trigger.name(),
+                    query.estimated_prompt_tokens
+                ))))
+            }
+            EscalationVerdict::Proceed => {
+                let plan = match esc.router.plan(query, Instant::now()) {
+                    Ok(plan) => plan,
+                    Err(e) => return Escalated::Done(Err(no_cloud_model(&e))),
+                };
+                match self.dispatch(&esc.router, &plan, request, cancellation).await {
+                    Ok((stream, route_record)) => {
+                        (esc.observer)(&record(Some(route_record.model.to_string()), "allowed"));
+                        if let Some(observer) = &self.observer {
+                            observer(&route_record);
+                        }
+                        Escalated::Done(Ok(stream))
+                    }
+                    Err(err) => Escalated::Done(Err(err)),
+                }
+            }
+        }
     }
 
     /// The default endpoint is served by the configured provider; every
@@ -125,6 +305,13 @@ pub fn is_routable(messages: &[LlmMessage]) -> bool {
     })
 }
 
+fn no_cloud_model(e: &aivyx_route::NoRoute) -> LlmError {
+    LlmError::Routing(format!(
+        "no cloud escalation model can serve this call either ({e}) — check the cloud entries in \
+         [[routing.models]]"
+    ))
+}
+
 /// Connection trouble, a missing/unloadable model, or a server error: try
 /// the next candidate. Anything else would fail the same way everywhere.
 fn is_retryable(err: &LlmError) -> bool {
@@ -159,59 +346,72 @@ impl LlmProvider for RoutedProvider {
             vision: has_image(request.messages),
             estimated_prompt_tokens: hint.estimated_prompt_tokens,
         };
-        let plan = self.router.plan(&query, Instant::now()).map_err(|e| {
-            LlmError::Routing(format!(
-                "{e} — add a capable model to [[routing.models]] (see `aivyx-pa routing status`)"
-            ))
-        })?;
-        let mut failures: Vec<String> = Vec::new();
-        for key in &plan.chain {
-            if cancellation.is_cancelled() {
-                return Err(LlmError::Cancelled);
-            }
-            let provider = match self.provider_for(&key.endpoint) {
-                Ok(provider) => provider,
-                Err(why) => {
-                    self.router.failed(key, Instant::now());
-                    failures.push(format!("`{key}` ({why})"));
-                    continue;
-                }
-            };
-            let mut attempt = request.clone();
-            attempt.model = &key.id;
-            if *key != self.default_key {
-                // Slot ids/hints describe the default server's KV cache.
-                attempt.id_slot = None;
-                attempt.slot_hint = None;
-            }
-            match provider.chat_stream(attempt, cancellation).await {
-                Ok(stream) => {
-                    let record = self.router.succeeded(&plan, key, &failures);
-                    if let Some(observer) = &self.observer {
-                        observer(&record);
-                    }
-                    return Ok(stream);
-                }
-                // Not the model's fault: don't cool it.
-                Err(_) if cancellation.is_cancelled() => return Err(LlmError::Cancelled),
-                Err(err) if is_retryable(&err) => {
-                    self.router.failed(key, Instant::now());
-                    failures.push(format!("`{key}` ({err})"));
-                }
-                Err(err) => return Err(err),
+
+        // A task kind listed in `tiers` asks for the cloud first; if
+        // escalation can't happen it is served locally as usual.
+        let mut blocked: Option<String> = None;
+        if let Some(esc) = &self.escalation
+            && esc.tiers.contains(&hint.task)
+        {
+            match self
+                .escalate(esc, Trigger::Tier, &query, &request, cancellation)
+                .await
+            {
+                Escalated::Done(result) => return result,
+                Escalated::Blocked(reason) => blocked = Some(reason),
+                Escalated::Disabled => {}
             }
         }
-        Err(LlmError::Routing(format!(
-            "every candidate failed: {}",
-            failures.join(", ")
-        )))
+
+        let plan = match self.router.plan(&query, Instant::now()) {
+            Ok(plan) => plan,
+            Err(e) => {
+                if blocked.is_none()
+                    && let Some(esc) = &self.escalation
+                    && esc.no_local_candidate
+                {
+                    match self
+                        .escalate(esc, Trigger::NoLocalCandidate, &query, &request, cancellation)
+                        .await
+                    {
+                        Escalated::Done(result) => return result,
+                        Escalated::Blocked(reason) => blocked = Some(reason),
+                        Escalated::Disabled => {}
+                    }
+                }
+                return Err(match blocked {
+                    Some(reason) => LlmError::Routing(format!(
+                        "cloud escalation blocked: this conversation contains {reason}; \
+                         no local model can serve it ({e})"
+                    )),
+                    None => LlmError::Routing(format!(
+                        "{e} — add a capable model to [[routing.models]] (see `aivyx-pa routing status`)"
+                    )),
+                });
+            }
+        };
+        let (stream, record) = self
+            .dispatch(&self.router, &plan, &request, cancellation)
+            .await?;
+        if let Some(observer) = &self.observer {
+            observer(&record);
+        }
+        Ok(stream)
     }
 
     async fn tool_call_family_hint(&self, model: &str) -> Option<String> {
+        // Local candidates first, then (Part 3b) cloud escalation models,
+        // so a hint for an escalated model reaches its own provider.
+        let cloud = self
+            .escalation
+            .as_ref()
+            .map(|esc| esc.router.profiles())
+            .unwrap_or_default();
         let endpoint = self
             .router
             .profiles()
             .into_iter()
+            .chain(cloud)
             .filter(|p| p.id == model)
             .map(|p| p.endpoint)
             .min_by_key(|e| *e != self.default_key.endpoint)
@@ -857,5 +1057,236 @@ mod tests {
         assert_eq!(routed_provider.refresh().await, Ok(3));
         assert_eq!(routed_provider.router().profiles(), fresh);
         assert_eq!(routed_provider.default_key(), &key("default", "default"));
+    }
+
+    // ---- Model routing Part 3b: cloud escalation ----
+
+    use crate::escalation::{
+        EscalationGuard, EscalationMode, EscalationRecord, Trigger, payload_hash,
+    };
+
+    /// Per-session taint and consent, set by the test.
+    #[derive(Default)]
+    struct FakeGuard {
+        taint: Mutex<HashMap<String, String>>,
+        consent: Mutex<Vec<String>>,
+    }
+
+    impl FakeGuard {
+        fn tainted(session: &str, reason: &str) -> Arc<Self> {
+            let g = FakeGuard::default();
+            g.taint.lock().unwrap().insert(session.into(), reason.into());
+            Arc::new(g)
+        }
+        fn consenting(session: &str) -> Arc<Self> {
+            let g = FakeGuard::default();
+            g.consent.lock().unwrap().push(session.into());
+            Arc::new(g)
+        }
+    }
+
+    #[async_trait]
+    impl EscalationGuard for FakeGuard {
+        async fn taint(&self, session: &str) -> Option<String> {
+            self.taint.lock().unwrap().get(session).cloned()
+        }
+        fn consented(&self, session: &str) -> bool {
+            self.consent.lock().unwrap().iter().any(|s| s == session)
+        }
+    }
+
+    fn cloud_profile() -> ModelProfile {
+        let mut p = profile("cloud", "claude", Tier::Large, &[Capability::Tools]);
+        p.locality = aivyx_route::Locality::Cloud;
+        p
+    }
+
+    /// Local candidates: only `default@default` (no tools). Cloud: one
+    /// tool-capable `claude@cloud`. Returns the fixture, the cloud
+    /// provider and the recorded escalation decisions.
+    fn escalating(
+        mode: EscalationMode,
+        no_local_candidate: bool,
+        tiers: Vec<TaskKind>,
+        guard: Arc<dyn EscalationGuard>,
+    ) -> (Fixture, Arc<Scripted>, Arc<Mutex<Vec<EscalationRecord>>>) {
+        let cloud = Scripted::ok();
+        let mut f = fixture(vec![default_profile()], vec![("cloud", Arc::clone(&cloud))]);
+        let records: Arc<Mutex<Vec<EscalationRecord>>> = Arc::default();
+        let sink = Arc::clone(&records);
+        f.routed = f.routed.with_escalation(EscalationSetup {
+            router: Router::new(vec![cloud_profile()], TaskOverrides::default())
+                .with_allow_cloud(true),
+            mode,
+            no_local_candidate,
+            tiers,
+            guard,
+            observer: Arc::new(move |r: &EscalationRecord| sink.lock().unwrap().push(r.clone())),
+        });
+        (f, cloud, records)
+    }
+
+    fn with_tools(session: Option<&str>) -> (Vec<LlmMessage>, RouteHint, Vec<LlmToolDescriptor>) {
+        let (messages, hint) = routed(TaskKind::Chat, session);
+        (messages, hint, vec![tool()])
+    }
+
+    #[tokio::test]
+    async fn no_local_candidate_escalates_in_auto_when_untainted() {
+        let (f, cloud, records) = escalating(
+            EscalationMode::Auto,
+            true,
+            vec![],
+            Arc::new(FakeGuard::default()),
+        );
+        let (messages, hint, tools) = with_tools(Some("s"));
+        call(&f.routed, request(&messages, &tools, Some(hint))).await.unwrap();
+        assert_eq!(cloud.seen().len(), 1);
+        assert_eq!(cloud.seen()[0].model, "claude");
+        assert!(f.default.seen().is_empty());
+        let recs = records.lock().unwrap().clone();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].outcome, "allowed");
+        assert_eq!(recs[0].trigger, Trigger::NoLocalCandidate);
+        assert_eq!(recs[0].model.as_deref(), Some("claude@cloud"));
+        assert_eq!(recs[0].session_id.as_deref(), Some("s"));
+        assert_eq!(recs[0].payload_hash, payload_hash(None, &messages));
+        assert_eq!(f.routed.last_served("s"), Some(key("cloud", "claude")));
+    }
+
+    #[tokio::test]
+    async fn ask_without_consent_stops_and_names_the_model() {
+        let (f, cloud, records) = escalating(
+            EscalationMode::Ask,
+            true,
+            vec![],
+            Arc::new(FakeGuard::default()),
+        );
+        let (messages, hint, tools) = with_tools(Some("s"));
+        let Err(LlmError::Routing(msg)) =
+            call(&f.routed, request(&messages, &tools, Some(hint))).await
+        else {
+            panic!("expected a consent request");
+        };
+        assert!(msg.contains("claude@cloud"), "{msg}");
+        assert!(msg.contains("/allow-cloud"), "{msg}");
+        assert!(cloud.seen().is_empty());
+        let recs = records.lock().unwrap().clone();
+        assert_eq!(recs[0].outcome, "consent_requested");
+        assert_eq!(recs[0].model.as_deref(), Some("claude@cloud"));
+    }
+
+    #[tokio::test]
+    async fn ask_with_consent_escalates() {
+        let (f, cloud, records) =
+            escalating(EscalationMode::Ask, true, vec![], FakeGuard::consenting("s"));
+        let (messages, hint, tools) = with_tools(Some("s"));
+        call(&f.routed, request(&messages, &tools, Some(hint))).await.unwrap();
+        assert_eq!(cloud.seen().len(), 1);
+        assert_eq!(records.lock().unwrap()[0].outcome, "allowed");
+    }
+
+    #[tokio::test]
+    async fn a_tainted_conversation_never_escalates_even_in_auto() {
+        let (f, cloud, records) = escalating(
+            EscalationMode::Auto,
+            true,
+            vec![],
+            FakeGuard::tainted("s", "gmail.search output"),
+        );
+        let (messages, hint, tools) = with_tools(Some("s"));
+        let Err(LlmError::Routing(msg)) =
+            call(&f.routed, request(&messages, &tools, Some(hint))).await
+        else {
+            panic!("expected a blocked error");
+        };
+        assert!(msg.contains("cloud escalation blocked"), "{msg}");
+        assert!(msg.contains("gmail.search output"), "{msg}");
+        assert!(cloud.seen().is_empty());
+        let recs = records.lock().unwrap().clone();
+        assert_eq!(recs[0].outcome, "blocked_taint");
+        assert_eq!(recs[0].model, None);
+    }
+
+    #[tokio::test]
+    async fn a_tainted_tier_call_is_served_locally() {
+        let (f, cloud, records) = escalating(
+            EscalationMode::Auto,
+            false,
+            vec![TaskKind::Chat],
+            FakeGuard::tainted("s", "memory recall"),
+        );
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        assert!(cloud.seen().is_empty());
+        assert_eq!(f.default.seen().len(), 1);
+        assert_eq!(records.lock().unwrap()[0].outcome, "blocked_taint");
+    }
+
+    #[tokio::test]
+    async fn a_tier_call_escalates_even_when_local_could_serve_it() {
+        let (f, cloud, records) = escalating(
+            EscalationMode::Auto,
+            false,
+            vec![TaskKind::Plan],
+            Arc::new(FakeGuard::default()),
+        );
+        let (messages, hint) = routed(TaskKind::Plan, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        assert_eq!(cloud.seen().len(), 1);
+        assert!(f.default.seen().is_empty());
+        let recs = records.lock().unwrap().clone();
+        assert_eq!(recs[0].trigger, Trigger::Tier);
+        assert_eq!(recs[0].outcome, "allowed");
+    }
+
+    #[tokio::test]
+    async fn a_side_call_never_escalates() {
+        let (f, cloud, records) = escalating(
+            EscalationMode::Auto,
+            true,
+            vec![TaskKind::Judge],
+            Arc::new(FakeGuard::default()),
+        );
+        let (messages, hint) = routed(TaskKind::Judge, None);
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        assert!(cloud.seen().is_empty());
+        assert_eq!(f.default.seen().len(), 1);
+        assert_eq!(records.lock().unwrap()[0].outcome, "disabled");
+
+        // No local candidate either: the 3a error, still no cloud call.
+        let (messages, _, tools) = with_tools(None);
+        let (_, hint) = routed(TaskKind::Chat, None);
+        let err = call(&f.routed, request(&messages, &tools, Some(hint)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LlmError::Routing(_)), "{err}");
+        assert!(cloud.seen().is_empty());
+        assert_eq!(records.lock().unwrap()[1].outcome, "disabled");
+    }
+
+    #[tokio::test]
+    async fn without_escalation_a_local_miss_is_the_3a_error_and_nothing_is_recorded() {
+        let cloud = Scripted::ok();
+        let f = fixture(vec![default_profile()], vec![("cloud", Arc::clone(&cloud))]);
+        let (messages, hint, tools) = with_tools(Some("s"));
+        let err = call(&f.routed, request(&messages, &tools, Some(hint)))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("[[routing.models]]"), "{err}");
+        assert!(cloud.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn last_served_tracks_local_routing_too() {
+        let gpu = Scripted::ok();
+        let f = fixture(
+            vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+            vec![("gpu", Arc::clone(&gpu))],
+        );
+        let (messages, hint) = routed(TaskKind::Plan, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        assert_eq!(f.routed.last_served("s"), Some(key("gpu", "big")));
+        assert_eq!(f.routed.last_served("other"), None);
     }
 }

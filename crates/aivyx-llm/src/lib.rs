@@ -121,13 +121,15 @@ pub mod verify;
 /// tagged request with `aivyx-route`'s shared `Router`. Ungated: it
 /// dispatches through providers the caller builds.
 pub mod routed;
-pub use routed::{ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider, is_routable};
+pub use routed::{
+    EscalationSetup, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider, is_routable,
+};
 
 /// Model routing Part 3b — consent-gated cloud escalation. For now just
 /// the read-side [`escalation::EscalationGuard`] trait (per-conversation
 /// taint + consent) that `RoutedProvider` consults.
 pub mod escalation;
-pub use escalation::EscalationGuard;
+pub use escalation::{EscalationGuard, EscalationMode, EscalationObserver, EscalationRecord, EscalationVerdict, Trigger, decide_escalation, payload_hash};
 
 // ---------------------------------------------------------------------------
 // Conversation messages

@@ -1045,14 +1045,17 @@ impl LlmPlanner {
         self.routing
             .as_ref()
             .filter(|_| aivyx_llm::is_routable(&self.history))
-            .and_then(|(r, _)| r.router().last_decision(self.route_session.as_deref()?))
-            .map(|rec| rec.model.id)
+            // `last_served`, not the local router's last decision: it also
+            // sees calls escalated to a cloud model (Part 3b).
+            .and_then(|(r, _)| r.last_served(self.route_session.as_deref()?))
+            .map(|key| key.id)
             .unwrap_or_else(|| self.config.model.clone())
     }
 
     /// Add a step's usage to the running total, and to the per-model
-    /// total of the model that served the step — the router's last
-    /// decision for this session when routed, else the configured model.
+    /// total of the model that served the step — the routed provider's
+    /// last-served model for this session when routed, else the
+    /// configured model.
     fn accumulate(&mut self, usage: LlmUsage) {
         self.accumulated_usage.input_tokens += usage.input_tokens;
         self.accumulated_usage.output_tokens += usage.output_tokens;
@@ -5796,6 +5799,78 @@ mod tests {
             default.hints.lock().unwrap().clone(),
             vec!["default".to_string()]
         );
+    }
+
+    /// Never tainted, never consented — `auto` mode doesn't need consent.
+    struct CleanGuard;
+
+    #[async_trait]
+    impl aivyx_llm::EscalationGuard for CleanGuard {
+        async fn taint(&self, _session: &str) -> Option<String> {
+            None
+        }
+        fn consented(&self, _session: &str) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn an_escalated_turn_is_billed_and_hinted_as_the_cloud_model() {
+        let default = FakeLlmProvider::new(vec![]);
+        let cloud = FakeLlmProvider::new(vec![final_step(30, 4)]);
+        // Local: only `default`, which can't call tools. Cloud: `claude`,
+        // which can — so a tool-advertising turn escalates in `auto`.
+        let local = aivyx_route::Router::new(
+            vec![routing_profile("default", "default", &[])],
+            aivyx_route::TaskOverrides::default(),
+        );
+        let mut claude = routing_profile("cloud", "claude", &[aivyx_route::Capability::Tools]);
+        claude.locality = aivyx_route::Locality::Cloud;
+        let cloud_for_factory = Arc::clone(&cloud);
+        let factory: aivyx_llm::ProviderFactory =
+            Box::new(move |_endpoint: &aivyx_route::EndpointRef| {
+                Ok(Arc::clone(&cloud_for_factory) as Arc<dyn LlmProvider>)
+            });
+        let routed = Arc::new(
+            aivyx_llm::RoutedProvider::new(
+                aivyx_route::ModelKey {
+                    endpoint: aivyx_route::EndpointRef::new("default"),
+                    id: "default".into(),
+                },
+                Arc::clone(&default) as Arc<dyn LlmProvider>,
+                local,
+                factory,
+            )
+            .with_escalation(aivyx_llm::EscalationSetup {
+                router: aivyx_route::Router::new(vec![claude], aivyx_route::TaskOverrides::default())
+                    .with_allow_cloud(true),
+                mode: aivyx_llm::EscalationMode::Auto,
+                no_local_candidate: true,
+                tiers: vec![],
+                guard: Arc::new(CleanGuard),
+                observer: Arc::new(|_: &aivyx_llm::EscalationRecord| {}),
+            }),
+        );
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Arc::new(FakeTool::new("echo")) as Arc<dyn Tool>
+        ]));
+        let mut planner = LlmPlanner::new(
+            Arc::clone(&routed) as Arc<dyn LlmProvider>,
+            registry,
+            LlmPlannerConfig::new("default"),
+        )
+        .with_routing(Arc::clone(&routed), aivyx_route::TaskKind::Chat);
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        assert_eq!(cloud.routes.lock().unwrap()[0].0, "claude");
+        let usage = planner.turn_usage();
+        assert_eq!(usage.input_tokens, 30);
+        assert_eq!(planner.turn_costs(), vec![("claude".to_string(), usage)]);
+        assert_eq!(cloud.hints.lock().unwrap().clone(), vec!["claude".to_string()]);
     }
 
     #[tokio::test]
