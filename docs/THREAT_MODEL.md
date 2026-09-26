@@ -390,6 +390,55 @@ sandboxed `null` origin are all rejected with `403`. This closes
 the Cross-Site WebSocket Hijacking / DNS-rebinding vector against
 the daemon's now-writable web surface.
 
+### 4.12 Private data leaves the machine through cloud model escalation
+
+**Threat:** with model routing's cloud escalation configured (Amendment
+A15), a conversation that has read the operator's email, files or
+memories is sent to a cloud model — silently, or by a model or a remote
+sender steering it there.
+
+**Mitigation:** escalation is off unless the operator configures a
+cloud `[routing.endpoints.*]` entry, and then passes a gate
+(`aivyx_llm::escalation::decide_escalation`, dispatched by
+`RoutedProvider`):
+
+- **Taint wins over everything.** A conversation is marked tainted —
+  write-once, persisted in its own `KeyDomain::RoutingTaint` so it
+  survives restarts and context compaction — the first time a
+  sensitive tool's output (or error text) reaches the model, memory
+  recall is injected, or a turn arrives on a channel listed as
+  sensitive. A tainted conversation never escalates, in any mode;
+  consent does not override it. An unreadable taint record is treated
+  as tainted (fail safe).
+- **Consent.** In `ask` mode a turn that needs the cloud stops and names
+  the model; only the operator's `/allow-cloud` (the whole message, in
+  that conversation) or the `AllowCloudEscalation` IPC query over the
+  `0600` socket grants it — per conversation, in memory, re-asked after
+  a restart. Nothing the model emits can grant consent: `/allow-cloud`
+  is read only from submitted operator input, before any turn runs.
+- **No session, no escalation.** Calls outside a conversation (judges,
+  mission planning) never escalate, because their taint can't be known.
+- **Only the operator's endpoints and keys.** Cloud models on
+  `[routing.endpoints.*]` are reachable only through this gate — never
+  as ordinary routing candidates — and use the operator's own
+  `anthropic_api_key` / `openai_api_key`.
+- **Audited without content.** Every decision (allowed, consent
+  requested, blocked by taint, disabled) is a `CloudEscalation` audit
+  entry with a SHA-256 hash of the would-be payload; grants are
+  `CloudConsentGranted`; the first taint is `ConversationTainted`.
+
+**Residual risk:** a sensitive source the taint rules don't know about
+(an MCP or third-party tool whose name matches no `[routing.sensitive]
+tool_prefixes` entry, or private data the operator types directly) does
+not taint. Operators who escalate should list such tools' prefixes, or
+keep `mode = "never"`. A channel whose adapter accepts messages from
+people other than the operator (e.g. a shared Discord server) lets them
+send `/allow-cloud` too — restrict who can message such channels, list
+them in `[routing.sensitive] channels` (which taints their
+conversations, so they never escalate), or keep `mode = "never"`. Once a
+call is escalated, the cloud provider's own retention terms apply
+(§5.5).
+
 ## 5. Threats we explicitly do not defend against
 
 The honest section. These are out-of-scope by design; if they

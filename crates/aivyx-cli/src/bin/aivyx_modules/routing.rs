@@ -1212,6 +1212,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn without_a_cloud_endpoint_no_escalation_is_attached_even_with_a_guard() {
+        let cfg = parse(
+            "[routing]\nenabled = true\ndiscover = false\n\
+             [[routing.models]]\nid = \"qwen3:32b\"\ntier = \"large\"\n",
+        );
+        let access = CloudAccess {
+            escalation_guard: Some(Arc::new(NoTaint)),
+            ..cloud_access()
+        };
+        let (_, routed) = wrap_with_routing(
+            Some(&cfg),
+            &access,
+            ProviderKind::Ollama,
+            None,
+            "qwen3:8b",
+            unused_provider(),
+            None,
+        )
+        .await
+        .unwrap();
+        let routed = routed.expect("routing is on");
+        assert!(routed.escalation_settings().is_none());
+        assert!(routed.escalation_candidates().is_empty());
+    }
+
+    #[tokio::test]
     async fn escalation_gets_the_cloud_endpoint_models_only_with_a_guard() {
         let cfg = parse(
             "[routing]\nenabled = true\ndiscover = false\n\

@@ -37,6 +37,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **Model routing (Part 3b) — consent-gated cloud escalation
+  (Amendment A15).** Off unless a `[routing.endpoints.*]` entry has
+  `kind = "anthropic"` or `"openai"`. Then a conversation whose call no
+  local model can serve (`no_local_candidate`), or whose task kind is in
+  `[routing.escalation] tiers`, may go to that cloud model under
+  `mode = "ask"` (the turn stops and names the model; send `/allow-cloud`
+  or run `aivyx-pa routing allow-cloud <session>`, then resend — the
+  grant lasts until the daemon restarts), `"auto"`, or `"never"`. A
+  conversation that has touched sensitive data — a `[routing.sensitive]
+  tool_prefixes` tool's output or error, memory recall, a sensitive
+  channel — is tainted permanently (persisted) and never escalates, in
+  any mode. Calls outside a conversation never escalate. Every decision
+  is a `CloudEscalation` audit entry carrying a payload hash, never
+  content; also `CloudConsentGranted` and `ConversationTainted`.
+  `routing.status` and `aivyx-pa routing status|explain` show it. New
+  `KeyDomain::RoutingTaint`. See `examples/aivyx-pa.toml` and
+  `docs/THREAT_MODEL.md` §4.12.
 - **Model routing (Part 3a) — an optional `[routing]` section picks a
   model per call.** Off by default: without `[routing]` (or with
   `enabled = false`) nothing changes. With `enabled = true`, a

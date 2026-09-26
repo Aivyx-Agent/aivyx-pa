@@ -1605,11 +1605,12 @@ parent_role = "researcher"
 # a second one). Other roster entries without `endpoint` are models on
 # that same provider.
 #
-# No new cloud destinations in this release:
-#   * [routing.endpoints.*] with kind = "anthropic" or "openai" is
-#     rejected at startup ("cloud endpoints arrive with consent-gated
-#     escalation in a later release").
-#   * Cloud candidates are allowed only on the `default` endpoint, and
+# Cloud and privacy (PRODUCT.md G6; amendment A15):
+#   * [routing.endpoints.*] with kind = "anthropic" or "openai" is a
+#     cloud ESCALATION target, never an ordinary candidate — see
+#     "Cloud escalation" below. With [routing.escalation] mode = "never"
+#     it is rejected at startup.
+#   * Ordinary cloud candidates are allowed only on the `default` endpoint, and
 #     only when the [agent] provider is itself cloud — e.g. on
 #     provider = "anthropic", routing may pick another Anthropic model
 #     you list in [[routing.models]]; on a local provider, a cloud-
@@ -1705,6 +1706,74 @@ parent_role = "researcher"
 #   * The [budget] pre-call gate prices a turn at the [agent] model;
 #     routing to a pricier model on the same provider can overshoot a
 #     cap by at most one turn (see docs/COST_GOVERNANCE.md).
+#
+# ----------------------------------------------------------------
+# Cloud escalation (Part 3b) — [routing.escalation], [routing.sensitive]
+# ----------------------------------------------------------------
+# Lets a local-first setup send a SPECIFIC conversation's call to a
+# cloud model you configure — only with consent, never after the
+# conversation has touched sensitive data, and always audited. Nothing
+# changes unless a [routing.endpoints.*] entry has kind = "anthropic" or
+# "openai" (with at least one [[routing.models]] entry on it). Governed
+# by docs/amendments/2026-09-26-cloud-escalation.md (A15).
+#
+# [routing.endpoints.claude]
+# kind = "anthropic"          # uses your anthropic_api_key (required)
+# # kind = "openai"           # uses your openai_api_key; optional base_url
+#
+# [[routing.models]]
+# id = "claude-sonnet-5"
+# endpoint = "claude"
+# tier = "large"
+# capabilities = ["completion", "tools", "vision"]
+# context_window = 200000
+#
+# [routing.escalation]
+# mode = "ask"                # never | ask (default) | auto
+# no_local_candidate = true   # escalate when no local model can do it
+# tiers = []                  # task kinds that go straight to the cloud,
+#                             # e.g. ["plan"] (chat | plan | judge | …)
+#
+# [routing.sensitive]
+# tool_prefixes = ["gmail.", "calendar.", "contacts.", "drive.",
+#                  "memory.", "notion.", "obsidian.", "fs.read"]  # defaults
+# channels = []               # platform names, e.g. ["telegram"]
+#
+# Unknown keys in either table are a config error, so a typo can't
+# silently weaken a privacy setting.
+#
+# How it works:
+#   * A trigger fires when no local model meets the call's needs
+#     (no_local_candidate) or its task kind is listed in `tiers`.
+#   * mode "ask": the turn stops with a message naming the cloud model,
+#     the trigger and about how many tokens would be sent. Send
+#     /allow-cloud in that conversation (the whole message), or run
+#     `aivyx-pa routing allow-cloud <session-id>`, then resend. The
+#     grant lasts for that conversation until the daemon restarts.
+#     mode "auto": no asking. mode "never": no escalation at all.
+#   * A conversation is TAINTED — permanently, persisted across restarts
+#     and compaction — the first time it touches sensitive data: output
+#     (or the error text) of a tool matching `tool_prefixes`, memory
+#     recall injected into a turn, or a turn arriving on a channel in
+#     `channels`. A tainted conversation NEVER escalates, in any mode,
+#     and consent doesn't override it. A `tiers` call in a tainted
+#     conversation is served locally; a call with no local model fails
+#     with "cloud escalation blocked: this conversation contains …".
+#   * Calls outside a conversation (the completion judge, mission
+#     planning, the skill-proposer judge) never escalate.
+#   * A turn carrying a PDF is never routed, so never escalated.
+#   * Cloud models on [routing.endpoints.*] are never ordinary routing
+#     candidates — they're reachable only through this gate.
+#   * Every escalation decision is audited as `CloudEscalation` (allowed,
+#     consent_requested, blocked_taint or disabled; the cloud model where
+#     one was chosen; a SHA-256 hash of what would be sent — never the
+#     content). Consent grants are `CloudConsentGranted`; the first taint
+#     of a conversation is `ConversationTainted`. `aivyx-pa routing
+#     explain` lists them; `routing.status` shows this conversation's
+#     taint and consent.
+#   * What leaves the machine goes only to the endpoint you configured,
+#     with your own key; what that provider retains is governed by its
+#     terms with you. No Aivyx server is in the path.
 
 # ----------------------------------------------------------------
 # Persistent helpfulness ledger (Phase 82) — no config; automatic
