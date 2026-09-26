@@ -189,19 +189,15 @@ impl ProfileRefresher for DiscoveryRefresher {
 /// Routed Ollama endpoints run with `OllamaConfig::default_local()`, whose
 /// provider sends `num_ctx = min(native, AUTO_NUM_CTX_CAP)` per request —
 /// so that, not the trained window discovery reports, is what the model
-/// actually gets. A roster `context_window` for the (endpoint, id) wins.
+/// actually gets. A roster `context_window` (already merged into the
+/// profile) can only lower it. An unknown window stays unknown.
 fn clamp_ollama_windows(profiles: &mut [ModelProfile], config: &RoutingConfig) {
     for p in profiles {
         let ollama = config
             .endpoints
             .get(p.endpoint.as_str())
             .is_some_and(|e| e.kind == EndpointKind::Ollama);
-        let declared = config.models.iter().any(|m| {
-            m.id == p.id
-                && m.endpoint.as_deref() == Some(p.endpoint.as_str())
-                && m.context_window.is_some()
-        });
-        if ollama && !declared {
+        if ollama {
             p.context_window = p.context_window.map(|w| w.min(AUTO_NUM_CTX_CAP));
         }
     }
@@ -946,11 +942,12 @@ mod tests {
     }
 
     #[test]
-    fn routed_ollama_windows_are_capped_at_the_served_num_ctx() {
+    fn routed_ollama_windows_declared_or_not_are_capped_at_the_served_num_ctx() {
         let cfg = parse(
             "[routing.endpoints.box]\nkind = \"ollama\"\nbase_url = \"http://127.0.0.1:11434\"\n\
              [routing.endpoints.gpu]\nkind = \"openai_compat\"\nbase_url = \"http://127.0.0.1:8080\"\n\
-             [[routing.models]]\nid = \"declared\"\nendpoint = \"box\"\ncontext_window = 65536\n",
+             [[routing.models]]\nid = \"declared\"\nendpoint = \"box\"\ncontext_window = 65536\n\
+             [[routing.models]]\nid = \"lowered\"\nendpoint = \"box\"\ncontext_window = 4096\n",
         );
         let with_window = |endpoint: &str, id: &str, window: Option<u32>| {
             let mut p = ModelProfile::new(id, EndpointRef::new(endpoint));
@@ -961,7 +958,9 @@ mod tests {
             with_window("box", "big", Some(131_072)),
             with_window("box", "small", Some(8_192)),
             with_window("box", "unknown", None),
+            // Roster windows arrive merged into the profile.
             with_window("box", "declared", Some(65_536)),
+            with_window("box", "lowered", Some(4_096)),
             with_window("gpu", "big", Some(131_072)),
             with_window("default", "big", Some(131_072)),
         ];
@@ -975,7 +974,8 @@ mod tests {
                 Some(cap),
                 Some(8_192),
                 None,
-                Some(65_536),
+                Some(cap),
+                Some(4_096),
                 Some(131_072),
                 Some(131_072),
             ]

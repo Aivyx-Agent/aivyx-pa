@@ -1636,9 +1636,12 @@ parent_role = "researcher"
 # on every request, which overrides the server's own default (a
 # Modelfile or OLLAMA_CONTEXT_LENGTH has no effect here). A routed
 # Ollama endpoint is served with num_ctx = min(the model's trained
-# window, 16384), and the router assumes that window for its models
-# unless you declare `context_window` for that (endpoint, id) in the
-# roster. `[ollama] num_ctx` applies only to the `default` endpoint.
+# window, 16384), and the router assumes that window for its models.
+# Declaring `context_window` for that (endpoint, id) in the roster can
+# only lower it — values above 16384 are clamped. When discovery can't
+# read a model's window, the model is served at Ollama's own default
+# context (often 4096) — declare that window in the roster.
+# `[ollama] num_ctx` applies only to the `default` endpoint.
 #
 # Also note: a misspelled key directly under [routing] (e.g.
 # `enable = true`) is silently ignored, so routing stays off — check

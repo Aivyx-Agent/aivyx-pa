@@ -59,8 +59,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
   routed call, and `LlmCost` recorded per model actually used. A request
   carrying a PDF is never routed (it goes to the `[agent]` model), and
   models on routed Ollama endpoints are assumed to have the window
-  aivyx-pa serves them with — `num_ctx = min(trained window, 16384)` —
-  unless the roster declares `context_window`. Declare your
+  aivyx-pa serves them with — `num_ctx = min(trained window, 16384)`; a
+  roster `context_window` can only lower that. Declare your
   `[agent]` model's `capabilities` and `context_window` in
   `[[routing.models]]`, or it ranks below discovered tool-capable models
   (startup warns). See `examples/aivyx-pa.toml` for the full reference.
