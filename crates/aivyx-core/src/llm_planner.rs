@@ -1025,6 +1025,16 @@ impl LlmPlanner {
         }
     }
 
+    /// The context a routed request needs, in tokens (chars / 4): the
+    /// history, the system prompt, the tool catalog as sent, and room
+    /// for the reply.
+    fn route_estimate(&self) -> u32 {
+        let system = self.config.system_prompt.as_deref().map_or(0, str::len);
+        let tools = serde_json::to_string(&self.tools).map_or(0, |json| json.len());
+        let prompt = aivyx_llm::estimate_tokens(&self.history) + (system + tools) / 4;
+        (prompt as u32).saturating_add(self.config.max_tokens)
+    }
+
     /// Build one `LlmRequest` from the current history + config and
     /// drain the provider's stream, returning the terminal value.
     /// Relays every `TextChunk` to the channel as a `StreamEvent::Text`.
@@ -1055,13 +1065,7 @@ impl LlmPlanner {
             route: self.routing.as_ref().map(|(_, task)| aivyx_llm::RouteHint {
                 task: task.clone(),
                 session: self.route_session.clone(),
-                estimated_prompt_tokens: (aivyx_llm::estimate_tokens(&self.history)
-                    + self
-                        .config
-                        .system_prompt
-                        .as_deref()
-                        .map_or(0, |s| s.len() / 4))
-                    as u32,
+                estimated_prompt_tokens: self.route_estimate(),
             }),
         };
 
@@ -1456,9 +1460,16 @@ impl TurnPlanner for LlmPlanner {
                     // inside `<tool_call>`. Failure to determine
                     // the family is silent — the substrate falls
                     // back to the default permissive scan.
+                    // Routed: ask about the model that actually served
+                    // the step, not the configured one.
+                    let served = self
+                        .routing
+                        .as_ref()
+                        .and_then(|(r, _)| r.router().last_decision(self.route_session.as_deref()?))
+                        .map(|rec| rec.model.id);
                     let family_hint = self
                         .provider
-                        .tool_call_family_hint(&self.config.model)
+                        .tool_call_family_hint(served.as_deref().unwrap_or(&self.config.model))
                         .await;
                     let extracted = crate::textual_tool_call::extract_tool_calls_with_hint(
                         &text,
@@ -2120,6 +2131,8 @@ mod tests {
         last_request: Mutex<Option<(Option<u32>, Option<SlotHint>)>>,
         // Model routing — `(model, route)` off every `chat_stream` call.
         routes: Mutex<Vec<(String, Option<aivyx_llm::RouteHint>)>>,
+        // Model routing — the model of every `tool_call_family_hint` call.
+        hints: Mutex<Vec<String>>,
     }
 
     struct FakeStep {
@@ -2133,6 +2146,7 @@ mod tests {
                 script: Mutex::new(steps.into()),
                 last_request: Mutex::new(None),
                 routes: Mutex::new(Vec::new()),
+                hints: Mutex::new(Vec::new()),
             })
         }
     }
@@ -2159,6 +2173,11 @@ mod tests {
                 events: step.events.into_iter(),
                 terminal: Some(step.terminal),
             }))
+        }
+
+        async fn tool_call_family_hint(&self, model: &str) -> Option<String> {
+            self.hints.lock().unwrap().push(model.to_string());
+            None
         }
     }
 
@@ -5506,6 +5525,82 @@ mod tests {
         let usage = planner.turn_usage();
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(planner.turn_costs(), vec![("big".to_string(), usage)]);
+    }
+
+    /// The `estimated_prompt_tokens` a routed planner sends for one
+    /// "hello there" turn under `config`, with `tools` registered.
+    async fn routed_estimate(config: LlmPlannerConfig, tools: Vec<Arc<dyn Tool>>) -> u32 {
+        let provider = FakeLlmProvider::new(vec![final_step(1, 1)]);
+        let routed = routed_over(FakeLlmProvider::new(vec![]), FakeLlmProvider::new(vec![]));
+        let mut planner =
+            LlmPlanner::new(provider.clone(), Arc::new(ToolRegistry::new(tools)), config)
+                .with_routing(routed, aivyx_route::TaskKind::Chat);
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(
+                &Message::text(channel.session, "hello there"),
+                TurnId::new(),
+            )
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        let routes = provider.routes.lock().unwrap().clone();
+        routes[0].1.clone().expect("tagged").estimated_prompt_tokens
+    }
+
+    fn estimate_config(system_prompt: Option<&str>, max_tokens: u32) -> LlmPlannerConfig {
+        let mut config = LlmPlannerConfig::new("m");
+        config.system_prompt = system_prompt.map(str::to_string);
+        config.max_tokens = max_tokens;
+        config
+    }
+
+    #[tokio::test]
+    async fn the_route_estimate_counts_system_prompt_tools_and_max_tokens() {
+        let base = routed_estimate(estimate_config(None, 0), vec![]).await;
+
+        let system = "x".repeat(4_000);
+        let with_system = routed_estimate(estimate_config(Some(&system), 0), vec![]).await;
+        assert!(
+            with_system >= base + 1_000,
+            "system prompt: {base} -> {with_system}"
+        );
+
+        let with_tools = routed_estimate(
+            estimate_config(None, 0),
+            vec![Arc::new(FakeTool::new("echo")) as Arc<dyn Tool>],
+        )
+        .await;
+        assert!(with_tools > base, "tools: {base} -> {with_tools}");
+
+        let with_output = routed_estimate(estimate_config(None, 2_000), vec![]).await;
+        assert_eq!(with_output, base + 2_000, "max_tokens");
+    }
+
+    #[tokio::test]
+    async fn the_family_hint_asks_about_the_model_the_router_used() {
+        let default = FakeLlmProvider::new(vec![]);
+        let gpu = FakeLlmProvider::new(vec![final_step(1, 1)]);
+        let routed = routed_over(default.clone(), gpu.clone());
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Arc::new(FakeTool::new("echo")) as Arc<dyn Tool>
+        ]));
+        let mut planner = LlmPlanner::new(
+            Arc::clone(&routed) as Arc<dyn LlmProvider>,
+            registry,
+            LlmPlannerConfig::new("default"),
+        )
+        .with_routing(routed, aivyx_route::TaskKind::Chat);
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        assert_eq!(gpu.hints.lock().unwrap().clone(), vec!["big".to_string()]);
+        assert!(default.hints.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
