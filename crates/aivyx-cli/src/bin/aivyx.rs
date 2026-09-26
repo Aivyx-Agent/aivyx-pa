@@ -6945,6 +6945,13 @@ async fn run_async(
             &model,
             provider,
             Some(route_observer),
+            routing::default_residency(
+                provider_kind.value,
+                routing_base_url.as_deref(),
+                config_broker_base_url
+                    .as_deref()
+                    .unwrap_or(DEFAULT_BROKER_BASE_URL),
+            ),
         )
         .await
         .map_err(|e| format!("routing: {e}"))?;
