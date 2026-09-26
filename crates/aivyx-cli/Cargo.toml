@@ -158,7 +158,7 @@ directories = "6.0.0"
 base64 = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time", "test-util"] }
 serde_json = { workspace = true }
 # routing.rs tests parse `[routing]` snippets into aivyx-route's own type.
 toml = "0.8"

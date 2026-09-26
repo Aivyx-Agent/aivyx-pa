@@ -24,8 +24,8 @@ use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::{LlmProvider, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider};
 use aivyx_route::{
     Availability, Capability, DefaultEndpoint, EndpointConfig, EndpointKind, EndpointRef, Locality,
-    ModelKey, ModelProfile, ResidencyNote, ResidencySnapshot, RosterEntry, Router, RoutingConfig,
-    find, merge,
+    ModelKey, ModelProfile, ModelResidency, ResidencyNote, ResidencySnapshot, RosterEntry, Router,
+    RoutingConfig, find, merge,
 };
 use aivyx_storage::Storage;
 use secrecy::SecretString;
@@ -423,6 +423,7 @@ impl ResidencySources {
             client,
         )
         .await;
+        alias_untagged_ollama_latest(&mut snap, &self.endpoints);
         if matches!(
             self.default,
             DefaultResidency::LlamaServer(_) | DefaultResidency::Resident | DefaultResidency::Broker(_)
@@ -433,10 +434,54 @@ impl ResidencySources {
     }
 }
 
+/// Final review I1 — Ollama accepts a tagless model name (`llama3.2`) for
+/// chat, which is what operators commonly write in `[agent] model` or
+/// `[[routing.models]]`; but `/api/ps` and `/api/tags` always report the
+/// canonical `name:latest`. Without this alias, an untagged default's
+/// residency key never matches what Ollama reports, so a loaded default
+/// scores as if it needed a load — and, with `vram_bytes` set, can be
+/// outranked by a small cold model. For every Ollama endpoint, this adds an
+/// untagged alias of each `X:latest` entry, unless an explicit `X` entry is
+/// already present (which always wins). Only Ollama has this suffix
+/// convention — no other endpoint kind is touched.
+fn alias_untagged_ollama_latest(
+    snap: &mut ResidencySnapshot,
+    endpoints: &[(EndpointRef, EndpointConfig)],
+) {
+    let ollama_endpoints: std::collections::HashSet<&EndpointRef> = endpoints
+        .iter()
+        .filter(|(_, c)| c.kind == EndpointKind::Ollama)
+        .map(|(ep, _)| ep)
+        .collect();
+    let aliases: Vec<(ModelKey, ModelResidency)> = snap
+        .models
+        .iter()
+        .filter(|(key, _)| ollama_endpoints.contains(&key.endpoint))
+        .filter_map(|(key, residency)| {
+            let untagged = key.id.strip_suffix(":latest")?;
+            Some((
+                ModelKey {
+                    endpoint: key.endpoint.clone(),
+                    id: untagged.to_string(),
+                },
+                *residency,
+            ))
+        })
+        .collect();
+    for (key, residency) in aliases {
+        snap.models.entry(key).or_insert(residency);
+    }
+}
+
 /// Polls `sources` every [`RESIDENCY_REFRESH`] (first poll immediately)
 /// and hands each snapshot to `routed`'s router; exits once `routed` is
-/// gone.
-pub(crate) fn spawn_residency_refresh(routed: Weak<RoutedProvider>, sources: ResidencySources) {
+/// gone. Returns the task's `JoinHandle` so the exit is observable (Final
+/// review M1) — production callers detach it (a regression that held a
+/// strong `Arc` instead of `Weak` would otherwise pass unnoticed).
+pub(crate) fn spawn_residency_refresh(
+    routed: Weak<RoutedProvider>,
+    sources: ResidencySources,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let client = aivyx_route::discovery::reqwest::Client::new();
         let mut tick = tokio::time::interval(RESIDENCY_REFRESH);
@@ -449,7 +494,7 @@ pub(crate) fn spawn_residency_refresh(routed: Weak<RoutedProvider>, sources: Res
             };
             routed.router().set_residency(snapshot);
         }
-    });
+    })
 }
 
 /// Routed Ollama endpoints run with `OllamaConfig::default_local()`, whose
@@ -588,7 +633,9 @@ pub(crate) async fn wrap_with_routing(
     let routed = Arc::new(routed);
     let residency = ResidencySources::new(&config, default_residency);
     if residency.is_active() {
-        spawn_residency_refresh(Arc::downgrade(&routed), residency);
+        // Detached: the loop holds only a `Weak` and exits on its own once
+        // `routed` is dropped, so nothing here needs the handle.
+        drop(spawn_residency_refresh(Arc::downgrade(&routed), residency));
     }
     Ok((Arc::clone(&routed) as Arc<dyn LlmProvider>, Some(routed)))
 }
@@ -652,9 +699,6 @@ pub(crate) fn render_status(
 /// so every candidate ranks as if it needs a load, same as before Part 4.
 /// Pure.
 pub(crate) fn render_residency(snapshot: &ResidencySnapshot, profiles: &[ModelProfile]) -> String {
-    if *snapshot == ResidencySnapshot::default() {
-        return "Residency: no signal — every model ranks as if it needs a load.\n".to_string();
-    }
     let mut loaded = Vec::new();
     let mut needs_load = Vec::new();
     let mut wont_fit = Vec::new();
@@ -666,27 +710,35 @@ pub(crate) fn render_residency(snapshot: &ResidencySnapshot, profiles: &[ModelPr
             None => {}
         }
     }
-    let mut out = String::from("Residency:\n");
+    // Final review M2 — build the body first: a snapshot can be non-empty
+    // (roster-only Ollama entries, or only `slots` set) yet say nothing
+    // about any candidate here and carry no VRAM figure. Print the
+    // no-signal sentence rather than a bare "Residency:" header in that
+    // case too, same as a genuinely empty snapshot.
+    let mut body = String::new();
     if !loaded.is_empty() {
-        out.push_str(&format!("  loaded: {}\n", loaded.join(", ")));
+        body.push_str(&format!("  loaded: {}\n", loaded.join(", ")));
     }
     if !needs_load.is_empty() {
-        out.push_str(&format!("  needs load: {}\n", needs_load.join(", ")));
+        body.push_str(&format!("  needs load: {}\n", needs_load.join(", ")));
     }
     if !wont_fit.is_empty() {
-        out.push_str(&format!("  may not fit: {}\n", wont_fit.join(", ")));
+        body.push_str(&format!("  may not fit: {}\n", wont_fit.join(", ")));
     }
     if let Some(vram) = snapshot.vram {
         let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
         let available = snapshot.available_vram().unwrap_or(0);
-        out.push_str(&format!(
+        body.push_str(&format!(
             "VRAM: {:.1} GiB used of {:.1} GiB ({:.1} GiB available for a load)\n",
             gib(vram.used_bytes),
             gib(vram.total_bytes),
             gib(available)
         ));
     }
-    out
+    if body.is_empty() {
+        return "Residency: no signal — every model ranks as if it needs a load.\n".to_string();
+    }
+    format!("Residency:\n{body}")
 }
 
 /// `aivyx-pa routing explain` output: `entries` in the order given
@@ -1628,6 +1680,24 @@ mod tests {
         );
     }
 
+    /// Final review M2 — a non-empty snapshot (roster-only entries, or
+    /// only `slots` set) that still says nothing about any candidate here
+    /// and carries no VRAM figure must print the same "no signal" sentence,
+    /// not a bare "Residency:" header.
+    #[test]
+    fn render_residency_says_no_signal_when_nothing_matches_a_candidate() {
+        let ps = profiles(&[("default", "m", &[], &[])]);
+        let mut snapshot = ResidencySnapshot::default();
+        snapshot
+            .models
+            .insert(key("gpu", "other"), ModelResidency::Loaded { vram_bytes: None });
+        let text = render_residency(&snapshot, &ps);
+        assert_eq!(
+            text,
+            "Residency: no signal — every model ranks as if it needs a load.\n"
+        );
+    }
+
     #[test]
     fn render_residency_groups_candidates_and_reports_vram() {
         use aivyx_route::{ModelResidency, Vram};
@@ -1927,6 +1997,134 @@ mod tests {
         assert!(ResidencySources::new(&vram, DefaultResidency::None).is_active());
     }
 
+    /// Final review I1 — Ollama reports `name:latest` for a tagless model,
+    /// while an operator commonly writes the untagged name.
+    #[test]
+    fn ollama_latest_ids_get_an_untagged_alias() {
+        let endpoints = vec![(
+            EndpointRef::new("default"),
+            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
+        )];
+        let mut snap = ResidencySnapshot::default();
+        snap.models.insert(
+            key("default", "llama3.2:latest"),
+            ModelResidency::Loaded { vram_bytes: None },
+        );
+        alias_untagged_ollama_latest(&mut snap, &endpoints);
+        assert_eq!(
+            snap.models[&key("default", "llama3.2")],
+            ModelResidency::Loaded { vram_bytes: None }
+        );
+    }
+
+    #[test]
+    fn an_explicit_untagged_entry_is_not_overwritten_by_the_alias() {
+        let endpoints = vec![(
+            EndpointRef::new("default"),
+            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
+        )];
+        let mut snap = ResidencySnapshot::default();
+        snap.models.insert(
+            key("default", "llama3.2:latest"),
+            ModelResidency::Loaded { vram_bytes: None },
+        );
+        snap.models.insert(
+            key("default", "llama3.2"),
+            ModelResidency::NotLoaded {
+                size_bytes: Some(1),
+            },
+        );
+        alias_untagged_ollama_latest(&mut snap, &endpoints);
+        assert_eq!(
+            snap.models[&key("default", "llama3.2")],
+            ModelResidency::NotLoaded {
+                size_bytes: Some(1)
+            }
+        );
+    }
+
+    #[test]
+    fn a_non_ollama_endpoint_gets_no_untagged_alias() {
+        let endpoints = vec![(
+            EndpointRef::new("gpu"),
+            endpoint(EndpointKind::LlamaRouter, Some("http://gpu:8080")),
+        )];
+        let mut snap = ResidencySnapshot::default();
+        snap.models.insert(
+            key("gpu", "llama3.2:latest"),
+            ModelResidency::Loaded { vram_bytes: None },
+        );
+        alias_untagged_ollama_latest(&mut snap, &endpoints);
+        assert!(!snap.models.contains_key(&key("gpu", "llama3.2")));
+    }
+
+    #[test]
+    fn a_tagged_ollama_model_gets_no_alias() {
+        let endpoints = vec![(
+            EndpointRef::new("default"),
+            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
+        )];
+        let mut snap = ResidencySnapshot::default();
+        snap.models.insert(
+            key("default", "qwen3:8b"),
+            ModelResidency::Loaded { vram_bytes: None },
+        );
+        alias_untagged_ollama_latest(&mut snap, &endpoints);
+        assert_eq!(snap.models.len(), 1, "no alias should be added");
+    }
+
+    /// The point of the alias: an untagged loaded default now costs the
+    /// same as an explicitly-tagged one, and, with `vram_bytes` set, beats
+    /// a small cold model of the same tier — the inversion the review
+    /// found (I1).
+    #[test]
+    fn an_aliased_untagged_default_costs_zero_and_beats_a_cold_model() {
+        let endpoints = vec![(
+            EndpointRef::new("default"),
+            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
+        )];
+        let mut snap = ResidencySnapshot::default();
+        snap.models.insert(
+            key("default", "llama3.2:latest"),
+            ModelResidency::Loaded { vram_bytes: None },
+        );
+        snap.models.insert(
+            key("default", "qwen3:1.7b"),
+            ModelResidency::NotLoaded {
+                size_bytes: Some(1 << 30),
+            },
+        );
+        snap.vram = Some(aivyx_route::Vram {
+            total_bytes: 24 << 30,
+            used_bytes: 0,
+        });
+        alias_untagged_ollama_latest(&mut snap, &endpoints);
+
+        let default_profile = ModelProfile::new("llama3.2", EndpointRef::new("default"));
+        assert_eq!(
+            snap.cost(&default_profile),
+            (0, Some(ResidencyNote::Loaded))
+        );
+
+        let profiles = vec![
+            default_profile,
+            ModelProfile::new("qwen3:1.7b", EndpointRef::new("default")),
+        ];
+        let router = Router::new(profiles, aivyx_route::TaskOverrides::default());
+        router.set_residency(snap);
+        let plan = router
+            .plan(
+                &RouteQuery::new(TaskKind::Chat),
+                std::time::Instant::now(),
+            )
+            .expect("both profiles are eligible for chat");
+        assert_eq!(
+            plan.chain[0],
+            key("default", "llama3.2"),
+            "the loaded default should outrank the cold model"
+        );
+    }
+
     #[tokio::test]
     async fn a_single_model_default_is_marked_resident_without_any_network() {
         let s = ResidencySources::new(&RoutingConfig::default(), DefaultResidency::Resident);
@@ -1955,21 +2153,33 @@ mod tests {
         routed.expect("routing is on")
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_refresh_loop_feeds_the_router_and_stops_with_it() {
         let routed = routed_provider_for_residency_test().await;
         let sources = ResidencySources::new(&RoutingConfig::default(), DefaultResidency::Resident);
-        spawn_residency_refresh(Arc::downgrade(&routed), sources);
+        let handle = spawn_residency_refresh(Arc::downgrade(&routed), sources);
         let default = EndpointRef::new(DEFAULT_ENDPOINT);
+        // The first poll runs immediately, before any tick fires, so it
+        // lands as soon as the spawned task gets to run at all.
         let mut fed = false;
         for _ in 0..50 {
             if routed.router().residency().resident_endpoints.contains(&default) {
                 fed = true;
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::task::yield_now().await;
         }
         assert!(fed, "the first poll runs immediately");
-        drop(routed); // the task exits on its next tick; nothing to assert beyond no panic
+
+        // Final review M1 — a regression that held a strong `Arc` instead
+        // of a `Weak` would pass the assertion above but never let this
+        // task finish. Dropping every external `Arc` and advancing one
+        // interval must be enough to observe the loop's own exit.
+        drop(routed);
+        tokio::time::advance(RESIDENCY_REFRESH * 2).await;
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("the refresh task should exit once the router is dropped")
+            .expect("the refresh task should not panic");
     }
 }
