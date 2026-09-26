@@ -378,6 +378,39 @@ impl ContextProvider for ComposedContextProvider {
             Some(blocks.join("\n\n"))
         }
     }
+
+    /// Model routing Part 3b — conservatively, sensitive if any part is.
+    /// The planner asks [`Self::recall_with_sensitivity`], which is exact.
+    fn sensitive(&self) -> bool {
+        self.providers.iter().any(|p| p.sensitive())
+    }
+
+    /// The joined block, sensitive only when a sensitive part actually
+    /// contributed to it (a skill block beside an empty recall isn't).
+    async fn recall_with_sensitivity(
+        &self,
+        user_message: &str,
+        session_id: aivyx_core::SessionId,
+        turn_id: aivyx_core::TurnId,
+        origin: aivyx_core::MessageOrigin,
+    ) -> Option<(String, bool)> {
+        let mut blocks: Vec<String> = Vec::new();
+        let mut sensitive = false;
+        for p in &self.providers {
+            if let Some((b, s)) = p
+                .recall_with_sensitivity(user_message, session_id, turn_id, origin)
+                .await
+            {
+                sensitive |= s && !b.trim().is_empty();
+                blocks.push(b);
+            }
+        }
+        if blocks.is_empty() {
+            None
+        } else {
+            Some((blocks.join("\n\n"), sensitive))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -618,6 +651,74 @@ mod tests {
         ) -> Option<String> {
             self.0.map(str::to_string)
         }
+    }
+
+    /// A [`FixedProvider`] that reports itself sensitive.
+    struct SensitiveProvider(Option<&'static str>);
+    #[async_trait]
+    impl ContextProvider for SensitiveProvider {
+        async fn recall(
+            &self,
+            _m: &str,
+            _s: SessionId,
+            _t: aivyx_core::TurnId,
+            _origin: aivyx_core::MessageOrigin,
+        ) -> Option<String> {
+            self.0.map(str::to_string)
+        }
+        fn sensitive(&self) -> bool {
+            true
+        }
+    }
+
+    async fn composed_sensitivity(
+        providers: Vec<Arc<dyn ContextProvider>>,
+    ) -> Option<(String, bool)> {
+        ComposedContextProvider::new(providers)
+            .recall_with_sensitivity(
+                "x",
+                SessionId::new(),
+                aivyx_core::TurnId::new(),
+                aivyx_core::MessageOrigin::Operator,
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn composed_provider_is_sensitive_only_when_a_sensitive_part_injected() {
+        // A skill block alone, beside a sensitive recall that found
+        // nothing, is not sensitive.
+        assert_eq!(
+            composed_sensitivity(vec![
+                Arc::new(SensitiveProvider(None)),
+                Arc::new(FixedProvider(Some("skill"))),
+            ])
+            .await,
+            Some(("skill".to_string(), false))
+        );
+        // The same composition, once recall injects, is.
+        assert_eq!(
+            composed_sensitivity(vec![
+                Arc::new(SensitiveProvider(Some("recall"))),
+                Arc::new(FixedProvider(Some("skill"))),
+            ])
+            .await,
+            Some(("recall\n\nskill".to_string(), true))
+        );
+        assert_eq!(
+            composed_sensitivity(vec![Arc::new(SensitiveProvider(None))]).await,
+            None
+        );
+        // Conservatively, the composite as a whole reports sensitive when
+        // any part is.
+        assert!(
+            ComposedContextProvider::new(vec![
+                Arc::new(SensitiveProvider(None)),
+                Arc::new(FixedProvider(None)),
+            ])
+            .sensitive()
+        );
+        assert!(!ComposedContextProvider::new(vec![Arc::new(FixedProvider(None))]).sensitive());
     }
 
     #[tokio::test]

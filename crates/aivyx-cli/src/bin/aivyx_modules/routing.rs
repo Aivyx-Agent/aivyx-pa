@@ -106,6 +106,23 @@ pub(crate) fn check_routing_config(
     Ok(())
 }
 
+/// Model routing Part 3b — cloud escalation is live: `[routing]` is
+/// enabled, `[routing.escalation] mode` isn't `never`, and at least one
+/// `[routing.endpoints.*]` is a cloud endpoint. Only then does the daemon
+/// run the taint machinery; otherwise nothing is marked (the
+/// compatibility invariant — behaviour stays byte-identical to 3a).
+pub(crate) fn escalation_active(
+    cfg: Option<&RoutingConfig>,
+    escalation: &EscalationConfig,
+) -> bool {
+    escalation.mode != EscalationMode::Never
+        && cfg.filter(|c| c.enabled).is_some_and(|c| {
+            c.endpoints
+                .values()
+                .any(|e| e.kind.locality() == Locality::Cloud)
+        })
+}
+
 /// Every cloud endpoint has the operator's key for its kind.
 pub(crate) fn check_cloud_keys(cfg: &RoutingConfig, access: &CloudAccess) -> Result<(), String> {
     for (name, endpoint) in &cfg.endpoints {
@@ -631,6 +648,39 @@ mod tests {
             anthropic_key: Some(SecretString::from("sk-ant-test")),
             openai_key: Some(SecretString::from("sk-test")),
         }
+    }
+
+    #[test]
+    fn escalation_is_active_only_with_a_cloud_endpoint_and_a_non_never_mode() {
+        let cloud =
+            parse("[routing]\nenabled = true\n[routing.endpoints.claude]\nkind = \"anthropic\"\n");
+        let local = parse(
+            "[routing]\nenabled = true\n[routing.endpoints.box]\nkind = \"ollama\"\n\
+             base_url = \"http://127.0.0.1:11434\"\n",
+        );
+        for mode in [EscalationMode::Ask, EscalationMode::Auto] {
+            assert!(
+                escalation_active(Some(&cloud), &escalation(mode)),
+                "{mode:?}"
+            );
+            assert!(
+                !escalation_active(Some(&local), &escalation(mode)),
+                "{mode:?}"
+            );
+            assert!(!escalation_active(None, &escalation(mode)), "{mode:?}");
+        }
+        assert!(!escalation_active(
+            Some(&cloud),
+            &escalation(EscalationMode::Never)
+        ));
+        let disabled = RoutingConfig {
+            enabled: false,
+            ..cloud.clone()
+        };
+        assert!(!escalation_active(
+            Some(&disabled),
+            &escalation(EscalationMode::Ask)
+        ));
     }
 
     #[test]

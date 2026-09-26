@@ -29,6 +29,15 @@ const UNREADABLE_REASON: &str = "routing taint unreadable";
 /// Persisted routing taint + in-memory cloud consent. Implements
 /// [`aivyx_llm::escalation::EscalationGuard`] (read side) and
 /// [`aivyx_core::TaintSink`] (write side).
+///
+/// **Build exactly one per process and share it** (`Arc<RoutingGuard>`)
+/// with everything that marks or reads taint — the agent, its planners,
+/// the escalation path. Write-once, first-reason-wins and the
+/// "newly tainted" result of [`RoutingGuard::mark`] (which gates the
+/// once-per-session `ConversationTainted` audit entry) all hold per
+/// instance: two guards over the same storage would each report a
+/// session's first mark as new, and consent granted on one would be
+/// invisible to the other.
 pub struct RoutingGuard {
     storage: DomainHandle,
     /// Every taint this process knows of: persisted rows it has read or

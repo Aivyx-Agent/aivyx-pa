@@ -761,6 +761,12 @@ pub enum AuditTag {
         task: String,
         reason: String,
     },
+    /// Model routing Part 3b — conversation `session_id` was first marked
+    /// routing-tainted (it touched sensitive data, so it never escalates
+    /// to a cloud endpoint). `reason` is a short label (a tool name, "memory
+    /// recall", a channel), never content. Emitted once per session, by
+    /// [`AuditedTaintSink`], only when the mark was new.
+    ConversationTainted { session_id: String, reason: String },
     ToolCall {
         turn_id: TurnId,
         tool_id: ToolId,
@@ -1123,6 +1129,74 @@ pub trait TaintSink: Send + Sync {
     /// only when this call newly tainted the session, so the caller can
     /// audit the transition exactly once.
     async fn mark(&self, session: &str, reason: &str) -> bool;
+}
+
+/// A [`TaintSink`] that audits each *new* taint: it forwards `mark` to the
+/// inner sink and, when that returns `true`, emits
+/// [`AuditTag::ConversationTainted`]. A repeat mark of an already-tainted
+/// session writes nothing. The daemon wraps its one shared routing guard in
+/// this and hands the same `Arc` to the agent, its planners and anything
+/// else that marks, so the entry lands exactly once per session.
+pub struct AuditedTaintSink {
+    inner: Arc<dyn TaintSink>,
+    audit: Arc<dyn AuditHook>,
+}
+
+impl AuditedTaintSink {
+    pub fn new(inner: Arc<dyn TaintSink>, audit: Arc<dyn AuditHook>) -> Self {
+        AuditedTaintSink { inner, audit }
+    }
+}
+
+#[async_trait]
+impl TaintSink for AuditedTaintSink {
+    async fn mark(&self, session: &str, reason: &str) -> bool {
+        let new = self.inner.mark(session, reason).await;
+        if new {
+            self.audit.on_event(AuditTag::ConversationTainted {
+                session_id: session.to_owned(),
+                reason: reason.to_owned(),
+            });
+        }
+        new
+    }
+}
+
+impl ChannelPlatform {
+    /// The platform's lowercase name as `[routing.sensitive] channels`
+    /// spells it (`"local"`, `"telegram"`, `"email"`, …).
+    pub fn config_name(self) -> &'static str {
+        match self {
+            ChannelPlatform::Local => "local",
+            ChannelPlatform::Telegram => "telegram",
+            ChannelPlatform::Discord => "discord",
+            ChannelPlatform::Slack => "slack",
+            ChannelPlatform::Matrix => "matrix",
+            ChannelPlatform::Email => "email",
+            ChannelPlatform::Rest => "rest",
+            ChannelPlatform::Voice => "voice",
+        }
+    }
+}
+
+/// Model routing Part 3b — the taint reason for a turn arriving on
+/// `platform`, when `[routing.sensitive] channels` lists it (matched
+/// case-insensitively against [`ChannelPlatform::config_name`]); `None`
+/// otherwise.
+pub fn sensitive_channel_reason(platform: ChannelPlatform, channels: &[String]) -> Option<String> {
+    let name = platform.config_name();
+    channels
+        .iter()
+        .any(|c| c.trim().eq_ignore_ascii_case(name))
+        .then(|| format!("{name} channel"))
+}
+
+/// Model routing Part 3b — whether `tool_name` is sensitive under
+/// `[routing.sensitive] tool_prefixes` (a plain prefix match).
+pub fn is_sensitive_tool(tool_name: &str, prefixes: &[String]) -> bool {
+    prefixes
+        .iter()
+        .any(|p| !p.is_empty() && tool_name.starts_with(p.as_str()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1489,5 +1563,107 @@ mod tests {
             trust_tier: TrustTier::Trusted,
             effective_capabilities: CapabilitySet::empty(),
         });
+    }
+
+    // ---- Model routing Part 3b — taint helpers ----
+
+    /// Write-once in-memory sink: `mark` is new only for an unseen session.
+    #[derive(Default)]
+    struct OnceSink(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait]
+    impl TaintSink for OnceSink {
+        async fn mark(&self, session: &str, _reason: &str) -> bool {
+            let mut seen = self.0.lock().unwrap();
+            if seen.iter().any(|s| s == session) {
+                return false;
+            }
+            seen.push(session.to_owned());
+            true
+        }
+    }
+
+    #[derive(Default)]
+    struct Tags(std::sync::Mutex<Vec<AuditTag>>);
+
+    impl AuditHook for Tags {
+        fn on_event(&self, tag: AuditTag) {
+            self.0.lock().unwrap().push(tag);
+        }
+    }
+
+    #[tokio::test]
+    async fn audited_taint_sink_audits_only_the_first_mark_of_a_session() {
+        let tags = Arc::new(Tags::default());
+        let sink = AuditedTaintSink::new(Arc::new(OnceSink::default()), tags.clone());
+        assert!(sink.mark("s1", "gmail.search output").await);
+        assert!(!sink.mark("s1", "memory recall").await);
+        assert!(sink.mark("s2", "email channel").await);
+        let got: Vec<(String, String)> = tags
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|t| match t {
+                AuditTag::ConversationTainted { session_id, reason } => {
+                    (session_id.clone(), reason.clone())
+                }
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("s1".to_string(), "gmail.search output".to_string()),
+                ("s2".to_string(), "email channel".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn sensitive_channel_reason_matches_platform_names_case_insensitively() {
+        let channels = vec!["Email".to_string(), " telegram ".to_string()];
+        assert_eq!(
+            sensitive_channel_reason(ChannelPlatform::Email, &channels).as_deref(),
+            Some("email channel")
+        );
+        assert_eq!(
+            sensitive_channel_reason(ChannelPlatform::Telegram, &channels).as_deref(),
+            Some("telegram channel")
+        );
+        assert_eq!(
+            sensitive_channel_reason(ChannelPlatform::Local, &channels),
+            None
+        );
+        assert_eq!(sensitive_channel_reason(ChannelPlatform::Email, &[]), None);
+    }
+
+    #[test]
+    fn channel_config_names_are_the_lowercase_serde_names() {
+        for p in [
+            ChannelPlatform::Local,
+            ChannelPlatform::Telegram,
+            ChannelPlatform::Discord,
+            ChannelPlatform::Slack,
+            ChannelPlatform::Matrix,
+            ChannelPlatform::Email,
+            ChannelPlatform::Rest,
+            ChannelPlatform::Voice,
+        ] {
+            let serde = serde_json::to_value(p).unwrap();
+            assert_eq!(serde.as_str().unwrap().to_lowercase(), p.config_name());
+        }
+    }
+
+    #[test]
+    fn sensitive_tool_is_a_plain_prefix_match() {
+        let prefixes = vec!["gmail.".to_string(), "fs.read".to_string(), String::new()];
+        assert!(is_sensitive_tool("gmail.search", &prefixes));
+        assert!(is_sensitive_tool("fs.read", &prefixes));
+        assert!(!is_sensitive_tool("fs.write", &prefixes));
+        assert!(
+            !is_sensitive_tool("web.search", &prefixes),
+            "empty prefix matches nothing"
+        );
     }
 }

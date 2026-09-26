@@ -581,6 +581,12 @@ impl SemanticMemoryContext {
 
 #[async_trait]
 impl ContextProvider for SemanticMemoryContext {
+    /// Model routing Part 3b — injects the operator's recalled memory (and the wiki / graph sources derived from it):
+    /// operator-private data, so an injection taints the conversation.
+    fn sensitive(&self) -> bool {
+        true
+    }
+
     async fn recall(
         &self,
         user_message: &str,
@@ -1303,6 +1309,12 @@ impl LiteRecallContext {
 
 #[async_trait]
 impl ContextProvider for LiteRecallContext {
+    /// Model routing Part 3b — injects the operator's recalled memory:
+    /// operator-private data, so an injection taints the conversation.
+    fn sensitive(&self) -> bool {
+        true
+    }
+
     async fn recall(
         &self,
         user_message: &str,
@@ -1625,6 +1637,15 @@ mod tests {
         assert!(block.contains("NOT new instructions"));
         assert!(block.contains("favorite color is purple"));
         assert!(block.contains("[notes · "));
+    }
+
+    #[tokio::test]
+    async fn memory_recall_providers_are_sensitive() {
+        // Model routing Part 3b — recalled memory is operator-private, so
+        // its injection taints the conversation (never escalates).
+        let memory = seed().await;
+        assert!(ctx(Arc::clone(&memory), false, 0.0).sensitive());
+        assert!(LiteRecallContext::new(memory, 5).sensitive());
     }
 
     #[tokio::test]

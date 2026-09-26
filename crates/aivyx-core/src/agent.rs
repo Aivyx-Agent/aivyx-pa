@@ -276,6 +276,17 @@ pub struct ConcreteAgent {
     /// section for the full writeup. Fail-safe, not fail-open — a stuck
     /// escalation blocks the action, it never lets it through.
     confirm_destructive: bool,
+    /// Model routing Part 3b — where this agent marks a conversation
+    /// routing-tainted (so it never escalates to a cloud endpoint). `None`
+    /// (the default) runs no taint machinery at all: the daemon attaches
+    /// one only when cloud escalation is active. See [`Self::with_taint`].
+    taint: Option<Arc<dyn crate::TaintSink>>,
+    /// `[routing.sensitive] tool_prefixes` — a completed call to a tool
+    /// whose name starts with one of these taints the session.
+    taint_tool_prefixes: Vec<String>,
+    /// `[routing.sensitive] channels` — a turn arriving on one of these
+    /// platforms taints the session at turn start.
+    taint_channels: Vec<String>,
 }
 
 impl ConcreteAgent {
@@ -304,6 +315,9 @@ impl ConcreteAgent {
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
             confirm_destructive: false,
+            taint: None,
+            taint_tool_prefixes: Vec::new(),
+            taint_channels: Vec::new(),
         }
     }
 
@@ -425,6 +439,28 @@ impl ConcreteAgent {
         self.confirm_destructive = confirm;
         self
     }
+
+    /// Model routing Part 3b — mark the turn's session routing-tainted via
+    /// `sink` whenever a tool whose name starts with one of `prefixes`
+    /// **completes** (`ToolOutcome::Completed` is the only outcome that
+    /// puts the tool's own output in front of the model; every other
+    /// outcome reaches it as a dispatch-layer error envelope). Reason:
+    /// `"<tool name> output"`. Not attaching one (the default) runs no
+    /// taint machinery.
+    pub fn with_taint(mut self, sink: Arc<dyn crate::TaintSink>, prefixes: Vec<String>) -> Self {
+        self.taint = Some(sink);
+        self.taint_tool_prefixes = prefixes;
+        self
+    }
+
+    /// Model routing Part 3b — `[routing.sensitive] channels`: a turn
+    /// whose channel platform is listed taints its session at turn start
+    /// (reason `"<platform> channel"`). Only takes effect alongside
+    /// [`Self::with_taint`].
+    pub fn with_sensitive_channels(mut self, channels: Vec<String>) -> Self {
+        self.taint_channels = channels;
+        self
+    }
 }
 
 #[async_trait]
@@ -454,6 +490,15 @@ impl Agent for ConcreteAgent {
             trust_tier: tier,
             effective_capabilities: effective.clone(),
         });
+
+        // Model routing Part 3b — a turn arriving on a sensitive channel
+        // taints its conversation before the planner makes any model call.
+        if let Some(sink) = &self.taint
+            && let Some(reason) =
+                crate::sensitive_channel_reason(channel.platform(), &self.taint_channels)
+        {
+            sink.mark(&session_id.to_string(), &reason).await;
+        }
 
         let mut planner = (self.planner_factory)();
         planner.begin_turn(&message, turn_id).await;
@@ -1616,6 +1661,22 @@ impl ConcreteAgent {
             // `NextStep::ToolCall.extracted_from_text`.
             extracted_from_text,
         });
+
+        // Model routing Part 3b — a completed sensitive tool's output is
+        // about to enter the model's context, so taint the conversation
+        // before the planner's next model call. Only `Completed` carries
+        // the tool's own output; every other outcome reaches the model as
+        // a dispatch-layer error envelope (see `render_tool_result`).
+        if let Some(sink) = &self.taint
+            && matches!(outcome, ToolOutcome::Completed { .. })
+            && crate::is_sensitive_tool(tool_name, &self.taint_tool_prefixes)
+        {
+            sink.mark(
+                &channel.session_id().to_string(),
+                &format!("{tool_name} output"),
+            )
+            .await;
+        }
 
         (
             StepObservation { tool_id, summary },
@@ -6528,5 +6589,183 @@ mod tests {
         let msg = Message::text(channel.session, "hi"); // no .system_originated()
         agent.turn(msg, &channel).await;
         assert_eq!(*observed.lock().unwrap(), Some(MessageOrigin::Operator));
+    }
+
+    // ---- Model routing Part 3b: taint marking ----
+
+    /// Records every `mark` call; reports a mark as new only the first
+    /// time a session is seen (like the real write-once guard).
+    #[derive(Default)]
+    struct RecordingTaint {
+        marks: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl crate::TaintSink for RecordingTaint {
+        async fn mark(&self, session: &str, reason: &str) -> bool {
+            let mut marks = self.marks.lock().unwrap();
+            let new = !marks.iter().any(|(s, _)| s == session);
+            marks.push((session.to_owned(), reason.to_owned()));
+            new
+        }
+    }
+
+    /// A tool that always fails (the tool ran, but no output reached the
+    /// model — only an error envelope).
+    struct FailingTool {
+        id: ToolId,
+        schema: Value,
+    }
+
+    #[async_trait]
+    impl Tool for FailingTool {
+        fn id(&self) -> ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            "gmail.read"
+        }
+        fn description(&self) -> &str {
+            "test-only: always fails"
+        }
+        fn input_schema(&self) -> &Value {
+            &self.schema
+        }
+        fn required_scope(&self, _input: &Value) -> Scope {
+            Scope::parse("memory.read").unwrap()
+        }
+        async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+            ToolOutcome::Failed(AivyxError::Internal("backend down".to_string()))
+        }
+    }
+
+    fn call(tool_id: ToolId) -> NextStep {
+        NextStep::ToolCall {
+            tool_id,
+            input: json!({}),
+            auto_corrected_from: None,
+            extracted_from_text: None,
+        }
+    }
+
+    fn sensitive_prefixes() -> Vec<String> {
+        vec!["gmail.".to_string(), "fs.read".to_string()]
+    }
+
+    /// Runs one turn of `tool` (one call, then a final message) on a Local
+    /// channel with a taint sink attached; returns the recorded marks and
+    /// the channel's session.
+    async fn run_tainted(
+        tool: Arc<dyn Tool>,
+        caps: CapabilitySet,
+    ) -> (Vec<(String, String)>, SessionId) {
+        let sink = Arc::new(RecordingTaint::default());
+        let tool_id = tool.id();
+        let agent = make_agent(
+            caps,
+            vec![tool],
+            RecordingAudit::new(),
+            vec![call(tool_id), NextStep::FinalMessage("ok".to_string())],
+        )
+        .with_taint(sink.clone(), sensitive_prefixes());
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let _ = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        let marks = sink.marks.lock().unwrap().clone();
+        (marks, channel.session)
+    }
+
+    fn memory_read_caps() -> CapabilitySet {
+        CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()])
+    }
+
+    #[tokio::test]
+    async fn a_completed_sensitive_tool_marks_the_session() {
+        let tool = Arc::new(FakeTool::new_bare("gmail.search", "memory.read"));
+        let (marks, session) = run_tainted(tool, memory_read_caps()).await;
+        assert_eq!(
+            marks,
+            vec![(session.to_string(), "gmail.search output".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_non_matching_tool_does_not_mark() {
+        let tool = Arc::new(FakeTool::new_bare("web.search", "memory.read"));
+        let (marks, _) = run_tainted(tool, memory_read_caps()).await;
+        assert!(marks.is_empty(), "got {marks:?}");
+    }
+
+    #[tokio::test]
+    async fn a_denied_sensitive_call_does_not_mark() {
+        // The agent lacks the scope, so the call is denied before the
+        // tool runs: the model sees only a `denied` envelope.
+        let tool = Arc::new(FakeTool::new_bare("gmail.search", "memory.read"));
+        let (marks, _) = run_tainted(tool, CapabilitySet::from_scopes([])).await;
+        assert!(marks.is_empty(), "got {marks:?}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_sensitive_call_does_not_mark() {
+        let tool = Arc::new(FailingTool {
+            id: ToolId::new(),
+            schema: json!({}),
+        });
+        let (marks, _) = run_tainted(tool, memory_read_caps()).await;
+        assert!(marks.is_empty(), "got {marks:?}");
+    }
+
+    #[tokio::test]
+    async fn a_sensitive_channel_marks_at_turn_start_and_others_do_not() {
+        for (platform, expected) in [
+            (ChannelPlatform::Email, Some("email channel")),
+            (ChannelPlatform::Local, None),
+        ] {
+            let sink = Arc::new(RecordingTaint::default());
+            let agent = make_agent(
+                CapabilitySet::from_scopes([]),
+                vec![],
+                RecordingAudit::new(),
+                vec![NextStep::FinalMessage("ok".to_string())],
+            )
+            .with_taint(sink.clone(), sensitive_prefixes())
+            .with_sensitive_channels(vec!["Email".to_string()]);
+            let channel = FakeChannel::new(platform, TrustTier::Trusted);
+            let _ = agent
+                .turn(Message::text(channel.session, "hi"), &channel)
+                .await;
+            let marks = sink.marks.lock().unwrap().clone();
+            let want: Vec<(String, String)> = expected
+                .map(|r| (channel.session.to_string(), r.to_string()))
+                .into_iter()
+                .collect();
+            assert_eq!(marks, want, "{platform:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn without_a_taint_sink_sensitive_calls_leave_the_audit_chain_unchanged() {
+        // Compatibility invariant: no sink ⇒ no marking, no extra entries.
+        let tool = Arc::new(FakeTool::new_bare("gmail.search", "memory.read"));
+        let tool_id = tool.id();
+        let audit = RecordingAudit::new();
+        let agent = make_agent(
+            memory_read_caps(),
+            vec![tool],
+            audit.clone(),
+            vec![call(tool_id), NextStep::FinalMessage("ok".to_string())],
+        )
+        .with_sensitive_channels(vec!["local".to_string()]);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let _ = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert!(
+            !audit
+                .snapshot()
+                .iter()
+                .any(|e| matches!(e, AuditTag::ConversationTainted { .. }))
+        );
     }
 }

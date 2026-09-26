@@ -167,6 +167,15 @@ pub enum AuditEvent {
         reason: String,
     },
 
+    /// Model routing Part 3b — conversation `session_id` was first marked
+    /// routing-tainted: it touched sensitive data (a sensitive tool's
+    /// output, operator-private memory recall, a sensitive channel), so it
+    /// never escalates to a cloud endpoint. `reason` is a short label,
+    /// never content. Written once per session, on the first mark.
+    /// Additive: an internally tagged variant, so existing entries
+    /// canonicalize unchanged.
+    ConversationTainted { session_id: String, reason: String },
+
     /// Dedicated view of a memory operation. Redundant with `ToolCall`
     /// (every memory op *is* also a tool call), but indexed for fast
     /// memory-specific queries. D4 justifies this as the one deviation
@@ -1127,6 +1136,9 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 task,
                 reason,
             },
+            AuditTag::ConversationTainted { session_id, reason } => {
+                AuditEvent::ConversationTainted { session_id, reason }
+            }
             AuditTag::ToolCall {
                 turn_id,
                 tool_id,
@@ -2483,6 +2495,37 @@ mod tests {
                 model: "big@gpu".into(),
                 task: "chat".into(),
                 reason: "only candidate".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn conversation_tainted_round_trips_through_canonical_json() {
+        let event = AuditEvent::ConversationTainted {
+            session_id: "sess-1".into(),
+            reason: "gmail.search output".into(),
+        };
+        let bytes = serde_jcs::to_vec(&event).expect("jcs must accept");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["kind"], "ConversationTainted");
+        assert_eq!(json["session_id"], "sess-1");
+        assert_eq!(json["reason"], "gmail.search output");
+        let decoded: AuditEvent = serde_json::from_slice(&bytes).expect("round trip");
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn conversation_tainted_audit_tag_bridges_field_for_field() {
+        let event: AuditEvent = aivyx_core::AuditTag::ConversationTainted {
+            session_id: "sess-1".into(),
+            reason: "memory recall".into(),
+        }
+        .into();
+        assert_eq!(
+            event,
+            AuditEvent::ConversationTainted {
+                session_id: "sess-1".into(),
+                reason: "memory recall".into(),
             }
         );
     }

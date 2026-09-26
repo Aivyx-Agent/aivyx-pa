@@ -6262,8 +6262,9 @@ async fn run_async(
         // Model routing Part 3b — `[routing.escalation]` gates cloud
         // `[routing.endpoints.*]` (checked in `wrap_with_routing` below).
         routing_escalation: config_routing_escalation,
-        // Model routing Part 3b — `[routing.sensitive]`; not consumed yet.
-        routing_sensitive: _,
+        // Model routing Part 3b — `[routing.sensitive]`: what taints a
+        // conversation (wired below only when escalation is active).
+        routing_sensitive: config_routing_sensitive,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -6885,6 +6886,29 @@ async fn run_async(
             routed.default_key()
         );
     }
+
+    // ---- Model routing Part 3b: routing taint ------------------------
+    // Only when cloud escalation is active (a cloud `[routing.endpoints.*]`
+    // and `[routing.escalation] mode` not `never`); otherwise no taint
+    // machinery runs at all (the compatibility invariant). ONE
+    // `RoutingGuard` for the whole process — write-once and the
+    // once-per-session `ConversationTainted` entry hold per instance — and
+    // one audited sink over it, shared by the daemon agent, the role-switch
+    // child and all their planners.
+    let routing_guard: Option<Arc<aivyx_channel::routing_guard::RoutingGuard>> =
+        if routing::escalation_active(config_routing.as_ref(), &routing_access.escalation) {
+            Some(Arc::new(aivyx_channel::routing_guard::RoutingGuard::new(
+                Arc::clone(&storage),
+            )))
+        } else {
+            None
+        };
+    let taint_sink: Option<Arc<dyn aivyx_core::TaintSink>> = routing_guard.as_ref().map(|guard| {
+        Arc::new(aivyx_core::AuditedTaintSink::new(
+            Arc::clone(guard) as Arc<dyn aivyx_core::TaintSink>,
+            Arc::clone(&audit),
+        )) as Arc<dyn aivyx_core::TaintSink>
+    });
 
     // ---- Chapter O: provision the agent's personal workspace ----------
     // Idempotent: creates `~/.aivyx-pa/workspace` + seed structure if absent.
@@ -8903,6 +8927,9 @@ async fn run_async(
     let provider_for_factory = Arc::clone(&provider);
     // Model routing — child turns are tagged like the parent's.
     let routed_for_factory = routed.clone();
+    // Model routing Part 3b — child turns share the one taint sink.
+    let taint_for_factory = taint_sink.clone();
+    let sensitive_for_factory = config_routing_sensitive.clone();
     let audit_for_factory = Arc::clone(&audit);
     let tools_for_factory = Arc::clone(&tools);
     // aivyx-checkpoint — the closure below is `move`, so it needs its
@@ -9067,6 +9094,7 @@ async fn run_async(
         }
         let planner_provider = Arc::clone(&provider_for_factory);
         let planner_routed = routed_for_factory.clone();
+        let planner_taint = taint_for_factory.clone();
         let planner_tools = Arc::clone(&tools_for_factory);
         // Phase 60 Task 3 — per-turn Persona refresh inside the
         // role-switch child agent. Each sub-session turn rebuilds
@@ -9118,6 +9146,11 @@ async fn run_async(
                 }
                 None => planner,
             };
+            // Model routing Part 3b — sensitive recall taints the session.
+            let planner = match &planner_taint {
+                Some(sink) => planner.with_taint(Arc::clone(sink)),
+                None => planner,
+            };
             Box::new(planner) as Box<dyn aivyx_core::TurnPlanner>
         };
 
@@ -9141,6 +9174,17 @@ async fn run_async(
         // the agent-level confirm-destructive gate in `run_tool_call`
         // (D1) never fires for role-switch child agents.
         .with_confirm_destructive(confirm_destructive);
+        // Model routing Part 3b — sensitive tools / channels taint the
+        // (shared) session, like the parent.
+        let child_agent = match &taint_for_factory {
+            Some(sink) => child_agent
+                .with_taint(
+                    Arc::clone(sink),
+                    sensitive_for_factory.tool_prefixes.clone(),
+                )
+                .with_sensitive_channels(sensitive_for_factory.channels.clone()),
+            None => child_agent,
+        };
         let child_agent = aivyx_core::TurnSafety::interactive(
             turn_timeout_secs,
             cycle_detection,
@@ -9416,6 +9460,7 @@ async fn run_async(
         }
         let planner_provider = Arc::clone(&provider);
         let planner_routed = routed.clone();
+        let planner_taint = taint_sink.clone();
         let planner_tools = Arc::clone(&tools);
         let planner_kv_cache_handles = kv_cache_handles.clone();
         let planner_broker_slot_hint_mode = broker_slot_hint_mode;
@@ -9493,6 +9538,12 @@ async fn run_async(
                 Some(routed) => {
                     planner.with_routing(Arc::clone(routed), aivyx_route::TaskKind::Chat)
                 }
+                None => planner,
+            };
+            // Model routing Part 3b — sensitive recall taints the session
+            // (only when escalation is active; otherwise `None`).
+            let planner = match &planner_taint {
+                Some(sink) => planner.with_taint(Arc::clone(sink)),
                 None => planner,
             };
             Box::new(planner) as Box<dyn aivyx_core::TurnPlanner>
@@ -9667,6 +9718,17 @@ async fn run_async(
                 // fires for the daemon-run agent (every frontend: Local,
                 // Telegram, Web, ... talks to this one agent).
                 .with_confirm_destructive(confirm_destructive);
+        // Model routing Part 3b — sensitive tools and channels taint the
+        // conversation. The one choke point every frontend's turn crosses.
+        let daemon_agent = match &taint_sink {
+            Some(sink) => daemon_agent
+                .with_taint(
+                    Arc::clone(sink),
+                    config_routing_sensitive.tool_prefixes.clone(),
+                )
+                .with_sensitive_channels(config_routing_sensitive.channels.clone()),
+            None => daemon_agent,
+        };
         let daemon_agent = aivyx_core::TurnSafety::interactive(
             turn_timeout_secs,
             cycle_detection,

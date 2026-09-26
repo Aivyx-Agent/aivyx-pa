@@ -117,6 +117,32 @@ pub trait ContextProvider: Send + Sync {
         turn_id: crate::TurnId,
         origin: crate::MessageOrigin,
     ) -> Option<String>;
+
+    /// Model routing Part 3b — whether this provider injects
+    /// operator-private data (memory recall, knowledge derived from it).
+    /// When a sensitive provider injects a block, a planner built with
+    /// [`LlmPlanner::with_taint`] marks the conversation routing-tainted.
+    /// Default `false` (e.g. an operator-approved skill procedure).
+    fn sensitive(&self) -> bool {
+        false
+    }
+
+    /// [`Self::recall`] plus whether the returned block carries
+    /// sensitive data. The default pairs the block with
+    /// [`Self::sensitive`]; a composite provider overrides it to report
+    /// only the parts that actually injected something.
+    async fn recall_with_sensitivity(
+        &self,
+        user_message: &str,
+        session_id: crate::SessionId,
+        turn_id: crate::TurnId,
+        origin: crate::MessageOrigin,
+    ) -> Option<(String, bool)> {
+        let block = self
+            .recall(user_message, session_id, turn_id, origin)
+            .await?;
+        Some((block, self.sensitive()))
+    }
 }
 
 /// Phase 79 — per-turn system-prompt refiner. Sibling of
@@ -518,6 +544,11 @@ pub struct LlmPlanner {
     /// Per-model token usage for this turn, one entry per model that
     /// served a step (see `TurnPlanner::turn_costs`).
     turn_costs: Vec<(String, crate::TokenUsage)>,
+    /// Model routing Part 3b — `None` unless `with_taint` was called (the
+    /// daemon's conversational planners, only when cloud escalation is
+    /// active). When set, a sensitive `ContextProvider`'s injection marks
+    /// the turn's session routing-tainted.
+    taint: Option<Arc<dyn crate::TaintSink>>,
 }
 
 struct KvCacheConfig {
@@ -691,6 +722,7 @@ impl LlmPlanner {
             routing: None,
             route_session: None,
             turn_costs: Vec::new(),
+            taint: None,
         }
     }
 
@@ -759,6 +791,16 @@ impl LlmPlanner {
         task: aivyx_route::TaskKind,
     ) -> Self {
         self.routing = Some((router, task));
+        self
+    }
+
+    /// Model routing Part 3b — mark the turn's session routing-tainted
+    /// (reason `"memory recall"`) when a [`ContextProvider`] whose
+    /// [`ContextProvider::sensitive`] is `true` injects a non-empty block
+    /// in `begin_turn`. Not attaching one (the default) runs no taint
+    /// machinery.
+    pub fn with_taint(mut self, sink: Arc<dyn crate::TaintSink>) -> Self {
+        self.taint = Some(sink);
         self
     }
 
@@ -1264,10 +1306,23 @@ impl TurnPlanner for LlmPlanner {
 
         if let Some(provider) = &self.config.context_provider {
             if has_query {
-                if let Some(block) = provider
-                    .recall(&query_text, message.session_id, turn_id, message.origin)
+                if let Some((block, sensitive)) = provider
+                    .recall_with_sensitivity(
+                        &query_text,
+                        message.session_id,
+                        turn_id,
+                        message.origin,
+                    )
                     .await
                 {
+                    // Model routing Part 3b — operator-private recall taints
+                    // the conversation before any model call sees it.
+                    if sensitive && !block.trim().is_empty() {
+                        if let Some(sink) = &self.taint {
+                            sink.mark(&message.session_id.to_string(), "memory recall")
+                                .await;
+                        }
+                    }
                     content.insert(0, ContentBlock::text(block));
                 }
             }
@@ -2388,6 +2443,95 @@ mod tests {
             self.seen.lock().unwrap().push(user_message.to_string());
             self.seen_sessions.lock().unwrap().push(session_id);
             self.block.clone()
+        }
+    }
+
+    // ---- Model routing Part 3b — recall taint -------------------
+
+    /// A provider with a fixed block and a fixed sensitivity.
+    struct SensitivityProvider {
+        block: Option<String>,
+        sensitive: bool,
+    }
+
+    #[async_trait]
+    impl ContextProvider for SensitivityProvider {
+        async fn recall(
+            &self,
+            _user_message: &str,
+            _session_id: SessionId,
+            _turn_id: TurnId,
+            _origin: crate::MessageOrigin,
+        ) -> Option<String> {
+            self.block.clone()
+        }
+        fn sensitive(&self) -> bool {
+            self.sensitive
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingTaint(std::sync::Mutex<Vec<(String, String)>>);
+
+    #[async_trait]
+    impl crate::TaintSink for RecordingTaint {
+        async fn mark(&self, session: &str, reason: &str) -> bool {
+            self.0
+                .lock()
+                .unwrap()
+                .push((session.to_owned(), reason.to_owned()));
+            true
+        }
+    }
+
+    /// Runs `begin_turn` with a taint sink and `provider`; returns the
+    /// recorded marks and the message's session.
+    async fn recall_marks(
+        provider: Arc<dyn ContextProvider>,
+    ) -> (Vec<(String, String)>, SessionId) {
+        let sink = Arc::new(RecordingTaint::default());
+        let mut planner = bare_planner(LlmPlannerConfig::new("m").with_context_provider(provider))
+            .with_taint(sink.clone());
+        let session = SessionId::new();
+        planner
+            .begin_turn(&Message::text(session, "what's my color?"), TurnId::new())
+            .await;
+        let marks = sink.0.lock().unwrap().clone();
+        (marks, session)
+    }
+
+    #[tokio::test]
+    async fn a_sensitive_providers_injection_marks_the_session() {
+        let (marks, session) = recall_marks(Arc::new(SensitivityProvider {
+            block: Some("- [notes] purple".to_string()),
+            sensitive: true,
+        }))
+        .await;
+        assert_eq!(
+            marks,
+            vec![(session.to_string(), "memory recall".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_non_sensitive_providers_injection_does_not_mark() {
+        let (marks, _) = recall_marks(Arc::new(SensitivityProvider {
+            block: Some("## Relevant skill".to_string()),
+            sensitive: false,
+        }))
+        .await;
+        assert!(marks.is_empty(), "got {marks:?}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_injection_does_not_mark() {
+        for block in [None, Some(String::new()), Some("  \n".to_string())] {
+            let (marks, _) = recall_marks(Arc::new(SensitivityProvider {
+                block: block.clone(),
+                sensitive: true,
+            }))
+            .await;
+            assert!(marks.is_empty(), "{block:?}: got {marks:?}");
         }
     }
 

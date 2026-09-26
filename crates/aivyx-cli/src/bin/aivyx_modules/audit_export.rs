@@ -220,6 +220,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::TurnEnded { .. } => "TurnEnded",
         AuditEvent::LlmCost { .. } => "LlmCost",
         AuditEvent::ModelRouted { .. } => "ModelRouted",
+        AuditEvent::ConversationTainted { .. } => "ConversationTainted",
         AuditEvent::MemoryAccess { .. } => "MemoryAccess",
         AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",
