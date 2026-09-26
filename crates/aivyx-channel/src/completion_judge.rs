@@ -169,6 +169,7 @@ impl CompletionJudge {
             temperature: Some(0.0),
         id_slot: None,
         slot_hint: None,
+        route: None,
         };
         let cancel = CancellationToken::new();
         let text = match self.provider.chat_stream(request, &cancel).await {

@@ -394,6 +394,23 @@ pub struct LlmRequest<'a> {
     /// llama-server) is unaffected: only the OpenAI-compat provider's
     /// request-body builder serializes it, and only when `Some`.
     pub slot_hint: Option<SlotHint>,
+
+    /// Model-routing metadata for `RoutedProvider` (`routed.rs`); every
+    /// other provider ignores it. `None` (an untagged call site) means a
+    /// `RoutedProvider` forwards the request to the configured provider
+    /// unchanged, `model` included.
+    pub route: Option<RouteHint>,
+}
+
+/// See [`LlmRequest::route`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteHint {
+    pub task: aivyx_route::TaskKind,
+    /// Stickiness key (the conversation's session id). `None` for side calls.
+    pub session: Option<String>,
+    /// The caller's prompt-size estimate; becomes the minimum context
+    /// window. `0` = no requirement.
+    pub estimated_prompt_tokens: u32,
 }
 
 /// `aivyx-broker` slot hint carried on [`LlmRequest::slot_hint`].
@@ -666,6 +683,9 @@ pub enum LlmError {
 
     #[error("configuration error: {0}")]
     Config(String),
+
+    #[error("model routing: {0}")]
+    Routing(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -770,6 +790,7 @@ mod tests {
             temperature: Some(0.2),
             id_slot: None,
             slot_hint: None,
+            route: None,
         }
     }
 
@@ -1158,5 +1179,23 @@ mod tests {
             }
             _ => panic!("expected User"),
         }
+    }
+
+    #[test]
+    fn routing_errors_explain_themselves() {
+        assert_eq!(
+            LlmError::Routing("no model has vision".into()).to_string(),
+            "model routing: no model has vision"
+        );
+    }
+
+    #[test]
+    fn a_route_hint_carries_task_session_and_estimate() {
+        let hint = RouteHint {
+            task: aivyx_route::TaskKind::Chat,
+            session: Some("s".into()),
+            estimated_prompt_tokens: 12,
+        };
+        assert_eq!(hint.clone(), hint);
     }
 }

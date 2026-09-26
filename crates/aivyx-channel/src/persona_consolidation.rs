@@ -595,6 +595,7 @@ impl PairPhraser for LlmPairPhraser {
             temperature: Some(0.3),
         id_slot: None,
         slot_hint: None,
+        route: None,
         };
         // A short, non-cancellable token: the consolidation
         // pass is on a reflection cron, not an interactive

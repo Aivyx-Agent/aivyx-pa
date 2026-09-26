@@ -764,6 +764,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -807,6 +808,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -860,6 +862,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         }
     }
 
@@ -990,6 +993,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let body = build_request_body(&req, true, false).unwrap();
         let messages = body["messages"].as_array().unwrap();
@@ -1015,6 +1019,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let body = build_request_body(&req, true, false).unwrap();
         let tool_arr = body["tools"].as_array().unwrap();
@@ -1049,6 +1054,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let body = build_request_body(&req, false, true).unwrap();
 
@@ -1105,6 +1111,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1151,6 +1158,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1234,6 +1242,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let body = build_request_body(&req, false, false).unwrap();
         assert!(
@@ -1254,6 +1263,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let body = build_request_body(&req, true, false).unwrap();
         assert!(
@@ -1380,6 +1390,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1413,6 +1424,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let body = build_request_body(&request, true, false).unwrap();
         assert!(body.get("id_slot").is_none(), "id_slot must be omitted entirely when None");
@@ -1431,6 +1443,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: Some(2),
             slot_hint: None,
+            route: None,
         };
         let body = build_request_body(&request, true, false).unwrap();
         assert_eq!(body["id_slot"], serde_json::json!(2));
@@ -1449,6 +1462,7 @@ data: [DONE]\n\n";
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            route: None,
         };
         let body = build_request_body(&request, true, false).unwrap();
         assert!(
@@ -1477,6 +1491,7 @@ data: [DONE]\n\n";
                 prefix_hash: "abc123".to_string(),
                 preferred_slot: Some(2),
             }),
+            route: None,
         };
         let body = build_request_body(&request, true, false).unwrap();
         assert_eq!(

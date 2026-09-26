@@ -268,6 +268,7 @@ pub async fn draft_team_template(
         temperature: Some(0.6),
     id_slot: None,
     slot_hint: None,
+    route: None,
     };
     let cancel = CancellationToken::new();
     let mut stream = provider.chat_stream(request, &cancel).await.ok()?;

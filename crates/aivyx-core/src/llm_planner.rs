@@ -857,6 +857,7 @@ impl LlmPlanner {
                 // `broker_slot_hint` (see that field's doc comment) --
                 // always `None` here.
                 slot_hint: None,
+                route: None,
             };
             let cancellation = crate::CancellationToken::new();
             let provider = self.provider.clone();
@@ -994,6 +995,11 @@ impl LlmPlanner {
             temperature: self.config.temperature,
             id_slot: self.kv_slot_id,
             slot_hint,
+            // Model-routing wiring (`RouteHint` population) lands in a
+            // later model-routing task; every call site stays untagged
+            // for now, per the "untagged ⇒ unchanged" compatibility
+            // invariant.
+            route: None,
         };
 
         let cancellation = channel.cancellation_token();

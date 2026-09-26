@@ -170,6 +170,7 @@ pub async fn draft_identity(
         temperature: Some(0.4),
     id_slot: None,
     slot_hint: None,
+    route: None,
     };
     let cancel = CancellationToken::new();
     let mut stream = provider.chat_stream(request, &cancel).await.ok()?;

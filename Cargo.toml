@@ -323,6 +323,12 @@ aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "b99159d
 aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "bcd98e98f3b6aaa4c09dee50c56b2d00230d0e4a" }
 aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "78779dbfced43fcfbeee869a0a0f385f89a51e72" }
 
+# Task-aware model routing (capability matching, tiering, discovery),
+# shared by `aivyx-pa` and `aivyx-coder`. Not on crates.io — pinned by
+# commit SHA, same pattern as aivyx-checkpoint/aivyx-confine/aivyx-kvcache/
+# aivyx-injection-guard/aivyx-skills above.
+aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "07defbfa3b2b21ef1bca05a5e719e3e6d326c707" }
+
 # Standalone generation backends for the aivyx-vision tool process's
 # vision.generate_svg / vision.generate_image / vision.generate_3d
 # (Chapter design docs:

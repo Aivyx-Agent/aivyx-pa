@@ -258,6 +258,7 @@ impl ContradictionDetector {
             temperature: Some(0.1),
         id_slot: None,
         slot_hint: None,
+        route: None,
         };
         let token = CancellationToken::new();
         let Ok(mut stream) = self.provider.chat_stream(request, &token).await else {

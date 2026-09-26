@@ -117,6 +117,7 @@ pub async fn draft_persona_seed(
         temperature: Some(0.5),
     id_slot: None,
     slot_hint: None,
+    route: None,
     };
     let cancel = CancellationToken::new();
     let mut stream = provider.chat_stream(request, &cancel).await.ok()?;

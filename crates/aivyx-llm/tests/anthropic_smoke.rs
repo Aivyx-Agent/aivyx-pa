@@ -54,6 +54,7 @@ async fn final_message_against_real_api() {
         temperature: Some(0.0),
         id_slot: None,
         slot_hint: None,
+        route: None,
     };
 
     let cancel = CancellationToken::new();

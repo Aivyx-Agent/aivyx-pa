@@ -172,6 +172,7 @@ impl CorrectionJudge for LlmCorrectionJudge {
             temperature: Some(0.0),
         id_slot: None,
         slot_hint: None,
+        route: None,
         };
         let cancel = CancellationToken::new();
         let mut stream =

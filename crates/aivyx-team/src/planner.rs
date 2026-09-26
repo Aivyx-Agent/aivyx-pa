@@ -55,6 +55,7 @@ pub async fn decompose_goal(
         temperature: Some(0.2),
     id_slot: None,
     slot_hint: None,
+    route: None,
     };
 
     let mut stream = provider

@@ -224,6 +224,7 @@ impl RefinementDrafter for LlmRefinementDrafter {
             temperature: Some(0.3),
         id_slot: None,
         slot_hint: None,
+        route: None,
         };
         let cancel = CancellationToken::new();
         let mut stream = self.provider.chat_stream(request, &cancel).await.ok()?;

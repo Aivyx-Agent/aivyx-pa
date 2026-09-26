@@ -543,6 +543,7 @@ dependencies = [
 name = "aivyx-llm"
 version = "0.9.4"
 dependencies = [
+ "aivyx-route",
  "async-trait",
  "base64 0.22.1",
  "bytes",
@@ -650,6 +651,14 @@ dependencies = [
  "tar",
  "thiserror 2.0.18",
  "toml 0.8.23",
+]
+
+[[package]]
+name = "aivyx-route"
+version = "0.1.0"
+source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=07defbfa3b2b21ef1bca05a5e719e3e6d326c707#07defbfa3b2b21ef1bca05a5e719e3e6d326c707"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
