@@ -24,7 +24,7 @@ use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::{LlmProvider, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider};
 use aivyx_route::{
     Availability, Capability, DefaultEndpoint, EndpointConfig, EndpointKind, EndpointRef, Locality,
-    ModelKey, ModelProfile, ModelResidency, ResidencyNote, ResidencySnapshot, RosterEntry, Router,
+    ModelKey, ModelProfile, ResidencyNote, ResidencySnapshot, RosterEntry, Router,
     RoutingConfig, find, merge,
 };
 use aivyx_storage::Storage;
@@ -423,7 +423,6 @@ impl ResidencySources {
             client,
         )
         .await;
-        alias_untagged_ollama_latest(&mut snap, &self.endpoints);
         if matches!(
             self.default,
             DefaultResidency::LlamaServer(_) | DefaultResidency::Resident | DefaultResidency::Broker(_)
@@ -431,52 +430,6 @@ impl ResidencySources {
             snap.resident_endpoints.insert(default);
         }
         snap
-    }
-}
-
-/// Final review I1 — Ollama accepts a tagless model name (`llama3.2`) for
-/// chat, which is what operators commonly write in `[agent] model` or
-/// `[[routing.models]]`; but `/api/ps` and `/api/tags` always report the
-/// canonical `name:latest`. Without this alias, an untagged default's
-/// residency key never matches what Ollama reports, so a loaded default
-/// scores as if it needed a load — and, with `vram_bytes` set, can be
-/// outranked by a small cold model. For every Ollama endpoint, this adds an
-/// untagged alias of each `X:latest` entry, unless an explicit `X` entry is
-/// already present (which always wins). A loaded alias carries no
-/// `vram_bytes`, so the model's VRAM isn't counted twice. Only Ollama has
-/// this suffix convention — no other endpoint kind is touched.
-fn alias_untagged_ollama_latest(
-    snap: &mut ResidencySnapshot,
-    endpoints: &[(EndpointRef, EndpointConfig)],
-) {
-    let ollama_endpoints: std::collections::HashSet<&EndpointRef> = endpoints
-        .iter()
-        .filter(|(_, c)| c.kind == EndpointKind::Ollama)
-        .map(|(ep, _)| ep)
-        .collect();
-    let aliases: Vec<(ModelKey, ModelResidency)> = snap
-        .models
-        .iter()
-        .filter(|(key, _)| ollama_endpoints.contains(&key.endpoint))
-        .filter_map(|(key, residency)| {
-            let untagged = key.id.strip_suffix(":latest")?;
-            // The same model under a second name: its VRAM is already
-            // counted (as evictable) on the `:latest` entry.
-            let residency = match residency {
-                ModelResidency::Loaded { .. } => ModelResidency::Loaded { vram_bytes: None },
-                other => *other,
-            };
-            Some((
-                ModelKey {
-                    endpoint: key.endpoint.clone(),
-                    id: untagged.to_string(),
-                },
-                residency,
-            ))
-        })
-        .collect();
-    for (key, residency) in aliases {
-        snap.models.entry(key).or_insert(residency);
     }
 }
 
@@ -1697,7 +1650,7 @@ mod tests {
         let mut snapshot = ResidencySnapshot::default();
         snapshot
             .models
-            .insert(key("gpu", "other"), ModelResidency::Loaded { vram_bytes: None });
+            .insert(key("gpu", "other"), aivyx_route::ModelResidency::Loaded { vram_bytes: None });
         let text = render_residency(&snapshot, &ps);
         assert_eq!(
             text,
@@ -1707,7 +1660,7 @@ mod tests {
 
     #[test]
     fn render_residency_groups_candidates_and_reports_vram() {
-        use aivyx_route::{ModelResidency, Vram};
+        use aivyx_route::Vram;
 
         let ps = profiles(&[
             ("default", "small", &[], &[]),
@@ -1720,13 +1673,13 @@ mod tests {
             .insert(EndpointRef::new("default"));
         snapshot.models.insert(
             key("gpu", "big"),
-            ModelResidency::NotLoaded {
+            aivyx_route::ModelResidency::NotLoaded {
                 size_bytes: Some(4 << 30),
             },
         );
         snapshot.models.insert(
             key("gpu", "huge"),
-            ModelResidency::NotLoaded {
+            aivyx_route::ModelResidency::NotLoaded {
                 size_bytes: Some(64 << 30),
             },
         );
@@ -2002,164 +1955,6 @@ mod tests {
             ..RoutingConfig::default()
         };
         assert!(ResidencySources::new(&vram, DefaultResidency::None).is_active());
-    }
-
-    /// Final review I1 — Ollama reports `name:latest` for a tagless model,
-    /// while an operator commonly writes the untagged name.
-    #[test]
-    fn ollama_latest_ids_get_an_untagged_alias() {
-        let endpoints = vec![(
-            EndpointRef::new("default"),
-            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
-        )];
-        let mut snap = ResidencySnapshot::default();
-        snap.models.insert(
-            key("default", "llama3.2:latest"),
-            ModelResidency::Loaded { vram_bytes: None },
-        );
-        alias_untagged_ollama_latest(&mut snap, &endpoints);
-        assert_eq!(
-            snap.models[&key("default", "llama3.2")],
-            ModelResidency::Loaded { vram_bytes: None }
-        );
-    }
-
-    /// Re-review R1 — the alias names the same loaded model, so its VRAM
-    /// must not be counted twice as evictable.
-    #[test]
-    fn the_alias_does_not_double_count_vram() {
-        let endpoints = vec![(
-            EndpointRef::new("default"),
-            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
-        )];
-        let mut snap = ResidencySnapshot {
-            vram: Some(aivyx_route::Vram {
-                total_bytes: 24 << 30,
-                used_bytes: 10 << 30,
-            }),
-            ..ResidencySnapshot::default()
-        };
-        snap.models.insert(
-            key("default", "llama3.2:latest"),
-            ModelResidency::Loaded {
-                vram_bytes: Some(8 << 30),
-            },
-        );
-        let before = snap.available_vram();
-        alias_untagged_ollama_latest(&mut snap, &endpoints);
-        assert_eq!(snap.available_vram(), before);
-        assert_eq!(
-            snap.models[&key("default", "llama3.2")],
-            ModelResidency::Loaded { vram_bytes: None }
-        );
-    }
-
-    #[test]
-    fn an_explicit_untagged_entry_is_not_overwritten_by_the_alias() {
-        let endpoints = vec![(
-            EndpointRef::new("default"),
-            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
-        )];
-        let mut snap = ResidencySnapshot::default();
-        snap.models.insert(
-            key("default", "llama3.2:latest"),
-            ModelResidency::Loaded { vram_bytes: None },
-        );
-        snap.models.insert(
-            key("default", "llama3.2"),
-            ModelResidency::NotLoaded {
-                size_bytes: Some(1),
-            },
-        );
-        alias_untagged_ollama_latest(&mut snap, &endpoints);
-        assert_eq!(
-            snap.models[&key("default", "llama3.2")],
-            ModelResidency::NotLoaded {
-                size_bytes: Some(1)
-            }
-        );
-    }
-
-    #[test]
-    fn a_non_ollama_endpoint_gets_no_untagged_alias() {
-        let endpoints = vec![(
-            EndpointRef::new("gpu"),
-            endpoint(EndpointKind::LlamaRouter, Some("http://gpu:8080")),
-        )];
-        let mut snap = ResidencySnapshot::default();
-        snap.models.insert(
-            key("gpu", "llama3.2:latest"),
-            ModelResidency::Loaded { vram_bytes: None },
-        );
-        alias_untagged_ollama_latest(&mut snap, &endpoints);
-        assert!(!snap.models.contains_key(&key("gpu", "llama3.2")));
-    }
-
-    #[test]
-    fn a_tagged_ollama_model_gets_no_alias() {
-        let endpoints = vec![(
-            EndpointRef::new("default"),
-            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
-        )];
-        let mut snap = ResidencySnapshot::default();
-        snap.models.insert(
-            key("default", "qwen3:8b"),
-            ModelResidency::Loaded { vram_bytes: None },
-        );
-        alias_untagged_ollama_latest(&mut snap, &endpoints);
-        assert_eq!(snap.models.len(), 1, "no alias should be added");
-    }
-
-    /// The point of the alias: an untagged loaded default now costs the
-    /// same as an explicitly-tagged one, and, with `vram_bytes` set, beats
-    /// a small cold model of the same tier — the inversion the review
-    /// found (I1).
-    #[test]
-    fn an_aliased_untagged_default_costs_zero_and_beats_a_cold_model() {
-        let endpoints = vec![(
-            EndpointRef::new("default"),
-            endpoint(EndpointKind::Ollama, Some("http://localhost:11434")),
-        )];
-        let mut snap = ResidencySnapshot::default();
-        snap.models.insert(
-            key("default", "llama3.2:latest"),
-            ModelResidency::Loaded { vram_bytes: None },
-        );
-        snap.models.insert(
-            key("default", "qwen3:1.7b"),
-            ModelResidency::NotLoaded {
-                size_bytes: Some(1 << 30),
-            },
-        );
-        snap.vram = Some(aivyx_route::Vram {
-            total_bytes: 24 << 30,
-            used_bytes: 0,
-        });
-        alias_untagged_ollama_latest(&mut snap, &endpoints);
-
-        let default_profile = ModelProfile::new("llama3.2", EndpointRef::new("default"));
-        assert_eq!(
-            snap.cost(&default_profile),
-            (0, Some(ResidencyNote::Loaded))
-        );
-
-        let profiles = vec![
-            default_profile,
-            ModelProfile::new("qwen3:1.7b", EndpointRef::new("default")),
-        ];
-        let router = Router::new(profiles, aivyx_route::TaskOverrides::default());
-        router.set_residency(snap);
-        let plan = router
-            .plan(
-                &RouteQuery::new(TaskKind::Chat),
-                std::time::Instant::now(),
-            )
-            .expect("both profiles are eligible for chat");
-        assert_eq!(
-            plan.chain[0],
-            key("default", "llama3.2"),
-            "the loaded default should outrank the cold model"
-        );
     }
 
     #[tokio::test]
