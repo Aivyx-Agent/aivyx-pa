@@ -6,17 +6,24 @@
 //! `[routing.endpoints.*]` must be local in 3a: cloud candidates are only
 //! allowed on the default endpoint, and only when the configured provider
 //! itself is cloud.
+//!
+//! Also the offline `aivyx-pa routing status|explain` subcommand: `status`
+//! runs the same discovery + merge without a daemon; `explain` scans the
+//! audit chain's `ModelRouted` entries like `aivyx-pa cost` scans `LlmCost`.
 
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
+use aivyx_audit::{AuditEvent, PersistentAuditLog, SignedEntry};
 use aivyx_config::ProviderKind;
 use aivyx_llm::ollama::{OllamaConfig, OllamaProvider};
 use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::{LlmProvider, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider};
 use aivyx_route::{
-    Capability, DefaultEndpoint, EndpointKind, EndpointRef, Locality, ModelKey, ModelProfile,
-    RosterEntry, Router, RoutingConfig, find, merge,
+    Availability, Capability, DefaultEndpoint, EndpointKind, EndpointRef, Locality, ModelKey,
+    ModelProfile, RosterEntry, Router, RoutingConfig, find, merge,
 };
+use aivyx_storage::Storage;
 
 /// The `[agent] provider` + `model`, as a routing endpoint name.
 pub(crate) const DEFAULT_ENDPOINT: &str = "default";
@@ -177,20 +184,25 @@ impl ProfileRefresher for DiscoveryRefresher {
     }
 }
 
-/// Routing off (`None` or `enabled = false`) ⇒ `(provider, None)` with
-/// `provider` untouched. Routing on ⇒ a `RoutedProvider` whose default
-/// endpoint is `provider` serving `model`.
-pub(crate) async fn wrap_with_routing(
-    routing: Option<&RoutingConfig>,
+/// What `wrap_with_routing` and `aivyx-pa routing status` both build from
+/// `[routing]`: the effective config, the discovered + merged candidates,
+/// and the refresher that re-runs that discovery.
+struct Prepared {
+    config: RoutingConfig,
+    default: DefaultEndpoint,
+    default_key: ModelKey,
+    refresher: Arc<DiscoveryRefresher>,
+    profiles: Vec<ModelProfile>,
+}
+
+/// Checks `routing` (enabled), reports config issues, and runs discovery +
+/// merge once.
+async fn prepare(
+    routing: &RoutingConfig,
     kind: ProviderKind,
     base_url: Option<&str>,
     model: &str,
-    provider: Arc<dyn LlmProvider>,
-    observer: Option<RouteObserver>,
-) -> Result<(Arc<dyn LlmProvider>, Option<Arc<RoutedProvider>>), String> {
-    let Some(routing) = routing.filter(|r| r.enabled) else {
-        return Ok((provider, None));
-    };
+) -> Result<Prepared, String> {
     check_routing_config(routing)?;
     let config = effective_routing_config(routing, model);
     let default = default_endpoint(kind, base_url);
@@ -207,6 +219,36 @@ pub(crate) async fn wrap_with_routing(
         endpoint: default.name.clone(),
         id: model.to_string(),
     };
+    Ok(Prepared {
+        config,
+        default,
+        default_key,
+        refresher,
+        profiles,
+    })
+}
+
+/// Routing off (`None` or `enabled = false`) ⇒ `(provider, None)` with
+/// `provider` untouched. Routing on ⇒ a `RoutedProvider` whose default
+/// endpoint is `provider` serving `model`.
+pub(crate) async fn wrap_with_routing(
+    routing: Option<&RoutingConfig>,
+    kind: ProviderKind,
+    base_url: Option<&str>,
+    model: &str,
+    provider: Arc<dyn LlmProvider>,
+    observer: Option<RouteObserver>,
+) -> Result<(Arc<dyn LlmProvider>, Option<Arc<RoutedProvider>>), String> {
+    let Some(routing) = routing.filter(|r| r.enabled) else {
+        return Ok((provider, None));
+    };
+    let Prepared {
+        config,
+        default,
+        default_key,
+        refresher,
+        profiles,
+    } = prepare(routing, kind, base_url, model).await?;
     if let Some(warning) = backend_caps_undeclared_warning(&profiles, &default_key) {
         eprintln!("aivyx-pa: routing: {warning}");
     }
@@ -219,6 +261,176 @@ pub(crate) async fn wrap_with_routing(
     }
     let routed = Arc::new(routed);
     Ok((Arc::clone(&routed) as Arc<dyn LlmProvider>, Some(routed)))
+}
+
+// ---------------------------------------------------------------------------
+// `aivyx-pa routing status|explain` (offline)
+// ---------------------------------------------------------------------------
+
+/// One `ModelRouted` audit entry, for `aivyx-pa routing explain`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RoutedEntry {
+    pub seq: u64,
+    pub appended_at: SystemTime,
+    pub session_id: Option<String>,
+    pub model: String,
+    pub task: String,
+    pub reason: String,
+}
+
+/// `aivyx-pa routing status` output, in aivyx-coder's `/models` shape:
+/// one line per candidate, `* ` marking the `[agent] model`, unknown
+/// capabilities carrying a `?`. Pure.
+pub(crate) fn render_status(
+    profiles: &[ModelProfile],
+    default: &ModelKey,
+    warning: Option<&str>,
+) -> String {
+    let mut out = String::from("Routing candidates (* = the [agent] model):\n");
+    for p in profiles {
+        let key = p.key();
+        let marker = if key == *default { "* " } else { "  " };
+        let mut caps: Vec<String> = p.capabilities.iter().map(ToString::to_string).collect();
+        caps.extend(p.unknown_capabilities.iter().map(|c| format!("{c}?")));
+        let caps = if caps.is_empty() {
+            "no known capabilities".to_string()
+        } else {
+            caps.join(" ")
+        };
+        let ctx = p
+            .context_window
+            .map_or_else(|| "?".to_string(), |n| n.to_string());
+        let availability = match p.availability {
+            Availability::Available => "available",
+            Availability::Unverified => "unverified",
+            Availability::Unavailable => "unavailable",
+        };
+        out.push_str(&format!(
+            "{marker}{key} — {}, {caps}, ctx {ctx}, {availability}\n",
+            p.tier
+        ));
+    }
+    if let Some(warning) = warning {
+        out.push_str(&format!("\n\u{26a0} {warning}\n"));
+    }
+    out
+}
+
+/// `aivyx-pa routing explain` output: `entries` in the order given
+/// (the caller passes newest first), each with its age relative to `now`
+/// and the router's reason. Pure.
+pub(crate) fn render_explain(entries: &[RoutedEntry], now: SystemTime) -> String {
+    if entries.is_empty() {
+        return "Routing decisions\n  no routing decisions recorded yet (is [routing] enabled?)\n"
+            .to_string();
+    }
+    let mut out = String::from("Routing decisions (newest first)\n");
+    for e in entries {
+        let age = now.duration_since(e.appended_at).map_or_else(
+            |_| "just now".to_string(),
+            |d| format!("{} ago", fmt_age(d)),
+        );
+        out.push_str(&format!(
+            "  #{:<6} {age:<9} {:<10} → {}",
+            e.seq, e.task, e.model
+        ));
+        if let Some(session) = &e.session_id {
+            out.push_str(&format!("  (session {session})"));
+        }
+        out.push_str(&format!("\n          {}\n", e.reason));
+    }
+    out
+}
+
+/// Coarse age: `30s`, `5m`, `2h`, `3d`.
+fn fmt_age(d: Duration) -> String {
+    let secs = d.as_secs();
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3_600 => format!("{}m", secs / 60),
+        3_600..86_400 => format!("{}h", secs / 3_600),
+        _ => format!("{}d", secs / 86_400),
+    }
+}
+
+/// `aivyx-pa routing status` — offline: load `[routing]`, run the same
+/// discovery + merge the daemon runs at startup (no daemon, no store),
+/// and print the candidates.
+pub(crate) async fn run_routing_status(
+    routing: Option<&RoutingConfig>,
+    kind: ProviderKind,
+    base_url: Option<&str>,
+    model: &str,
+) -> Result<(), String> {
+    let Some(routing) = routing.filter(|r| r.enabled) else {
+        println!(
+            "Model routing is off — every call uses the [agent] model `{model}`. Add \
+             [routing] enabled = true to aivyx-pa.toml to turn it on."
+        );
+        return Ok(());
+    };
+    let prepared = prepare(routing, kind, base_url, model).await?;
+    let warning = backend_caps_undeclared_warning(&prepared.profiles, &prepared.default_key);
+    print!(
+        "{}",
+        render_status(
+            &prepared.profiles,
+            &prepared.default_key,
+            warning.as_deref()
+        )
+    );
+    Ok(())
+}
+
+/// `aivyx-pa routing explain [--limit N]` — offline, the same cold-start
+/// posture as `aivyx-pa cost`: scan the audit chain's `ModelRouted`
+/// entries and print the newest `limit` of them.
+pub(crate) async fn run_routing_explain(
+    storage: Arc<dyn Storage>,
+    audit_chain_key: [u8; 32],
+    limit: usize,
+) -> Result<(), String> {
+    const PAGE_SIZE: usize = 1024;
+    let log = PersistentAuditLog::open(storage, audit_chain_key)
+        .await
+        .map_err(|e| format!("failed to open audit chain: {e}"))?;
+    let mut entries: Vec<RoutedEntry> = Vec::new();
+    let mut cursor = 0u64;
+    loop {
+        let batch = log
+            .entries_range(cursor, PAGE_SIZE)
+            .map_err(|e| format!("audit-chain read failed at seq={cursor}: {e}"))?;
+        if batch.is_empty() {
+            break;
+        }
+        entries.extend(batch.iter().filter_map(routed_entry));
+        cursor = batch.last().map(|e| e.seq + 1).unwrap_or(cursor);
+    }
+    entries.reverse();
+    entries.truncate(limit);
+    print!("{}", render_explain(&entries, SystemTime::now()));
+    Ok(())
+}
+
+/// A `ModelRouted` entry, else `None`.
+fn routed_entry(entry: &SignedEntry) -> Option<RoutedEntry> {
+    let AuditEvent::ModelRouted {
+        session_id,
+        model,
+        task,
+        reason,
+    } = &entry.event
+    else {
+        return None;
+    };
+    Some(RoutedEntry {
+        seq: entry.seq,
+        appended_at: entry.appended_at,
+        session_id: session_id.clone(),
+        model: model.clone(),
+        task: task.clone(),
+        reason: reason.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -581,5 +793,132 @@ mod tests {
         .err()
         .unwrap();
         assert!(err.contains("consent-gated escalation"), "{err}");
+    }
+    #[test]
+    fn render_status_prints_one_line_per_candidate_and_marks_the_default() {
+        use Capability::{Completion, Tools, Vision};
+        let mut ps = profiles(&[
+            ("default", "qwen3:8b", &[Completion], &[Tools]),
+            ("gpu", "coder", &[Completion, Tools], &[Vision]),
+        ]);
+        ps[1].tier = aivyx_route::Tier::Large;
+        ps[1].context_window = Some(32_768);
+        ps[1].availability = aivyx_route::Availability::Available;
+        let text = render_status(&ps, &key("default", "qwen3:8b"), Some("heads up"));
+
+        let default = text
+            .lines()
+            .find(|l| l.contains("qwen3:8b@default"))
+            .unwrap();
+        assert!(default.starts_with("* "), "{default}");
+        assert!(default.contains("completion tools?"), "{default}");
+        assert!(default.contains("ctx ?"), "{default}");
+        let coder = text.lines().find(|l| l.contains("coder@gpu")).unwrap();
+        assert!(coder.starts_with("  "), "{coder}");
+        assert!(coder.contains("large"), "{coder}");
+        assert!(coder.contains("completion tools vision?"), "{coder}");
+        assert!(coder.contains("ctx 32768"), "{coder}");
+        assert!(coder.contains("available"), "{coder}");
+        assert_eq!(
+            text.lines().filter(|l| l.contains('@')).count(),
+            2,
+            "{text}"
+        );
+        assert!(text.contains("heads up"), "{text}");
+    }
+
+    #[test]
+    fn render_status_says_when_no_capability_is_known() {
+        let ps = profiles(&[("default", "m", &[], &[])]);
+        let text = render_status(&ps, &key("default", "m"), None);
+        assert!(text.contains("no known capabilities"), "{text}");
+    }
+
+    fn sample_entry(seq: u64, secs_ago: u64, session: Option<&str>) -> RoutedEntry {
+        RoutedEntry {
+            seq,
+            appended_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(10_000 - secs_ago),
+            session_id: session.map(str::to_string),
+            model: format!("m{seq}@gpu"),
+            task: "chat".into(),
+            reason: format!("reason {seq}"),
+        }
+    }
+
+    #[test]
+    fn render_explain_lists_decisions_in_the_given_order_with_reasons() {
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(10_000);
+        let text = render_explain(
+            &[
+                sample_entry(9, 30, Some("sess-1")),
+                sample_entry(4, 7_200, None),
+            ],
+            now,
+        );
+        let first = text.find("m9@gpu").expect("newest listed");
+        let second = text.find("m4@gpu").expect("older listed");
+        assert!(first < second, "{text}");
+        assert!(text.contains("#9"), "{text}");
+        assert!(text.contains("30s ago"), "{text}");
+        assert!(text.contains("2h ago"), "{text}");
+        assert!(text.contains("chat"), "{text}");
+        assert!(
+            text.contains("reason 9") && text.contains("reason 4"),
+            "{text}"
+        );
+        assert!(text.contains("sess-1"), "{text}");
+    }
+
+    #[test]
+    fn render_explain_with_no_decisions_says_so() {
+        let text = render_explain(&[], std::time::SystemTime::now());
+        assert!(text.contains("no routing decisions recorded"), "{text}");
+    }
+    #[test]
+    fn only_model_routed_entries_are_extracted() {
+        let entry = |seq, event| SignedEntry {
+            seq,
+            appended_at: std::time::UNIX_EPOCH,
+            event,
+            prev_mac: [0; 32],
+            mac: [0; 32],
+        };
+        let routed = entry(
+            3,
+            AuditEvent::ModelRouted {
+                session_id: None,
+                model: "big@gpu".into(),
+                task: "plan".into(),
+                reason: "plan prefers a large model".into(),
+            },
+        );
+        let got = routed_entry(&routed).expect("ModelRouted is extracted");
+        assert_eq!(got.seq, 3);
+        assert_eq!(got.model, "big@gpu");
+        assert_eq!(got.task, "plan");
+        assert_eq!(got.session_id, None);
+
+        let other = entry(
+            4,
+            AuditEvent::ModelRouted {
+                session_id: Some("s".into()),
+                model: "m".into(),
+                task: "chat".into(),
+                reason: "r".into(),
+            },
+        );
+        assert_eq!(
+            routed_entry(&other).unwrap().session_id.as_deref(),
+            Some("s")
+        );
+        let unrelated = entry(
+            5,
+            AuditEvent::LlmCost {
+                turn_id: aivyx_core::TurnId::new(),
+                model: "m".into(),
+                usage: Default::default(),
+            },
+        );
+        assert_eq!(routed_entry(&unrelated), None);
     }
 }

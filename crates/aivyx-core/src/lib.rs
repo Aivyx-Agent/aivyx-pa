@@ -55,10 +55,11 @@ pub use planner::{
 pub use tools::{
     FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
     FsReadToolConfig, FsWriteTool, FsWriteToolConfig, GitCommitTool, GitDiffTool,
-    GitReadToolConfig, GitStatusTool, GitWriteToolConfig, NetDnsTool, ShellExecTool,
-    ShellExecToolConfig, SkillDefaultsListTool, SkillDefaultsReadTool, SkillReader,
-    SkillsInvokeTool, SkillsListTool, WebExtractTool, WebExtractToolConfig, WebFetchTool,
-    WebFetchToolConfig, WebPostTool, WebPostToolConfig, render_default_skills_section,
+    GitReadToolConfig, GitStatusTool, GitWriteToolConfig, NetDnsTool, RoutingExplainTool,
+    RoutingStatusTool, ShellExecTool, ShellExecToolConfig, SkillDefaultsListTool,
+    SkillDefaultsReadTool, SkillReader, SkillsInvokeTool, SkillsListTool, WebExtractTool,
+    WebExtractToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
+    render_default_skills_section,
 };
 
 use std::sync::Arc;

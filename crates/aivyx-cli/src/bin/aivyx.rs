@@ -1013,7 +1013,17 @@ fn run() -> Result<(), String> {
         CliMode::Cost { today } => Some(*today),
         _ => None,
     };
-    let cost_mode = cost_today.is_some();
+    // Model routing Part 3a — `aivyx-pa routing explain` scans the chain for
+    // `ModelRouted` entries, so it shares `cost`'s offline cold-start posture
+    // (folded into `cost_mode` for the no-API-key / no-sandbox / no-store
+    // guards below) and dispatches after storage open. `routing status`
+    // needs no store at all: it dispatches right after config load.
+    let routing_explain_limit: Option<usize> = match &mode {
+        CliMode::Routing(RoutingSubcommand::Explain { limit }) => Some(*limit),
+        _ => None,
+    };
+    let routing_status_mode = matches!(mode, CliMode::Routing(RoutingSubcommand::Status));
+    let cost_mode = cost_today.is_some() || routing_explain_limit.is_some();
 
     // ---- Config -------------------------------------------------------
     // Phase 9 Task 3 — the whole "read ten env vars by hand" block that
@@ -1042,7 +1052,11 @@ fn run() -> Result<(), String> {
         // posture: cold-start storage open via passphrase, no
         // session opened, no provider call made. No API key
         // required, regardless of `--channel`.
-        require_api_key: !verify_only && !print_role_mode && !audit_export_mode && !cost_mode,
+        require_api_key: !verify_only
+            && !print_role_mode
+            && !audit_export_mode
+            && !cost_mode
+            && !routing_status_mode,
         require_telegram_token: matches!(channel_kind, ChannelKind::Telegram) && !print_role_mode,
         // Phase 107 — mirrors the Telegram check for the
         // Discord adapter. `--print-role` does not open a
@@ -1087,6 +1101,23 @@ fn run() -> Result<(), String> {
         let rendered = render_role_envelope(&name, &config, channel_kind)?;
         print!("{rendered}");
         return Ok(());
+    }
+
+    // Model routing Part 3a — `aivyx-pa routing status`. Like
+    // `--print-role`, it needs no passphrase, store, or sandbox: it runs
+    // the daemon's startup discovery + merge against `[routing]` and prints
+    // the candidates. No daemon is contacted.
+    if routing_status_mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(routing::run_routing_status(
+            config.routing.as_ref(),
+            config.provider.value,
+            config.openai_base_url.as_ref().map(|s| s.value.as_str()),
+            &config.model.value,
+        ));
     }
 
     // Resolve the encrypted store path early — needed both for the
@@ -1318,6 +1349,13 @@ fn run() -> Result<(), String> {
         if let Some(today) = cost_today {
             let pricing = aivyx_cost::Pricing::with_overrides(config.pricing.clone());
             return cost::run_cost(storage, audit_chain_key, today, pricing).await;
+        }
+
+        // Model routing Part 3a — `aivyx-pa routing explain`. Same cold-start
+        // posture as `cost`: open the chain, list its `ModelRouted` entries
+        // newest first, exit.
+        if let Some(limit) = routing_explain_limit {
+            return routing::run_routing_explain(storage, audit_chain_key, limit).await;
         }
 
         // Phase 9 Task 3 — Phase 2 of the two-phase config load.
@@ -2055,6 +2093,20 @@ enum CliMode {
     /// `LlmCost` events, prices them, and prints a per-model breakdown.
     /// `--today` scopes to the last 24h.
     Cost { today: bool },
+    /// `aivyx-pa routing <subcommand>`: model routing Part 3a. Offline:
+    /// `status` runs `[routing]` discovery + merge without a daemon and
+    /// prints the candidates; `explain [--limit N]` lists the audit chain's
+    /// `ModelRouted` decisions, newest first (cold-start like `cost`).
+    Routing(RoutingSubcommand),
+}
+
+/// Model routing Part 3a — `aivyx-pa routing <subcommand>`.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum RoutingSubcommand {
+    /// The routing candidates, as discovery + merge sees them now.
+    Status,
+    /// The newest `limit` routing decisions on the audit chain.
+    Explain { limit: usize },
 }
 
 /// Chapter Keyring — `aivyx-pa keyring <subcommand>`.
@@ -3712,6 +3764,62 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Cost { today },
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Model routing Part 3a — `aivyx-pa routing status|explain [--limit N]`
+    // (offline).
+    if !args.is_empty() && args[0] == "routing" {
+        let sub = match args.get(1).map(String::as_str) {
+            Some("status") => {
+                if let Some(other) = args.get(2) {
+                    return Err(format!(
+                        "unrecognized argument to `aivyx-pa routing status`: `{other}`"
+                    ));
+                }
+                RoutingSubcommand::Status
+            }
+            Some("explain") => {
+                let mut limit = 20usize;
+                let mut rest = args[2..].iter();
+                while let Some(arg) = rest.next() {
+                    match arg.as_str() {
+                        "--limit" => {
+                            limit = rest
+                                .next()
+                                .and_then(|n| n.parse::<usize>().ok())
+                                .filter(|n| *n > 0)
+                                .ok_or_else(|| {
+                                    "`aivyx-pa routing explain --limit` needs a positive number"
+                                        .to_string()
+                                })?;
+                        }
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument to `aivyx-pa routing explain`: `{other}`"
+                            ));
+                        }
+                    }
+                }
+                RoutingSubcommand::Explain { limit }
+            }
+            other => {
+                return Err(format!(
+                    "unknown `aivyx-pa routing` subcommand `{}` (expected: status | explain \
+                     [--limit N])",
+                    other.unwrap_or("")
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Routing(sub),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -7662,6 +7770,19 @@ async fn run_async(
     tool_list.push(Arc::new(aivyx_core::SkillDefaultsReadTool::new(
         Arc::clone(&skill_defaults_loader),
     )) as Arc<dyn Tool>);
+
+    // Model routing Part 3a — the router's read-only status/explain tools.
+    // Registered only when `[routing] enabled` (`routed` is `Some` only
+    // then); both opt into the backcompat floor, with the Trusted-tier
+    // ceiling as the real gate, same posture as skill_defaults.* above.
+    if let Some(routed) = &routed {
+        tool_list.push(
+            Arc::new(aivyx_core::RoutingStatusTool::new(Arc::clone(routed))) as Arc<dyn Tool>,
+        );
+        tool_list.push(
+            Arc::new(aivyx_core::RoutingExplainTool::new(Arc::clone(routed))) as Arc<dyn Tool>,
+        );
+    }
 
     // Vitrine §5 fix — structural skill use. Compose the trigger-
     // injection provider with auto-recall into the single planner
@@ -11910,6 +12031,10 @@ mod tests {
             // picks them up like any other opted-in tool.
             Scope::parse("skill_defaults.list").unwrap(),
             Scope::parse("skill_defaults.read").unwrap(),
+            // Model routing Part 3a — routing.status/routing.explain opt
+            // into the floor too (read-only views of the daemon's router).
+            Scope::parse("routing.status").unwrap(),
+            Scope::parse("routing.read").unwrap(),
         ];
         let floor = compute_backcompat_floor(
             Scope::parse("fs.read:/tmp/proj/**").unwrap(),
@@ -11968,6 +12093,8 @@ mod tests {
                 "ollama.list",
                 "ollama.pull",
                 "ollama.show",
+                "routing.read",
+                "routing.status",
                 "skill_defaults.list",
                 "skill_defaults.read",
                 "loop.next",
@@ -13897,6 +14024,47 @@ mod tests {
         let err = parse_cli_args_from(&argv(&["cost", "--yesterday"]))
             .expect_err("unknown flag must error");
         assert!(err.contains("unrecognized"), "error: {err}");
+    }
+
+    // ---- Model routing Part 3a — `aivyx-pa routing` parsing ------------
+
+    #[test]
+    fn routing_parses_status_and_explain() {
+        assert_eq!(
+            parse_cli_args_from(&argv(&["routing", "status"]))
+                .unwrap()
+                .mode,
+            CliMode::Routing(RoutingSubcommand::Status)
+        );
+        assert_eq!(
+            parse_cli_args_from(&argv(&["routing", "explain"]))
+                .unwrap()
+                .mode,
+            CliMode::Routing(RoutingSubcommand::Explain { limit: 20 })
+        );
+        assert_eq!(
+            parse_cli_args_from(&argv(&["routing", "explain", "--limit", "5"]))
+                .unwrap()
+                .mode,
+            CliMode::Routing(RoutingSubcommand::Explain { limit: 5 })
+        );
+    }
+
+    #[test]
+    fn routing_rejects_bad_input() {
+        for args in [
+            &["routing"][..],
+            &["routing", "pin"],
+            &["routing", "status", "--all"],
+            &["routing", "explain", "--limit"],
+            &["routing", "explain", "--limit", "zero"],
+            &["routing", "explain", "--limit", "0"],
+        ] {
+            assert!(
+                parse_cli_args_from(&argv(args)).is_err(),
+                "{args:?} must be rejected"
+            );
+        }
     }
 
     #[test]

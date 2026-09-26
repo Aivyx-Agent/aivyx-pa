@@ -29,6 +29,7 @@ pub mod fs;
 pub mod git;
 pub mod net_dns;
 pub mod role_switch;
+pub mod routing;
 pub mod shell;
 pub mod skill_defaults;
 pub mod skills;
@@ -42,6 +43,7 @@ pub use fs::{
 pub use git::{GitCommitTool, GitDiffTool, GitReadToolConfig, GitStatusTool, GitWriteToolConfig};
 pub use net_dns::NetDnsTool;
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
+pub use routing::{RoutingExplainTool, RoutingStatusTool};
 pub use shell::{ShellExecTool, ShellExecToolConfig};
 pub use skill_defaults::{
     SkillDefaultsListTool, SkillDefaultsReadTool, render_default_skills_section,
