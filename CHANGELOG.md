@@ -37,6 +37,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **Model routing (Part 4) — routing prefers loaded models.** A
+  background poll, every 5 s, reads which models are already resident:
+  Ollama's `/api/ps`, llama-server's `/models` (router mode), or
+  aivyx-broker; the `default` endpoint's own model counts as loaded for
+  free on a single-model server (llama-server, mistral.rs, or a broker
+  fronting one). New `[routing] vram_bytes` adds host GPU memory when
+  nothing else reports it. Residency is a soft signal — worth at most
+  one tier-step, never a hard filter — so a model that needs a load can
+  still win on capability/tier alone. `routing.status` and `aivyx-pa
+  routing status` now show it: total/available VRAM, which endpoints
+  are fully resident, and each candidate's load note (`loaded` /
+  `needs_load` / `wont_fit` / unknown). No config required to keep
+  today's behavior: without a source, residency has no opinion and
+  ranking is unchanged. See `examples/aivyx-pa.toml`.
 - **Model routing (Part 3b) — consent-gated cloud escalation
   (Amendment A15).** Off unless a `[routing.endpoints.*]` entry has
   `kind = "anthropic"` or `"openai"`. Then a conversation whose call no

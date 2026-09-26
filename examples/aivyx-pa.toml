@@ -1562,6 +1562,7 @@ parent_role = "researcher"
 # enabled = true
 # discover = true        # default true — ask each endpoint what it serves
 #                        # at startup; false = use the roster below only
+# vram_bytes = 25769803776   # host GPU memory, for residency without aivyx-broker
 #
 # # Extra LOCAL endpoints. Kinds: "ollama" (default base_url
 # # http://localhost:11434), "llama_router" (llama-server router mode,
@@ -1698,6 +1699,23 @@ parent_role = "researcher"
 #     model actually used, so spend is priced correctly; `aivyx-pa
 #     cost` may count a turn answered by two models twice in its turn
 #     total.
+#
+# Residency (Part 4):
+#   * Routing prefers a model that's already loaded — a SOFT signal
+#     (worth at most one tier-step), never a hard filter: a candidate
+#     that needs a load can still win on capability/tier alone.
+#   * Polled every 5s in the background: Ollama's `/api/ps`, llama-
+#     server's `/models` (router mode), or aivyx-broker — whichever the
+#     [agent] provider and any [routing.endpoints.*] give a signal for.
+#     The `default` endpoint's own model counts as loaded for free on a
+#     single-model server (llama-server, mistral.rs, or a broker
+#     fronting one) — nothing to ask, it's the only thing that could be
+#     resident. `vram_bytes` above adds host GPU memory when nothing
+#     else reports it (aivyx-broker already does).
+#   * `aivyx-pa routing status` and the `routing.status` tool show it:
+#     which endpoints are fully resident, each candidate's load note
+#     (loaded / needs a load / may not fit), and available VRAM for a
+#     new load.
 #
 # Cost caveats (cloud [agent] provider):
 #   * The judge and mission-planning side calls don't record `LlmCost`

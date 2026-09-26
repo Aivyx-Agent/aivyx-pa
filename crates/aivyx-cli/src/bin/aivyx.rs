@@ -1134,6 +1134,14 @@ fn run() -> Result<(), String> {
             config.provider.value,
             config.openai_base_url.as_ref().map(|s| s.value.as_str()),
             &config.model.value,
+            routing::default_residency(
+                config.provider.value,
+                config.openai_base_url.as_ref().map(|s| s.value.as_str()),
+                config
+                    .broker_base_url
+                    .as_deref()
+                    .unwrap_or(DEFAULT_BROKER_BASE_URL),
+            ),
         ));
     }
 

@@ -59,7 +59,9 @@ impl Tool for RoutingStatusTool {
          each entry has `model` (`id@endpoint`), `tier`, `capabilities` \
          (known), `unknown_capabilities` (assumed but unconfirmed), \
          `context_window` (tokens, or null when unknown) and `availability` \
-         (`available`, `unverified` or `unavailable`)."
+         (`available`, `unverified` or `unavailable`) — plus `residency` \
+         (`vram`, `resident_endpoints`, and each candidate's load note: \
+         `loaded`, `needs_load`, `wont_fit` or `null` when unknown)."
     }
 
     fn input_schema(&self) -> &Value {
@@ -86,13 +88,11 @@ impl Tool for RoutingStatusTool {
     }
 
     async fn execute(&self, _input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
-        let candidates: Vec<Value> = self
-            .routed
-            .router()
-            .profiles()
-            .iter()
-            .map(candidate_json)
-            .collect();
+        let profiles = self.routed.router().profiles();
+        let candidates: Vec<Value> = profiles.iter().map(candidate_json).collect();
+        // Model routing Part 4 — the router's residency snapshot, refreshed
+        // in the background every 5s; empty until a source responds.
+        let residency = residency_json(&self.routed.router().residency(), &profiles);
         // Model routing Part 3b — escalation settings and this
         // conversation's taint / consent (`null` when not configured).
         let escalation = match self.routed.escalation_settings() {
@@ -125,6 +125,7 @@ impl Tool for RoutingStatusTool {
                 "default": self.routed.default_key().to_string(),
                 "candidates": candidates,
                 "escalation": escalation,
+                "residency": residency,
             }),
             verified: Verification::Verified,
         }
@@ -144,6 +145,40 @@ fn candidate_json(p: &aivyx_route::ModelProfile) -> Value {
             .collect::<Vec<_>>(),
         "context_window": p.context_window,
         "availability": p.availability,
+    })
+}
+
+/// The router's residency snapshot, as `routing.status` reports it: total
+/// VRAM plus what a new load could use, which endpoints count as fully
+/// loaded, and each candidate's load note (`null` when residency has no
+/// opinion on it — an empty snapshot, or an unlisted model on a
+/// non-resident endpoint).
+fn residency_json(
+    snapshot: &aivyx_route::ResidencySnapshot,
+    profiles: &[aivyx_route::ModelProfile],
+) -> Value {
+    let vram = snapshot.vram.map(|v| {
+        json!({
+            "total_bytes": v.total_bytes,
+            "used_bytes": v.used_bytes,
+            "available_bytes": snapshot.available_vram().unwrap_or(0),
+        })
+    });
+    let mut candidates = serde_json::Map::new();
+    for p in profiles {
+        candidates.insert(
+            p.key().to_string(),
+            serde_json::to_value(snapshot.cost(p).1).unwrap_or(Value::Null),
+        );
+    }
+    json!({
+        "vram": vram,
+        "resident_endpoints": snapshot
+            .resident_endpoints
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        "candidates": candidates,
     })
 }
 
@@ -444,6 +479,54 @@ mod routing_tool_tests {
             .expect("small@default listed");
         assert_eq!(small["unknown_capabilities"], json!(["tools"]));
         assert_eq!(small["context_window"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn status_reports_residency_signals() {
+        use aivyx_route::{ModelResidency, ResidencySnapshot, Vram};
+
+        let routed = routed();
+        let tool = RoutingStatusTool::new(Arc::clone(&routed));
+
+        // No poll has landed yet: every candidate's note is null, VRAM is
+        // null — residency has no opinion, so ranking is unaffected.
+        let output = completed(run_execute(&tool, SessionId::new(), json!({})).await);
+        let residency = &output["residency"];
+        assert_eq!(residency["vram"], Value::Null);
+        assert_eq!(residency["candidates"]["small@default"], Value::Null);
+        assert_eq!(residency["candidates"]["big@gpu"], Value::Null);
+        assert_eq!(residency["resident_endpoints"], json!([]));
+
+        // `big@gpu` is explicitly loaded; the `default` endpoint counts as
+        // resident too (a single-model server), so `small@default` is
+        // loaded via that endpoint signal. 24 GiB total VRAM, none used.
+        let mut snapshot = ResidencySnapshot::default();
+        snapshot.models.insert(
+            ModelKey {
+                endpoint: EndpointRef::new("gpu"),
+                id: "big".into(),
+            },
+            ModelResidency::Loaded {
+                vram_bytes: Some(4 << 30),
+            },
+        );
+        snapshot
+            .resident_endpoints
+            .insert(EndpointRef::new("default"));
+        snapshot.vram = Some(Vram {
+            total_bytes: 24u64 << 30,
+            used_bytes: 0,
+        });
+        routed.router().set_residency(snapshot);
+
+        let output = completed(run_execute(&tool, SessionId::new(), json!({})).await);
+        let residency = &output["residency"];
+        assert_eq!(residency["candidates"]["big@gpu"], "loaded");
+        assert_eq!(residency["candidates"]["small@default"], "loaded");
+        assert_eq!(residency["resident_endpoints"], json!(["default"]));
+        assert_eq!(residency["vram"]["total_bytes"], 24u64 << 30);
+        assert_eq!(residency["vram"]["used_bytes"], 0);
+        assert_eq!(residency["vram"]["available_bytes"], 24u64 << 30);
     }
 
     struct GuardFor {

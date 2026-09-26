@@ -24,7 +24,8 @@ use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::{LlmProvider, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider};
 use aivyx_route::{
     Availability, Capability, DefaultEndpoint, EndpointConfig, EndpointKind, EndpointRef, Locality,
-    ModelKey, ModelProfile, ResidencySnapshot, RosterEntry, Router, RoutingConfig, find, merge,
+    ModelKey, ModelProfile, ResidencyNote, ResidencySnapshot, RosterEntry, Router, RoutingConfig,
+    find, merge,
 };
 use aivyx_storage::Storage;
 use secrecy::SecretString;
@@ -645,6 +646,49 @@ pub(crate) fn render_status(
     out
 }
 
+/// `aivyx-pa routing status` residency section, from the same poll that
+/// feeds the router (Part 4). An all-default snapshot means no source
+/// has answered yet (or none is configured) — residency has no opinion,
+/// so every candidate ranks as if it needs a load, same as before Part 4.
+/// Pure.
+pub(crate) fn render_residency(snapshot: &ResidencySnapshot, profiles: &[ModelProfile]) -> String {
+    if *snapshot == ResidencySnapshot::default() {
+        return "Residency: no signal — every model ranks as if it needs a load.\n".to_string();
+    }
+    let mut loaded = Vec::new();
+    let mut needs_load = Vec::new();
+    let mut wont_fit = Vec::new();
+    for p in profiles {
+        match snapshot.cost(p).1 {
+            Some(ResidencyNote::Loaded) => loaded.push(p.key().to_string()),
+            Some(ResidencyNote::NeedsLoad) => needs_load.push(p.key().to_string()),
+            Some(ResidencyNote::WontFit) => wont_fit.push(p.key().to_string()),
+            None => {}
+        }
+    }
+    let mut out = String::from("Residency:\n");
+    if !loaded.is_empty() {
+        out.push_str(&format!("  loaded: {}\n", loaded.join(", ")));
+    }
+    if !needs_load.is_empty() {
+        out.push_str(&format!("  needs load: {}\n", needs_load.join(", ")));
+    }
+    if !wont_fit.is_empty() {
+        out.push_str(&format!("  may not fit: {}\n", wont_fit.join(", ")));
+    }
+    if let Some(vram) = snapshot.vram {
+        let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+        let available = snapshot.available_vram().unwrap_or(0);
+        out.push_str(&format!(
+            "VRAM: {:.1} GiB used of {:.1} GiB ({:.1} GiB available for a load)\n",
+            gib(vram.used_bytes),
+            gib(vram.total_bytes),
+            gib(available)
+        ));
+    }
+    out
+}
+
 /// `aivyx-pa routing explain` output: `entries` in the order given
 /// (the caller passes newest first), each with its age relative to `now`
 /// and the router's reason. Pure.
@@ -691,6 +735,7 @@ pub(crate) async fn run_routing_status(
     kind: ProviderKind,
     base_url: Option<&str>,
     model: &str,
+    default_residency: DefaultResidency,
 ) -> Result<(), String> {
     let Some(routing) = routing.filter(|r| r.enabled) else {
         println!(
@@ -712,6 +757,14 @@ pub(crate) async fn run_routing_status(
     if escalation_active(Some(routing), &access.escalation) {
         let cloud = cloud_candidates(&prepared.config, &prepared.default);
         print!("{}", render_escalation(&access.escalation, &cloud));
+    }
+    // Model routing Part 4 — one residency poll (no background task: this
+    // process exits right after), only when there's a source to read.
+    let residency = ResidencySources::new(&prepared.config, default_residency);
+    if residency.is_active() {
+        let client = aivyx_route::discovery::reqwest::Client::new();
+        let snapshot = residency.poll(&client).await;
+        print!("{}", render_residency(&snapshot, &prepared.profiles));
     }
     Ok(())
 }
@@ -1563,6 +1616,60 @@ mod tests {
         let ps = profiles(&[("default", "m", &[], &[])]);
         let text = render_status(&ps, &key("default", "m"), None);
         assert!(text.contains("no known capabilities"), "{text}");
+    }
+
+    #[test]
+    fn render_residency_says_no_signal_when_snapshot_is_empty() {
+        let ps = profiles(&[("default", "m", &[], &[])]);
+        let text = render_residency(&ResidencySnapshot::default(), &ps);
+        assert_eq!(
+            text,
+            "Residency: no signal — every model ranks as if it needs a load.\n"
+        );
+    }
+
+    #[test]
+    fn render_residency_groups_candidates_and_reports_vram() {
+        use aivyx_route::{ModelResidency, Vram};
+
+        let ps = profiles(&[
+            ("default", "small", &[], &[]),
+            ("gpu", "big", &[], &[]),
+            ("gpu", "huge", &[], &[]),
+        ]);
+        let mut snapshot = ResidencySnapshot::default();
+        snapshot
+            .resident_endpoints
+            .insert(EndpointRef::new("default"));
+        snapshot.models.insert(
+            key("gpu", "big"),
+            ModelResidency::NotLoaded {
+                size_bytes: Some(4 << 30),
+            },
+        );
+        snapshot.models.insert(
+            key("gpu", "huge"),
+            ModelResidency::NotLoaded {
+                size_bytes: Some(64 << 30),
+            },
+        );
+        snapshot.vram = Some(Vram {
+            total_bytes: 24u64 << 30,
+            used_bytes: 9u64 << 30,
+        });
+
+        let text = render_residency(&snapshot, &ps);
+        assert!(text.contains("small@default"), "{text}");
+        let loaded = text.lines().find(|l| l.contains("small@default")).unwrap();
+        assert!(loaded.contains("loaded"), "{loaded}");
+        let needs = text.lines().find(|l| l.contains("big@gpu")).unwrap();
+        assert!(needs.contains("needs load"), "{needs}");
+        let wont_fit = text.lines().find(|l| l.contains("huge@gpu")).unwrap();
+        assert!(wont_fit.contains("may not fit"), "{wont_fit}");
+        assert!(
+            text.contains("VRAM: 9.0 GiB used of 24.0 GiB (15.0 GiB available for a load)"),
+            "{text}"
+        );
     }
 
     fn sample_entry(seq: u64, secs_ago: u64, session: Option<&str>) -> RoutedEntry {
