@@ -216,6 +216,15 @@ pub struct JudgeRequest<'a> {
     /// `ProposalSource::FailedTurn { .. }` carrying the
     /// failure context.
     pub source: ProposalSource,
+
+    /// Model routing Part 3a — `Some(task)` tags the judge's
+    /// `LlmRequest` with a `RouteHint` for `task` (session
+    /// `None`, estimated prompt tokens = (system + user prompt
+    /// chars) / 4) so a `RoutedProvider` picks the model. Set
+    /// only when routing is on AND the operator left
+    /// `judge_model` unset; an explicit `judge_model` stays an
+    /// untagged pin (`None` ⇒ `route: None`).
+    pub route_task: Option<aivyx_route::TaskKind>,
 }
 
 /// What the judge actually proposes when it decides a turn is
@@ -796,6 +805,15 @@ pub async fn judge(
     let system = build_system_prompt();
     let user = build_user_prompt(&request);
 
+    // Model routing Part 3a — estimate = (system prompt chars +
+    // user prompt chars) / 4, the same cheap heuristic the other
+    // tagged side calls use.
+    let route = request.route_task.clone().map(|task| aivyx_llm::RouteHint {
+        task,
+        session: None,
+        estimated_prompt_tokens: ((system.len() + user.len()) / 4) as u32,
+    });
+
     let messages = vec![LlmMessage::User {
         content: vec![ContentBlock::Text { text: user }],
     }];
@@ -809,7 +827,7 @@ pub async fn judge(
         temperature: Some(0.2), // low temp for stable judgment
         id_slot: None,
         slot_hint: None,
-        route: None,
+        route,
     };
 
     let mut stream = provider.chat_stream(llm_request, cancellation).await?;
@@ -845,12 +863,15 @@ mod tests {
 
     struct ScriptedProvider {
         responses: Mutex<VecDeque<String>>,
+        /// The `route` of every request seen, in call order.
+        routes_seen: Mutex<Vec<Option<aivyx_llm::RouteHint>>>,
     }
 
     impl ScriptedProvider {
         fn new(responses: Vec<&str>) -> Arc<Self> {
             Arc::new(ScriptedProvider {
                 responses: Mutex::new(responses.into_iter().map(|s| s.to_string()).collect()),
+                routes_seen: Mutex::new(Vec::new()),
             })
         }
     }
@@ -859,9 +880,10 @@ mod tests {
     impl LlmProvider for ScriptedProvider {
         async fn chat_stream(
             &self,
-            _request: LlmRequest<'_>,
+            request: LlmRequest<'_>,
             _cancellation: &CancellationToken,
         ) -> Result<Box<dyn aivyx_llm::LlmStream>, LlmError> {
+            self.routes_seen.lock().unwrap().push(request.route.clone());
             let text = self
                 .responses
                 .lock()
@@ -992,6 +1014,7 @@ mod tests {
             existing_persona: &persona,
             model: "claude-haiku-4-5",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let p = build_user_prompt(&req);
@@ -1019,6 +1042,7 @@ mod tests {
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let p = build_user_prompt(&req);
@@ -1054,6 +1078,7 @@ mod tests {
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let p = build_user_prompt(&req);
@@ -1089,6 +1114,7 @@ mod tests {
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let p = build_user_prompt(&req);
@@ -1117,12 +1143,68 @@ mod tests {
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let p = build_user_prompt(&req);
         // Prompt build doesn't panic; raw text appears.
         assert!(p.contains("ProfileHint"));
         assert!(p.contains("this is not json"));
+    }
+
+    // ----- Model routing Part 3a -----
+
+    const WORTHLESS: &str = r#"{"is_worth_proposing":false,"confidence":0.1,
+        "category":null,"proposed_draft":null,"is_duplicate_of":null}"#;
+
+    #[tokio::test]
+    async fn judge_tags_its_request_when_a_route_task_is_set() {
+        // Routing on + `judge_model` left unset ⇒ the daemon sets
+        // `route_task: Some(Judge)`; the request then carries a
+        // `RouteHint` so the router picks the judge's model.
+        let provider = ScriptedProvider::new(vec![WORTHLESS]);
+        let persona = empty_persona();
+        let req = JudgeRequest {
+            turn_summary: "summary",
+            existing_persona: &persona,
+            model: "m",
+            max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
+            route_task: Some(aivyx_route::TaskKind::Judge),
+        };
+        let expected_tokens =
+            ((build_system_prompt().len() + build_user_prompt(&req).len()) / 4) as u32;
+        let cancel = CancellationToken::new();
+        judge(provider.clone(), req, &cancel).await.expect("ok");
+        let seen = provider.routes_seen.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![Some(aivyx_llm::RouteHint {
+                task: aivyx_route::TaskKind::Judge,
+                session: None,
+                estimated_prompt_tokens: expected_tokens,
+            })]
+        );
+        assert!(expected_tokens > 0);
+    }
+
+    #[tokio::test]
+    async fn judge_request_is_untagged_without_a_route_task() {
+        // Routing off, or an explicit `judge_model` pin ⇒ `route: None`
+        // (forwarded to the configured provider untouched).
+        let provider = ScriptedProvider::new(vec![WORTHLESS]);
+        let persona = empty_persona();
+        let req = JudgeRequest {
+            turn_summary: "summary",
+            existing_persona: &persona,
+            model: "m",
+            max_tokens: 800,
+            source: ProposalSource::CompletedTurn,
+            route_task: None,
+        };
+        let cancel = CancellationToken::new();
+        judge(provider.clone(), req, &cancel).await.expect("ok");
+        assert_eq!(*provider.routes_seen.lock().unwrap(), vec![None]);
     }
 
     // ----- Parser tolerance -----
@@ -1293,6 +1375,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
@@ -1318,6 +1401,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
@@ -1344,6 +1428,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
@@ -1365,6 +1450,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
@@ -1381,6 +1467,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let cancel = CancellationToken::new();
@@ -1541,6 +1628,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::CompletedTurn,
         };
         let p = build_user_prompt(&req);
@@ -1556,6 +1644,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::FailedTurn {
                 kind: FailureKind::Failed,
                 summary: "planner returned MaxStepsExceeded".into(),
@@ -1576,6 +1665,7 @@ that's my call."#;
             existing_persona: &persona,
             model: "m",
             max_tokens: 800,
+            route_task: None,
             source: ProposalSource::FailedTurn {
                 kind: FailureKind::TimedOut,
                 summary: "exceeded 30 second budget at step 12".into(),

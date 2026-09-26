@@ -135,6 +135,27 @@ pub struct SkillAutoProposeConfig {
     /// Escalated=false.
     #[serde(default)]
     pub failure_outcomes: FailureHeuristicConfig,
+
+    /// Model routing Part 3a — the `TaskKind` the judge's
+    /// request is tagged with, or `None` for an untagged call
+    /// (the default). Never read from TOML: the daemon wiring
+    /// sets it via [`judge_route_task`] — `Some(Judge)` only
+    /// when routing is on AND `judge_model` was left unset.
+    #[serde(skip)]
+    pub judge_route_task: Option<aivyx_route::TaskKind>,
+}
+
+/// Model routing Part 3a — the route tag for the skill
+/// auto-proposer's judge. Tagged `Judge` only when routing is
+/// on and the operator left `judge_model` unset (so it was
+/// defaulted to the planner's model); an explicit
+/// `judge_model` stays an untagged pin, and with routing off
+/// every request is untagged.
+pub fn judge_route_task(
+    routing_on: bool,
+    judge_model_was_empty: bool,
+) -> Option<aivyx_route::TaskKind> {
+    (routing_on && judge_model_was_empty).then_some(aivyx_route::TaskKind::Judge)
 }
 
 impl Default for SkillAutoProposeConfig {
@@ -152,6 +173,7 @@ impl Default for SkillAutoProposeConfig {
             per_category: None,
             from_failed_turns: false,
             failure_outcomes: FailureHeuristicConfig::default(),
+            judge_route_task: None,
         }
     }
 }
@@ -258,6 +280,7 @@ impl From<aivyx_config::SkillAutoProposeConfig> for SkillAutoProposeConfig {
             // failure-feedback fields; default to off.
             from_failed_turns: false,
             failure_outcomes: FailureHeuristicConfig::default(),
+            judge_route_task: None,
         }
     }
 }
@@ -298,6 +321,7 @@ impl From<aivyx_config::PersonaAutoProposeConfig> for SkillAutoProposeConfig {
                 timed_out: c.failure_outcomes.timed_out,
                 escalated: c.failure_outcomes.escalated,
             },
+            judge_route_task: None,
         }
     }
 }
@@ -865,6 +889,7 @@ pub async fn auto_propose_for_turn_with_source(
         model: &config.judge_model,
         max_tokens: config.judge_max_tokens,
         source,
+        route_task: config.judge_route_task.clone(),
     };
 
     match skill_proposer::judge(provider, request, cancellation).await {
@@ -1569,12 +1594,15 @@ mod tests {
 
     struct ScriptedProvider {
         steps: Mutex<VecDeque<ScriptedStep>>,
+        /// The `route` of every request seen, in call order.
+        routes_seen: Mutex<Vec<Option<aivyx_llm::RouteHint>>>,
     }
 
     impl ScriptedProvider {
         fn new(steps: Vec<ScriptedStep>) -> Arc<Self> {
             Arc::new(ScriptedProvider {
                 steps: Mutex::new(steps.into()),
+                routes_seen: Mutex::new(Vec::new()),
             })
         }
     }
@@ -1583,9 +1611,10 @@ mod tests {
     impl LlmProvider for ScriptedProvider {
         async fn chat_stream(
             &self,
-            _request: LlmRequest<'_>,
+            request: LlmRequest<'_>,
             _cancellation: &CancellationToken,
         ) -> Result<Box<dyn LlmStream>, LlmError> {
+            self.routes_seen.lock().unwrap().push(request.route.clone());
             let step = self.steps.lock().unwrap().pop_front().ok_or_else(|| {
                 LlmError::Config("ScriptedProvider exhausted".to_string())
             })?;
@@ -1646,6 +1675,84 @@ mod tests {
             had_successful_gate_resolve: false,
             ..TurnSignals::default()
         }
+    }
+
+    // ----- Model routing Part 3a -----
+
+    #[test]
+    fn judge_route_task_tags_only_a_defaulted_judge_under_routing() {
+        use aivyx_route::TaskKind;
+        assert_eq!(judge_route_task(true, true), Some(TaskKind::Judge));
+        // Explicit `judge_model` ⇒ untagged pin.
+        assert_eq!(judge_route_task(true, false), None);
+        // Routing off ⇒ always untagged.
+        assert_eq!(judge_route_task(false, true), None);
+        assert_eq!(judge_route_task(false, false), None);
+    }
+
+    #[test]
+    fn judge_route_task_defaults_to_none_and_is_not_serialized() {
+        let config = SkillAutoProposeConfig::default();
+        assert_eq!(config.judge_route_task, None);
+        let tagged = SkillAutoProposeConfig {
+            judge_route_task: Some(aivyx_route::TaskKind::Judge),
+            ..SkillAutoProposeConfig::default()
+        };
+        let json = serde_json::to_string(&tagged).unwrap();
+        assert!(!json.contains("judge_route_task"), "{json}");
+    }
+
+    const WORTHLESS_VERDICT: &str = r#"{"is_worth_proposing":false,"confidence":0.1,
+        "category":null,"proposed_draft":null,"is_duplicate_of":null}"#;
+
+    #[tokio::test]
+    async fn configured_judge_route_task_reaches_the_judge_request() {
+        let provider = ScriptedProvider::new(vec![ScriptedStep::FinalText(
+            WORTHLESS_VERDICT.into(),
+        )]);
+        let config = SkillAutoProposeConfig {
+            judge_model: "m".into(),
+            judge_route_task: Some(aivyx_route::TaskKind::Judge),
+            ..SkillAutoProposeConfig::default()
+        };
+        let cancel = CancellationToken::new();
+        auto_propose_for_turn(
+            provider.clone(),
+            &config,
+            fire_threshold_signals(),
+            "summary".into(),
+            ExistingPersonaSnapshot::default(),
+            &cancel,
+        )
+        .await;
+        let seen = provider.routes_seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        let hint = seen[0].as_ref().expect("judge request tagged");
+        assert_eq!(hint.task, aivyx_route::TaskKind::Judge);
+        assert_eq!(hint.session, None);
+        assert!(hint.estimated_prompt_tokens > 0);
+    }
+
+    #[tokio::test]
+    async fn default_config_leaves_the_judge_request_untagged() {
+        let provider = ScriptedProvider::new(vec![ScriptedStep::FinalText(
+            WORTHLESS_VERDICT.into(),
+        )]);
+        let config = SkillAutoProposeConfig {
+            judge_model: "m".into(),
+            ..SkillAutoProposeConfig::default()
+        };
+        let cancel = CancellationToken::new();
+        auto_propose_for_turn(
+            provider.clone(),
+            &config,
+            fire_threshold_signals(),
+            "summary".into(),
+            ExistingPersonaSnapshot::default(),
+            &cancel,
+        )
+        .await;
+        assert_eq!(*provider.routes_seen.lock().unwrap(), vec![None]);
     }
 
     // ----- Outcome branches -----

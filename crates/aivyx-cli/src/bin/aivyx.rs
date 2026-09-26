@@ -9795,9 +9795,19 @@ async fn run_async(
                     // (the configured-provider invariant). The old
                     // hardcoded "claude-haiku-4-5" default 404'd after
                     // every tool-heavy turn on an Ollama-only install.
-                    if cfg.judge_model.is_empty() {
+                    //
+                    // Model routing Part 3a — that defaulted judge is
+                    // tagged `Judge` when routing is on so the router
+                    // picks its model; an explicit `judge_model` stays
+                    // an untagged pin.
+                    let judge_model_was_empty = cfg.judge_model.is_empty();
+                    if judge_model_was_empty {
                         cfg.judge_model = model.clone();
                     }
+                    cfg.judge_route_task = aivyx_channel::skill_auto_proposer::judge_route_task(
+                        routed.is_some(),
+                        judge_model_was_empty,
+                    );
                     cfg
                 },
             );
