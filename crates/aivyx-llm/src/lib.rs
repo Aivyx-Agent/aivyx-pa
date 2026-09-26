@@ -117,6 +117,12 @@ pub mod embedding;
 ))]
 pub mod verify;
 
+/// Model routing Part 3a — an `LlmProvider` that picks a model per
+/// tagged request with `aivyx-route`'s shared `Router`. Ungated: it
+/// dispatches through providers the caller builds.
+pub mod routed;
+pub use routed::{ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider};
+
 // ---------------------------------------------------------------------------
 // Conversation messages
 // ---------------------------------------------------------------------------
