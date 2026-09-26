@@ -138,3 +138,4 @@ to a strong starting point so the testing is productive from turn one.
 - [`LOCAL_FIRST_RUN.md`](LOCAL_FIRST_RUN.md) — the modest-hardware on-ramp (auto `num_ctx`, recommended model, `doctor`).
 - [`SECURITY_POSTURE.md`](SECURITY_POSTURE.md) / [`AUTONOMY.md`](AUTONOMY.md) — reach + autonomy on a box you trust.
 - [`BRIDLE.md`](BRIDLE.md) — the runaway breakers that keep a local model on the rails.
+- `[routing]` in [`../examples/aivyx-pa.toml`](../examples/aivyx-pa.toml) — route each call to the right local model (tools, vision, context size, task tier) across several models or servers.

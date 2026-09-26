@@ -1566,7 +1566,10 @@ parent_role = "researcher"
 # # Extra LOCAL endpoints. Kinds: "ollama" (default base_url
 # # http://localhost:11434), "llama_router" (llama-server router mode,
 # # default http://localhost:8080), "openai_compat" (anything serving
-# # /v1/models — base_url required). A base_url may end in /v1 or not.
+# # /v1/models — base_url required; it may end in /v1 or not). For
+# # "ollama" and "llama_router" give the bare server root (no /v1):
+# # discovery calls /api/tags and /models under it, and a /v1 root
+# # makes the endpoint look unreachable.
 # [routing.endpoints.gpu-box]
 # kind = "ollama"
 # base_url = "http://192.168.1.20:11434"
@@ -1624,7 +1627,9 @@ parent_role = "researcher"
 # `aivyx-pa routing status`) warns when this happens. Note that
 # Ollama's discovered context window is the model's TRAINED maximum,
 # not the num_ctx it is actually served with — declare the served
-# window in the roster if it's smaller. Also note: a misspelled key
+# window in the roster if it's smaller. (Routed Ollama endpoints are
+# served with the Ollama server's own default context, so set it there
+# — Modelfile or OLLAMA_CONTEXT_LENGTH — and declare the same value.) Also note: a misspelled key
 # directly under [routing] (e.g. `enable = true`) is silently ignored,
 # so routing stays off — check the startup line "model routing
 # enabled (N candidate model(s), default `…`)".
@@ -1644,10 +1649,12 @@ parent_role = "researcher"
 # Slack / Discord session paths, KV warm-up, and Ensemble per-role
 # models. A request carrying an image only goes to a model with (or
 # possibly with) vision; the same holds for tools. If no candidate
-# qualifies, the call fails with a routing error.
+# qualifies — or every candidate fails — the call fails with a routing
+# error.
 #
 # Failures: a connection error, an unknown model, or HTTP 404 / 408 /
-# 5xx puts that model on a 60 s cooldown and the call falls back to the
+# 5xx (or a routed endpoint that can't be set up) puts that model on a
+# 60 s cooldown and the call falls back to the
 # next candidate. Cooled models are still tried as a last resort if
 # nothing else qualifies. A fallback is temporary — the conversation
 # returns to its own model after the cooldown. A failure after the
@@ -1662,13 +1669,14 @@ parent_role = "researcher"
 #   * tools `routing.status` (the candidate list) and `routing.explain`
 #     (the last decision for this conversation — or, given an explicit
 #     `session`, for another one; model / task / reason only). Both are
-#     read-only, Trusted-tier, and registered only when routing is on.
+#     read-only, Trusted-tier, registered only when routing is on, and
+#     granted to the zero-config default role (backcompat floor).
 #   * `aivyx-pa routing status` — offline: runs the same discovery +
 #     merge as startup and prints the candidates (* marks the [agent]
 #     model, `?` marks an unknown capability). No daemon, no passphrase.
 #   * `aivyx-pa routing explain [--limit N]` — offline: lists the
 #     newest N (default 20) routing decisions from the audit chain.
-#   * Every routed call writes a `ModelRouted` audit entry (model, task,
+#   * Every successfully routed call writes a `ModelRouted` audit entry (model, task,
 #     reason; no session id in this release). `LlmCost` is recorded per
 #     model actually used, so spend is priced correctly; `aivyx-pa
 #     cost` may count a turn answered by two models twice in its turn

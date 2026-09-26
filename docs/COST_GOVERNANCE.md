@@ -47,6 +47,8 @@ over it.
   `TenantId`. (A future paid Fleet/multi-tenant tier can re-add it.)
 - **Model routing** (`ModelRouter`). Out of scope — that's a cost
   *optimisation*, a later concern; K is about *visibility + caps*.
+  (Since shipped separately as `[routing]` — see `examples/aivyx-pa.toml`;
+  its `LlmCost` entries are recorded per model actually used.)
 - **A separate ledger store.** The audit chain already holds usage; we add a
   priced aggregation over it, not a second write path. (If per-call query
   performance ever demands an index, a `KeyDomain::CostLedger` is the

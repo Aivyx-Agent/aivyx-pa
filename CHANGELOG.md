@@ -54,7 +54,7 @@ All notable changes to Aivyx are recorded here. This project adheres to
   errors, unknown models and HTTP 404/408/5xx cool a model down for 60 s
   and fall back to the next candidate. New read-only, Trusted-tier tools
   `routing.status` / `routing.explain` (registered only when routing is
-  on), new offline `aivyx-pa routing status` and `aivyx-pa routing
+  on; in the default role's backcompat floor), new offline `aivyx-pa routing status` and `aivyx-pa routing
   explain [--limit N]` commands, a `ModelRouted` audit entry per routed
   call, and `LlmCost` recorded per model actually used. Declare your
   `[agent]` model's `capabilities` and `context_window` in
