@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime};
 
 use aivyx_audit::{AuditEvent, PersistentAuditLog, SignedEntry};
 use aivyx_config::ProviderKind;
-use aivyx_llm::ollama::{OllamaConfig, OllamaProvider};
+use aivyx_llm::ollama::{AUTO_NUM_CTX_CAP, OllamaConfig, OllamaProvider};
 use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::{LlmProvider, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider};
 use aivyx_route::{
@@ -180,7 +180,30 @@ impl ProfileRefresher for DiscoveryRefresher {
         } else {
             Vec::new()
         };
-        merge(&self.config, &self.default_endpoint, &reports)
+        let mut profiles = merge(&self.config, &self.default_endpoint, &reports);
+        clamp_ollama_windows(&mut profiles, &self.config);
+        profiles
+    }
+}
+
+/// Routed Ollama endpoints run with `OllamaConfig::default_local()`, whose
+/// provider sends `num_ctx = min(native, AUTO_NUM_CTX_CAP)` per request —
+/// so that, not the trained window discovery reports, is what the model
+/// actually gets. A roster `context_window` for the (endpoint, id) wins.
+fn clamp_ollama_windows(profiles: &mut [ModelProfile], config: &RoutingConfig) {
+    for p in profiles {
+        let ollama = config
+            .endpoints
+            .get(p.endpoint.as_str())
+            .is_some_and(|e| e.kind == EndpointKind::Ollama);
+        let declared = config.models.iter().any(|m| {
+            m.id == p.id
+                && m.endpoint.as_deref() == Some(p.endpoint.as_str())
+                && m.context_window.is_some()
+        });
+        if ollama && !declared {
+            p.context_window = p.context_window.map(|w| w.min(AUTO_NUM_CTX_CAP));
+        }
     }
 }
 
@@ -920,5 +943,42 @@ mod tests {
             },
         );
         assert_eq!(routed_entry(&unrelated), None);
+    }
+
+    #[test]
+    fn routed_ollama_windows_are_capped_at_the_served_num_ctx() {
+        let cfg = parse(
+            "[routing.endpoints.box]\nkind = \"ollama\"\nbase_url = \"http://127.0.0.1:11434\"\n\
+             [routing.endpoints.gpu]\nkind = \"openai_compat\"\nbase_url = \"http://127.0.0.1:8080\"\n\
+             [[routing.models]]\nid = \"declared\"\nendpoint = \"box\"\ncontext_window = 65536\n",
+        );
+        let with_window = |endpoint: &str, id: &str, window: Option<u32>| {
+            let mut p = ModelProfile::new(id, EndpointRef::new(endpoint));
+            p.context_window = window;
+            p
+        };
+        let mut profiles = vec![
+            with_window("box", "big", Some(131_072)),
+            with_window("box", "small", Some(8_192)),
+            with_window("box", "unknown", None),
+            with_window("box", "declared", Some(65_536)),
+            with_window("gpu", "big", Some(131_072)),
+            with_window("default", "big", Some(131_072)),
+        ];
+        clamp_ollama_windows(&mut profiles, &cfg);
+
+        let windows: Vec<Option<u32>> = profiles.iter().map(|p| p.context_window).collect();
+        let cap = aivyx_llm::ollama::AUTO_NUM_CTX_CAP;
+        assert_eq!(
+            windows,
+            vec![
+                Some(cap),
+                Some(8_192),
+                None,
+                Some(65_536),
+                Some(131_072),
+                Some(131_072),
+            ]
+        );
     }
 }
