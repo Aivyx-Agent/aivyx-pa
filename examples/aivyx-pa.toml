@@ -1548,6 +1548,133 @@ parent_role = "researcher"
 # optional and independent; either or both may be set.
 
 # ----------------------------------------------------------------
+# Model routing (Part 3a) — [routing]
+# ----------------------------------------------------------------
+#
+# OFF BY DEFAULT. Without a [routing] table — or with
+# `enabled = false` — nothing changes: the [agent] provider + model
+# serve every call exactly as before (the daemon holds the very same
+# provider object). With `enabled = true`, a router picks a model per
+# call from a candidate list, using the shared `aivyx-route` crate
+# (the same [routing] shape aivyx-coder reads).
+#
+# [routing]
+# enabled = true
+# discover = true        # default true — ask each endpoint what it serves
+#                        # at startup; false = use the roster below only
+#
+# # Extra LOCAL endpoints. Kinds: "ollama" (default base_url
+# # http://localhost:11434), "llama_router" (llama-server router mode,
+# # default http://localhost:8080), "openai_compat" (anything serving
+# # /v1/models — base_url required). A base_url may end in /v1 or not.
+# [routing.endpoints.gpu-box]
+# kind = "ollama"
+# base_url = "http://192.168.1.20:11434"
+#
+# # The roster: declare what discovery can't tell (or override it).
+# # `endpoint` omitted = the `default` endpoint (see below).
+# [[routing.models]]
+# id = "qwen3:8b"                        # your [agent] model
+# tier = "medium"                        # small | medium | large
+# strengths = ["chat"]                   # code | reasoning | chat | summarize
+# capabilities = ["completion", "tools"] # completion | tools | vision |
+#                                        # thinking | audio | embedding
+# context_window = 32768                 # the window you actually serve
+#
+# [[routing.models]]
+# id = "qwen3-coder:30b"
+# endpoint = "gpu-box"
+# tier = "large"
+# strengths = ["code", "reasoning"]
+# priority = 10                          # tie-break; higher wins (default 0)
+# capabilities_deny = ["vision"]         # remove a discovered capability
+#
+# # Per-task soft preferences (defaults: chat = medium/chat,
+# # plan = large/reasoning, judge = medium/reasoning).
+# [routing.tasks]
+# judge = { tier = "small" }
+#
+# The `default` endpoint. It IS your [agent] provider + model and is
+# reserved: a [routing.endpoints.default] table is rejected at startup.
+# It is never auto-discovered; your [agent] model is always an
+# implicit candidate on it (a [[routing.models]] entry with that id and
+# no endpoint, or `endpoint = "default"`, describes it instead of adding
+# a second one). Other roster entries without `endpoint` are models on
+# that same provider.
+#
+# No new cloud destinations in this release:
+#   * [routing.endpoints.*] with kind = "anthropic" or "openai" is
+#     rejected at startup ("cloud endpoints arrive with consent-gated
+#     escalation in a later release").
+#   * Cloud candidates are allowed only on the `default` endpoint, and
+#     only when the [agent] provider is itself cloud — e.g. on
+#     provider = "anthropic", routing may pick another Anthropic model
+#     you list in [[routing.models]]; on a local provider, a cloud-
+#     tagged entry is never chosen. (provider = "openai" with a loopback
+#     base_url counts as local.)
+#   * No API key is ever sent to a routing endpoint.
+#   * Routed Ollama / OpenAI-compatible endpoints use the provider's
+#     DEFAULT settings — your [ollama] tuning (e.g. num_ctx) applies
+#     only to the `default` endpoint.
+#
+# DECLARE YOUR [agent] MODEL'S capabilities AND context_window. The
+# router ranks a model whose capabilities are unknown below every model
+# known to have them, so an undeclared default model loses every
+# tool-using call to any discovered tool-capable model. Startup (and
+# `aivyx-pa routing status`) warns when this happens. Note that
+# Ollama's discovered context window is the model's TRAINED maximum,
+# not the num_ctx it is actually served with — declare the served
+# window in the roster if it's smaller. Also note: a misspelled key
+# directly under [routing] (e.g. `enable = true`) is silently ignored,
+# so routing stays off — check the startup line "model routing
+# enabled (N candidate model(s), default `…`)".
+#
+# Which calls are routed (tagged with a task kind):
+#   * daemon conversation turns — `chat`, sticky per conversation (a
+#     conversation keeps its model), including role-switch child
+#     sessions;
+#   * the Chapter Verdict completion judge (loop.complete) — `judge`,
+#     whenever routing is on;
+#   * the persona/skill auto-proposer judge — `judge`, only when
+#     `judge_model` is unset (an explicit `judge_model` is a pin and is
+#     never routed);
+#   * team mission planning — `plan`.
+# Everything else uses the [agent] model unchanged: memory / persona /
+# wiki / graph / correction side calls, the standalone Telegram /
+# Slack / Discord session paths, KV warm-up, and Ensemble per-role
+# models. A request carrying an image only goes to a model with (or
+# possibly with) vision; the same holds for tools. If no candidate
+# qualifies, the call fails with a routing error.
+#
+# Failures: a connection error, an unknown model, or HTTP 404 / 408 /
+# 5xx puts that model on a 60 s cooldown and the call falls back to the
+# next candidate. Cooled models are still tried as a last resort if
+# nothing else qualifies. A fallback is temporary — the conversation
+# returns to its own model after the cooldown. A failure after the
+# response has started streaming is not retried. Other errors are
+# returned as-is.
+#
+# Discovery runs once, at startup, one endpoint after another, with a
+# 5 s timeout per request: an unreachable endpoint slows startup, and
+# its models stay unavailable until the daemon restarts.
+#
+# Visibility:
+#   * tools `routing.status` (the candidate list) and `routing.explain`
+#     (the last decision for this conversation — or, given an explicit
+#     `session`, for another one; model / task / reason only). Both are
+#     read-only, Trusted-tier, and registered only when routing is on.
+#   * `aivyx-pa routing status` — offline: runs the same discovery +
+#     merge as startup and prints the candidates (* marks the [agent]
+#     model, `?` marks an unknown capability). No daemon, no passphrase.
+#   * `aivyx-pa routing explain [--limit N]` — offline: lists the
+#     newest N (default 20) routing decisions from the audit chain.
+#   * Every routed call writes a `ModelRouted` audit entry (model, task,
+#     reason; no session id in this release). `LlmCost` is recorded per
+#     model actually used, so spend is priced correctly; `aivyx-pa
+#     cost` may count a turn answered by two models twice in its turn
+#     total.
+
+# ----------------------------------------------------------------
 # Persistent helpfulness ledger (Phase 82) — no config; automatic
 # ----------------------------------------------------------------
 #

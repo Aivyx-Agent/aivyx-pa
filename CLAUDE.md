@@ -92,7 +92,7 @@ socket is the operator").
 | `aivyx-storage` | redb-backed encrypted store, keyed storage domains |
 | `aivyx-audit` | HMAC-chained audit log + offline verification |
 | `aivyx-config` | TOML + env config loader with source provenance |
-| `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama implementations |
+| `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama implementations; `RoutedProvider` (opt-in `[routing]` per-call model routing over the shared `aivyx-route` router) |
 | `aivyx-memory` | `memory.{read,write,forget,gc}` + redb-backed substrate |
 | `aivyx-channel` | Daemon server/client, missions, scheduling, reflection, the autonomous loop, memory recall/graph/wiki machinery — the largest crate; most feature "chapters" land here |
 | `aivyx-ipc` | wasm-clean wire protocol shared by the daemon and the Dioxus web client |

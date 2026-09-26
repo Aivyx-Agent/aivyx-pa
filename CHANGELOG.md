@@ -37,6 +37,29 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **Model routing (Part 3a) — an optional `[routing]` section picks a
+  model per call.** Off by default: without `[routing]` (or with
+  `enabled = false`) nothing changes. With `enabled = true`, a
+  `RoutedProvider` (over the shared `aivyx-route` router, the same
+  `[routing]` shape `aivyx-coder` reads) chooses among the `[agent]`
+  model (the reserved `default` endpoint), the `[[routing.models]]`
+  roster, and models discovered on local `[routing.endpoints.*]`
+  (Ollama, llama-server router mode, OpenAI-compatible). Routed calls:
+  daemon conversation turns (`chat`, sticky per conversation), the
+  completion judge and — when `judge_model` is unset — the auto-proposer
+  judge (`judge`), and team mission planning (`plan`); every other call
+  uses the `[agent]` model unchanged. No new cloud destinations: cloud
+  endpoint kinds are rejected at startup, and cloud candidates are
+  allowed only on a cloud `[agent]` provider's own endpoint. Connection
+  errors, unknown models and HTTP 404/408/5xx cool a model down for 60 s
+  and fall back to the next candidate. New read-only, Trusted-tier tools
+  `routing.status` / `routing.explain` (registered only when routing is
+  on), new offline `aivyx-pa routing status` and `aivyx-pa routing
+  explain [--limit N]` commands, a `ModelRouted` audit entry per routed
+  call, and `LlmCost` recorded per model actually used. Declare your
+  `[agent]` model's `capabilities` and `context_window` in
+  `[[routing.models]]`, or it ranks below discovered tool-capable models
+  (startup warns). See `examples/aivyx-pa.toml` for the full reference.
 - **A shared default skill library (Aivyx-Skills Part 3) — two new
   read-only tools plus a `## Default skills` system-prompt section.**
   `skill_defaults.list` / `skill_defaults.read` expose the 5 skills

@@ -6835,7 +6835,8 @@ async fn run_async(
     // every routed decision lands on the chain as a `ModelRouted` entry
     // (its `session_id` stays `None` — the router's record carries no
     // session). `routed` also tags the daemon's conversational planners
-    // and backs the routing IPC surface (Task 8).
+    // and judges, and backs the `routing.status`/`routing.explain` tools;
+    // the observer below is what writes those audit entries.
     let route_observer: aivyx_llm::RouteObserver = {
         let audit = Arc::clone(&audit);
         Arc::new(move |rec: &aivyx_route::RouteRecord| {
