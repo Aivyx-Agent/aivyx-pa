@@ -153,6 +153,19 @@ pub trait TurnPlanner: Send + Sync {
     fn model(&self) -> &str {
         ""
     }
+
+    /// The turn's LLM spend split by the model that actually served it —
+    /// one Chapter-K `AuditTag::LlmCost` event per entry. A routed planner
+    /// can use several models in one turn; the default is the single
+    /// [`model`](Self::model) + [`turn_usage`](Self::turn_usage) pair, or
+    /// nothing for a deterministic planner.
+    fn turn_costs(&self) -> Vec<(String, TokenUsage)> {
+        if self.model().is_empty() {
+            vec![]
+        } else {
+            vec![(self.model().to_string(), self.turn_usage())]
+        }
+    }
 }
 
 /// Deterministic planner that walks a fixed script of steps. Used for

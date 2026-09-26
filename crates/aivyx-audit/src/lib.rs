@@ -153,6 +153,20 @@ pub enum AuditEvent {
         usage: TokenUsage,
     },
 
+    /// Model routing — the router picked `model` (`id@endpoint`) for a
+    /// routing-tagged LLM call (task kind `task`, e.g. `chat`), with the
+    /// router's human-readable `reason` (including any fallback note).
+    /// Additive: an internally tagged variant, so existing entries
+    /// canonicalize unchanged. `session_id` is omitted when `None` (the
+    /// router's record carries no session today).
+    ModelRouted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        model: String,
+        task: String,
+        reason: String,
+    },
+
     /// Dedicated view of a memory operation. Redundant with `ToolCall`
     /// (every memory op *is* also a tool call), but indexed for fast
     /// memory-specific queries. D4 justifies this as the one deviation
@@ -1101,6 +1115,17 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 turn_id,
                 model,
                 usage,
+            },
+            AuditTag::ModelRouted {
+                session_id,
+                model,
+                task,
+                reason,
+            } => AuditEvent::ModelRouted {
+                session_id,
+                model,
+                task,
+                reason,
             },
             AuditTag::ToolCall {
                 turn_id,
@@ -2420,6 +2445,46 @@ mod tests {
             let decoded: AuditEvent = serde_json::from_value(json).expect("decode");
             assert_eq!(decoded, event, "round-trip must be lossless for {surface:?}");
         }
+    }
+
+    #[test]
+    fn model_routed_round_trips_through_canonical_json() {
+        // Model routing — the router's decision lands on the chain, so it
+        // must serialize + decode byte-stably like every other variant.
+        for session_id in [None, Some("sess-1".to_string())] {
+            let event = AuditEvent::ModelRouted {
+                session_id: session_id.clone(),
+                model: "big@gpu".into(),
+                task: "chat".into(),
+                reason: "chat prefers a medium model".into(),
+            };
+            let bytes = serde_jcs::to_vec(&event).expect("jcs must accept");
+            let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(json["kind"], "ModelRouted");
+            assert_eq!(json.get("session_id").is_some(), session_id.is_some());
+            let decoded: AuditEvent = serde_json::from_slice(&bytes).expect("round trip");
+            assert_eq!(decoded, event);
+        }
+    }
+
+    #[test]
+    fn model_routed_audit_tag_bridges_field_for_field() {
+        let event: AuditEvent = aivyx_core::AuditTag::ModelRouted {
+            session_id: None,
+            model: "big@gpu".into(),
+            task: "chat".into(),
+            reason: "only candidate".into(),
+        }
+        .into();
+        assert_eq!(
+            event,
+            AuditEvent::ModelRouted {
+                session_id: None,
+                model: "big@gpu".into(),
+                task: "chat".into(),
+                reason: "only candidate".into(),
+            }
+        );
     }
 
     #[test]

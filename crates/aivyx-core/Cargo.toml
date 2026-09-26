@@ -18,6 +18,9 @@ aivyx-llm = { path = "../aivyx-llm" }
 # aivyx-kvcache's own CLAUDE.md for the repo's release status. Pin lives in
 # the workspace root's [workspace.dependencies].
 aivyx-kvcache = { workspace = true }
+# Model routing — `LlmPlanner::with_routing` takes the task kind its turns
+# are tagged with. Pin lives in the workspace root's [workspace.dependencies].
+aivyx-route = { workspace = true }
 # Phase 51 Task 2 — D6 typed nested errors for AivyxError::Storage /
 # Crypto. The Phase 1 TODOs in lib.rs:689,693 are finally closed.
 # Adding these as deps was deliberately deferred at Phase 1; both

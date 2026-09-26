@@ -506,6 +506,18 @@ pub struct LlmPlanner {
     /// `ensure_kv_slot_checked_out` (gated on `kv_cache.is_some()`)
     /// stays a complete no-op the whole turn.
     broker_slot_hint: bool,
+    /// `None` unless `with_routing` was called (only for the daemon's
+    /// conversational planners, and only when `[routing]` is configured).
+    /// When set, the main request carries a `RouteHint` with this task
+    /// kind, and each step's usage is priced against the model the
+    /// router actually used.
+    routing: Option<(Arc<aivyx_llm::RoutedProvider>, aivyx_route::TaskKind)>,
+    /// The router's stickiness key for this turn — the turn message's
+    /// session id, set in `begin_turn`.
+    route_session: Option<String>,
+    /// Per-model token usage for this turn, one entry per model that
+    /// served a step (see `TurnPlanner::turn_costs`).
+    turn_costs: Vec<(String, crate::TokenUsage)>,
 }
 
 struct KvCacheConfig {
@@ -676,6 +688,9 @@ impl LlmPlanner {
             kv_cache: None,
             kv_slot_id: None,
             broker_slot_hint: false,
+            routing: None,
+            route_session: None,
+            turn_costs: Vec::new(),
         }
     }
 
@@ -728,6 +743,22 @@ impl LlmPlanner {
             "with_broker_slot_hint called on a planner that already has kv_cache set"
         );
         self.broker_slot_hint = true;
+        self
+    }
+
+    /// Tags this planner's main LLM request for model routing: every step
+    /// carries a `RouteHint` for `task`, sticky per conversation (the turn
+    /// message's session id). `router` must be the `RoutedProvider` this
+    /// planner's provider dispatches through — its last decision for the
+    /// session names the model each step's usage is priced against. Only
+    /// the daemon's conversational planners call this; the KV warm-up
+    /// request stays untagged.
+    pub fn with_routing(
+        mut self,
+        router: Arc<aivyx_llm::RoutedProvider>,
+        task: aivyx_route::TaskKind,
+    ) -> Self {
+        self.routing = Some((router, task));
         self
     }
 
@@ -963,12 +994,35 @@ impl LlmPlanner {
         self.tools.iter().map(|t| t.name.as_str()).collect()
     }
 
-    /// Add a step's usage to the running total.
+    /// Add a step's usage to the running total, and to the per-model
+    /// total of the model that served the step — the router's last
+    /// decision for this session when routed, else the configured model.
     fn accumulate(&mut self, usage: LlmUsage) {
         self.accumulated_usage.input_tokens += usage.input_tokens;
         self.accumulated_usage.output_tokens += usage.output_tokens;
         self.accumulated_usage.cache_creation_input_tokens += usage.cache_creation_input_tokens;
         self.accumulated_usage.cache_read_input_tokens += usage.cache_read_input_tokens;
+
+        let served = self
+            .routing
+            .as_ref()
+            .and_then(|(r, _)| r.router().last_decision(self.route_session.as_deref()?))
+            .map(|rec| rec.model.id)
+            .unwrap_or_else(|| self.config.model.clone());
+        let step = crate::TokenUsage::from(usage);
+        match self
+            .turn_costs
+            .iter_mut()
+            .find(|(model, _)| *model == served)
+        {
+            Some((_, total)) => {
+                total.input_tokens += step.input_tokens;
+                total.output_tokens += step.output_tokens;
+                total.cache_creation_input_tokens += step.cache_creation_input_tokens;
+                total.cache_read_input_tokens += step.cache_read_input_tokens;
+            }
+            None => self.turn_costs.push((served, step)),
+        }
     }
 
     /// Build one `LlmRequest` from the current history + config and
@@ -995,11 +1049,20 @@ impl LlmPlanner {
             temperature: self.config.temperature,
             id_slot: self.kv_slot_id,
             slot_hint,
-            // Model-routing wiring (`RouteHint` population) lands in a
-            // later model-routing task; every call site stays untagged
-            // for now, per the "untagged ⇒ unchanged" compatibility
-            // invariant.
-            route: None,
+            // Tagged only when `with_routing` was called (the daemon's
+            // conversational planners); otherwise untagged, per the
+            // "untagged ⇒ unchanged" compatibility invariant.
+            route: self.routing.as_ref().map(|(_, task)| aivyx_llm::RouteHint {
+                task: task.clone(),
+                session: self.route_session.clone(),
+                estimated_prompt_tokens: (aivyx_llm::estimate_tokens(&self.history)
+                    + self
+                        .config
+                        .system_prompt
+                        .as_deref()
+                        .map_or(0, |s| s.len() / 4))
+                    as u32,
+            }),
         };
 
         let cancellation = channel.cancellation_token();
@@ -1130,6 +1193,7 @@ impl LlmPlanner {
 #[async_trait]
 impl TurnPlanner for LlmPlanner {
     async fn begin_turn(&mut self, message: &Message, turn_id: crate::TurnId) {
+        self.route_session = Some(message.session_id.to_string());
         self.ensure_kv_slot_checked_out().await;
         let mut content = match &message.content {
             MessageContent::Text(text) => vec![ContentBlock::text(text)],
@@ -1640,6 +1704,26 @@ impl TurnPlanner for LlmPlanner {
         &self.config.model
     }
 
+    /// Per-model spend. Without routing every step is the configured
+    /// model, so this is exactly `[(model, turn_usage)]`. The turn-level
+    /// pruning estimates ride on the first entry, as they do on
+    /// `turn_usage`.
+    fn turn_costs(&self) -> Vec<(String, crate::TokenUsage)> {
+        if self.turn_costs.is_empty() {
+            return if self.config.model.is_empty() {
+                vec![]
+            } else {
+                vec![(self.config.model.clone(), self.accumulated_usage)]
+            };
+        }
+        let mut costs = self.turn_costs.clone();
+        costs[0].1.context_tokens_before_pruning =
+            self.accumulated_usage.context_tokens_before_pruning;
+        costs[0].1.context_tokens_after_pruning =
+            self.accumulated_usage.context_tokens_after_pruning;
+        costs
+    }
+
     fn tool_result_texts(&self) -> Vec<String> {
         self.history
             .iter()
@@ -2034,6 +2118,8 @@ mod tests {
         // `chat_stream` call, so tests can assert on what the planner
         // actually sent without a real HTTP layer to inspect.
         last_request: Mutex<Option<(Option<u32>, Option<SlotHint>)>>,
+        // Model routing — `(model, route)` off every `chat_stream` call.
+        routes: Mutex<Vec<(String, Option<aivyx_llm::RouteHint>)>>,
     }
 
     struct FakeStep {
@@ -2046,6 +2132,7 @@ mod tests {
             Arc::new(FakeLlmProvider {
                 script: Mutex::new(steps.into()),
                 last_request: Mutex::new(None),
+                routes: Mutex::new(Vec::new()),
             })
         }
     }
@@ -2058,6 +2145,10 @@ mod tests {
             _cancellation: &crate::CancellationToken,
         ) -> Result<Box<dyn LlmStream>, LlmError> {
             *self.last_request.lock().unwrap() = Some((request.id_slot, request.slot_hint.clone()));
+            self.routes
+                .lock()
+                .unwrap()
+                .push((request.model.to_string(), request.route.clone()));
             let step = self
                 .script
                 .lock()
@@ -5285,5 +5376,155 @@ mod tests {
             slot_hint, None,
             "a planner that never opted into broker mode must never attach a slot_hint"
         );
+    }
+    // ---- Model routing — turn tagging and per-model cost ----
+
+    fn routing_profile(
+        endpoint: &str,
+        id: &str,
+        caps: &[aivyx_route::Capability],
+    ) -> aivyx_route::ModelProfile {
+        let mut p = aivyx_route::ModelProfile::new(id, aivyx_route::EndpointRef::new(endpoint));
+        p.tier = aivyx_route::Tier::Medium;
+        p.capabilities.insert(aivyx_route::Capability::Completion);
+        p.capabilities.extend(caps.iter().copied());
+        p
+    }
+
+    /// A real `RoutedProvider` over `default@default` (no tool calling)
+    /// and `big@gpu` (tool calling), so any request advertising a tool
+    /// routes to `big`.
+    fn routed_over(
+        default: Arc<FakeLlmProvider>,
+        gpu: Arc<FakeLlmProvider>,
+    ) -> Arc<aivyx_llm::RoutedProvider> {
+        let router = aivyx_route::Router::new(
+            vec![
+                routing_profile("default", "default", &[]),
+                routing_profile("gpu", "big", &[aivyx_route::Capability::Tools]),
+            ],
+            aivyx_route::TaskOverrides::default(),
+        );
+        let factory: aivyx_llm::ProviderFactory =
+            Box::new(move |_endpoint: &aivyx_route::EndpointRef| {
+                Ok(Arc::clone(&gpu) as Arc<dyn LlmProvider>)
+            });
+        Arc::new(aivyx_llm::RoutedProvider::new(
+            aivyx_route::ModelKey {
+                endpoint: aivyx_route::EndpointRef::new("default"),
+                id: "default".into(),
+            },
+            default as Arc<dyn LlmProvider>,
+            router,
+            factory,
+        ))
+    }
+
+    fn final_step(input_tokens: u32, output_tokens: u32) -> FakeStep {
+        FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "ok".to_string(),
+                usage: LlmUsage {
+                    input_tokens,
+                    output_tokens,
+                    ..LlmUsage::default()
+                },
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn routed_planner_tags_its_request_with_the_turn_session() {
+        let provider = FakeLlmProvider::new(vec![final_step(1, 1)]);
+        let routed = routed_over(FakeLlmProvider::new(vec![]), FakeLlmProvider::new(vec![]));
+        let mut planner = LlmPlanner::new(
+            provider.clone(),
+            Arc::new(ToolRegistry::new(vec![])),
+            LlmPlannerConfig::new("m"),
+        )
+        .with_routing(routed, aivyx_route::TaskKind::Chat);
+
+        let channel = RecChannel::new();
+        let message = Message::text(channel.session, "hello there");
+        planner.begin_turn(&message, TurnId::new()).await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        let routes = provider.routes.lock().unwrap().clone();
+        assert_eq!(routes.len(), 1, "one main request");
+        let hint = routes[0]
+            .1
+            .clone()
+            .expect("a routed planner must tag its request");
+        assert_eq!(hint.task, aivyx_route::TaskKind::Chat);
+        assert_eq!(hint.session, Some(message.session_id.to_string()));
+        assert!(hint.estimated_prompt_tokens > 0, "got {hint:?}");
+    }
+
+    #[tokio::test]
+    async fn unrouted_planner_sends_no_route_hint() {
+        let provider = FakeLlmProvider::new(vec![final_step(1, 1)]);
+        let mut planner = LlmPlanner::new(
+            provider.clone(),
+            Arc::new(ToolRegistry::new(vec![])),
+            LlmPlannerConfig::new("m"),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        let routes = provider.routes.lock().unwrap().clone();
+        assert_eq!(routes, vec![("m".to_string(), None)]);
+    }
+
+    #[tokio::test]
+    async fn turn_costs_price_the_model_the_router_used() {
+        let default = FakeLlmProvider::new(vec![]);
+        let gpu = FakeLlmProvider::new(vec![final_step(10, 5)]);
+        let routed = routed_over(default.clone(), gpu.clone());
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Arc::new(FakeTool::new("echo")) as Arc<dyn Tool>
+        ]));
+        let mut planner = LlmPlanner::new(
+            Arc::clone(&routed) as Arc<dyn LlmProvider>,
+            registry,
+            LlmPlannerConfig::new("default"),
+        )
+        .with_routing(routed, aivyx_route::TaskKind::Chat);
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        assert!(default.routes.lock().unwrap().is_empty());
+        assert_eq!(gpu.routes.lock().unwrap()[0].0, "big");
+        let usage = planner.turn_usage();
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(planner.turn_costs(), vec![("big".to_string(), usage)]);
+    }
+
+    #[tokio::test]
+    async fn unrouted_turn_costs_are_the_configured_model_and_turn_usage() {
+        let provider = FakeLlmProvider::new(vec![final_step(7, 3)]);
+        let mut planner = LlmPlanner::new(
+            provider,
+            Arc::new(ToolRegistry::new(vec![])),
+            LlmPlannerConfig::new("m"),
+        );
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        let usage = planner.turn_usage();
+        assert_eq!(usage.output_tokens, 3);
+        assert_eq!(planner.turn_costs(), vec![("m".to_string(), usage)]);
     }
 }

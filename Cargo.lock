@@ -318,6 +318,7 @@ dependencies = [
  "aivyx-injection-guard",
  "aivyx-kvcache",
  "aivyx-llm",
+ "aivyx-route",
  "aivyx-skills",
  "aivyx-storage",
  "async-trait",

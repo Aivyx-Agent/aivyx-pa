@@ -6623,31 +6623,6 @@ async fn run_async(
         }
     };
 
-    // ---- Model routing Part 3a ----------------------------------------
-    // `[routing]` absent or `enabled = false` ⇒ `provider` comes back as
-    // the very same `Arc`. Otherwise it becomes a `RoutedProvider` whose
-    // default endpoint is the provider just built; untagged requests still
-    // reach it unchanged. `routed` is kept for the audit observer (Task 6)
-    // and the routing IPC surface (Task 8).
-    let (provider, routed): (Arc<dyn LlmProvider>, Option<Arc<aivyx_llm::RoutedProvider>>) =
-        routing::wrap_with_routing(
-            config_routing.as_ref(),
-            provider_kind.value,
-            routing_base_url.as_deref(),
-            &model,
-            provider,
-            None,
-        )
-        .await
-        .map_err(|e| format!("routing: {e}"))?;
-    if let Some(routed) = &routed {
-        eprintln!(
-            "aivyx-pa daemon: model routing enabled ({} candidate model(s), default `{}`)",
-            routed.router().profiles().len(),
-            routed.default_key()
-        );
-    }
-
     // ---- kvcache (Task 5) — build the shared slot pool + slot store, ----
     // only when this run actually selected the LlamaCpp provider. The
     // /props probe is best-effort: any failure (unreachable server,
@@ -6743,6 +6718,45 @@ async fn run_async(
     // `AuditWriter` / `AuditLog` traits).
     let persistent_audit_for_query: Arc<PersistentAuditLog> = Arc::clone(&persistent_audit);
     let audit: Arc<dyn AuditHook> = persistent_audit;
+
+    // ---- Model routing Part 3a ----------------------------------------
+    // `[routing]` absent or `enabled = false` ⇒ `provider` comes back as
+    // the very same `Arc`. Otherwise it becomes a `RoutedProvider` whose
+    // default endpoint is the provider built above; untagged requests
+    // still reach it unchanged. Built here, after the audit log opens, so
+    // every routed decision lands on the chain as a `ModelRouted` entry
+    // (its `session_id` stays `None` — the router's record carries no
+    // session). `routed` also tags the daemon's conversational planners
+    // and backs the routing IPC surface (Task 8).
+    let route_observer: aivyx_llm::RouteObserver = {
+        let audit = Arc::clone(&audit);
+        Arc::new(move |rec: &aivyx_route::RouteRecord| {
+            audit.on_event(aivyx_core::AuditTag::ModelRouted {
+                session_id: None,
+                model: rec.model.to_string(),
+                task: rec.task.name().to_string(),
+                reason: rec.reason.clone(),
+            })
+        })
+    };
+    let (provider, routed): (Arc<dyn LlmProvider>, Option<Arc<aivyx_llm::RoutedProvider>>) =
+        routing::wrap_with_routing(
+            config_routing.as_ref(),
+            provider_kind.value,
+            routing_base_url.as_deref(),
+            &model,
+            provider,
+            Some(route_observer),
+        )
+        .await
+        .map_err(|e| format!("routing: {e}"))?;
+    if let Some(routed) = &routed {
+        eprintln!(
+            "aivyx-pa daemon: model routing enabled ({} candidate model(s), default `{}`)",
+            routed.router().profiles().len(),
+            routed.default_key()
+        );
+    }
 
     // ---- Chapter O: provision the agent's personal workspace ----------
     // Idempotent: creates `~/.aivyx-pa/workspace` + seed structure if absent.
@@ -8736,6 +8750,8 @@ async fn run_async(
     // configures, and inheriting it from the parent would defeat
     // the partitioning.
     let provider_for_factory = Arc::clone(&provider);
+    // Model routing — child turns are tagged like the parent's.
+    let routed_for_factory = routed.clone();
     let audit_for_factory = Arc::clone(&audit);
     let tools_for_factory = Arc::clone(&tools);
     // aivyx-checkpoint — the closure below is `move`, so it needs its
@@ -8899,6 +8915,7 @@ async fn run_async(
             planner_config = planner_config.with_system_prompt_refiner(Arc::clone(pr));
         }
         let planner_provider = Arc::clone(&provider_for_factory);
+        let planner_routed = routed_for_factory.clone();
         let planner_tools = Arc::clone(&tools_for_factory);
         // Phase 60 Task 3 — per-turn Persona refresh inside the
         // role-switch child agent. Each sub-session turn rebuilds
@@ -8938,11 +8955,19 @@ async fn run_async(
                 Some(&*prompt_fs_root_cpf),
             ));
             drop(snap);
-            Box::new(LlmPlanner::new(
+            let planner = LlmPlanner::new(
                 Arc::clone(&planner_provider),
                 Arc::clone(&planner_tools),
                 cfg,
-            )) as Box<dyn aivyx_core::TurnPlanner>
+            );
+            // Model routing — tag the child's turns (sticky per session).
+            let planner = match &planner_routed {
+                Some(routed) => {
+                    planner.with_routing(Arc::clone(routed), aivyx_route::TaskKind::Chat)
+                }
+                None => planner,
+            };
+            Box::new(planner) as Box<dyn aivyx_core::TurnPlanner>
         };
 
         // The role-switch child runs inside the same interactive session as its
@@ -9239,6 +9264,7 @@ async fn run_async(
             }
         }
         let planner_provider = Arc::clone(&provider);
+        let planner_routed = routed.clone();
         let planner_tools = Arc::clone(&tools);
         let planner_kv_cache_handles = kv_cache_handles.clone();
         let planner_broker_slot_hint_mode = broker_slot_hint_mode;
@@ -9309,6 +9335,14 @@ async fn run_async(
                 planner.with_broker_slot_hint()
             } else {
                 planner
+            };
+            // Model routing — tag this conversation's turns (`chat`, sticky
+            // per session) when `[routing]` is enabled; otherwise untagged.
+            let planner = match &planner_routed {
+                Some(routed) => {
+                    planner.with_routing(Arc::clone(routed), aivyx_route::TaskKind::Chat)
+                }
+                None => planner,
             };
             Box::new(planner) as Box<dyn aivyx_core::TurnPlanner>
         };

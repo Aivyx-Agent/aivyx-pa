@@ -869,15 +869,17 @@ impl Agent for ConcreteAgent {
         });
 
         // Chapter K — a dedicated cost event for LLM-backed turns, carrying the
-        // model `TurnEnded` omits so spend can be priced per turn. Deterministic
-        // planners report no model, so they emit nothing here.
-        let model = planner.model();
-        if !model.is_empty() {
-            self.audit.on_event(AuditTag::LlmCost {
-                turn_id,
-                model: model.to_string(),
-                usage: planner.turn_usage(),
-            });
+        // model `TurnEnded` omits so spend can be priced per turn: one event
+        // per model that served the turn (a routed turn can use several).
+        // Deterministic planners report no model, so they emit nothing here.
+        for (model, usage) in planner.turn_costs() {
+            if !model.is_empty() {
+                self.audit.on_event(AuditTag::LlmCost {
+                    turn_id,
+                    model,
+                    usage,
+                });
+            }
         }
 
         final_outcome
@@ -2357,6 +2359,84 @@ mod tests {
             calls.load(Ordering::SeqCst),
             0,
             "deterministic (empty-model) turns bypass the gate"
+        );
+    }
+
+    // ---- Model routing — one priced LlmCost per model used ----
+
+    /// A `ModeledPlanner` whose turn was served by two models.
+    struct TwoModelPlanner {
+        inner: ModeledPlanner,
+    }
+
+    fn usage_of(input_tokens: u32) -> crate::TokenUsage {
+        crate::TokenUsage {
+            input_tokens,
+            ..crate::TokenUsage::default()
+        }
+    }
+
+    #[async_trait]
+    impl TurnPlanner for TwoModelPlanner {
+        async fn next_step(
+            &mut self,
+            observed: &[StepObservation],
+            channel: &dyn ChannelContext,
+        ) -> NextStep {
+            self.inner.next_step(observed, channel).await
+        }
+        fn model(&self) -> &str {
+            self.inner.model()
+        }
+        fn turn_costs(&self) -> Vec<(String, crate::TokenUsage)> {
+            vec![
+                ("small".to_string(), usage_of(3)),
+                ("big".to_string(), usage_of(9)),
+            ]
+        }
+    }
+
+    #[tokio::test]
+    async fn one_llm_cost_event_per_model_in_turn_costs() {
+        let audit = RecordingAudit::new();
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            CapabilitySet::from_scopes([]),
+            registry,
+            audit.clone(),
+            || {
+                Box::new(TwoModelPlanner {
+                    inner: ModeledPlanner {
+                        steps: [NextStep::FinalMessage("done".to_string())]
+                            .into_iter()
+                            .collect(),
+                        model: "configured".to_string(),
+                    },
+                })
+            },
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+
+        let outcome = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert!(matches!(outcome, TurnOutcome::Completed { .. }));
+
+        let costs: Vec<(String, crate::TokenUsage)> = audit
+            .snapshot()
+            .into_iter()
+            .filter_map(|e| match e {
+                AuditTag::LlmCost { model, usage, .. } => Some((model, usage)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            costs,
+            vec![
+                ("small".to_string(), usage_of(3)),
+                ("big".to_string(), usage_of(9)),
+            ]
         );
     }
 

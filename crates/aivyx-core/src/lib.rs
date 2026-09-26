@@ -751,6 +751,15 @@ pub enum AuditTag {
         model: String,
         usage: TokenUsage,
     },
+    /// Model routing — the router picked `model` (`id@endpoint`) for a
+    /// tagged call, with its human-readable `reason`. Fed by the daemon's
+    /// `RoutedProvider` observer after each successful routed dispatch.
+    ModelRouted {
+        session_id: Option<String>,
+        model: String,
+        task: String,
+        reason: String,
+    },
     ToolCall {
         turn_id: TurnId,
         tool_id: ToolId,
