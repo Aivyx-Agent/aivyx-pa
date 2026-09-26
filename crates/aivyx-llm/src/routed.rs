@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use aivyx_route::{
-    EndpointRef, ModelKey, ModelProfile, RoutePlan, RouteQuery, RouteRecord, Router, TaskKind,
+    EndpointRef, ModelKey, ModelProfile, RoutePlan, RouteQuery, RouteRecord, Router, SessionMap,
+    TaskKind,
 };
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
@@ -72,7 +73,8 @@ pub struct RoutedProvider {
     /// Session → the model that served its last routed call, local or
     /// escalated. What a caller attributing a step to a model must read
     /// (the local router's last decision doesn't see escalated calls).
-    last_served: Mutex<HashMap<String, ModelKey>>,
+    /// Capped like the router's own per-session state.
+    last_served: Mutex<SessionMap<ModelKey>>,
 }
 
 impl RoutedProvider {
@@ -91,7 +93,7 @@ impl RoutedProvider {
             refresher: None,
             observer: None,
             escalation: None,
-            last_served: Mutex::new(HashMap::new()),
+            last_served: Mutex::new(SessionMap::default()),
         }
     }
 
@@ -140,6 +142,15 @@ impl RoutedProvider {
                 .unwrap()
                 .insert(session.to_string(), key.clone());
         }
+    }
+
+    /// Keep `last_served` for at most `max` sessions (default
+    /// [`aivyx_route::MAX_SESSIONS`]); the least recently served session
+    /// is forgotten first. The local router is capped by its own
+    /// [`Router::with_max_sessions`].
+    pub fn with_max_sessions(mut self, max: usize) -> Self {
+        self.last_served = Mutex::new(SessionMap::with_capacity(max));
+        self
     }
 
     pub fn with_refresher(mut self, refresher: Arc<dyn ProfileRefresher>) -> Self {
@@ -1342,6 +1353,22 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("[[routing.models]]"), "{err}");
         assert!(cloud.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn last_served_is_capped_per_session() {
+        let gpu = Scripted::ok();
+        let mut f = fixture(
+            vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+            vec![("gpu", Arc::clone(&gpu))],
+        );
+        f.routed = f.routed.with_max_sessions(2);
+        for session in ["s1", "s2", "s3"] {
+            let (messages, hint) = routed(TaskKind::Plan, Some(session));
+            call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        }
+        assert_eq!(f.routed.last_served("s1"), None, "the idlest session is dropped");
+        assert_eq!(f.routed.last_served("s3"), Some(key("gpu", "big")));
     }
 
     #[tokio::test]
