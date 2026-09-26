@@ -43,12 +43,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
   local model can serve (`no_local_candidate`), or whose task kind is in
   `[routing.escalation] tiers`, may go to that cloud model under
   `mode = "ask"` (the turn stops and names the model; send `/allow-cloud`
-  or run `aivyx-pa routing allow-cloud <session>`, then resend — the
-  grant lasts until the daemon restarts), `"auto"`, or `"never"`. A
-  conversation that has touched sensitive data — a `[routing.sensitive]
-  tool_prefixes` tool's output or error, memory recall, a sensitive
-  channel — is tainted permanently (persisted) and never escalates, in
-  any mode. Calls outside a conversation never escalate. Every decision
+  from a Trusted channel or run `aivyx-pa routing allow-cloud <session>`,
+  then resend — the grant lasts until the daemon restarts), `"auto"`, or
+  `"never"`. A conversation that has touched sensitive data — a
+  `[routing.sensitive] tool_prefixes` tool's output or error (by default
+  every tool returning the operator's own data: mail, files, repos,
+  shell, screen, history, finances, health, tasks, memory), memory
+  recall, a sensitive channel — is tainted permanently (persisted) and
+  never escalates, in any mode. Calls outside a conversation never escalate. Every decision
   is a `CloudEscalation` audit entry carrying a payload hash, never
   content; also `CloudConsentGranted` and `ConversationTainted`.
   `routing.status` and `aivyx-pa routing status|explain` show it. New

@@ -2895,17 +2895,32 @@ pub struct SensitiveConfig {
 }
 
 /// `[routing.sensitive] tool_prefixes` default — each matches real tools
-/// in `docs/TOOLS.md` (personal data: mail, calendar, contacts, files,
-/// memory, notes).
+/// in `docs/TOOLS.md` that return the operator's own data: mail,
+/// calendar, contacts, files and documents, memory and the graph built
+/// from it, notes, repositories, shell output, the screen, conversation
+/// history, finances, health, tasks and reminders. Fail safe: when in
+/// doubt a tool is listed.
 pub const DEFAULT_SENSITIVE_TOOL_PREFIXES: &[&str] = &[
     "gmail.",
+    "email.",
     "calendar.",
     "contacts.",
     "drive.",
     "memory.",
+    "graph.",
     "notion.",
     "obsidian.",
     "fs.read",
+    "data.",
+    "workspace.",
+    "git.",
+    "shell.",
+    "app.",
+    "turn.history",
+    "budget.",
+    "health.",
+    "task.",
+    "remind.",
 ];
 
 impl Default for SensitiveConfig {

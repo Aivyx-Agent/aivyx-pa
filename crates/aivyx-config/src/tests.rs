@@ -8725,17 +8725,62 @@ fn routing_section_with_escalation_subsection_still_parses() {
 fn default_sensitive_prefixes() -> Vec<String> {
     [
         "gmail.",
+        "email.",
         "calendar.",
         "contacts.",
         "drive.",
         "memory.",
+        "graph.",
         "notion.",
         "obsidian.",
         "fs.read",
+        "data.",
+        "workspace.",
+        "git.",
+        "shell.",
+        "app.",
+        "turn.history",
+        "budget.",
+        "health.",
+        "task.",
+        "remind.",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect()
+}
+
+/// Final-review I4 — built-in tools that return the operator's own data
+/// (files, repos, screen, history, finances, health, mail, tasks) taint
+/// by default, not just the productivity integrations.
+#[test]
+fn default_sensitive_prefixes_cover_tools_returning_operator_data() {
+    let prefixes = crate::SensitiveConfig::default().tool_prefixes;
+    for tool in [
+        "gmail.search",
+        "fs.read",
+        "memory.read",
+        "data.xlsx",
+        "data.pdf",
+        "shell.exec",
+        "git.diff",
+        "git.read",
+        "workspace.read",
+        "graph.query",
+        "app.screenshot",
+        "app.read",
+        "turn.history",
+        "budget.read",
+        "health.read",
+        "email.read",
+        "task.list",
+        "remind.list",
+    ] {
+        assert!(
+            prefixes.iter().any(|p| tool.starts_with(p.as_str())),
+            "{tool} is not sensitive by default"
+        );
+    }
 }
 
 #[test]

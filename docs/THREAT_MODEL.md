@@ -412,18 +412,22 @@ cloud `[routing.endpoints.*]` entry, and then passes a gate
   as tainted (fail safe).
 - **Consent.** In `ask` mode a turn that needs the cloud stops and names
   the model; only the operator's `/allow-cloud` (the whole message, in
-  that conversation) or the `AllowCloudEscalation` IPC query over the
-  `0600` socket grants it — per conversation, in memory, re-asked after
-  a restart. Nothing the model emits can grant consent: `/allow-cloud`
-  is read only from submitted operator input, before any turn runs.
+  that conversation, on a Trusted-tier channel) or the
+  `AllowCloudEscalation` IPC query over the `0600` socket grants it —
+  per conversation, in memory, re-asked after a restart. Nothing the
+  model emits can grant consent: `/allow-cloud` is read only from
+  submitted operator input, before any turn runs, and is refused from an
+  Untrusted or SemiTrusted sender (e.g. a bot channel with no
+  allowlist).
 - **No session, no escalation.** Calls outside a conversation (judges,
   mission planning) never escalate, because their taint can't be known.
 - **Only the operator's endpoints and keys.** Cloud models on
   `[routing.endpoints.*]` are reachable only through this gate — never
   as ordinary routing candidates — and use the operator's own
   `anthropic_api_key` / `openai_api_key`.
-- **Audited without content.** Every decision (allowed, consent
-  requested, blocked by taint, disabled) is a `CloudEscalation` audit
+- **Audited without content.** Every decision (allowed — including a
+  call that failed after it may have been sent — consent requested, no
+  cloud model, blocked by taint, disabled) is a `CloudEscalation` audit
   entry with a SHA-256 hash of the would-be payload; grants are
   `CloudConsentGranted`; the first taint is `ConversationTainted`.
 
@@ -431,13 +435,16 @@ cloud `[routing.endpoints.*]` entry, and then passes a gate
 (an MCP or third-party tool whose name matches no `[routing.sensitive]
 tool_prefixes` entry, or private data the operator types directly) does
 not taint. Operators who escalate should list such tools' prefixes, or
-keep `mode = "never"`. A channel whose adapter accepts messages from
-people other than the operator (e.g. a shared Discord server) lets them
-send `/allow-cloud` too — restrict who can message such channels, list
-them in `[routing.sensitive] channels` (which taints their
-conversations, so they never escalate), or keep `mode = "never"`. Once a
-call is escalated, the cloud provider's own retention terms apply
-(§5.5).
+keep `mode = "never"`. A channel the operator has marked Trusted but
+that accepts messages from other people (e.g. an allowlisted but shared
+Discord server) lets them send `/allow-cloud` too — keep such channels'
+allowlists to the operator, list them in `[routing.sensitive] channels`
+(which taints their conversations, so they never escalate), or keep
+`mode = "never"`. An escalated request carries the whole system prompt,
+including the operator Profile and the reflection-written Persona, which
+are derived from past conversations (tainted ones included); operators
+for whom that is private should keep `mode = "never"`. Once a call is
+escalated, the cloud provider's own retention terms apply (§5.5).
 
 ## 5. Threats we explicitly do not defend against
 

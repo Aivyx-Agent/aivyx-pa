@@ -1734,11 +1734,16 @@ parent_role = "researcher"
 # mode = "ask"                # never | ask (default) | auto
 # no_local_candidate = true   # escalate when no local model can do it
 # tiers = []                  # task kinds that go straight to the cloud,
-#                             # e.g. ["plan"] (chat | plan | judge | …)
+#                             # e.g. ["plan"] (chat | plan | judge | …);
+#                             # under "ask", each new conversation of that
+#                             # kind stops for /allow-cloud first
 #
 # [routing.sensitive]
-# tool_prefixes = ["gmail.", "calendar.", "contacts.", "drive.",
-#                  "memory.", "notion.", "obsidian.", "fs.read"]  # defaults
+# tool_prefixes = ["gmail.", "email.", "calendar.", "contacts.", "drive.",
+#                  "memory.", "graph.", "notion.", "obsidian.", "fs.read",
+#                  "data.", "workspace.", "git.", "shell.", "app.",
+#                  "turn.history", "budget.", "health.", "task.",
+#                  "remind."]  # defaults: tools returning your own data
 # channels = []               # platform names, e.g. ["telegram"]
 #
 # Unknown keys in either table are a config error, so a typo can't
