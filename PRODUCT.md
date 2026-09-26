@@ -212,6 +212,14 @@ prevents drift away from the target.
   property that uniquely positions Aivyx PA, and the one a future
   phase is most likely to be tempted to compromise on. Don't.
 
+  > *See amendment
+  > [`2026-09-26-cloud-escalation.md`](docs/amendments/2026-09-26-cloud-escalation.md)
+  > (A15) — consent-gated cloud escalation: a local-first
+  > configuration may send a specific conversation's call to a
+  > cloud endpoint the operator configured, under six privacy
+  > rules (tainted conversations never escalate; no Aivyx-hosted
+  > component, key proxying or telemetry). Model routing Part 3b.*
+
 - **G7 — Third-party tool SDK.** Tools follow a documented
   contract any third party can implement to add new capabilities
   to Aivyx PA. The SDK contract guarantees policy integration:
