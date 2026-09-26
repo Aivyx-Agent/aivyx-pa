@@ -2293,10 +2293,28 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // configured), audit it, and answer without
                             // touching the agent, the history or the model.
                             if crate::routing_guard::is_allow_cloud_command(&text) {
-                                let key = session.to_string();
+                                // The same key the turn's router checks:
+                                // the bridge's session, which falls back
+                                // to the inner channel's (not a fresh id)
+                                // when `sid` isn't a UUID.
+                                let key = sid
+                                    .parse::<uuid::Uuid>()
+                                    .map(aivyx_core::SessionId)
+                                    .unwrap_or_else(|_| ch.session_id())
+                                    .to_string();
+                                // Consent is the operator's act: an
+                                // Untrusted/SemiTrusted sender (a bot
+                                // channel without an allowlist) can't
+                                // grant it.
+                                let trusted = matches!(
+                                    ch.trust_tier(),
+                                    aivyx_capability::TrustTier::Trusted
+                                        | aivyx_capability::TrustTier::Kernel
+                                );
                                 let (granted, reply) = crate::routing_guard::allow_cloud_reply(
                                     routing_guard.as_deref(),
                                     &key,
+                                    trusted,
                                 );
                                 if granted {
                                     audit_consent(audit_log.as_deref(), &key, "chat");
@@ -4371,7 +4389,8 @@ async fn handle_query(
                 };
             };
             let session = aivyx_core::SessionId(uuid).to_string();
-            match crate::routing_guard::allow_cloud_reply(routing_guard, &session).0 {
+            // The local socket is the operator (its 0600 mode is the auth).
+            match crate::routing_guard::allow_cloud_reply(routing_guard, &session, true).0 {
                 true => {
                     audit_consent(consent_audit, &session, "ipc");
                     QueryResponsePayload::CloudEscalationAllowed { session_id: session }

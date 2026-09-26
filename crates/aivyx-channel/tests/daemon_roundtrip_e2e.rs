@@ -3439,8 +3439,12 @@ impl Agent for CountingAgent {
     }
 }
 
-#[tokio::test]
-async fn allow_cloud_records_consent_without_running_a_turn() {
+/// Sends `/allow-cloud` over a real daemon socket whose session channel is
+/// `channel`; returns the reply, how many agent turns ran, and whether
+/// consent was recorded for the conversation.
+async fn allow_cloud_over<C: ChannelContext + Send + Sync + 'static>(
+    channel: Arc<C>,
+) -> (String, usize, bool) {
     let scratch = ScratchDir::new();
     let socket_path = scratch.socket_path();
     let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -3456,7 +3460,6 @@ async fn allow_cloud_records_consent_without_running_a_turn() {
     .await
     .expect("storage opens");
     let guard = Arc::new(aivyx_channel::routing_guard::RoutingGuard::new(storage));
-    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
 
     let daemon_socket = socket_path.clone();
     let daemon_guard = Arc::clone(&guard);
@@ -3477,13 +3480,60 @@ async fn allow_cloud_records_consent_without_running_a_turn() {
         .expect("client must complete successfully");
     daemon_handle.await.expect("daemon task");
 
-    assert!(
-        result.outcome.contains("Cloud escalation allowed"),
-        "{}",
-        result.outcome
-    );
     assert!(result.events.is_empty(), "{:?}", result.events);
-    assert_eq!(turns.load(std::sync::atomic::Ordering::SeqCst), 0);
     let session = aivyx_core::SessionId(result.session_id.parse().expect("uuid")).to_string();
-    assert!(guard.consented(&session));
+    (
+        result.outcome,
+        turns.load(std::sync::atomic::Ordering::SeqCst),
+        guard.consented(&session),
+    )
+}
+
+#[tokio::test]
+async fn allow_cloud_records_consent_without_running_a_turn() {
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let (outcome, turns, consented) = allow_cloud_over(channel).await;
+    assert!(outcome.contains("Cloud escalation allowed"), "{outcome}");
+    assert_eq!(turns, 0);
+    assert!(consented);
+}
+
+/// A remote bot channel with no sender allowlist.
+struct UntrustedChannel(aivyx_core::SessionId);
+
+#[async_trait]
+impl ChannelContext for UntrustedChannel {
+    fn channel_name(&self) -> &str {
+        "untrusted-test"
+    }
+    fn platform(&self) -> aivyx_core::ChannelPlatform {
+        aivyx_core::ChannelPlatform::Telegram
+    }
+    fn trust_tier(&self) -> aivyx_capability::TrustTier {
+        aivyx_capability::TrustTier::Untrusted
+    }
+    fn session_id(&self) -> aivyx_core::SessionId {
+        self.0
+    }
+    async fn stream_event(
+        &self,
+        _event: StreamEvent<'_>,
+    ) -> Result<(), aivyx_core::ChannelError> {
+        Ok(())
+    }
+    async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), aivyx_core::ChannelError> {
+        Ok(())
+    }
+    fn cancellation_token(&self) -> CancellationToken {
+        CancellationToken::new()
+    }
+}
+
+#[tokio::test]
+async fn allow_cloud_from_an_untrusted_channel_grants_nothing() {
+    let channel = Arc::new(UntrustedChannel(aivyx_core::SessionId::new()));
+    let (outcome, turns, consented) = allow_cloud_over(channel).await;
+    assert!(outcome.contains("only be allowed by the operator"), "{outcome}");
+    assert_eq!(turns, 0, "the command still never reaches the agent");
+    assert!(!consented);
 }

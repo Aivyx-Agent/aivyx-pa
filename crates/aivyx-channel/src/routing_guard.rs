@@ -143,8 +143,6 @@ impl RoutingGuard {
     }
 }
 
-/// Lock a std mutex, recovering from poisoning: both guarded sets only
-/// ever grow, so a panicked holder can't leave them inconsistent.
 /// Model routing Part 3b — the chat command that allows cloud escalation
 /// for the conversation it's sent in. Only the whole message counts.
 pub const ALLOW_CLOUD_COMMAND: &str = "/allow-cloud";
@@ -156,11 +154,21 @@ pub fn is_allow_cloud_command(text: &str) -> bool {
 }
 
 /// Grants cloud-escalation consent for `session` when escalation is
-/// configured (`guard` is `Some`), and returns whether it was recorded and
-/// the reply for the operator. Consent is in-memory and never clears a
-/// taint.
-pub fn allow_cloud_reply(guard: Option<&RoutingGuard>, session: &str) -> (bool, &'static str) {
+/// configured (`guard` is `Some`) and the request comes from the operator
+/// (`trusted`: a Trusted-tier channel, the local IPC socket or the CLI),
+/// and returns whether it was recorded and the reply. Consent is in-memory
+/// and never clears a taint.
+pub fn allow_cloud_reply(
+    guard: Option<&RoutingGuard>,
+    session: &str,
+    trusted: bool,
+) -> (bool, &'static str) {
     match guard {
+        Some(_) if !trusted => (
+            false,
+            "Cloud escalation can only be allowed by the operator — from a trusted frontend, or \
+             `aivyx-pa routing allow-cloud <session>`.",
+        ),
         Some(guard) => {
             guard.allow(session);
             (
@@ -177,6 +185,8 @@ pub fn allow_cloud_reply(guard: Option<&RoutingGuard>, session: &str) -> (bool, 
     }
 }
 
+/// Lock a std mutex, recovering from poisoning: both guarded sets only
+/// ever grow, so a panicked holder can't leave them inconsistent.
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -363,13 +373,13 @@ mod tests {
     async fn allow_cloud_reply_records_consent_only_when_enabled() {
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 1).await);
-        let (granted, reply) = allow_cloud_reply(Some(&guard), "s");
+        let (granted, reply) = allow_cloud_reply(Some(&guard), "s", true);
         assert!(granted);
         assert!(guard.consented("s"));
         assert!(reply.contains("allowed"), "{reply}");
         assert!(reply.contains("Resend"), "{reply}");
 
-        let (granted, reply) = allow_cloud_reply(None, "s");
+        let (granted, reply) = allow_cloud_reply(None, "s", true);
         assert!(!granted);
         assert!(reply.contains("not enabled"), "{reply}");
     }
