@@ -8683,6 +8683,40 @@ fn skill_defaults_config_arms_on_user_dir_alone() {
     );
 }
 
+// ------------------------------------------------------------------
+// Model routing Part 3a — [routing] section
+// ------------------------------------------------------------------
+
+#[test]
+fn routing_absent_section_is_none() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml("\n[agent]\nprovider = \"ollama\"\n", "routing-absent");
+    assert!(cfg.routing.is_none());
+}
+
+#[test]
+fn routing_section_parses_roster_entries() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[routing]\nenabled = true\n[[routing.models]]\nid = \"qwen3:8b\"\ntier = \"small\"\n",
+        "routing-roster",
+    );
+    let routing = cfg.routing.expect("routing must be Some");
+    assert!(routing.enabled);
+    assert_eq!(routing.models[0].id, "qwen3:8b");
+}
+
+#[test]
+fn routing_section_ignores_unknown_escalation_subsection() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[routing]\nenabled = true\n[routing.escalation]\nmode = \"ask\"\n",
+        "routing-escalation-ignored",
+    );
+    let routing = cfg.routing.expect("routing must be Some");
+    assert!(routing.enabled);
+}
+
 #[test]
 fn skill_refinement_section_parses_and_defaults() {
     let _env = EnvScope::new();

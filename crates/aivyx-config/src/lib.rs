@@ -1054,6 +1054,13 @@ pub struct AivyxConfig {
     /// unconditional" precedent); this config only ever adds overlay
     /// directories on top.
     pub skill_defaults: Option<SkillDefaultsConfig>,
+    /// Model routing (`[routing]`, shared with aivyx-coder). `None` ⇒
+    /// routing off: the configured provider/model serve every call,
+    /// exactly as before. Parsed verbatim from the shared
+    /// `aivyx_route::RoutingConfig` shape (no `Sourced` provenance —
+    /// it's the shared crate's type, not this crate's own schema); its
+    /// unknown keys (e.g. a future `[routing.escalation]`) are ignored.
+    pub routing: Option<aivyx_route::RoutingConfig>,
     /// Chapter Synapse — `[memory] profile`. `Off` (default) ⇒ today's
     /// behavior; `Smart` expands the coherent memory bundle into the
     /// `[embedding]` / `[recall_cluster]` / `[wiki]` / `[graph]` fields
@@ -3941,6 +3948,12 @@ struct RawToml {
     /// `[skill_defaults]` section. Aivyx-Skills Part 3.
     #[serde(default)]
     skill_defaults: RawSkillDefaults,
+    /// `[routing]` section. Model routing, Part 3a — the shared
+    /// `aivyx_route::RoutingConfig` shape verbatim (so `aivyx-coder` and
+    /// `aivyx-pa` configs look alike). `None` when the section is
+    /// absent; unknown keys within it are ignored by the shared type.
+    #[serde(default)]
+    routing: Option<aivyx_route::RoutingConfig>,
     /// `[persona_consolidation]` section. Phase 87 —
     /// pattern-driven Persona proposals.
     #[serde(default)]
@@ -6555,6 +6568,10 @@ impl AivyxConfig {
         let skill_authoring =
             build_skill_authoring_config(&toml.skill_authoring);
         let skill_defaults = build_skill_defaults_config(&toml.skill_defaults);
+        // Model routing, Part 3a — [routing] parses directly into the
+        // shared aivyx_route::RoutingConfig; passed through verbatim,
+        // no extra validation at this layer (that's the router's job).
+        let routing = toml.routing.clone();
         let persona_consolidation =
             build_persona_consolidation_config(
                 &toml.persona_consolidation,
@@ -7870,6 +7887,7 @@ impl AivyxConfig {
             skill_refinement,
             skill_authoring,
             skill_defaults,
+            routing,
             memory_profile,
             persona_consolidation,
             correction_consolidation,

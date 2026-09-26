@@ -6140,6 +6140,9 @@ async fn run_async(
         // above (before this destructure moved `config`), to build
         // `skill_defaults_loader`/`default_skills_section`.
         skill_defaults: _,
+        // Model routing Part 3a — read via `config.routing` where needed
+        // (Task 5 wires it into the daemon's provider construction).
+        routing: _,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {

@@ -72,6 +72,12 @@ aivyx-cost = { path = "../aivyx-cost" }
 # wildcards), so adding it here is not a net-new workspace dep.
 globset = { workspace = true }
 
+# Model routing Part 3a — `[routing]` parses directly into the shared
+# `aivyx_route::RoutingConfig` serde struct, same "shared crate's type,
+# parsed as-is" pattern as `aivyx-cost` above. `aivyx-llm` already
+# depends on this crate; not a net-new workspace dep.
+aivyx-route = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 

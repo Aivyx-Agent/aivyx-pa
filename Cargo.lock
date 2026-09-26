@@ -262,6 +262,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-cost",
  "aivyx-crypto",
+ "aivyx-route",
  "aivyx-storage",
  "base64 0.22.1",
  "globset",
