@@ -92,22 +92,33 @@ impl RoutedProvider {
         if *endpoint == self.default_key.endpoint {
             return Ok(Arc::clone(&self.default_provider));
         }
-        let mut pool = self.pool.lock().unwrap();
-        if let Some(provider) = pool.get(endpoint) {
+        if let Some(provider) = self.pool.lock().unwrap().get(endpoint) {
             return Ok(Arc::clone(provider));
         }
-        let provider = (self.factory)(endpoint)?;
-        pool.insert(endpoint.clone(), Arc::clone(&provider));
-        Ok(provider)
+        // Build outside the lock (a factory may do real work); if another
+        // call inserted first, use theirs.
+        let built = (self.factory)(endpoint)?;
+        let mut pool = self.pool.lock().unwrap();
+        Ok(Arc::clone(pool.entry(endpoint.clone()).or_insert(built)))
     }
 }
 
-fn has_image(messages: &[LlmMessage]) -> bool {
+fn user_blocks_any(messages: &[LlmMessage], pred: impl Fn(&ContentBlock) -> bool) -> bool {
     messages.iter().any(|m| match m {
-        LlmMessage::User { content } => content
-            .iter()
-            .any(|b| matches!(b, ContentBlock::ImageBase64 { .. })),
+        LlmMessage::User { content } => content.iter().any(&pred),
         _ => false,
+    })
+}
+
+fn has_image(messages: &[LlmMessage]) -> bool {
+    user_blocks_any(messages, |b| matches!(b, ContentBlock::ImageBase64 { .. }))
+}
+
+/// OpenAI-compatible providers drop document blocks, so a PDF must stay
+/// on the configured model.
+fn has_document(messages: &[LlmMessage]) -> bool {
+    user_blocks_any(messages, |b| {
+        matches!(b, ContentBlock::DocumentBase64 { .. })
     })
 }
 
@@ -128,11 +139,15 @@ impl LlmProvider for RoutedProvider {
         request: LlmRequest<'_>,
         cancellation: &CancellationToken,
     ) -> Result<Box<dyn LlmStream>, LlmError> {
-        let Some(hint) = request.route.clone() else {
-            return self
-                .default_provider
-                .chat_stream(request, cancellation)
-                .await;
+        let hint = match request.route.clone() {
+            Some(hint) if !has_document(request.messages) => hint,
+            // Untagged, or carrying a PDF: the configured provider, as-is.
+            _ => {
+                return self
+                    .default_provider
+                    .chat_stream(request, cancellation)
+                    .await;
+            }
         };
         let query = RouteQuery {
             task: hint.task.clone(),
@@ -148,6 +163,9 @@ impl LlmProvider for RoutedProvider {
         })?;
         let mut failures: Vec<String> = Vec::new();
         for key in &plan.chain {
+            if cancellation.is_cancelled() {
+                return Err(LlmError::Cancelled);
+            }
             let provider = match self.provider_for(&key.endpoint) {
                 Ok(provider) => provider,
                 Err(why) => {
@@ -171,6 +189,8 @@ impl LlmProvider for RoutedProvider {
                     }
                     return Ok(stream);
                 }
+                // Not the model's fault: don't cool it.
+                Err(_) if cancellation.is_cancelled() => return Err(LlmError::Cancelled),
                 Err(err) if is_retryable(&err) => {
                     self.router.failed(key, Instant::now());
                     failures.push(format!("`{key}` ({err})"));
@@ -229,9 +249,11 @@ mod tests {
     }
 
     /// Records every request; answers with an empty successful stream, or
-    /// with `LlmError::Api { status, .. }` when `fail` is set.
+    /// with `fail` when it is set. `cancel_first` is cancelled before the
+    /// answer, to model an error that arrives after cancellation.
     struct Scripted {
-        fail: Option<u16>,
+        fail: Option<LlmError>,
+        cancel_first: Option<CancellationToken>,
         seen: Mutex<Vec<Seen>>,
     }
 
@@ -239,13 +261,33 @@ mod tests {
         fn ok() -> Arc<Self> {
             Arc::new(Scripted {
                 fail: None,
+                cancel_first: None,
                 seen: Mutex::new(Vec::new()),
             })
         }
 
         fn failing(status: u16) -> Arc<Self> {
+            Self::failing_with(LlmError::Api {
+                status,
+                message: "down".into(),
+            })
+        }
+
+        fn failing_with(err: LlmError) -> Arc<Self> {
             Arc::new(Scripted {
-                fail: Some(status),
+                fail: Some(err),
+                cancel_first: None,
+                seen: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn cancelling_then_failing(token: CancellationToken, status: u16) -> Arc<Self> {
+            Arc::new(Scripted {
+                fail: Some(LlmError::Api {
+                    status,
+                    message: "down".into(),
+                }),
+                cancel_first: Some(token),
                 seen: Mutex::new(Vec::new()),
             })
         }
@@ -267,11 +309,11 @@ mod tests {
                 id_slot: request.id_slot,
                 slot_hint: request.slot_hint.clone(),
             });
-            match self.fail {
-                Some(status) => Err(LlmError::Api {
-                    status,
-                    message: "down".into(),
-                }),
+            if let Some(token) = &self.cancel_first {
+                token.cancel();
+            }
+            match &self.fail {
+                Some(err) => Err(err.clone()),
                 None => Ok(Box::new(EmptyStream)),
             }
         }
@@ -617,6 +659,174 @@ mod tests {
         let models: Vec<String> = gpu.seen().into_iter().map(|s| s.model).collect();
         assert_eq!(models, vec!["big".to_string(), "tiny".to_string()]);
         assert_eq!(f.builds.load(Ordering::SeqCst), 1);
+    }
+
+    /// The model the router would try first for a `CodeEdit` call now —
+    /// a cooling model drops behind every healthy one.
+    fn first_choice(routed: &RoutedProvider) -> ModelKey {
+        let query = RouteQuery::new(TaskKind::CodeEdit);
+        routed.router().plan(&query, Instant::now()).unwrap().chain[0].clone()
+    }
+
+    fn with_document(text: &str) -> Vec<LlmMessage> {
+        vec![LlmMessage::User {
+            content: vec![
+                ContentBlock::text(text),
+                ContentBlock::DocumentBase64 {
+                    media_type: "application/pdf".into(),
+                    data: "JVBERi0=".into(),
+                },
+            ],
+        }]
+    }
+
+    #[tokio::test]
+    async fn a_request_carrying_a_pdf_is_not_routed() {
+        let gpu = Scripted::ok();
+        let f = fixture(
+            vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+            vec![("gpu", Arc::clone(&gpu))],
+        );
+        let (_, hint) = routed(TaskKind::CodeEdit, Some("s1"));
+        let messages = with_document("summarise this");
+        let mut req = request(&messages, &[], Some(hint));
+        req.id_slot = Some(4);
+        call(&f.routed, req).await.unwrap();
+
+        assert_eq!(
+            f.default.seen(),
+            vec![Seen {
+                model: "whatever".into(),
+                id_slot: Some(4),
+                slot_hint: None,
+            }]
+        );
+        assert!(gpu.seen().is_empty());
+        assert_eq!(f.builds.load(Ordering::SeqCst), 0);
+        assert_eq!(f.routed.router().last_decision("s1"), None);
+
+        // The same tagged request without the document still routes.
+        let (messages, hint) = routed(TaskKind::CodeEdit, None);
+        call(&f.routed, request(&messages, &[], Some(hint)))
+            .await
+            .unwrap();
+        let models: Vec<String> = gpu.seen().into_iter().map(|s| s.model).collect();
+        assert_eq!(models, vec!["big".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_token_stops_before_any_candidate() {
+        let gpu = Scripted::ok();
+        let f = fixture(
+            vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+            vec![("gpu", Arc::clone(&gpu))],
+        );
+        let token = CancellationToken::new();
+        token.cancel();
+        let (messages, hint) = routed(TaskKind::CodeEdit, None);
+        let err = f
+            .routed
+            .chat_stream(request(&messages, &[], Some(hint)), &token)
+            .await
+            .err()
+            .unwrap();
+
+        assert_eq!(err, LlmError::Cancelled);
+        assert!(gpu.seen().is_empty());
+        assert!(f.default.seen().is_empty());
+        assert_eq!(first_choice(&f.routed), key("gpu", "big"));
+    }
+
+    #[tokio::test]
+    async fn an_error_after_cancellation_does_not_cool_the_model() {
+        let token = CancellationToken::new();
+        let gpu = Scripted::cancelling_then_failing(token.clone(), 503);
+        let f = fixture(
+            vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+            vec![("gpu", Arc::clone(&gpu))],
+        );
+        let (messages, hint) = routed(TaskKind::CodeEdit, None);
+        let err = f
+            .routed
+            .chat_stream(request(&messages, &[], Some(hint)), &token)
+            .await
+            .err()
+            .unwrap();
+
+        assert_eq!(err, LlmError::Cancelled);
+        assert_eq!(gpu.seen().len(), 1);
+        assert!(f.default.seen().is_empty());
+        assert_eq!(first_choice(&f.routed), key("gpu", "big"));
+    }
+
+    #[tokio::test]
+    async fn a_factory_error_falls_back_and_cools() {
+        // `gpu` is a candidate but the pool has no provider for it.
+        let f = fixture(
+            vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+            Vec::new(),
+        );
+        assert_eq!(first_choice(&f.routed), key("gpu", "big"));
+        let (messages, hint) = routed(TaskKind::CodeEdit, None);
+        call(&f.routed, request(&messages, &[], Some(hint)))
+            .await
+            .unwrap();
+
+        assert_eq!(f.default.seen().len(), 1);
+        assert_eq!(f.builds.load(Ordering::SeqCst), 1);
+        assert_eq!(first_choice(&f.routed), key("default", "default"));
+    }
+
+    #[tokio::test]
+    async fn cancelled_passes_through_without_cooling() {
+        let gpu = Scripted::failing_with(LlmError::Cancelled);
+        let f = fixture(
+            vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+            vec![("gpu", Arc::clone(&gpu))],
+        );
+        let (messages, hint) = routed(TaskKind::CodeEdit, None);
+        let err = call(&f.routed, request(&messages, &[], Some(hint)))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, LlmError::Cancelled);
+        assert!(f.default.seen().is_empty());
+        assert_eq!(first_choice(&f.routed), key("gpu", "big"));
+    }
+
+    #[tokio::test]
+    async fn transport_unknown_model_404_and_408_are_retryable() {
+        let errors = [
+            LlmError::Transport("connection refused".into()),
+            LlmError::UnknownModel("big".into()),
+            LlmError::Api {
+                status: 404,
+                message: "not found".into(),
+            },
+            LlmError::Api {
+                status: 408,
+                message: "timeout".into(),
+            },
+        ];
+        for err in errors {
+            let gpu = Scripted::failing_with(err.clone());
+            let f = fixture(
+                vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+                vec![("gpu", Arc::clone(&gpu))],
+            );
+            let (messages, hint) = routed(TaskKind::CodeEdit, None);
+            call(&f.routed, request(&messages, &[], Some(hint)))
+                .await
+                .unwrap_or_else(|e| panic!("{err:?} was not retried: {e:?}"));
+
+            assert_eq!(gpu.seen().len(), 1, "{err:?}");
+            assert_eq!(f.default.seen().len(), 1, "{err:?}");
+            assert_eq!(
+                first_choice(&f.routed),
+                key("default", "default"),
+                "{err:?}"
+            );
+        }
     }
 
     struct FixedRefresher(Vec<ModelProfile>);
