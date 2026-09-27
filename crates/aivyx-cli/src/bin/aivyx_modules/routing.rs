@@ -130,6 +130,18 @@ pub(crate) fn escalation_active(
         })
 }
 
+/// Model routing Part 3b (A16) — does the autonomous loop arm its
+/// iterations for `on_failure` escalation? Only in `auto` mode (the loop
+/// runs unattended, so no one is there to send `/allow-cloud`), with
+/// `on_failure` on, and with an arming actually built (`arming_present`).
+/// This is the sole enforcement of A16's "in `ask` the loop never arms".
+pub(crate) fn loop_escalates_on_failure(
+    escalation: &EscalationConfig,
+    arming_present: bool,
+) -> bool {
+    escalation.mode == EscalationMode::Auto && escalation.on_failure && arming_present
+}
+
 /// Every cloud endpoint has the operator's key for its kind.
 pub(crate) fn check_cloud_keys(cfg: &RoutingConfig, access: &CloudAccess) -> Result<(), String> {
     for (name, endpoint) in &cfg.endpoints {
@@ -936,6 +948,36 @@ mod tests {
     use super::*;
     use aivyx_route::{EndpointConfig, RouteQuery, TaskKind};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn the_loop_escalates_on_failure_only_in_auto_with_on_failure_and_arming() {
+        // A16 — the sole enforcement of "in `ask` the loop never arms".
+        use EscalationMode::{Ask, Auto, Never};
+        let table = [
+            // (mode, on_failure, arming present, expected)
+            (Auto, true, true, true),
+            (Auto, true, false, false),
+            (Auto, false, true, false),
+            (Auto, false, false, false),
+            (Ask, true, true, false),
+            (Ask, true, false, false),
+            (Ask, false, true, false),
+            (Never, true, true, false),
+            (Never, false, false, false),
+        ];
+        for (mode, on_failure, arming, want) in table {
+            let esc = EscalationConfig {
+                mode,
+                on_failure,
+                ..EscalationConfig::default()
+            };
+            assert_eq!(
+                loop_escalates_on_failure(&esc, arming),
+                want,
+                "mode {mode:?}, on_failure {on_failure}, arming {arming}"
+            );
+        }
+    }
 
     fn parse(toml_src: &str) -> RoutingConfig {
         #[derive(serde::Deserialize)]

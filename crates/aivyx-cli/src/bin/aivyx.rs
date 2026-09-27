@@ -6945,10 +6945,10 @@ async fn run_async(
     // Part 3b (A16) — the autonomous loop arms only in `auto` mode (it runs
     // unattended, so there is no one to send `/allow-cloud`) with
     // `on_failure` on and an arming built above.
-    let loop_escalate_on_failure = routing_access.escalation.mode
-        == aivyx_config::EscalationMode::Auto
-        && routing_access.escalation.on_failure
-        && escalation_arming.is_some();
+    let loop_escalate_on_failure = routing::loop_escalates_on_failure(
+        &routing_access.escalation,
+        escalation_arming.is_some(),
+    );
 
     // Part 3b (A16) — in `ask` mode, give the guard the hint line it hands
     // back to an armed, untainted session (`RoutingGuard::arm`), naming the
