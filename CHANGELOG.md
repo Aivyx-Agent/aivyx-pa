@@ -37,6 +37,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **Local OpenAI-compatible backends now report token usage.** Keyless
+  providers (`llamacpp`, `jan`, `broker`, and routed OpenAI-compatible or
+  llama-server endpoints) never asked for streamed usage, so every local
+  turn was billed as zero tokens: the cost ledger, `[budget]` caps and the
+  routing classifier's billing all saw nothing. They now request it
+  (`stream_options.include_usage`), which llama.cpp-family servers answer
+  in a final chunk. Found in a live run against Lemonade Server.
 - **Model routing — the routing classifier is wired in.** New
   `[routing.classifier]` (`enabled = false`, `timeout_ms = 2000`). When
   on, a chat conversation with no pinned or sticky model yet is

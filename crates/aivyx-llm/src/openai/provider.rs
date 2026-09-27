@@ -41,9 +41,9 @@ pub struct OpenAiConfig {
     pub api_key: Option<SecretString>,
     pub base_url: Option<String>,
     /// When `true`, the `stream_options.include_usage` field is
-    /// included in request bodies. Cloud OpenAI supports this;
-    /// some Ollama versions may reject unknown fields. Default:
-    /// `true`.
+    /// included in request bodies. Cloud OpenAI and llama.cpp-family
+    /// servers support it; turn it off only for a server that rejects
+    /// unknown fields. Default: `true` (both constructors).
     pub include_stream_usage: bool,
     /// Chapter Emboss (EB.2) — grammar-constrained tool-calling for
     /// **llama.cpp-family** servers (`llama-server`, Jan). When `true`,
@@ -70,13 +70,20 @@ impl OpenAiConfig {
         }
     }
 
-    /// Build a config with no API key. Used for local providers
-    /// like Ollama that don't require authentication.
+    /// Build a config with no API key, for local OpenAI-compatible
+    /// servers (llama-server, Jan, aivyx-broker, routed endpoints).
+    /// Streamed usage is requested: llama.cpp-family servers report it
+    /// in a final `choices: []` chunk, and without it every local turn
+    /// is billed as zero tokens (so `[budget]` caps and the cost ledger
+    /// see nothing). It was once off for old Ollama versions that
+    /// rejected `stream_options`; Ollama now has its own native
+    /// provider. A server that still rejects the field can opt out with
+    /// [`Self::with_include_stream_usage`]`(false)`.
     pub fn without_api_key() -> Self {
         OpenAiConfig {
             api_key: None,
             base_url: None,
-            include_stream_usage: false,
+            include_stream_usage: true,
             constrain_tool_calls: false,
         }
     }
@@ -1203,11 +1210,17 @@ data: [DONE]\n\n";
 
     // ---- Ollama / optional API key tests --------------------------------
 
+    /// Keyless local servers (llama-server, Jan, aivyx-broker, routed
+    /// OpenAI-compatible endpoints) report usage when asked; without it
+    /// every local turn is billed as zero tokens. Verified live against
+    /// Lemonade Server (llama.cpp) on 2026-09-28.
     #[test]
-    fn without_api_key_config_has_none_key_and_no_stream_usage() {
+    fn without_api_key_config_has_none_key_and_requests_stream_usage() {
         let cfg = OpenAiConfig::without_api_key();
         assert!(cfg.api_key.is_none());
-        assert!(!cfg.include_stream_usage);
+        assert!(cfg.include_stream_usage);
+        // The opt-out stays available for a server that rejects the field.
+        assert!(!cfg.with_include_stream_usage(false).include_stream_usage);
     }
 
     #[test]
