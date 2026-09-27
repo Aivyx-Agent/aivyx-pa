@@ -6923,6 +6923,44 @@ async fn run_async(
         ));
     }
 
+    // Part 3b (A16) — arms the daemon agent and the role-switch child for
+    // `on_failure` escalation, over the exact same `routing_guard` the
+    // escalation layer above just wired into `routing_access.escalation_guard`
+    // — the guard the provider reads consent/taint from and the guard the
+    // agent arms must be the same instance, or arming one session would be
+    // invisible to the other. Only built at all when `on_failure` is on;
+    // with it off (the default) nothing here changes what runs — the
+    // compatibility invariant.
+    let escalation_arming: Option<Arc<dyn aivyx_core::EscalationArming>> =
+        if routing_access.escalation.on_failure {
+            routing_guard.as_ref().map(|guard| {
+                Arc::new(aivyx_core::AuditedArming::new(
+                    Arc::clone(guard) as Arc<dyn aivyx_core::EscalationArming>,
+                    Arc::clone(&audit),
+                )) as Arc<dyn aivyx_core::EscalationArming>
+            })
+        } else {
+            None
+        };
+
+    // Part 3b (A16) — in `ask` mode, give the guard the hint line it hands
+    // back to an armed, untainted session (`RoutingGuard::arm`), naming the
+    // first cloud candidate. Nothing to hint without one.
+    if routing_access.escalation.mode == aivyx_config::EscalationMode::Ask
+        && routing_access.escalation.on_failure
+        && let Some(guard) = &routing_guard
+        && let Some(cfg) = config_routing.as_ref()
+    {
+        let default_endpoint =
+            routing::default_endpoint(provider_kind.value, routing_base_url.as_deref());
+        if let Some(first) = routing::cloud_candidates(cfg, &default_endpoint).first() {
+            guard.set_arm_hint(Some(format!(
+                "The local model got stuck; send /allow-cloud and resend to retry on `{}`.",
+                first.id
+            )));
+        }
+    }
+
     // ---- Model routing Part 3a ----------------------------------------
     // `[routing]` absent or `enabled = false` ⇒ `provider` comes back as
     // the very same `Arc`. Otherwise it becomes a `RoutedProvider` whose
@@ -8991,6 +9029,10 @@ async fn run_async(
     // Model routing Part 3b — child turns share the one taint sink.
     let taint_for_factory = taint_sink.clone();
     let sensitive_for_factory = config_routing_sensitive.clone();
+    // Model routing Part 3b (A16) — the role-switch child arms the same
+    // guard the daemon agent does; see the `escalation_arming` build site
+    // above for why it must be the same instance.
+    let arming_for_factory = escalation_arming.clone();
     let audit_for_factory = Arc::clone(&audit);
     let tools_for_factory = Arc::clone(&tools);
     // aivyx-checkpoint — the closure below is `move`, so it needs its
@@ -9244,6 +9286,12 @@ async fn run_async(
                     sensitive_for_factory.tool_prefixes.clone(),
                 )
                 .with_sensitive_channels(sensitive_for_factory.channels.clone()),
+            None => child_agent,
+        };
+        // Model routing Part 3b (A16) — the same guard, shared with the
+        // daemon agent (see the `escalation_arming` build site above).
+        let child_agent = match &arming_for_factory {
+            Some(arming) => child_agent.with_escalation_arming(Arc::clone(arming)),
             None => child_agent,
         };
         let child_agent = aivyx_core::TurnSafety::interactive(
@@ -9788,6 +9836,13 @@ async fn run_async(
                     config_routing_sensitive.tool_prefixes.clone(),
                 )
                 .with_sensitive_channels(config_routing_sensitive.channels.clone()),
+            None => daemon_agent,
+        };
+        // Model routing Part 3b (A16) — arm the daemon agent over the same
+        // guard `routing_access.escalation_guard` reads from (see the
+        // `escalation_arming` build site above).
+        let daemon_agent = match &escalation_arming {
+            Some(arming) => daemon_agent.with_escalation_arming(Arc::clone(arming)),
             None => daemon_agent,
         };
         let daemon_agent = aivyx_core::TurnSafety::interactive(

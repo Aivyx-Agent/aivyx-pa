@@ -98,15 +98,22 @@ impl Tool for RoutingStatusTool {
         let escalation = match self.routed.escalation_settings() {
             None => Value::Null,
             Some((mode, no_local_candidate, tiers)) => {
+                let session = ctx.session_id.to_string();
                 let (tainted, cloud_allowed) = self
                     .routed
-                    .escalation_state(&ctx.session_id.to_string())
+                    .escalation_state(&session)
                     .await
                     .unwrap_or((None, false));
+                // A16 — "armed" here means the *next* turn will escalate
+                // (the ARMED set), not that a call is escalating mid-turn
+                // right now (the ACTIVE set `EscalationGuard::armed`
+                // reads) — that's the question `routing.status` answers.
+                let armed = self.routed.escalation_armed_next(&session);
                 json!({
                     "mode": mode.name(),
                     "no_local_candidate": no_local_candidate,
                     "tiers": tiers.iter().map(|t| t.name()).collect::<Vec<_>>(),
+                    "on_failure": self.routed.escalation_on_failure().unwrap_or(false),
                     "cloud_candidates": self
                         .routed
                         .escalation_candidates()
@@ -116,6 +123,7 @@ impl Tool for RoutingStatusTool {
                     "this_conversation": {
                         "tainted": tainted,
                         "cloud_allowed": cloud_allowed,
+                        "armed": armed,
                     },
                 })
             }
@@ -532,6 +540,7 @@ mod routing_tool_tests {
     struct GuardFor {
         tainted: String,
         allowed: String,
+        armed: String,
     }
 
     #[async_trait]
@@ -541,6 +550,9 @@ mod routing_tool_tests {
         }
         fn consented(&self, session: &str) -> bool {
             session == self.allowed
+        }
+        fn armed_next(&self, session: &str) -> bool {
+            session == self.armed
         }
     }
 
@@ -555,6 +567,7 @@ mod routing_tool_tests {
     async fn status_reports_escalation_and_this_conversations_state() {
         let tainted = SessionId::new();
         let allowed = SessionId::new();
+        let armed = SessionId::new();
         let mut claude = ModelProfile::new("claude", EndpointRef::new("cloud"));
         claude.tier = Tier::Large;
         claude.capabilities.insert(Capability::Completion);
@@ -565,10 +578,11 @@ mod routing_tool_tests {
             mode: aivyx_llm::EscalationMode::Ask,
             no_local_candidate: true,
             tiers: vec![TaskKind::Plan],
-            on_failure: false,
+            on_failure: true,
             guard: Arc::new(GuardFor {
                 tainted: tainted.to_string(),
                 allowed: allowed.to_string(),
+                armed: armed.to_string(),
             }),
             observer: Arc::new(|_: &aivyx_llm::EscalationRecord| {}),
         }));
@@ -579,14 +593,46 @@ mod routing_tool_tests {
         assert_eq!(esc["mode"], "ask");
         assert_eq!(esc["no_local_candidate"], true);
         assert_eq!(esc["tiers"], json!(["plan"]));
+        assert_eq!(esc["on_failure"], true);
         assert_eq!(esc["cloud_candidates"][0]["model"], "claude@cloud");
         assert_eq!(esc["this_conversation"]["tainted"], "gmail.search output");
         assert_eq!(esc["this_conversation"]["cloud_allowed"], false);
+        assert_eq!(esc["this_conversation"]["armed"], false);
 
         let output = completed(run_execute(&tool, allowed, json!({})).await);
         let this = &output["escalation"]["this_conversation"];
         assert_eq!(this["tainted"], Value::Null);
         assert_eq!(this["cloud_allowed"], true);
+        assert_eq!(this["armed"], false);
+
+        let output = completed(run_execute(&tool, armed, json!({})).await);
+        let this = &output["escalation"]["this_conversation"];
+        assert_eq!(this["armed"], true, "the armed session's next turn will escalate");
+    }
+
+    #[tokio::test]
+    async fn status_reports_on_failure_false_when_configured_off() {
+        let session = SessionId::new();
+        let mut claude = ModelProfile::new("claude", EndpointRef::new("cloud"));
+        claude.locality = aivyx_route::Locality::Cloud;
+        let base = Arc::try_unwrap(routed()).ok().expect("sole owner");
+        let routed = Arc::new(base.with_escalation(aivyx_llm::EscalationSetup {
+            router: Router::new(vec![claude], TaskOverrides::default()).with_allow_cloud(true),
+            mode: aivyx_llm::EscalationMode::Auto,
+            no_local_candidate: false,
+            tiers: vec![],
+            on_failure: false,
+            guard: Arc::new(GuardFor {
+                tainted: "nobody".to_string(),
+                allowed: "nobody".to_string(),
+                armed: "nobody".to_string(),
+            }),
+            observer: Arc::new(|_: &aivyx_llm::EscalationRecord| {}),
+        }));
+        let tool = RoutingStatusTool::new(routed);
+        let output = completed(run_execute(&tool, session, json!({})).await);
+        assert_eq!(output["escalation"]["on_failure"], false);
+        assert_eq!(output["escalation"]["this_conversation"]["armed"], false);
     }
 
     #[tokio::test]

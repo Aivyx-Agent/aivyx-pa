@@ -285,7 +285,10 @@ impl ProfileRefresher for DiscoveryRefresher {
 /// The models on `[routing.endpoints.*]` cloud endpoints — the escalation
 /// candidates. Cloud endpoints are never probed, so these are exactly the
 /// roster entries naming them (merged as unverified).
-fn cloud_candidates(config: &RoutingConfig, default: &DefaultEndpoint) -> Vec<ModelProfile> {
+pub(crate) fn cloud_candidates(
+    config: &RoutingConfig,
+    default: &DefaultEndpoint,
+) -> Vec<ModelProfile> {
     merge(config, default, &[])
         .into_iter()
         .filter(|p| {
@@ -582,9 +585,7 @@ pub(crate) async fn wrap_with_routing(
                     .iter()
                     .map(|t| t.parse().unwrap_or_else(|never| match never {}))
                     .collect(),
-                // Task 5 wires the real `[routing.escalation] on_failure`
-                // value through; for now escalation never arms from here.
-                on_failure: false,
+                on_failure: access.escalation.on_failure,
                 guard: Arc::clone(guard),
                 observer: access
                     .escalation_observer
@@ -881,8 +882,9 @@ pub(crate) fn render_escalation(esc: &EscalationConfig, cloud: &[ModelProfile]) 
         EscalationMode::Ask => "ask",
         EscalationMode::Auto => "auto",
     };
+    let on_failure = if esc.on_failure { "on" } else { "off" };
     let mut out = format!(
-        "\nCloud escalation: mode {mode}; triggers: {}{}\n",
+        "\nCloud escalation: mode {mode}; on_failure: {on_failure}; triggers: {}{}\n",
         if esc.no_local_candidate {
             "no_local_candidate"
         } else {
@@ -1562,6 +1564,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn escalation_on_failure_reflects_the_configured_flag() {
+        let cfg = parse(
+            "[routing]\nenabled = true\ndiscover = false\n\
+             [routing.endpoints.claude]\nkind = \"anthropic\"\n\
+             [[routing.models]]\nid = \"claude-big\"\nendpoint = \"claude\"\ntier = \"large\"\n\
+             capabilities = [\"completion\", \"tools\"]\n",
+        );
+        for (on_failure, expected) in [(true, Some(true)), (false, Some(false))] {
+            let access = CloudAccess {
+                escalation: EscalationConfig {
+                    on_failure,
+                    ..EscalationConfig::default()
+                },
+                escalation_guard: Some(Arc::new(NoTaint)),
+                ..cloud_access()
+            };
+            let (_, routed) = wrap_with_routing(
+                Some(&cfg),
+                &access,
+                ProviderKind::Ollama,
+                None,
+                "qwen3:8b",
+                unused_provider(),
+                None,
+                DefaultResidency::None,
+            )
+            .await
+            .unwrap();
+            let routed = routed.expect("routing is on");
+            assert_eq!(
+                routed.escalation_on_failure(),
+                expected,
+                "on_failure={on_failure}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn cloud_endpoint_models_are_kept_out_of_the_local_router() {
         let local = "[routing]\nenabled = true\ndiscover = false\n\
              [[routing.models]]\nid = \"qwen3:32b\"\ntier = \"large\"\n";
@@ -1869,18 +1909,21 @@ mod tests {
     fn render_status_lists_escalation_settings_and_cloud_candidates() {
         let mut claude = ModelProfile::new("claude-big", EndpointRef::new("claude"));
         claude.capabilities.insert(Capability::Tools);
-        let esc = EscalationConfig {
-            mode: EscalationMode::Ask,
-            no_local_candidate: true,
-            tiers: vec!["plan".into()],
-            on_failure: false,
-        };
-        let text = render_escalation(&esc, &[claude]);
-        assert!(text.contains("mode ask"), "{text}");
-        assert!(text.contains("no_local_candidate"), "{text}");
-        assert!(text.contains("plan"), "{text}");
-        assert!(text.contains("claude-big@claude"), "{text}");
-        assert!(text.contains("/allow-cloud"), "{text}");
+        for (on_failure, marker) in [(false, "on_failure: off"), (true, "on_failure: on")] {
+            let esc = EscalationConfig {
+                mode: EscalationMode::Ask,
+                no_local_candidate: true,
+                tiers: vec!["plan".into()],
+                on_failure,
+            };
+            let text = render_escalation(&esc, &[claude.clone()]);
+            assert!(text.contains("mode ask"), "{text}");
+            assert!(text.contains("no_local_candidate"), "{text}");
+            assert!(text.contains("plan"), "{text}");
+            assert!(text.contains("claude-big@claude"), "{text}");
+            assert!(text.contains("/allow-cloud"), "{text}");
+            assert!(text.contains(marker), "{text}");
+        }
     }
 
     #[test]

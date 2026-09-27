@@ -129,6 +129,17 @@ impl RoutedProvider {
         Some((esc.guard.taint(session).await, esc.guard.consented(session)))
     }
 
+    /// Is `session` armed for its *next* turn (A16) — `false` when
+    /// escalation isn't configured. For `routing.status`'s
+    /// `this_conversation.armed`; see [`EscalationGuard::armed_next`]'s
+    /// doc for why this reads the armed (next-turn), not active
+    /// (this-turn), set.
+    pub fn escalation_armed_next(&self, session: &str) -> bool {
+        self.escalation
+            .as_ref()
+            .is_some_and(|esc| esc.guard.armed_next(session))
+    }
+
     /// The cloud escalation candidates (Part 3b), empty when escalation
     /// isn't configured. For `routing.status`.
     pub fn escalation_candidates(&self) -> Vec<ModelProfile> {

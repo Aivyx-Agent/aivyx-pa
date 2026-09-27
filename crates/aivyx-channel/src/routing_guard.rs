@@ -250,6 +250,12 @@ impl aivyx_llm::escalation::EscalationGuard for RoutingGuard {
         lock(&self.arm_state).active.contains(session)
     }
 
+    fn armed_next(&self, session: &str) -> bool {
+        // The *armed* set (next turn), never `active` (this turn) — the
+        // other half of the split `armed` reads; see `ArmState::armed`.
+        lock(&self.arm_state).armed.contains(session)
+    }
+
     fn note_consent_requested(&self, session: &str) {
         // Only recorded while the session is still active this turn — an
         // OnFailure consent request can only come from an active-turn
@@ -493,6 +499,28 @@ mod tests {
             !guard.armed("s1"),
             "one-shot: a begin with nothing armed doesn't activate"
         );
+    }
+
+    #[tokio::test]
+    async fn armed_next_reads_the_armed_set_not_the_active_one() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+
+        assert!(!guard.armed_next("s1"), "unarmed session");
+        assert!(guard.arm("s1", "looping").await.0);
+        assert!(guard.armed_next("s1"), "armed for its next turn");
+        assert!(!guard.armed("s1"), "not active yet — the turn hasn't begun");
+
+        guard.begin_armed_turn("s1");
+        assert!(guard.armed("s1"), "now active this turn");
+        assert!(
+            !guard.armed_next("s1"),
+            "moved out of the armed set into active — one-shot"
+        );
+
+        guard.end_armed_turn("s1");
+        assert!(!guard.armed("s1"));
+        assert!(!guard.armed_next("s1"), "cleared, not re-armed");
     }
 
     #[tokio::test]

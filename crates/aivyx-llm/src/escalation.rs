@@ -31,6 +31,18 @@ pub trait EscalationGuard: Send + Sync {
         false
     }
 
+    /// Is `session` armed for its *next* turn — i.e. will the next turn
+    /// escalate, before it has even started? This is the `armed` set
+    /// (`RoutingGuard`'s `ArmState::armed`), never the `active` set
+    /// [`Self::armed`] reads. `routing.status` reports this as
+    /// `this_conversation.armed`, since that's the question an operator
+    /// looking at status actually has ("will my next message escalate?"),
+    /// not whether a call is escalating *right now* mid-turn. Default:
+    /// never armed.
+    fn armed_next(&self, _session: &str) -> bool {
+        false
+    }
+
     /// Record that `session`'s armed `on_failure` escalation stopped for
     /// operator consent, so the arming can be re-surfaced. Default: no-op.
     fn note_consent_requested(&self, _session: &str) {}
