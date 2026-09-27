@@ -7140,6 +7140,33 @@ mod tests {
         assert_eq!((count(&log, "begin:"), count(&log, "end:")), (1, 1));
     }
 
+    #[tokio::test]
+    async fn arming_and_bracketing_key_on_the_channel_session_not_the_message_session() {
+        // Final review (b) — the daemon's gate-resume turn builds its
+        // message with a fresh `SessionId` but runs on the conversation's
+        // bridge, so the message and channel sessions differ. The
+        // conversation is the channel's session: begin, arm and end must
+        // all carry it.
+        let log = ArmLog::default();
+        let agent = looping_agent(RecordingAudit::new())
+            .with_escalation_arming(RecordingArming::new(log.clone(), None));
+        let channel = ArmChannel::new(log.clone());
+        let session = channel.session.to_string();
+        let other = SessionId::new();
+        assert_ne!(other, channel.session);
+        let _ = agent.turn(Message::text(other, "resume"), &channel).await;
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                format!("begin:{session}"),
+                format!("arm:{session}:looping"),
+                "finalize".to_string(),
+                format!("end:{session}"),
+            ],
+            "every arming call uses the channel's session"
+        );
+    }
+
     /// A minimal stateful arming with `RoutingGuard`'s armed → active →
     /// cleared shape, so a test can observe the active mark mid-turn.
     #[derive(Default)]
