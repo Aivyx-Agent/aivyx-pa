@@ -23,6 +23,17 @@ pub trait EscalationGuard: Send + Sync {
     /// process's lifetime? Consent is in-memory only (a restart re-asks)
     /// and never overrides a taint.
     fn consented(&self, session: &str) -> bool;
+
+    /// Has `session` been armed for `on_failure` escalation by a failed
+    /// local turn (A16)? Default: never armed — the guard state that sets
+    /// armed marks lands in a later task; until then this is a no-op.
+    fn armed(&self, _session: &str) -> bool {
+        false
+    }
+
+    /// Record that `session`'s armed `on_failure` escalation stopped for
+    /// operator consent, so the arming can be re-surfaced. Default: no-op.
+    fn note_consent_requested(&self, _session: &str) {}
 }
 
 /// How cloud escalation is gated. Mirrors `[routing.escalation] mode`.
@@ -51,6 +62,8 @@ pub enum Trigger {
     NoLocalCandidate,
     /// The task kind is listed in `[routing.escalation] tiers`.
     Tier,
+    /// The conversation's previous turn failed locally (A16).
+    OnFailure,
 }
 
 impl Trigger {
@@ -59,6 +72,7 @@ impl Trigger {
         match self {
             Trigger::NoLocalCandidate => "no_local_candidate",
             Trigger::Tier => "tier",
+            Trigger::OnFailure => "on_failure",
         }
     }
 }
@@ -200,5 +214,6 @@ mod tests {
         assert_eq!(EscalationMode::Never.name(), "never");
         assert_eq!(Trigger::NoLocalCandidate.name(), "no_local_candidate");
         assert_eq!(Trigger::Tier.name(), "tier");
+        assert_eq!(Trigger::OnFailure.name(), "on_failure");
     }
 }

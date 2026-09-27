@@ -8836,6 +8836,24 @@ fn routing_escalation_fields_parse() {
     }
 }
 
+#[test]
+fn routing_escalation_on_failure_field_parses() {
+    let _env = EnvScope::new();
+    assert!(!crate::EscalationConfig::default().on_failure);
+
+    let cfg = load_with_toml(
+        "\n[routing]\nenabled = true\n[routing.escalation]\non_failure = true\n",
+        "routing-esc-on-failure-true",
+    );
+    assert!(cfg.routing_escalation.on_failure);
+
+    let cfg = load_with_toml(
+        "\n[routing]\nenabled = true\n[routing.escalation]\nmode = \"auto\"\n",
+        "routing-esc-on-failure-default",
+    );
+    assert!(!cfg.routing_escalation.on_failure);
+}
+
 /// The shared `[routing]` keys parse exactly as the shared type parses
 /// them on its own, with aivyx-pa's sub-tables alongside (the flattened
 /// wrapper must not lose or mistype any of them).
@@ -8891,7 +8909,7 @@ fn routing_escalation_rejects_an_unknown_mode() {
 #[test]
 fn routing_escalation_rejects_unknown_keys() {
     let _env = EnvScope::new();
-    for key in ["on_failure = true", "mdoe = \"never\""] {
+    for key in ["on_failur = true", "mdoe = \"never\""] {
         let r = load_with_toml_result(
             &format!("\n[routing]\n[routing.escalation]\n{key}\n"),
             "routing-esc-unknown-key",

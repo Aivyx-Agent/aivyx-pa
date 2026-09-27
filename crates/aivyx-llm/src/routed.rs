@@ -46,6 +46,9 @@ pub struct EscalationSetup {
     pub no_local_candidate: bool,
     /// `[routing.escalation] tiers` — task kinds that go straight to cloud.
     pub tiers: Vec<TaskKind>,
+    /// `[routing.escalation] on_failure` (A16) — an armed session (its
+    /// previous turn failed locally) escalates before `tiers` is checked.
+    pub on_failure: bool,
     pub guard: Arc<dyn EscalationGuard>,
     /// Every escalation decision (the daemon audits through it).
     pub observer: EscalationObserver,
@@ -110,6 +113,12 @@ impl RoutedProvider {
         self.escalation
             .as_ref()
             .map(|esc| (esc.mode, esc.no_local_candidate, esc.tiers.clone()))
+    }
+
+    /// `[routing.escalation] on_failure` (Part 3b / A16), `None` when
+    /// escalation isn't configured.
+    pub fn escalation_on_failure(&self) -> Option<bool> {
+        self.escalation.as_ref().map(|esc| esc.on_failure)
     }
 
     /// `session`'s escalation state (Part 3b) — its taint reason, if any,
@@ -270,6 +279,11 @@ impl RoutedProvider {
                 Escalated::Blocked(reason)
             }
             EscalationVerdict::NeedsConsent => {
+                if trigger == Trigger::OnFailure
+                    && let Some(s) = session
+                {
+                    esc.guard.note_consent_requested(s);
+                }
                 let plan = match esc.router.plan(query, Instant::now()) {
                     Ok(plan) => plan,
                     Err(e) => {
@@ -394,10 +408,31 @@ impl LlmProvider for RoutedProvider {
             estimated_prompt_tokens: hint.estimated_prompt_tokens,
         };
 
-        // A task kind listed in `tiers` asks for the cloud first; if
-        // escalation can't happen it is served locally as usual.
+        // Task 2 / A16 — a session armed by a failed local turn escalates
+        // before `tiers` is even checked. If escalation can't happen it
+        // falls through exactly like the `tiers` block below.
         let mut blocked: Option<String> = None;
         if let Some(esc) = &self.escalation
+            && esc.on_failure
+            && let Some(s) = hint.session.as_deref()
+            && esc.guard.armed(s)
+        {
+            match self
+                .escalate(esc, Trigger::OnFailure, &query, &request, cancellation)
+                .await
+            {
+                Escalated::Done(result) => return result,
+                Escalated::Blocked(reason) => blocked = Some(reason),
+                Escalated::Disabled => {}
+            }
+        }
+
+        // A task kind listed in `tiers` asks for the cloud first; if
+        // escalation can't happen it is served locally as usual. Only
+        // tried when `on_failure` above didn't already produce a
+        // `Done`/`Blocked` result.
+        if blocked.is_none()
+            && let Some(esc) = &self.escalation
             && esc.tiers.contains(&hint.task)
         {
             match self
@@ -1112,11 +1147,15 @@ mod tests {
         EscalationGuard, EscalationMode, EscalationRecord, Trigger, payload_hash,
     };
 
-    /// Per-session taint and consent, set by the test.
+    /// Per-session taint, consent and (Task 2) `on_failure` arming, set by
+    /// the test. `consent_requested` records every session
+    /// `note_consent_requested` was called for.
     #[derive(Default)]
     struct FakeGuard {
         taint: Mutex<HashMap<String, String>>,
         consent: Mutex<Vec<String>>,
+        armed: Mutex<Vec<String>>,
+        consent_requested: Mutex<Vec<String>>,
     }
 
     impl FakeGuard {
@@ -1130,6 +1169,22 @@ mod tests {
             g.consent.lock().unwrap().push(session.into());
             Arc::new(g)
         }
+        /// `session` is armed for `on_failure` (untainted).
+        fn armed_session(session: &str) -> Arc<Self> {
+            let g = FakeGuard::default();
+            g.armed.lock().unwrap().push(session.into());
+            Arc::new(g)
+        }
+        /// `session` is both armed for `on_failure` and tainted.
+        fn armed_and_tainted(session: &str, reason: &str) -> Arc<Self> {
+            let g = FakeGuard::default();
+            g.armed.lock().unwrap().push(session.into());
+            g.taint.lock().unwrap().insert(session.into(), reason.into());
+            Arc::new(g)
+        }
+        fn consent_requested_sessions(&self) -> Vec<String> {
+            self.consent_requested.lock().unwrap().clone()
+        }
     }
 
     #[async_trait]
@@ -1139,6 +1194,12 @@ mod tests {
         }
         fn consented(&self, session: &str) -> bool {
             self.consent.lock().unwrap().iter().any(|s| s == session)
+        }
+        fn armed(&self, session: &str) -> bool {
+            self.armed.lock().unwrap().iter().any(|s| s == session)
+        }
+        fn note_consent_requested(&self, session: &str) {
+            self.consent_requested.lock().unwrap().push(session.into());
         }
     }
 
@@ -1160,12 +1221,35 @@ mod tests {
         escalating_to(Scripted::ok(), mode, no_local_candidate, tiers, guard)
     }
 
-    /// [`escalating`], with `cloud` serving the cloud endpoint.
+    /// [`escalating`], with `cloud` serving the cloud endpoint. `on_failure`
+    /// stays off — see [`escalating_armed`] for Task 2's trigger.
     fn escalating_to(
         cloud: Arc<Scripted>,
         mode: EscalationMode,
         no_local_candidate: bool,
         tiers: Vec<TaskKind>,
+        guard: Arc<dyn EscalationGuard>,
+    ) -> (Fixture, Arc<Scripted>, Arc<Mutex<Vec<EscalationRecord>>>) {
+        escalating_full(cloud, mode, no_local_candidate, tiers, false, guard)
+    }
+
+    /// [`escalating`] / [`escalating_to`], with `on_failure` also set
+    /// (Task 2's `on_failure` trigger).
+    fn escalating_armed(
+        mode: EscalationMode,
+        on_failure: bool,
+        guard: Arc<dyn EscalationGuard>,
+    ) -> (Fixture, Arc<Scripted>, Arc<Mutex<Vec<EscalationRecord>>>) {
+        escalating_full(Scripted::ok(), mode, false, vec![], on_failure, guard)
+    }
+
+    /// The full `EscalationSetup`, every field explicit.
+    fn escalating_full(
+        cloud: Arc<Scripted>,
+        mode: EscalationMode,
+        no_local_candidate: bool,
+        tiers: Vec<TaskKind>,
+        on_failure: bool,
         guard: Arc<dyn EscalationGuard>,
     ) -> (Fixture, Arc<Scripted>, Arc<Mutex<Vec<EscalationRecord>>>) {
         let mut f = fixture(vec![default_profile()], vec![("cloud", Arc::clone(&cloud))]);
@@ -1177,6 +1261,7 @@ mod tests {
             mode,
             no_local_candidate,
             tiers,
+            on_failure,
             guard,
             observer: Arc::new(move |r: &EscalationRecord| sink.lock().unwrap().push(r.clone())),
         });
@@ -1382,5 +1467,105 @@ mod tests {
         call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
         assert_eq!(f.routed.last_served("s"), Some(key("gpu", "big")));
         assert_eq!(f.routed.last_served("other"), None);
+    }
+
+    // ---- Task 2: the `on_failure` escalation trigger (A16) ----
+
+    #[tokio::test]
+    async fn escalation_on_failure_reports_the_configured_flag() {
+        let (f, _cloud, _records) =
+            escalating_armed(EscalationMode::Auto, true, Arc::new(FakeGuard::default()));
+        assert_eq!(f.routed.escalation_on_failure(), Some(true));
+
+        let f = fixture(vec![default_profile()], Vec::new());
+        assert_eq!(f.routed.escalation_on_failure(), None);
+    }
+
+    #[tokio::test]
+    async fn an_armed_session_escalates_first_even_when_local_could_serve_it() {
+        let guard = FakeGuard::armed_session("s");
+        let (f, cloud, records) = escalating_armed(EscalationMode::Auto, true, guard);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert_eq!(cloud.seen().len(), 1);
+        assert!(f.default.seen().is_empty());
+        let recs = records.lock().unwrap().clone();
+        assert_eq!(recs.len(), 1, "got {recs:?}");
+        assert_eq!(recs[0].trigger, Trigger::OnFailure);
+        assert_eq!(recs[0].outcome, "allowed");
+    }
+
+    #[tokio::test]
+    async fn an_armed_session_without_consent_in_ask_names_on_failure() {
+        let guard = FakeGuard::armed_session("s");
+        let (f, cloud, records) = escalating_armed(
+            EscalationMode::Ask,
+            true,
+            Arc::clone(&guard) as Arc<dyn EscalationGuard>,
+        );
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        let Err(LlmError::Routing(msg)) =
+            call(&f.routed, request(&messages, &[], Some(hint))).await
+        else {
+            panic!("expected a consent request");
+        };
+        assert!(msg.contains("on_failure"), "{msg}");
+        assert!(cloud.seen().is_empty());
+        let recs = records.lock().unwrap().clone();
+        assert_eq!(recs[0].outcome, "consent_requested");
+        assert_eq!(recs[0].trigger, Trigger::OnFailure);
+        assert_eq!(guard.consent_requested_sessions(), vec!["s".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn an_armed_and_tainted_session_blocks_on_failure_and_serves_locally() {
+        let guard = FakeGuard::armed_and_tainted("s", "gmail.search output");
+        let (f, cloud, records) = escalating_armed(EscalationMode::Auto, true, guard);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert!(cloud.seen().is_empty());
+        assert_eq!(f.default.seen().len(), 1);
+        let recs = records.lock().unwrap().clone();
+        assert_eq!(recs.len(), 1, "got {recs:?}");
+        assert_eq!(recs[0].trigger, Trigger::OnFailure);
+        assert_eq!(recs[0].outcome, "blocked_taint");
+    }
+
+    #[tokio::test]
+    async fn on_failure_off_ignores_an_armed_session() {
+        let guard = FakeGuard::armed_session("s");
+        let (f, cloud, records) = escalating_armed(EscalationMode::Auto, false, guard);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert!(cloud.seen().is_empty());
+        assert_eq!(f.default.seen().len(), 1);
+        assert!(records.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unarmed_session_produces_no_on_failure_record() {
+        let (f, cloud, records) =
+            escalating_armed(EscalationMode::Auto, true, Arc::new(FakeGuard::default()));
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert!(cloud.seen().is_empty());
+        assert_eq!(f.default.seen().len(), 1);
+        assert!(records.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_call_with_no_session_never_escalates_on_failure_even_if_armed() {
+        let guard = FakeGuard::armed_session("s");
+        let (f, cloud, records) = escalating_armed(EscalationMode::Auto, true, guard);
+        let (messages, hint) = routed(TaskKind::Chat, None);
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert!(cloud.seen().is_empty());
+        assert_eq!(f.default.seen().len(), 1);
+        assert!(records.lock().unwrap().is_empty());
     }
 }

@@ -565,6 +565,7 @@ mod routing_tool_tests {
             mode: aivyx_llm::EscalationMode::Ask,
             no_local_candidate: true,
             tiers: vec![TaskKind::Plan],
+            on_failure: false,
             guard: Arc::new(GuardFor {
                 tainted: tainted.to_string(),
                 allowed: allowed.to_string(),

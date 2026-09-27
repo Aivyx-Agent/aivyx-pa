@@ -582,6 +582,9 @@ pub(crate) async fn wrap_with_routing(
                     .iter()
                     .map(|t| t.parse().unwrap_or_else(|never| match never {}))
                     .collect(),
+                // Task 5 wires the real `[routing.escalation] on_failure`
+                // value through; for now escalation never arms from here.
+                on_failure: false,
                 guard: Arc::clone(guard),
                 observer: access
                     .escalation_observer
@@ -1863,6 +1866,7 @@ mod tests {
             mode: EscalationMode::Ask,
             no_local_candidate: true,
             tiers: vec!["plan".into()],
+            on_failure: false,
         };
         let text = render_escalation(&esc, &[claude]);
         assert!(text.contains("mode ask"), "{text}");

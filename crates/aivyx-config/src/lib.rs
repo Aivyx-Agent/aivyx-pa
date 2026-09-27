@@ -2860,8 +2860,7 @@ pub enum EscalationMode {
 
 /// Model routing Part 3b — `[routing.escalation]`. Only matters when a
 /// cloud endpoint is configured under `[routing.endpoints]`. Unknown keys
-/// (e.g. the deferred `on_failure`) are a config error, so a typo can't
-/// silently weaken a privacy setting.
+/// are a config error, so a typo can't silently weaken a privacy setting.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EscalationConfig {
@@ -2871,6 +2870,10 @@ pub struct EscalationConfig {
     /// `TaskKind` names (`[routing.tasks]` keys, e.g. `"plan"`) that
     /// always prefer a cloud endpoint.
     pub tiers: Vec<String>,
+    /// A16 — a session "armed" by a failed local turn escalates before
+    /// `tiers` is even checked. Only takes effect with `mode = "auto"`
+    /// (Amendment A16's binding constraint); default `false`.
+    pub on_failure: bool,
 }
 
 impl Default for EscalationConfig {
@@ -2879,6 +2882,7 @@ impl Default for EscalationConfig {
             mode: EscalationMode::Ask,
             no_local_candidate: true,
             tiers: Vec::new(),
+            on_failure: false,
         }
     }
 }
