@@ -76,7 +76,10 @@ is covered by tests in the implementing phase.
    `[routing.endpoints]` with the operator's own keys (rule 4); every
    decision it makes is audited with a payload hash, never content
    (rule 5); and where `ask` mode applies to it, consent stays
-   in-memory and per-conversation (rule 6).
+   in-memory and per-conversation (rule 6). A cloud model that serves
+   an armed turn never becomes the conversation's sticky model: the
+   conversation stays on its local model, and only that one turn went
+   to the cloud.
 2. **The armed mark is a new, distinct piece of in-memory state, held
    to the same standard as consent.** One-shot, per conversation,
    never written to disk: a daemon restart clears it, exactly as it
