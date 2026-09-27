@@ -430,6 +430,19 @@ cloud `[routing.endpoints.*]` entry, and then passes a gate
   cloud model, blocked by taint, disabled) is a `CloudEscalation` audit
   entry with a SHA-256 hash of the would-be payload; grants are
   `CloudConsentGranted`; the first taint is `ConversationTainted`.
+- **`on_failure` escalates one turn, through the same gate (A16).**
+  With `[routing.escalation] on_failure = true`, a stuck local turn
+  (`Looping`, or both tool-call repair rounds spent) — or, in the
+  autonomous loop, a Verdict FAIL or a stall — only *arms* the
+  conversation's **next** turn; nothing is replayed and no turn changes
+  model mid-way. That next turn goes through the gate above unchanged:
+  taint still blocks it in every mode, `ask` still needs
+  `/allow-cloud`, a call without a session never escalates, and the
+  cloud model serving an armed turn never becomes the conversation's
+  sticky model. Arming is audited once per new mark (`EscalationArmed`)
+  and each decision as a `CloudEscalation` with trigger `on_failure`;
+  marks are in memory only. The loop arms only with `mode = "auto"`,
+  and a stalled run gets at most one armed rescue iteration.
 
 **Residual risk:** a sensitive source the taint rules don't know about
 (an MCP or third-party tool whose name matches no `[routing.sensitive]
@@ -445,6 +458,10 @@ including the operator Profile and the reflection-written Persona, which
 are derived from past conversations (tainted ones included); operators
 for whom that is private should keep `mode = "never"`. Once a call is
 escalated, the cloud provider's own retention terms apply (§5.5).
+With `on_failure = true` and `mode = "auto"`, a local model's failure
+moves the conversation's next turn — and, for the autonomous loop, the
+next iteration — to the cloud without a prompt; the operator enabled
+exactly that by setting both, and taint still blocks it.
 
 ## 5. Threats we explicitly do not defend against
 

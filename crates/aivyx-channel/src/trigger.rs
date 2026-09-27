@@ -158,6 +158,11 @@ pub struct TriggerDispatch {
     /// behind a gate no one will answer — it's recorded as a refusal and the
     /// mission ends.
     gate_policy: GatePolicy,
+    /// Model routing Part 3b (A16) — the `on_failure` arming, attached only
+    /// when `on_failure` is on. [`Self::fire_armed`] arms the fired turn's
+    /// conversation through it before the turn runs; `None` (the default)
+    /// ⇒ nothing is ever armed.
+    arming: Option<Arc<dyn aivyx_core::EscalationArming>>,
 }
 
 /// Phase 73 — per-target retry + rate-limit policy snapshot.
@@ -274,7 +279,19 @@ impl TriggerDispatch {
             rate_limit_registry: Arc::new(RateLimitRegistry::new()),
             // Trigger fires are operator-absent → headless by default.
             gate_policy: GatePolicy::RejectAndAbort,
+            arming: None,
         }
+    }
+
+    /// Model routing Part 3b (A16) — attach the `on_failure` arming so
+    /// [`Self::fire_armed`] can arm a fired turn for cloud escalation. The
+    /// daemon attaches it only when `on_failure` is on.
+    pub fn with_escalation_arming(
+        mut self,
+        arming: Arc<dyn aivyx_core::EscalationArming>,
+    ) -> Self {
+        self.arming = Some(arming);
+        self
     }
 
     /// Chapter H — override the gate posture (e.g. an operator-watched webhook
@@ -354,6 +371,36 @@ impl TriggerDispatch {
         notify_targets: &[String],
         notify_when: aivyx_config::NotifyWhen,
     ) -> Duration {
+        self.fire_armed(
+            source,
+            trigger_id,
+            prompt,
+            wrap_mission,
+            notify_targets,
+            notify_when,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::fire`], optionally arming the turn for `on_failure` cloud
+    /// escalation (model routing Part 3b, A16). With `arm_signal = Some(..)`
+    /// and an arming attached ([`Self::with_escalation_arming`]), the fired
+    /// turn's conversation — the channel's session, the key the agent
+    /// brackets its turn with — is armed immediately before `agent.turn`,
+    /// so exactly this turn may escalate (under the routing guard's usual
+    /// taint / mode gate). `None`, or no arming attached, is exactly `fire`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn fire_armed(
+        &self,
+        source: TriggerSource,
+        trigger_id: &str,
+        prompt: &str,
+        wrap_mission: bool,
+        notify_targets: &[String],
+        notify_when: aivyx_config::NotifyWhen,
+        arm_signal: Option<&'static str>,
+    ) -> Duration {
         eprintln!(
             "aivyx-pa trigger: firing {source} {trigger_id:?} (prompt={prompt:?}, mission={wrap_mission})",
         );
@@ -421,6 +468,15 @@ impl TriggerDispatch {
 
         let start = std::time::Instant::now();
         let _guard = self.turn_lock.lock().await;
+        if let (Some(signal), Some(arming)) = (arm_signal, &self.arming) {
+            let session = channel.session_id().to_string();
+            let (newly, _hint) = arming.arm(&session, signal).await;
+            eprintln!(
+                "aivyx-pa trigger: {source} {trigger_id:?} armed for on_failure \
+                 escalation ({signal}{})",
+                if newly { "" } else { ", already armed" },
+            );
+        }
         let outcome = self.agent.turn(msg, channel.as_ref()).await;
         drop(_guard);
         let elapsed = start.elapsed();
@@ -1071,6 +1127,202 @@ mod tests {
                 Some(TrustTier::Trusted),
                 "non-webhook trigger sources must be unaffected by the webhook downgrade"
             );
+        }
+    }
+
+    // ---- Model routing Part 3b (A16) — `fire_armed` --------------------
+    //
+    // The loop arms its next iteration for `on_failure` escalation. The
+    // conversation key the agent brackets is the CHANNEL's session, so the
+    // arm must name `channel.session_id()` and land before `agent.turn`.
+
+    mod arming_tests {
+        use super::*;
+        use aivyx_capability::{CapabilitySet, TrustTier};
+        use aivyx_core::{
+            AgentId, CancellationToken as CoreCancellationToken, ChannelContext, ChannelError,
+            ChannelPlatform, EscalationArming, StreamEvent,
+        };
+        use std::sync::Mutex as StdMutex;
+
+        type Log = Arc<StdMutex<Vec<String>>>;
+
+        /// Records `turn:<channel session>` when a turn runs.
+        struct RecordingAgent {
+            id: AgentId,
+            caps: CapabilitySet,
+            log: Log,
+        }
+
+        #[async_trait::async_trait]
+        impl Agent for RecordingAgent {
+            fn id(&self) -> AgentId {
+                self.id
+            }
+            fn capabilities(&self) -> &CapabilitySet {
+                &self.caps
+            }
+            async fn turn(&self, _message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
+                self.log.lock().unwrap().push(format!("turn:{}", channel.session_id()));
+                TurnOutcome::Completed {
+                    final_message: "ok".to_string(),
+                    tool_calls_made: 0,
+                    duration: Duration::from_millis(0),
+                }
+            }
+        }
+
+        /// Records `arm:<session>:<signal>`; brackets are no-ops here.
+        struct RecordingArming {
+            log: Log,
+        }
+
+        #[async_trait::async_trait]
+        impl EscalationArming for RecordingArming {
+            async fn arm(&self, session: &str, signal: &str) -> (bool, Option<String>) {
+                self.log.lock().unwrap().push(format!("arm:{session}:{signal}"));
+                (true, None)
+            }
+            fn begin_armed_turn(&self, _session: &str) {}
+            fn end_armed_turn(&self, _session: &str) {}
+        }
+
+        /// A channel with a stable session id, like `LocalChannel`.
+        struct FixedSessionChannel(SessionId);
+
+        #[async_trait::async_trait]
+        impl ChannelContext for FixedSessionChannel {
+            fn channel_name(&self) -> &str {
+                "test-local"
+            }
+            fn platform(&self) -> ChannelPlatform {
+                ChannelPlatform::Local
+            }
+            fn trust_tier(&self) -> TrustTier {
+                TrustTier::Trusted
+            }
+            fn session_id(&self) -> SessionId {
+                self.0
+            }
+            async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            fn cancellation_token(&self) -> CoreCancellationToken {
+                CoreCancellationToken::new()
+            }
+        }
+
+        fn armed_dispatch(log: Log, session: SessionId) -> TriggerDispatch {
+            let channel_factory: ChannelFactory = Arc::new(move |_ft: FrontendType| {
+                Arc::new(FixedSessionChannel(session)) as Arc<dyn ChannelContext + Send + Sync>
+            });
+            TriggerDispatch::new(
+                Arc::new(RecordingAgent {
+                    id: AgentId::new(),
+                    caps: CapabilitySet::empty(),
+                    log: Arc::clone(&log),
+                }),
+                channel_factory,
+            )
+            .with_escalation_arming(Arc::new(RecordingArming { log }))
+        }
+
+        #[tokio::test]
+        async fn fire_armed_arms_the_channel_session_before_the_turn() {
+            let log: Log = Arc::new(StdMutex::new(Vec::new()));
+            let session = SessionId::new();
+            let dispatch = armed_dispatch(Arc::clone(&log), session);
+
+            dispatch
+                .fire_armed(
+                    TriggerSource::Loop,
+                    "loop-iter-2",
+                    "work",
+                    false,
+                    &[],
+                    aivyx_config::NotifyWhen::Always,
+                    Some("loop_verdict_fail"),
+                )
+                .await;
+
+            assert_eq!(
+                *log.lock().unwrap(),
+                vec![
+                    format!("arm:{session}:loop_verdict_fail"),
+                    format!("turn:{session}"),
+                ],
+                "the arm must name the channel's session and precede the turn"
+            );
+        }
+
+        #[tokio::test]
+        async fn fire_armed_without_a_signal_never_arms() {
+            let log: Log = Arc::new(StdMutex::new(Vec::new()));
+            let session = SessionId::new();
+            let dispatch = armed_dispatch(Arc::clone(&log), session);
+
+            dispatch
+                .fire_armed(
+                    TriggerSource::Loop,
+                    "loop-iter-1",
+                    "work",
+                    false,
+                    &[],
+                    aivyx_config::NotifyWhen::Always,
+                    None,
+                )
+                .await;
+            // `fire` is `fire_armed(.., None)`.
+            dispatch
+                .fire(
+                    TriggerSource::Cron,
+                    "cron1",
+                    "work",
+                    false,
+                    &[],
+                    aivyx_config::NotifyWhen::Always,
+                )
+                .await;
+
+            assert_eq!(
+                *log.lock().unwrap(),
+                vec![format!("turn:{session}"), format!("turn:{session}")],
+                "no signal ⇒ no arm"
+            );
+        }
+
+        #[tokio::test]
+        async fn fire_armed_without_an_arming_attached_just_runs_the_turn() {
+            let log: Log = Arc::new(StdMutex::new(Vec::new()));
+            let session = SessionId::new();
+            let channel_factory: ChannelFactory = Arc::new(move |_ft: FrontendType| {
+                Arc::new(FixedSessionChannel(session)) as Arc<dyn ChannelContext + Send + Sync>
+            });
+            let dispatch = TriggerDispatch::new(
+                Arc::new(RecordingAgent {
+                    id: AgentId::new(),
+                    caps: CapabilitySet::empty(),
+                    log: Arc::clone(&log),
+                }),
+                channel_factory,
+            );
+
+            dispatch
+                .fire_armed(
+                    TriggerSource::Loop,
+                    "loop-iter-2",
+                    "work",
+                    false,
+                    &[],
+                    aivyx_config::NotifyWhen::Always,
+                    Some("loop_stall_rescue"),
+                )
+                .await;
+
+            assert_eq!(*log.lock().unwrap(), vec![format!("turn:{session}")]);
         }
     }
 

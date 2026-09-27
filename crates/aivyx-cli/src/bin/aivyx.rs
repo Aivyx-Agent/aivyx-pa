@@ -6942,6 +6942,13 @@ async fn run_async(
         } else {
             None
         };
+    // Part 3b (A16) — the autonomous loop arms only in `auto` mode (it runs
+    // unattended, so there is no one to send `/allow-cloud`) with
+    // `on_failure` on and an arming built above.
+    let loop_escalate_on_failure = routing_access.escalation.mode
+        == aivyx_config::EscalationMode::Auto
+        && routing_access.escalation.on_failure
+        && escalation_arming.is_some();
 
     // Part 3b (A16) — in `ask` mode, give the guard the hint line it hands
     // back to an armed, untainted session (`RoutingGuard::arm`), naming the
@@ -10193,6 +10200,10 @@ async fn run_async(
             // reminder driver) is also the `GetReminders` query's source.
             reminder_store: Some(Arc::clone(&reminder_store)),
             routing_guard: routing_guard.clone(),
+            // Part 3b (A16) — the loop's `on_failure` arming (see the
+            // `escalation_arming` build site above).
+            escalation_arming: escalation_arming.clone(),
+            loop_escalate_on_failure,
             // Chapter L (L.5) — the team-mission service built above.
             team_missions,
             // Chapter H — the daemon's default gate posture. Interactive for

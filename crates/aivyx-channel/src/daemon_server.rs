@@ -526,6 +526,15 @@ pub struct DaemonConfig {
     /// query record consent on it. `None` ⇒ escalation isn't configured and
     /// both answer "not enabled".
     pub routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
+    /// Model routing Part 3b (A16) — the process's `on_failure` arming (the
+    /// audited wrapper over `routing_guard`), `Some` only when `on_failure`
+    /// is on. Attached to the autonomous loop's trigger dispatch.
+    pub escalation_arming: Option<Arc<dyn aivyx_core::EscalationArming>>,
+    /// Model routing Part 3b (A16) — `true` iff `[routing.escalation]
+    /// mode = "auto"` and `on_failure = true` (and `escalation_arming` is
+    /// present): the loop then arms its next iteration after a Verdict FAIL
+    /// and gives a stall one escalated rescue iteration per run.
+    pub loop_escalate_on_failure: bool,
 }
 
 /// Chapter X — the provider + model the daemon uses for one-shot persona-seed
@@ -802,6 +811,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         document_roots,
         reminder_store,
         routing_guard,
+        escalation_arming,
+        loop_escalate_on_failure,
         wiki_sweep,
         wiki_store,
         graph_sweep,
@@ -1046,6 +1057,17 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 (true, Some(svc)) => Some(std::sync::Arc::new(svc.completion_judge())),
                 _ => None,
             };
+            // Model routing Part 3b (A16) — the loop escalates on failure
+            // only in `auto` mode with `on_failure` on (the caller's bool)
+            // AND with an arming to arm through; only the loop's own
+            // dispatch clone carries the arming.
+            let ld_escalate = loop_escalate_on_failure && escalation_arming.is_some();
+            let ld_dispatch = match &escalation_arming {
+                Some(arming) if ld_escalate => {
+                    ld_dispatch.with_escalation_arming(Arc::clone(arming))
+                }
+                _ => ld_dispatch,
+            };
             Some(tokio::spawn(async move {
                 crate::loop_driver::run_loop_driver(
                     ld_dispatch,
@@ -1063,6 +1085,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     ld_shutdown,
                     ld_delegate,
                     ld_judge,
+                    ld_escalate,
                 )
                 .await;
             }))
@@ -3942,6 +3965,8 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         document_roots: Default::default(),
         reminder_store: None,
         routing_guard: None,
+        escalation_arming: None,
+        loop_escalate_on_failure: false,
         wiki_sweep: None,
         graph_sweep: None,
     })

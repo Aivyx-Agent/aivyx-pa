@@ -185,20 +185,23 @@ async fn write_progress_note(
 /// against its own acceptance criteria — the judge grounds on the memory /
 /// workspace artifacts the turn produced — and mark it `Done` iff the judge
 /// passes. Genuinely-incomplete work stays pending (the grounded judge rejects
-/// it). Returns whether the story was closed (⇒ the iteration made progress).
+/// it). Returns what happened: [`CloseResult::Closed`] (⇒ the iteration made
+/// progress), [`CloseResult::JudgedIncomplete`] (a Verdict FAIL — the signal
+/// `on_failure` escalation arms the next iteration on), or
+/// [`CloseResult::NotNeeded`] (the story was already resolved).
 async fn verify_and_close(
     backlog: &Arc<PersistentLoopBacklog>,
     judge: &crate::completion_judge::CompletionJudge,
     candidate: &aivyx_ipc::backlog::Story,
     memory: Option<&Arc<dyn aivyx_memory::Memory>>,
-) -> bool {
+) -> CloseResult {
     let still_pending = matches!(
         backlog.get(&candidate.id).map(|s| s.status),
         Some(aivyx_ipc::backlog::StoryStatus::Pending)
     );
     if !still_pending {
         // The agent DID close it this turn (or it was skipped) — nothing to do.
-        return false;
+        return CloseResult::NotNeeded;
     }
     let v = judge
         .verify(
@@ -228,8 +231,60 @@ async fn verify_and_close(
             ),
         )
         .await;
+        CloseResult::Closed
+    } else {
+        CloseResult::JudgedIncomplete
     }
-    v.passed
+}
+
+/// Chapter Capstone — the outcome of [`verify_and_close`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseResult {
+    /// The judge passed; the story was marked done.
+    Closed,
+    /// Verdict FAIL — the story was still pending and the judge rejected it.
+    JudgedIncomplete,
+    /// The story was already resolved; the judge wasn't consulted.
+    NotNeeded,
+}
+
+/// Model routing Part 3b (A16) — the audit spelling of the loop's
+/// `on_failure` signals.
+const SIGNAL_VERDICT_FAIL: &str = "loop_verdict_fail";
+const SIGNAL_STALL_RESCUE: &str = "loop_stall_rescue";
+
+/// Model routing Part 3b (A16) — decide what an iteration's outcome means
+/// for `on_failure` escalation. `close` is the iteration's verify-and-close
+/// result, `stalled` whether the stall breaker just tripped, `rescue_used`
+/// whether this run already spent its one armed rescue, and `enabled`
+/// whether the loop escalates at all (`mode = "auto"` and `on_failure`).
+///
+/// Returns `(arm the next fire with, stop the run, rescue_used after)`:
+/// - disabled ⇒ nothing arms and a stall stops exactly as before;
+/// - a stall with the rescue unspent ⇒ don't stop, arm
+///   `"loop_stall_rescue"`, spend the rescue;
+/// - a stall with the rescue spent ⇒ stop;
+/// - otherwise a Verdict FAIL arms `"loop_verdict_fail"`.
+fn next_arm(
+    close: CloseResult,
+    stalled: bool,
+    rescue_used: bool,
+    enabled: bool,
+) -> (Option<&'static str>, bool, bool) {
+    if !enabled {
+        return (None, stalled, rescue_used);
+    }
+    if stalled {
+        return if rescue_used {
+            (None, true, true)
+        } else {
+            (Some(SIGNAL_STALL_RESCUE), false, true)
+        };
+    }
+    match close {
+        CloseResult::JudgedIncomplete => (Some(SIGNAL_VERDICT_FAIL), false, rescue_used),
+        CloseResult::Closed | CloseResult::NotNeeded => (None, false, rescue_used),
+    }
 }
 
 /// Chapter Foreman follow-up — how many times a single story may fail
@@ -330,6 +385,14 @@ impl StallTracker {
             self.consecutive_idle += 1;
             self.consecutive_idle >= self.max_idle
         }
+    }
+
+    /// Model routing Part 3b (A16) — after a stall, leave the streak one
+    /// idle iteration short of the threshold: exactly one more iteration
+    /// runs, and if it too makes no progress the breaker trips again.
+    /// (Progress still clears the streak as usual.)
+    fn grant_one_more(&mut self) {
+        self.consecutive_idle = self.max_idle.saturating_sub(1);
     }
 }
 
@@ -788,6 +851,12 @@ pub async fn run_loop_driver(
     // which grounds on the artifact when the agent did the work but forgot to
     // call `loop.complete`. `None` ⇒ neither runs (accept-on-Done / no close-out).
     completion_judge: Option<Arc<crate::completion_judge::CompletionJudge>>,
+    // Model routing Part 3b (A16) — `on_failure` escalation in the loop. The
+    // daemon passes `true` only when `[routing.escalation] mode = "auto"`,
+    // `on_failure = true` and the dispatch carries an arming. Then a Verdict
+    // FAIL arms the next iteration, and a stall gets ONE armed rescue
+    // iteration per run. `false` ⇒ byte-identical to before.
+    escalate_on_failure: bool,
 ) {
     // Chapter K — the dollar cap prices LlmCost events with the rate table the
     // daemon built (built-in defaults + any `[pricing.<model>]` overrides, K.5).
@@ -856,6 +925,11 @@ pub async fn run_loop_driver(
         // On a clean end we disarm it (the stop path owns `active`);
         // on a panic it clears `active` so the loop isn't wedged.
         let mut active_guard = RunActiveGuard::new(shared.clone());
+
+        // Model routing Part 3b (A16) — per run: the signal to arm the next
+        // fired iteration with, and whether the one stall rescue is spent.
+        let mut arm_next: Option<&'static str> = None;
+        let mut rescue_used = false;
 
         loop {
             if shutdown.is_cancelled() {
@@ -1070,14 +1144,16 @@ pub async fn run_loop_driver(
             // Fire a fresh-context loop turn. `wrap_mission =
             // false`: the loop's own backlog is the work tracker,
             // not a per-iteration mission. No notify target.
+            // A16 — `arm_next` is `Some` only with `escalate_on_failure`.
             let _ = dispatch
-                .fire(
+                .fire_armed(
                     TriggerSource::Loop,
                     &trigger_id,
                     &prompt,
                     false,
                     &[],
                     aivyx_config::NotifyWhen::Always,
+                    arm_next.take(),
                 )
                 .await;
             shared.record_iteration();
@@ -1107,11 +1183,13 @@ pub async fn run_loop_driver(
             // iff the judge passes. Genuinely-incomplete work stays pending (the
             // grounded judge rejects it, e.g. "only 1 of 2 requested items").
             // Only runs when `[loop] verify_completion` is on (judge is Some).
-            if let (Some(judge), Some(candidate)) =
+            let close = if let (Some(judge), Some(candidate)) =
                 (&completion_judge, &candidate_before)
             {
-                verify_and_close(&backlog, judge, candidate, memory.as_ref()).await;
-            }
+                verify_and_close(&backlog, judge, candidate, memory.as_ref()).await
+            } else {
+                CloseResult::NotNeeded
+            };
 
             // Chapter Circuit (CI.1) — stall breaker. The iteration
             // "made progress" iff a story completed/delegated (the
@@ -1123,14 +1201,30 @@ pub async fn run_loop_driver(
             let note_after = recent_progress_note(memory.as_ref()).await;
             let made_progress = remaining_after < remaining
                 || (note_after.is_some() && note_after != note_before);
-            let should_stop = stall.record(made_progress);
+            let stalled = stall.record(made_progress);
+            // A16 — a Verdict FAIL arms the next iteration; the first stall
+            // of a run gets one armed rescue iteration instead of stopping.
+            let rescue_was_used = rescue_used;
+            let (arm, should_stop, now_used) =
+                next_arm(close, stalled, rescue_used, escalate_on_failure);
+            arm_next = arm;
+            rescue_used = now_used;
+            if stalled && !should_stop {
+                stall.grant_one_more();
+                eprintln!(
+                    "aivyx-pa loop: stalled — one escalated rescue iteration (on_failure)"
+                );
+            }
             // CI.5 — surface the live idle streak for `aivyx-pa loop status`.
             shared.record_idle(stall.consecutive_idle);
             if should_stop {
-                let reason = format!(
+                let mut reason = format!(
                     "no progress for {max_idle_iterations} consecutive \
                      iteration(s) (stall breaker)"
                 );
+                if rescue_was_used {
+                    reason.push_str(" (after one on_failure rescue)");
+                }
                 shared.finish_run(&reason);
                 eprintln!(
                     "aivyx-pa loop: run ended — {reason} (after {} iteration(s))",
@@ -1239,7 +1333,7 @@ mod tests {
             None,
         )
         .await;
-        assert!(closed, "a PASS verdict closes the story");
+        assert_eq!(closed, CloseResult::Closed, "a PASS verdict closes the story");
         assert!(matches!(
             bl.get(&id).unwrap().status,
             aivyx_ipc::backlog::StoryStatus::Done { .. }
@@ -1260,7 +1354,11 @@ mod tests {
             None,
         )
         .await;
-        assert!(!closed, "a FAIL verdict must not close the story");
+        assert_eq!(
+            closed,
+            CloseResult::JudgedIncomplete,
+            "a FAIL verdict must not close the story",
+        );
         assert!(matches!(
             bl.get(&id).unwrap().status,
             aivyx_ipc::backlog::StoryStatus::Pending
@@ -1282,7 +1380,11 @@ mod tests {
             None,
         )
         .await;
-        assert!(!closed, "already-resolved story is a no-op for close-out");
+        assert_eq!(
+            closed,
+            CloseResult::NotNeeded,
+            "already-resolved story is a no-op for close-out",
+        );
         assert!(matches!(
             bl.get(&id).unwrap().status,
             aivyx_ipc::backlog::StoryStatus::Done { .. }
@@ -1785,6 +1887,237 @@ mod tests {
         assert!(!s.record(false)); // idle 1
         assert!(!s.record(false)); // idle 2
         assert!(s.record(false), "idle 3 after the reset trips");
+    }
+
+    // ---- Model routing Part 3b (A16) — on_failure in the loop ----------
+
+    #[test]
+    fn stall_tracker_grant_one_more_allows_exactly_one_idle_iteration() {
+        let mut s = StallTracker::new(3);
+        assert!(!s.record(false));
+        assert!(!s.record(false));
+        assert!(s.record(false), "stalled");
+        s.grant_one_more();
+        assert!(s.record(false), "the very next idle iteration stalls again");
+    }
+
+    #[test]
+    fn next_arm_verdict_fail_arms_the_next_iteration() {
+        assert_eq!(
+            next_arm(CloseResult::JudgedIncomplete, false, false, true),
+            (Some("loop_verdict_fail"), false, false)
+        );
+        // Closed / not needed → nothing to arm.
+        assert_eq!(next_arm(CloseResult::Closed, false, false, true), (None, false, false));
+        assert_eq!(next_arm(CloseResult::NotNeeded, false, false, true), (None, false, false));
+        // A spent rescue doesn't stop verdict arming.
+        assert_eq!(
+            next_arm(CloseResult::JudgedIncomplete, false, true, true),
+            (Some("loop_verdict_fail"), false, true)
+        );
+    }
+
+    #[test]
+    fn next_arm_first_stall_gets_one_rescue_second_stops() {
+        assert_eq!(
+            next_arm(CloseResult::NotNeeded, true, false, true),
+            (Some("loop_stall_rescue"), false, true),
+            "the first stall is rescued, not stopped"
+        );
+        // The rescue signal wins over a same-iteration verdict FAIL.
+        assert_eq!(
+            next_arm(CloseResult::JudgedIncomplete, true, false, true),
+            (Some("loop_stall_rescue"), false, true)
+        );
+        assert_eq!(
+            next_arm(CloseResult::NotNeeded, true, true, true),
+            (None, true, true),
+            "a second stall ends the run"
+        );
+    }
+
+    #[test]
+    fn next_arm_disabled_never_arms_and_stalls_stop_as_before() {
+        for close in [CloseResult::Closed, CloseResult::JudgedIncomplete, CloseResult::NotNeeded] {
+            assert_eq!(next_arm(close, false, false, false), (None, false, false));
+            assert_eq!(next_arm(close, true, false, false), (None, true, false));
+        }
+    }
+
+    // Driver-level: the real `run_loop_driver` over a recording agent and a
+    // recording arming, both behind a real `TriggerDispatch`.
+
+    mod driver_arming {
+        use super::*;
+        use aivyx_capability::{CapabilitySet, TrustTier};
+        use aivyx_core::{
+            Agent, AgentId, CancellationToken as CoreCancellationToken, ChannelContext,
+            ChannelError, ChannelPlatform, EscalationArming, Message, SessionId, StreamEvent,
+            TurnOutcome,
+        };
+        use std::sync::Mutex as StdMutex;
+
+        type Log = Arc<StdMutex<Vec<String>>>;
+
+        /// Does nothing — every iteration is idle (no note, no completion).
+        struct IdleAgent {
+            id: AgentId,
+            caps: CapabilitySet,
+            log: Log,
+        }
+
+        #[async_trait::async_trait]
+        impl Agent for IdleAgent {
+            fn id(&self) -> AgentId {
+                self.id
+            }
+            fn capabilities(&self) -> &CapabilitySet {
+                &self.caps
+            }
+            async fn turn(&self, _message: Message, _channel: &dyn ChannelContext) -> TurnOutcome {
+                self.log.lock().unwrap().push("turn".to_string());
+                TurnOutcome::Completed {
+                    final_message: "ok".to_string(),
+                    tool_calls_made: 0,
+                    duration: Duration::from_millis(0),
+                }
+            }
+        }
+
+        struct RecordingArming {
+            log: Log,
+        }
+
+        #[async_trait::async_trait]
+        impl EscalationArming for RecordingArming {
+            async fn arm(&self, _session: &str, signal: &str) -> (bool, Option<String>) {
+                self.log.lock().unwrap().push(format!("arm:{signal}"));
+                (true, None)
+            }
+            fn begin_armed_turn(&self, _session: &str) {}
+            fn end_armed_turn(&self, _session: &str) {}
+        }
+
+        struct TestChannel(SessionId);
+
+        #[async_trait::async_trait]
+        impl ChannelContext for TestChannel {
+            fn channel_name(&self) -> &str {
+                "test-loop"
+            }
+            fn platform(&self) -> ChannelPlatform {
+                ChannelPlatform::Local
+            }
+            fn trust_tier(&self) -> TrustTier {
+                TrustTier::Trusted
+            }
+            fn session_id(&self) -> SessionId {
+                self.0
+            }
+            async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            fn cancellation_token(&self) -> CoreCancellationToken {
+                CoreCancellationToken::new()
+            }
+        }
+
+        /// Run one loop to completion; returns the event log and the
+        /// recorded stop reason.
+        async fn drive(
+            max_iterations: u32,
+            max_idle: u32,
+            judge: Option<Arc<crate::completion_judge::CompletionJudge>>,
+            escalate_on_failure: bool,
+        ) -> (Vec<String>, String) {
+            let log: Log = Arc::new(StdMutex::new(Vec::new()));
+            let factory: crate::daemon_server::ChannelFactory =
+                Arc::new(|_ft: crate::daemon_ipc::FrontendType| {
+                    Arc::new(TestChannel(SessionId::new()))
+                        as Arc<dyn ChannelContext + Send + Sync>
+                });
+            let dispatch = TriggerDispatch::new(
+                Arc::new(IdleAgent {
+                    id: AgentId::new(),
+                    caps: CapabilitySet::empty(),
+                    log: Arc::clone(&log),
+                }),
+                factory,
+            )
+            .with_escalation_arming(Arc::new(RecordingArming { log: Arc::clone(&log) }));
+            let (bl, _id, _dir) = backlog_with_one_pending().await;
+            let shared = SharedLoopState::new();
+            assert!(shared.request_start(max_iterations, now_unix_ms()));
+            // `request_start` stores a wake-up permit for a parked driver. The
+            // driver below starts already active and never parks first, so
+            // consume the permit here — otherwise, once the run ends, the
+            // idle driver would wake on it and record a spurious second
+            // (immediately stopped) run over the reason under test.
+            shared.notify.notified().await;
+            let shutdown = CancellationToken::new();
+            let driver = tokio::spawn(run_loop_driver(
+                dispatch,
+                bl,
+                shared.clone(),
+                None,
+                None,
+                None,
+                0,
+                None,
+                None,
+                None,
+                aivyx_cost::Pricing::default(),
+                max_idle,
+                shutdown.clone(),
+                None,
+                judge,
+                escalate_on_failure,
+            ));
+            let deadline = std::time::Instant::now() + Duration::from_secs(20);
+            while shared.snapshot().active {
+                assert!(std::time::Instant::now() < deadline, "loop run never ended");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            shutdown.cancel();
+            driver.await.unwrap();
+            let reason = shared.snapshot().last_stop_reason.unwrap_or_default();
+            let events = log.lock().unwrap().clone();
+            (events, reason)
+        }
+
+        #[tokio::test]
+        async fn a_judged_incomplete_iteration_arms_the_next_fire() {
+            let judge = Arc::new(judge_returning("FAIL — nothing was written."));
+            let (events, _) = drive(2, 0, Some(judge), true).await;
+            assert_eq!(events, vec!["turn", "arm:loop_verdict_fail", "turn"]);
+        }
+
+        #[tokio::test]
+        async fn a_stall_gets_exactly_one_rescue_iteration_then_stops() {
+            let (events, reason) = drive(10, 2, None, true).await;
+            // Two idle iterations stall; ONE rescued iteration (armed) runs;
+            // its idleness stalls again and ends the run.
+            assert_eq!(events, vec!["turn", "turn", "arm:loop_stall_rescue", "turn"]);
+            assert!(
+                reason.ends_with("(after one on_failure rescue)"),
+                "stop reason names the spent rescue: {reason}"
+            );
+            assert!(reason.contains("stall breaker"), "{reason}");
+        }
+
+        #[tokio::test]
+        async fn disabled_never_arms_and_a_stall_ends_the_run_as_before() {
+            let judge = Arc::new(judge_returning("FAIL — nothing was written."));
+            let (events, reason) = drive(10, 2, Some(judge), false).await;
+            assert_eq!(events, vec!["turn", "turn"]);
+            assert_eq!(
+                reason,
+                "no progress for 2 consecutive iteration(s) (stall breaker)"
+            );
+        }
     }
 
     #[tokio::test]

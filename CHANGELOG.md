@@ -37,6 +37,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **Model routing (Part 3b) — `on_failure` escalation (Amendment
+  A16).** New `[routing.escalation] on_failure` (default `false`). When
+  on, a local turn that got stuck — `Looping`, or both tool-call repair
+  rounds spent — arms that conversation's **next turn only** for cloud
+  escalation, under the same gate as every other escalation: never a
+  replay, never a mid-turn model switch, and a tainted conversation
+  still never escalates. In `ask` mode the stuck turn ends with "The
+  local model got stuck; send /allow-cloud and resend to retry on
+  `<model>`." The autonomous loop arms only with `mode = "auto"`: a
+  Verdict FAIL (the completion judge rejecting a left-pending story)
+  arms the next iteration, and a run the stall breaker would end gets
+  exactly one armed rescue iteration first; a second stall ends it,
+  with "(after one on_failure rescue)" on the stop reason. New
+  `EscalationArmed` audit entry per new mark; the escalation itself is
+  a `CloudEscalation` with trigger `on_failure`. Marks live in memory
+  only. With `on_failure = false`, nothing changes. See
+  `examples/aivyx-pa.toml` and `docs/THREAT_MODEL.md` §4.12.
 - **Model routing (Part 4) — routing prefers loaded models.** A
   background poll, every 5 s, reads which models are already resident:
   Ollama's `/api/ps`, llama-server's `/models` (router mode), or
