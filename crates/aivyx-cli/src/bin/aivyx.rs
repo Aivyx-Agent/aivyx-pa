@@ -5121,7 +5121,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let value = args
                     .get(i + 1)
                     .ok_or_else(|| {
-                        "`--provider` requires a value: `anthropic`, `openai`, `ollama`, `llamacpp`, or `jan`"
+                        "`--provider` requires a value: `anthropic`, `openai`, `ollama`, `llamacpp`, `jan`, `mistralrs`, `broker`, or `lemonade`"
                             .to_string()
                     })?;
                 cli_provider = Some(match value.as_str() {
@@ -6717,12 +6717,17 @@ async fn run_async(
             // Lemonade Server — OpenAI-compatible under its `/api`
             // prefix (`{base}/v1/chat/completions`), one LLM loaded at a
             // time. Defaults to `http://127.0.0.1:13305/api`; operator
-            // overrides via `[openai] base_url`. Keyless: Lemonade is a
-            // loopback server with no auth.
+            // overrides via `[openai] base_url`. Keyless by default; an
+            // `[openai] api_key` is passed through for a server started
+            // with `LEMONADE_API_KEY`.
             let base_url = openai_base_url
                 .map(|s| s.value)
                 .unwrap_or_else(|| DEFAULT_LEMONADE_BASE_URL.to_string());
-            let p = OpenAiProvider::new(OpenAiConfig::without_api_key().with_base_url(base_url))
+            let cfg = match openai_api_key {
+                Some(k) => OpenAiConfig::new(k.value),
+                None => OpenAiConfig::without_api_key(),
+            };
+            let p = OpenAiProvider::new(cfg.with_base_url(base_url))
                 .map_err(|e| format!("failed to build Lemonade provider: {e}"))?;
             Arc::new(p)
         }

@@ -40,8 +40,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 - **Lemonade Server as a provider and routing endpoint.** `[agent]
   provider = "lemonade"` targets a local Lemonade Server at
   `http://127.0.0.1:13305/api` by default (override with `[openai]
-  base_url`, keeping the `/api` suffix), keyless, with streamed token
-  usage. `[routing.endpoints.*] kind = "lemonade"` adds one as a routing
+  base_url`, keeping the `/api` suffix), keyless unless `[openai]
+  api_key` is set, with streamed token usage. `[routing.endpoints.*] kind = "lemonade"` adds one as a routing
   endpoint (aivyx-route af1b748): discovery lists its downloaded models
   from `/v1/models`, mapping its labels onto capabilities, and residency
   reads `/v1/health` to see which model is loaded. Lemonade holds one LLM

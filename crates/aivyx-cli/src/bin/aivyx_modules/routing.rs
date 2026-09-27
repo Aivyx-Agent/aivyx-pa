@@ -436,11 +436,11 @@ impl ResidencySources {
                 .endpoints
                 .iter()
                 .any(|(_, c)| {
-                matches!(
-                    c.kind,
-                    EndpointKind::Ollama | EndpointKind::LlamaRouter | EndpointKind::Lemonade
-                )
-            })
+                    matches!(
+                        c.kind,
+                        EndpointKind::Ollama | EndpointKind::LlamaRouter | EndpointKind::Lemonade
+                    )
+                })
     }
 
     pub(crate) async fn poll(

@@ -335,8 +335,8 @@ parent_role = "researcher"
 #   versions reject unknown fields).
 # - "lemonade" is local Lemonade Server — defaults to
 #   http://127.0.0.1:13305/api (its OpenAI-compatible API lives
-#   under /api; port 13305), no API key. Override with
-#   [openai] base_url, keeping the /api suffix.
+#   under /api; port 13305), no API key unless [openai] api_key
+#   is set. Override with [openai] base_url, keeping the /api suffix.
 #
 # Can also be overridden via `AIVYX_PA_PROVIDER` env var or
 # `--provider` CLI flag.
