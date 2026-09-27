@@ -614,18 +614,23 @@ impl LlmProvider for RoutedProvider {
             && let Some(session) = hint.session.as_deref()
             && self.router.current(session).is_none()
         {
-            let remembered = self.classified.lock().unwrap().get(session).copied();
+            // Check and claim under one lock, so two concurrent first
+            // calls can't both miss the memo and both classify: the
+            // winner leaves a medium placeholder the other one uses
+            // without calling. If the winner's future is dropped mid-call,
+            // medium is what stays remembered. The guard is released
+            // before the classifier call is awaited.
+            let remembered = {
+                let mut memo = self.classified.lock().unwrap();
+                let found = memo.get(session).copied();
+                if found.is_none() {
+                    memo.insert(session.to_string(), (Tier::Medium, true));
+                }
+                found
+            };
             let (tier, fell_back) = match remembered {
                 Some(memo) => memo,
                 None => {
-                    // Single-flight: a concurrent first call on this
-                    // session sees this placeholder and uses medium
-                    // without calling. If this future is dropped
-                    // mid-call, medium is what stays remembered.
-                    self.classified
-                        .lock()
-                        .unwrap()
-                        .insert(session.to_string(), (Tier::Medium, true));
                     let memo = match self.classify(&request, cancellation, setup.timeout).await {
                         Ok(tier) => (tier, false),
                         Err(()) => (Tier::Medium, true),
