@@ -476,8 +476,11 @@ impl ConcreteAgent {
     /// `Completed` turn whose planner spent both tool-call repair rounds
     /// arms with `"tool_call_repair_exhausted"` — escalating the *next*
     /// turn only; this one is never replayed and never changes model
-    /// mid-turn. `MaxStepsExceeded` and `Failed(..)` never arm. Not
-    /// attaching one (the default) runs no arming machinery.
+    /// mid-turn. `MaxStepsExceeded` and `Failed(..)` never arm, and only
+    /// an operator-originated turn arms (a system-originated one is still
+    /// bracketed). Arming and bracketing key on the channel's session,
+    /// never the message's. Not attaching one (the default) runs no
+    /// arming machinery.
     pub fn with_escalation_arming(mut self, arming: Arc<dyn crate::EscalationArming>) -> Self {
         self.arming = Some(arming);
         self
@@ -486,8 +489,22 @@ impl ConcreteAgent {
     /// `on_failure` cloud escalation — arm `session`'s next turn with
     /// `signal`, appending the returned `ask`-mode hint (if any) to the
     /// final message the channel is about to receive. No-op without an
-    /// attached arming.
-    async fn arm_next_turn(&self, session: &str, signal: &str, final_message: &mut String) {
+    /// attached arming, and for any turn not originated by the operator:
+    /// a trigger, cron, webhook, file-watch or loop fire runs on a fresh
+    /// session that never gets a next turn, so a mark there would never
+    /// be consumed and its hint would invite `/allow-cloud` in a
+    /// conversation that can't use it (final review I1). The loop arms
+    /// its own iterations from outside, through `fire_armed`.
+    async fn arm_next_turn(
+        &self,
+        origin: MessageOrigin,
+        session: &str,
+        signal: &str,
+        final_message: &mut String,
+    ) {
+        if origin != MessageOrigin::Operator {
+            return;
+        }
         if let Some(arming) = &self.arming {
             let (_newly_armed, hint) = arming.arm(session, signal).await;
             if let Some(hint) = hint {
@@ -532,6 +549,8 @@ impl ConcreteAgent {
     async fn turn_inner(&self, message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
         let turn_id = TurnId::new();
         let session_id = channel.session_id();
+        // Captured up front: `message` is consumed before the arming step.
+        let origin = message.origin;
         let tier = channel.trust_tier();
         let effective = self.capabilities.intersect(tier.default_ceiling());
         let cancellation = channel.cancellation_token();
@@ -911,6 +930,7 @@ impl ConcreteAgent {
                 // reaches the channel with the message.
                 if planner.repair_exhausted() {
                     self.arm_next_turn(
+                        origin,
                         &session_id.to_string(),
                         "tool_call_repair_exhausted",
                         &mut final_message,
@@ -941,8 +961,13 @@ impl ConcreteAgent {
                 // on_failure escalation (A16) — a loop-breaker stop arms the
                 // conversation's *next* turn (this one is never replayed).
                 // Before finalize, so an `ask`-mode hint reaches the channel.
-                self.arm_next_turn(&session_id.to_string(), "looping", &mut final_message)
-                    .await;
+                self.arm_next_turn(
+                    origin,
+                    &session_id.to_string(),
+                    "looping",
+                    &mut final_message,
+                )
+                .await;
                 TurnOutcome::Looping {
                     final_message,
                     tool_calls_made,
@@ -7044,6 +7069,75 @@ mod tests {
             ],
             "begin, then arm (before finalize), then end"
         );
+    }
+
+    #[tokio::test]
+    async fn a_system_originated_looping_turn_is_bracketed_but_never_arms() {
+        // Final review I1 — a trigger / cron / webhook / loop iteration is
+        // system-originated and runs on a fresh session that never gets a
+        // next turn, so arming it would only leave a dead mark, an
+        // `EscalationArmed` entry and a hint inviting `/allow-cloud` in a
+        // conversation that can't use it. The bracket still runs: the
+        // loop's `fire_armed` pre-arms a system turn and relies on
+        // `begin_armed_turn` promoting that mark.
+        let log = ArmLog::default();
+        let audit = RecordingAudit::new();
+        let audited: Arc<dyn crate::EscalationArming> = Arc::new(crate::AuditedArming::new(
+            RecordingArming::new(log.clone(), Some(HINT)),
+            audit.clone(),
+        ));
+        let agent = looping_agent(RecordingAudit::new()).with_escalation_arming(audited);
+        let channel = ArmChannel::new(log.clone());
+        let session = channel.session.to_string();
+        let outcome = agent
+            .turn(
+                Message::text(channel.session, "tick").system_originated(),
+                &channel,
+            )
+            .await;
+
+        assert!(
+            matches!(outcome, TurnOutcome::Looping { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                format!("begin:{session}"),
+                "finalize".to_string(),
+                format!("end:{session}"),
+            ],
+            "bracketed, but no arm"
+        );
+        assert_eq!(
+            channel.seen(),
+            Some(looping_message(DEFAULT_REPEAT_CALL_LIMIT)),
+            "no hint appended"
+        );
+        assert!(
+            !audit
+                .snapshot()
+                .iter()
+                .any(|e| matches!(e, AuditTag::EscalationArmed { .. })),
+            "no EscalationArmed audit entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_system_originated_repair_exhausted_turn_never_arms() {
+        let log = ArmLog::default();
+        let agent = repair_agent(true, "done")
+            .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = ArmChannel::new(log.clone());
+        let _ = agent
+            .turn(
+                Message::text(channel.session, "tick").system_originated(),
+                &channel,
+            )
+            .await;
+        assert!(arm_entries(&log).is_empty());
+        assert_eq!(channel.seen(), Some("done".to_string()), "no hint appended");
+        assert_eq!((count(&log, "begin:"), count(&log, "end:")), (1, 1));
     }
 
     #[tokio::test]
