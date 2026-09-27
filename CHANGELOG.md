@@ -1808,7 +1808,7 @@ chapter deferrals and stabilized the test suite.
   `web.extract` returns a page's readable article text (readability over the
   existing `net.fetch` capability), and `git.commit` stages + commits in an
   operator-allowed repo (a new `git.write` capability base, Trusted-tier only,
-  confirm-first). The substrate count moves 13 → 15 (**Amendment A13**).
+  confirm-first). The substrate count moves 13 → 15 (**Amendment A13b**).
 - **`tools.list` runtime tool introspection (Chapter Atlas).** A refinement
   pass over the ~92-tool surface: a runtime `tools.list` tool, a drift-guarded
   [`docs/TOOLS.md`](docs/TOOLS.md) catalog, and a tool-metadata quality guard.

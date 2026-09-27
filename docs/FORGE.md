@@ -3,7 +3,7 @@
 > **Status:** ✅ **COMPLETE (FG.0–FG.5).** Both substrate tools shipped, wired,
 > and finalized: **`web.extract`** (readability over the existing `net.fetch`
 > base, `dom_smoothie`) and **`git.commit`** (new `git.write` base + Amendment
-> A13, confirm-first, Trusted-only, reusing the `[git] repos` allow-set). P10 is
+> A13b, confirm-first, Trusted-only, reusing the `[git] repos` allow-set). P10 is
 > now **fifteen tools**; `KNOWN_BASES` is 86. Full workspace suite + clippy +
 > `cargo deny` (licenses + advisories) green. The locked reference for the first
 > **new-tools breadth** chapter after Atlas. It adds two substrate capabilities —
@@ -86,7 +86,7 @@ security model, trust tiers, or sandboxing beyond the new base's tier placement.
 |---|---|---|
 | **FG.0** ✅ | **This design contract** | locked reference; banner flips per phase. DONE. |
 | **FG.1** ✅ | **`web.extract`** | DONE. New substrate tool in `aivyx-core/tools/web_fetch.rs` reusing the hardened redirect-free client (factored to `build_redirect_free_client`) + SSRF/size guards; `dom_smoothie` (MIT) readability dep; output `{ title, byline, text, word_count, url, extractable }`; non-article/non-UTF8/redirect → `extractable:false` pointing at `web.fetch`. Reuses `net.fetch`. 4 tests + quality sweep. |
-| **FG.2** ✅ | **`git.write` base + amendment** | DONE. Added `git.write` to `KNOWN_BASES` (85→86) + `CEILING_TRUSTED` + `docs/TOOLS.md`; **Amendment A13** (PRODUCT.md P10 thirteen→fifteen + DESIGN Deliverable 4 row + taxonomy-growth addendum), modeled on A12. Count-pin + drift-guard updated. |
+| **FG.2** ✅ | **`git.write` base + amendment** | DONE. Added `git.write` to `KNOWN_BASES` (85→86) + `CEILING_TRUSTED` + `docs/TOOLS.md`; **Amendment A13b** (PRODUCT.md P10 thirteen→fifteen + DESIGN Deliverable 4 row + taxonomy-growth addendum), modeled on A12. Count-pin + drift-guard updated. |
 | **FG.3** ✅ | **`git.commit` tool** | DONE. Shell-out in `aivyx-core/tools/git.rs`; repo-allowlist gated (shared `canonicalize_repo_allow_set` with the read config); stages explicit repo-relative `paths` + commits a `message`; confirm-first via `confirm_destructive`; Trusted-only. 8 tests incl. real-tmpdir happy path / denial / confirm gate / traversal (single `git.commit`, no `git.add`). |
 | **FG.4** ✅ | **Legibility + wiring** | DONE. Registered both in the agent `tool_list` (`aivyx.rs`): `web.extract` all-channels, `git.commit` from `[git] repos` + `confirm_destructive`; extended `check_tool_quality` sweep; `docs/TOOLS.md` rows + name→scope map; README 13→15; registration test. |
 | **FG.5** ✅ | **Finalize** | DONE. Full workspace suite + clippy + `cargo deny` (licenses + advisories) green; ATLAS §6 backlog items struck; status flipped to COMPLETE; chapter recorded. |

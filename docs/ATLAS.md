@@ -123,7 +123,7 @@ Recorded from the audit so it isn't rediscovered; each is a *future* new-tools
 chapter, gated by the substrate cap / its own base + amendment where applicable:
 
 - ~~**`git.write`**~~ — ✅ **shipped in Chapter Forge** (`git.commit`, new `git.write`
-  base + Amendment A13, confirm-first, Trusted-only). See `docs/FORGE.md`.
+  base + Amendment A13b, confirm-first, Trusted-only). See `docs/FORGE.md`.
 - ~~**`web.extract`**~~ — ✅ **shipped in Chapter Forge** (readability over the existing
   `net.fetch` base, `dom_smoothie`). See `docs/FORGE.md`.
 - ~~**Utilities pack** (toolkit): calculator, unit/timezone conversion, date math

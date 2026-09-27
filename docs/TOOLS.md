@@ -285,7 +285,7 @@ user-facing; the scope base groups capabilities):
 | `web.post` | `net.post` | same |
 | `gmail.*` | `email.*` | the base is provider-neutral (`email.read/write/send`); Gmail is one implementation |
 | `git.status`, `git.diff` | `git.read` | one read base shared by both read tools (A12) |
-| `git.commit` | `git.write` | the destructive write base (A13, Chapter Forge); separate from `git.read` by invariant |
+| `git.commit` | `git.write` | the destructive write base (A13b, Chapter Forge); separate from `git.read` by invariant |
 | `web.search` | `web.search` | (matches — listed for completeness) |
 
 ---

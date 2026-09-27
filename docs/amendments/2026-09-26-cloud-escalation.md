@@ -10,7 +10,7 @@ apply to the rest of Aivyx PA. No PRODUCT.md or DESIGN.md text is
 superseded.
 **Implementing phase:** Model routing Part 3b. This amendment lands
 *before* the code it authorizes — the governance gate precedes the
-feature, never trails it (the A13 / FG.2 precedent).
+feature, never trails it (the A13b / FG.2 precedent).
 **Reference design:** `aivyx-ecosystem/docs/superpowers/specs/2026-09-25-model-routing-design.md`,
 section "Part 3 only — Cloud escalation and sensitivity".
 

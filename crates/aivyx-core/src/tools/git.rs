@@ -3,7 +3,7 @@
 //!
 //! The read tools (`git.status` / `git.diff`) share the `git.read`
 //! scope base; `git.commit` is gated by the separate `git.write`
-//! base added at Chapter Forge FG.2 (Amendment A13). Writing repo
+//! base added at Chapter Forge FG.2 (Amendment A13b). Writing repo
 //! history is at least as sensitive as `shell.exec` / `fs.delete`,
 //! so `git.write` is Trusted-tier only and `git.commit` is
 //! confirm-first when the operator enables `[access]

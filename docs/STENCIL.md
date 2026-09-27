@@ -49,7 +49,7 @@ MistralRs-only.
 The chapter changes *how reliably* an existing provider emits an existing kind of
 output. It adds **no tool**, **no `KNOWN_BASES` base**, **no scope**, and therefore
 **no P10 amendment** (contrast Chapter Forge, which added the `git.write` base and
-Amendment A13). The trust-tier model, the per-role allowlist, sandboxing, and the
+Amendment A13b). The trust-tier model, the per-role allowlist, sandboxing, and the
 audit chain are all untouched. The only contract-adjacent surface is one new
 **default-off** config field.
 

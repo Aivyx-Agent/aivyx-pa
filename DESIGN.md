@@ -561,7 +561,7 @@ Rule 4 is intentional: tools must be specific. Unrestricted requests are visible
 | `shell.exec` | command allowlist | Run a command, capture output |
 | `shell.spawn` | command allowlist | Spawn long-lived subprocess |
 
-**`git` — version control** *(read added in Amendment A12, Phase 109; write added in Amendment A13, Chapter Forge)*
+**`git` — version control** *(read added in Amendment A12, Phase 109; write added in Amendment A13b, Chapter Forge)*
 
 | Scope | Qualifier | Description |
 |---|---|---|

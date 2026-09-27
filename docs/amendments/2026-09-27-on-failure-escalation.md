@@ -7,7 +7,7 @@ authorize `on_failure` escalation." A15 is otherwise unchanged: G6 and
 N5 are not narrowed or relaxed, and A15's other four "What this does
 not say" bullets still hold in full.
 **Implementing phase:** Model routing Part 3b (continued). The
-governance gate precedes the feature, as in A15 (the A13 / FG.2
+governance gate precedes the feature, as in A15 (the A13b / FG.2
 precedent).
 **Reference design:** `aivyx-ecosystem/docs/superpowers/specs/2026-09-27-on-failure-escalation-design.md`.
 

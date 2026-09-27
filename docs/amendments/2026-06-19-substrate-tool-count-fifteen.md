@@ -1,6 +1,9 @@
-# Amendment A13 — Substrate Tool Count Update (Thirteen → Fifteen)
+# Amendment A13b — Substrate Tool Count Update (Thirteen → Fifteen)
 
 **Date:** 2026-06-19
+**Renumbered:** filed as A13, which duplicated the Phase 163 amendment
+(`2026-06-04-content-part-document.md`, the earlier and first A13). Renamed A13b
+on 2026-09-28 so each amendment number is unique; A14 onward are unchanged.
 **Phase:** Chapter Forge (FG.2)
 **Supersedes:** Narrows P10 (Product Commitment 10 —
 Substrate-Only Core, post-A12). The count "thirteen" becomes

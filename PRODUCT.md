@@ -723,7 +723,7 @@ future implementation from compromising it for ergonomics.
    read primitives (`git.status`, `git.diff`) were added to
    substrate at A12 (Phase 109) on the rationale that code-
    read inspection is operator-bootstrap-essential, the same
-   way `fs.read` is; `git.commit` followed at A13 (Chapter
+   way `fs.read` is; `git.commit` followed at A13b (Chapter
    Forge) — code-write is the `fs.write` to that `fs.read` —
    alongside `web.extract`, the readability refinement of
    `web.fetch`.
@@ -777,7 +777,7 @@ substrate and therefore **not** counted against the cap:
 Phase 37 stabilized the substrate set; Amendment A11 (Phase
 100) brought it to ten tools; Amendment A12 (Phase 109)
 brought it to thirteen with the `git.status` + `git.diff`
-read pair and `net.dns`; Amendment A13 (Chapter Forge) brought
+read pair and `net.dns`; Amendment A13b (Chapter Forge) brought
 it to fifteen with `web.extract` and `git.commit`. Pinning the cap at the current
 count is a way of saying: **the foundation is done growing
 the substrate.** Future product phases focus on the daemon
@@ -1343,7 +1343,7 @@ because the foundation already supports them:
   inheritance layer.
 - **P10 — Substrate-only core.** True at fifteen tools
   (Amendment A5, Phase 38; Amendment A11, Phase 100;
-  Amendment A12, Phase 109; Amendment A13, Chapter Forge).
+  Amendment A12, Phase 109; Amendment A13b, Chapter Forge).
 
 ---
 
@@ -1356,7 +1356,7 @@ A6 (parallel tool execution, Phase 40), A7 (protocol
 negotiation, Phase 41), A8 (pitch reframe, Phase 56), A9
 (P13 — Profile, Phase 56), A10 (P14 — Persona, Phase 56), A11
 (P10 eight→ten, Phase 100), A12 (P10 ten→thirteen, Phase 109),
-A13 (P10 thirteen→fifteen, Chapter Forge).
+A13b (P10 thirteen→fifteen, Chapter Forge).
 This section records what shipped, what partially shipped,
 and what remains forward.
 
@@ -1448,7 +1448,7 @@ take effect on the next turn without daemon restart.
   (existing scope since Phase 0) added in Phase 109,
   amendment A12 filed the same phase; `web.extract` (over the
   existing `net.fetch` scope) + `git.commit` (new `git.write`
-  scope) added at Chapter Forge, amendment A13 filed at FG.2.
+  scope) added at Chapter Forge, amendment A13b filed at FG.2.
   Infrastructure tools and third-party MCP tools are separate
   categories.
 

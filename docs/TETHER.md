@@ -53,7 +53,7 @@ enough from shell.exec's one-shot semantics that this needs its own base —
 same reasoning that gave `git.write` its own base distinct from `git.read`
 (Chapter Forge), or `team.run` its own base distinct from `team.delegate`
 (Chapter L.7). Under **P10** (substrate tool count, amendment-gated) this
-tool family would need its own amendment, the same process A12/A13 went
+tool family would need its own amendment, the same process A12/A13b went
 through for `git.read`/`git.write`. Given the severity — a *live* shell you
 can keep steering is strictly more powerful than a one-shot command — it
 should sit at Trusted tier at minimum (same ceiling as `shell.exec`), and
