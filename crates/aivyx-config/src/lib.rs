@@ -395,6 +395,10 @@ pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx PA";
 ///   additive `aivyx_slot_hint` field. This run never builds a local
 ///   `KvSlotPool` / kvcache store -- the broker owns that lifecycle
 ///   itself. No `ollama.list/show/pull` tools registered.
+/// - `Lemonade` — `base_url = http://127.0.0.1:13305/api` (Lemonade
+///   Server's default); OpenAI-compatible under that `/api` prefix, one
+///   LLM loaded at a time. Model management via Lemonade's own UI/CLI.
+///   No `ollama.list/show/pull` tools registered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
@@ -430,6 +434,11 @@ pub enum ProviderKind {
     /// `broker_base_url`.
     #[serde(alias = "broker", alias = "aivyx-broker", alias = "aivyx_broker")]
     Broker,
+    /// Lemonade Server — a local OpenAI-compatible server (llama.cpp,
+    /// ONNX/NPU and other backends) that holds one LLM at a time. Its
+    /// OpenAI-compatible surface lives under `/api`, so the base URL is
+    /// `http://127.0.0.1:13305/api`.
+    Lemonade,
 }
 
 impl ProviderKind {
@@ -447,6 +456,7 @@ impl ProviderKind {
                 | ProviderKind::LlamaCpp
                 | ProviderKind::Jan
                 | ProviderKind::Broker
+                | ProviderKind::Lemonade
         )
         // Phase 134 — MistralRs is intentionally NOT in this set.
         // It has no HTTP wire protocol; the model runs in-process.
@@ -478,7 +488,10 @@ impl ProviderKind {
             // most 7B/13B models. Operators on llama-server / Jan
             // routinely load larger-context models (Qwen 32B at
             // 32k, etc.) and override via config.
-            ProviderKind::Ollama | ProviderKind::LlamaCpp | ProviderKind::Jan => 8_000,
+            ProviderKind::Ollama
+            | ProviderKind::LlamaCpp
+            | ProviderKind::Jan
+            | ProviderKind::Lemonade => 8_000,
             // Phase 134 — same conservative posture as the other
             // local-LLM providers. The actual context depends on
             // the loaded GGUF's metadata; mistralrs honors the
@@ -502,6 +515,7 @@ impl std::fmt::Display for ProviderKind {
             ProviderKind::Jan => f.write_str("jan"),
             ProviderKind::MistralRs => f.write_str("mistralrs"),
             ProviderKind::Broker => f.write_str("broker"),
+            ProviderKind::Lemonade => f.write_str("lemonade"),
         }
     }
 }
@@ -6085,12 +6099,13 @@ impl AivyxConfig {
                     // GPU-slot broker coordination — same alias set as
                     // the serde attribute on the enum.
                     "broker" | "aivyx-broker" | "aivyx_broker" => ProviderKind::Broker,
+                    "lemonade" => ProviderKind::Lemonade,
                     other => {
                         return Err(ConfigError::Invalid {
                             field: "provider",
                             reason: format!(
                                 "{ENV_PROVIDER}={other:?} is not valid. \
-                                 Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs, broker"
+                                 Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs, broker, lemonade"
                             ),
                         });
                     }
@@ -8363,7 +8378,8 @@ impl AivyxConfig {
                 | ProviderKind::LlamaCpp
                 | ProviderKind::Jan
                 | ProviderKind::MistralRs
-                | ProviderKind::Broker => {
+                | ProviderKind::Broker
+                | ProviderKind::Lemonade => {
                     // Local-LLM providers do not require an API key —
                     // they run locally and ignore the Authorization
                     // header. Phase 133 added LlamaCpp + Jan; Phase
@@ -8372,6 +8388,7 @@ impl AivyxConfig {
                     // arise). GPU-slot broker coordination adds Broker
                     // -- `aivyx-broker` is loopback-only with no auth,
                     // same trust model as `llama-server` itself.
+                    // Lemonade Server is loopback-local with no key.
                 }
             }
         }

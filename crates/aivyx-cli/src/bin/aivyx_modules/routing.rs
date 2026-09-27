@@ -44,6 +44,7 @@ pub(crate) fn default_endpoint(kind: ProviderKind, base_url: Option<&str>) -> De
         ProviderKind::OpenAi if base_url.is_some_and(is_loopback_url) => EndpointKind::OpenaiCompat,
         ProviderKind::OpenAi => EndpointKind::Openai,
         ProviderKind::Ollama => EndpointKind::Ollama,
+        ProviderKind::Lemonade => EndpointKind::Lemonade,
         ProviderKind::LlamaCpp
         | ProviderKind::Jan
         | ProviderKind::MistralRs
@@ -366,6 +367,10 @@ pub(crate) enum DefaultResidency {
     Resident,
     /// `aivyx-broker` at this base URL, fronting a single llama-server.
     Broker(String),
+    /// Lemonade Server at this base URL (the `.../api` form):
+    /// `/v1/health` + `/v1/models`. Never resident — Lemonade loads one
+    /// LLM at a time and says which.
+    Lemonade(String),
 }
 
 pub(crate) fn default_residency(
@@ -382,6 +387,9 @@ pub(crate) fn default_residency(
         )),
         ProviderKind::MistralRs => DefaultResidency::Resident,
         ProviderKind::Broker => DefaultResidency::Broker(provider_base_url(broker_base_url)),
+        ProviderKind::Lemonade => DefaultResidency::Lemonade(provider_base_url(
+            base_url.unwrap_or("http://127.0.0.1:13305/api"),
+        )),
         ProviderKind::Jan | ProviderKind::OpenAi | ProviderKind::Anthropic => {
             DefaultResidency::None
         }
@@ -401,6 +409,7 @@ impl ResidencySources {
         let own = match &default {
             DefaultResidency::Ollama(url) => Some((EndpointKind::Ollama, url)),
             DefaultResidency::LlamaServer(url) => Some((EndpointKind::LlamaRouter, url)),
+            DefaultResidency::Lemonade(url) => Some((EndpointKind::Lemonade, url)),
             _ => None,
         };
         if let Some((kind, url)) = own {
@@ -426,7 +435,12 @@ impl ResidencySources {
             || self
                 .endpoints
                 .iter()
-                .any(|(_, c)| matches!(c.kind, EndpointKind::Ollama | EndpointKind::LlamaRouter))
+                .any(|(_, c)| {
+                matches!(
+                    c.kind,
+                    EndpointKind::Ollama | EndpointKind::LlamaRouter | EndpointKind::Lemonade
+                )
+            })
     }
 
     pub(crate) async fn poll(
@@ -1071,6 +1085,7 @@ mod tests {
             );
         }
         assert_eq!(kind(ProviderKind::Ollama, None), EndpointKind::Ollama);
+        assert_eq!(kind(ProviderKind::Lemonade, None), EndpointKind::Lemonade);
         for p in [
             ProviderKind::LlamaCpp,
             ProviderKind::Jan,
@@ -1280,6 +1295,21 @@ mod tests {
             let line = request_line(listener, provider).await;
             assert!(line.starts_with(expected), "{kind:?}: {line}");
         }
+    }
+
+    /// Lemonade's base URL is the `.../api` form discovery and residency
+    /// use; the OpenAI-compatible provider appends `/v1/chat/completions`.
+    #[tokio::test]
+    async fn the_factory_builds_a_lemonade_provider_under_its_api_prefix() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/api", listener.local_addr().unwrap());
+        let mut cfg = RoutingConfig::default();
+        cfg.endpoints
+            .insert("npu".into(), endpoint(EndpointKind::Lemonade, Some(&base)));
+        let provider =
+            provider_factory(&cfg, &CloudAccess::default())(&EndpointRef::new("npu")).unwrap();
+        let line = request_line(listener, provider).await;
+        assert!(line.starts_with("POST /api/v1/chat/completions "), "{line}");
     }
 
     #[test]
@@ -2097,6 +2127,14 @@ mod tests {
         assert_eq!(d(ProviderKind::MistralRs, None), D::Resident);
         assert_eq!(d(ProviderKind::Broker, None), D::Broker("http://127.0.0.1:8899".into()));
         assert_eq!(d(ProviderKind::Jan, None), D::None);
+        assert_eq!(
+            d(ProviderKind::Lemonade, None),
+            D::Lemonade("http://127.0.0.1:13305/api".into())
+        );
+        assert_eq!(
+            d(ProviderKind::Lemonade, Some("http://npu:13305/api/")),
+            D::Lemonade("http://npu:13305/api".into())
+        );
         assert_eq!(d(ProviderKind::OpenAi, Some("http://127.0.0.1:1234/v1")), D::None);
         assert_eq!(d(ProviderKind::Anthropic, None), D::None);
     }
@@ -2126,6 +2164,31 @@ mod tests {
             ..RoutingConfig::default()
         };
         assert!(ResidencySources::new(&vram, DefaultResidency::None).is_active());
+    }
+
+    #[tokio::test]
+    async fn a_lemonade_default_is_a_residency_source_but_never_marked_resident() {
+        // Port 1: nothing listens, so the poll reads nothing.
+        let s = ResidencySources::new(
+            &RoutingConfig::default(),
+            DefaultResidency::Lemonade("http://127.0.0.1:1/api".into()),
+        );
+        let sources: Vec<(String, EndpointConfig)> =
+            s.endpoints.iter().map(|(e, c)| (e.to_string(), c.clone())).collect();
+        assert_eq!(
+            sources,
+            [(
+                DEFAULT_ENDPOINT.to_string(),
+                endpoint(EndpointKind::Lemonade, Some("http://127.0.0.1:1/api"))
+            )]
+        );
+        assert!(s.is_active());
+        let snap = s.poll(&aivyx_route::discovery::reqwest::Client::new()).await;
+        assert!(!snap.resident_endpoints.contains(&EndpointRef::new(DEFAULT_ENDPOINT)));
+        // A Lemonade routing endpoint is a residency source too.
+        let mut npu = RoutingConfig::default();
+        npu.endpoints.insert("npu".into(), endpoint(EndpointKind::Lemonade, None));
+        assert!(ResidencySources::new(&npu, DefaultResidency::None).is_active());
     }
 
     #[tokio::test]

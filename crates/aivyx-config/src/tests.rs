@@ -4200,6 +4200,82 @@ fn broker_display_canonical_form() {
 }
 
 // ------------------------------------------------------------------
+// Lemonade Server — `provider = "lemonade"`
+// ------------------------------------------------------------------
+
+#[test]
+fn lemonade_provider_from_env() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PA_PROVIDER", "lemonade");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::Lemonade);
+    assert_eq!(cfg.provider.source, FieldSource::Env);
+    drop(env);
+}
+
+#[test]
+fn lemonade_provider_from_toml() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("lemonade-toml");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "lemonade"
+model = "Qwen3-8B-GGUF"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.provider.value, ProviderKind::Lemonade);
+    assert_eq!(cfg.model.value, "Qwen3-8B-GGUF");
+    drop(env);
+}
+
+#[test]
+fn lemonade_validate_does_not_require_api_key() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PA_PROVIDER", "lemonade");
+    let opts = LoadOptions {
+        toml_path: None,
+        require_api_key: true,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    cfg.validate(&opts)
+        .expect("lemonade must not require an API key even with require_api_key=true");
+    drop(env);
+}
+
+#[test]
+fn provider_kind_lemonade_is_a_local_openai_compatible_provider() {
+    assert!(ProviderKind::Lemonade.is_openai_compatible());
+    assert!(!ProviderKind::Lemonade.is_in_process());
+    assert_eq!(ProviderKind::Lemonade.default_context_window(), 8_000);
+    assert_eq!(ProviderKind::Lemonade.to_string(), "lemonade");
+}
+
+// ------------------------------------------------------------------
 // [daemon] web_ui / web_ui_port — Phase 39
 // ------------------------------------------------------------------
 

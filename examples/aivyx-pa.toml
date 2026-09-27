@@ -326,13 +326,17 @@ parent_role = "researcher"
 # ----------------------------------------------------------------
 #
 # `[agent] provider` selects the LLM backend. Default: "anthropic".
-# Supported values: "anthropic", "openai", "ollama".
+# Supported values: "anthropic", "openai", "ollama", "lemonade".
 #
 # - "openai" targets cloud OpenAI or any compatible endpoint.
 # - "ollama" is sugar for local Ollama — defaults to
 #   http://localhost:11434, API key is optional, and
 #   stream_options.include_usage is omitted (some Ollama
 #   versions reject unknown fields).
+# - "lemonade" is local Lemonade Server — defaults to
+#   http://127.0.0.1:13305/api (its OpenAI-compatible API lives
+#   under /api; port 13305), no API key. Override with
+#   [openai] base_url, keeping the /api suffix.
 #
 # Can also be overridden via `AIVYX_PA_PROVIDER` env var or
 # `--provider` CLI flag.
@@ -1566,11 +1570,13 @@ parent_role = "researcher"
 #
 # # Extra LOCAL endpoints. Kinds: "ollama" (default base_url
 # # http://localhost:11434), "llama_router" (llama-server router mode,
-# # default http://localhost:8080), "openai_compat" (anything serving
-# # /v1/models — base_url required; it may end in /v1 or not). For
-# # "ollama" and "llama_router" give the bare server root (no /v1):
-# # discovery calls /api/tags and /models under it, and a /v1 root
-# # makes the endpoint look unreachable.
+# # default http://localhost:8080), "lemonade" (Lemonade Server,
+# # default http://127.0.0.1:13305/api — keep the /api suffix; one LLM
+# # loaded at a time, residency read from /v1/health), "openai_compat"
+# # (anything serving /v1/models — base_url required; it may end in /v1
+# # or not). For "ollama" and "llama_router" give the bare server root
+# # (no /v1): discovery calls /api/tags and /models under it, and a /v1
+# # root makes the endpoint look unreachable.
 # [routing.endpoints.gpu-box]
 # kind = "ollama"
 # base_url = "http://192.168.1.20:11434"

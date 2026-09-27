@@ -7046,6 +7046,7 @@ fn provider_label(p: aivyx_config::ProviderKind) -> &'static str {
         Jan => "jan",
         MistralRs => "mistralrs",
         Broker => "broker",
+        Lemonade => "lemonade",
     }
 }
 

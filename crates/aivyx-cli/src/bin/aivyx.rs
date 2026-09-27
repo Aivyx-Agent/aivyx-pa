@@ -233,6 +233,12 @@ const PROMPT: &str = "> ";
 /// can't silently drift apart.
 const DEFAULT_BROKER_BASE_URL: &str = "http://127.0.0.1:8899";
 
+/// Lemonade Server's default base URL (the `/api` form discovery and
+/// residency use too), when `[openai] base_url` is unset. Shared by the
+/// `ProviderKind::Lemonade` provider-construction arm and the startup
+/// banner.
+const DEFAULT_LEMONADE_BASE_URL: &str = "http://127.0.0.1:13305/api";
+
 /// Default path the binary looks at for the TOML config file.
 /// `./aivyx-pa.toml` relative to the current working directory — present
 /// if the operator has written one, silently ignored if not. Absolute
@@ -1546,6 +1552,11 @@ fn print_config_banner(config: &AivyxConfig) {
             eprintln!(
                 "  base_url          = {:?} (default)",
                 "http://localhost:1337/v1",
+            );
+        } else if config.provider.value == aivyx_config::ProviderKind::Lemonade {
+            eprintln!(
+                "  base_url          = {:?} (default)",
+                DEFAULT_LEMONADE_BASE_URL,
             );
         }
     } else if config.provider.value.is_in_process() {
@@ -5126,10 +5137,12 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     // GPU-slot broker coordination — accept the same
                     // alias as the serde alias attribute on the enum.
                     "broker" => ProviderKind::Broker,
+                    "lemonade" => ProviderKind::Lemonade,
                     other => {
                         return Err(format!(
                             "unrecognized provider `{other}`. \
-                             Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs, broker"
+                             Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs, broker, \
+                             lemonade"
                         ));
                     }
                 });
@@ -6698,6 +6711,19 @@ async fn run_async(
             .with_constrain_tool_calls(openai_constrain_tool_calls);
             let p = OpenAiProvider::new(cfg)
                 .map_err(|e| format!("failed to build Jan provider: {e}"))?;
+            Arc::new(p)
+        }
+        ProviderKind::Lemonade => {
+            // Lemonade Server — OpenAI-compatible under its `/api`
+            // prefix (`{base}/v1/chat/completions`), one LLM loaded at a
+            // time. Defaults to `http://127.0.0.1:13305/api`; operator
+            // overrides via `[openai] base_url`. Keyless: Lemonade is a
+            // loopback server with no auth.
+            let base_url = openai_base_url
+                .map(|s| s.value)
+                .unwrap_or_else(|| DEFAULT_LEMONADE_BASE_URL.to_string());
+            let p = OpenAiProvider::new(OpenAiConfig::without_api_key().with_base_url(base_url))
+                .map_err(|e| format!("failed to build Lemonade provider: {e}"))?;
             Arc::new(p)
         }
         ProviderKind::MistralRs => {
@@ -13606,6 +13632,13 @@ mod tests {
     fn provider_flag_broker() {
         let parsed = parse_cli_args_from(&argv(&["--provider", "broker"])).expect("must parse");
         assert_eq!(parsed.provider, Some(ProviderKind::Broker));
+    }
+
+    #[test]
+    fn provider_flag_lemonade() {
+        let parsed =
+            parse_cli_args_from(&argv(&["--provider", "lemonade"])).expect("must parse");
+        assert_eq!(parsed.provider, Some(ProviderKind::Lemonade));
     }
 
     // -----------------------------------------------------------------
