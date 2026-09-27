@@ -5,8 +5,9 @@
 //! turn. For the local (Ollama) provider it checks: Ollama reachable → the
 //! configured model present → a real test generation that returns **non-empty**
 //! text (the exact failure modes — empty thinking content, dropped tool calls,
-//! starved `num_ctx` — that ruined first impressions). Cloud providers get a
-//! lighter config-presence check. Read-only; no daemon, no passphrase.
+//! starved `num_ctx` — that ruined first impressions). Lemonade Server gets a
+//! reachability + model-downloaded check. Cloud providers get a lighter
+//! config-presence check. Read-only; no daemon, no passphrase.
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +27,7 @@ pub async fn run_doctor() -> Result<(), String> {
 
     let provider_ok = match cfg.provider.value {
         ProviderKind::Ollama => check_ollama(&cfg).await,
+        ProviderKind::Lemonade => check_lemonade(&cfg).await,
         other => check_cloud(other, &cfg),
     };
 
@@ -271,6 +273,105 @@ async fn test_generation(base_url: &str, model: &str) -> Result<String, String> 
     // Drain the terminal; the text-so-far is what we assert on.
     let _ = Box::new(stream).finish().await;
     Ok(text)
+}
+
+/// What doctor concluded about a Lemonade Server, split out as pure logic
+/// from the probing and the `println!` side effects.
+#[derive(Debug, PartialEq, Eq)]
+enum LemonadeVerdict {
+    Unreachable(String),
+    /// Reachable, but the configured model is not downloaded.
+    ModelMissing { downloaded: Vec<String> },
+    /// Reachable with the model downloaded; `loaded` is whichever model
+    /// Lemonade holds right now (it holds one LLM at a time).
+    Ready { loaded: Option<String> },
+}
+
+fn lemonade_verdict(
+    discovery: aivyx_route::DiscoveryOutcome,
+    residency: &aivyx_route::ResidencySnapshot,
+    model: &str,
+) -> LemonadeVerdict {
+    let downloaded: Vec<String> = match discovery {
+        aivyx_route::DiscoveryOutcome::Reached(models) => {
+            models.into_iter().map(|m| m.id).collect()
+        }
+        aivyx_route::DiscoveryOutcome::Unreachable(why) => {
+            return LemonadeVerdict::Unreachable(why);
+        }
+        aivyx_route::DiscoveryOutcome::NotProbed => {
+            return LemonadeVerdict::Unreachable("not probed".into());
+        }
+    };
+    if !downloaded.iter().any(|id| id == model) {
+        return LemonadeVerdict::ModelMissing { downloaded };
+    }
+    let loaded = residency.models.iter().find_map(|(key, r)| {
+        matches!(r, aivyx_route::ModelResidency::Loaded { .. }).then(|| key.id.clone())
+    });
+    LemonadeVerdict::Ready { loaded }
+}
+
+/// Lemonade Server checks: reachable, and the configured model is
+/// downloaded (through aivyx-route's own Lemonade discovery + residency,
+/// the same view routing gets). Returns `true` iff both passed.
+async fn check_lemonade(cfg: &AivyxConfig) -> bool {
+    let base_url = cfg
+        .openai_base_url
+        .as_ref()
+        .map(|s| s.value.clone())
+        .unwrap_or_else(|| crate::DEFAULT_LEMONADE_BASE_URL.to_string());
+    let model = cfg.model.value.clone();
+    println!("Provider: lemonade (model `{model}`, {base_url})\n");
+    check_lemonade_at(&base_url, &model).await
+}
+
+async fn check_lemonade_at(base_url: &str, model: &str) -> bool {
+    let client = aivyx_route::discovery::reqwest::Client::new();
+    let endpoint = aivyx_route::EndpointRef::new("default");
+    let config = aivyx_route::EndpointConfig {
+        kind: aivyx_route::EndpointKind::Lemonade,
+        base_url: Some(base_url.to_string()),
+    };
+    let report = aivyx_route::discovery::discover(&endpoint, &config, &client).await;
+    let residency =
+        aivyx_route::discovery::residency::collect(&[(endpoint, config)], None, None, &client)
+            .await;
+    match lemonade_verdict(report.outcome, &residency, model) {
+        LemonadeVerdict::Unreachable(why) => {
+            fail(
+                &format!("Lemonade Server is not reachable at {base_url} ({why})"),
+                "Start it (`lemond`, or its service), and keep the `/api` suffix on \
+                 `[openai] base_url` (default http://127.0.0.1:13305/api).",
+            );
+            false
+        }
+        LemonadeVerdict::ModelMissing { downloaded } => {
+            let have = if downloaded.is_empty() {
+                "none".to_string()
+            } else {
+                downloaded.join(", ")
+            };
+            fail(
+                &format!("model `{model}` is not downloaded (downloaded: {have})"),
+                &format!("Download it with `lemonade pull {model}`, or set `[agent] model` to one of those."),
+            );
+            false
+        }
+        LemonadeVerdict::Ready { loaded } => {
+            pass("Lemonade Server is running");
+            pass(&format!("model `{model}` is downloaded"));
+            match loaded {
+                Some(id) if id == model => println!("  loaded now: `{id}`"),
+                Some(id) => println!(
+                    "  loaded now: `{id}` — Lemonade holds one LLM at a time, so the \
+                     first turn swaps to `{model}`"
+                ),
+                None => println!("  no model loaded yet — the first turn loads `{model}`"),
+            }
+            true
+        }
+    }
 }
 
 /// Lighter check for cloud providers — confirm the config is wired (a key is
@@ -606,6 +707,59 @@ mod tests {
         assert!(is_local_base_url("http://my-box:11434"));
         // Cloud endpoints are not local.
         assert!(!is_local_base_url("https://api.openai.com"));
+    }
+
+    fn lemonade_model(id: &str) -> aivyx_route::DiscoveredModel {
+        aivyx_route::DiscoveredModel {
+            id: id.to_string(),
+            capabilities: Default::default(),
+            unknown_capabilities: Default::default(),
+            context_window: None,
+        }
+    }
+
+    fn residency_with_loaded(id: &str) -> aivyx_route::ResidencySnapshot {
+        let mut snap = aivyx_route::ResidencySnapshot::default();
+        snap.models.insert(
+            aivyx_route::ModelKey {
+                endpoint: aivyx_route::EndpointRef::new("default"),
+                id: id.to_string(),
+            },
+            aivyx_route::ModelResidency::Loaded { vram_bytes: None },
+        );
+        snap
+    }
+
+    #[test]
+    fn lemonade_verdict_covers_unreachable_missing_and_ready() {
+        use aivyx_route::DiscoveryOutcome;
+        let none = aivyx_route::ResidencySnapshot::default();
+        assert_eq!(
+            lemonade_verdict(DiscoveryOutcome::Unreachable("refused".into()), &none, "m"),
+            LemonadeVerdict::Unreachable("refused".into())
+        );
+        let reached = || DiscoveryOutcome::Reached(vec![lemonade_model("a"), lemonade_model("b")]);
+        assert_eq!(
+            lemonade_verdict(reached(), &none, "m"),
+            LemonadeVerdict::ModelMissing {
+                downloaded: vec!["a".into(), "b".into()]
+            }
+        );
+        assert_eq!(
+            lemonade_verdict(reached(), &none, "a"),
+            LemonadeVerdict::Ready { loaded: None }
+        );
+        assert_eq!(
+            lemonade_verdict(reached(), &residency_with_loaded("b"), "a"),
+            LemonadeVerdict::Ready {
+                loaded: Some("b".into())
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn check_lemonade_fails_when_the_server_is_unreachable() {
+        assert!(!check_lemonade_at("http://127.0.0.1:1/api", "some-model").await);
     }
 
     #[tokio::test]

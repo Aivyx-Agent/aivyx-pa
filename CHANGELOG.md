@@ -41,12 +41,21 @@ All notable changes to Aivyx are recorded here. This project adheres to
   provider = "lemonade"` targets a local Lemonade Server at
   `http://127.0.0.1:13305/api` by default (override with `[openai]
   base_url`, keeping the `/api` suffix), keyless unless `[openai]
-  api_key` is set, with streamed token usage. `[routing.endpoints.*] kind = "lemonade"` adds one as a routing
-  endpoint (aivyx-route af1b748): discovery lists its downloaded models
+  api_key` is set, with streamed token usage. `[routing.endpoints.*]
+  kind = "lemonade"` adds one as a routing endpoint (aivyx-route
+  af1b748): discovery lists its downloaded models
   from `/v1/models`, mapping its labels onto capabilities, and residency
   reads `/v1/health` to see which model is loaded. Lemonade holds one LLM
   at a time, so the endpoint is never assumed resident, whether it is
   the default endpoint or an extra one.
+- **Lemonade hardening (aivyx-route 5cdc111).** A model Lemonade labels
+  `reasoning` is now known to think, so the routing classifier avoids it
+  without a roster entry (an unlabelled model may still think: declare
+  `capabilities = ["thinking"]` for those). A Lemonade base ending in
+  `/v1` is tolerated by discovery and residency. `aivyx-pa doctor` with
+  `provider = "lemonade"` now checks the server is reachable and the
+  model is downloaded, and says which model is loaded, instead of the
+  cloud "an API key is configured" note.
 - **The routing classifier avoids thinking models.** A reasoning model
   spends the classifier's few tokens thinking and never answers, so it
   always fell back to medium. Classification now prefers a model not
