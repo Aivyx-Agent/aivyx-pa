@@ -38,6 +38,33 @@ const UNREADABLE_REASON: &str = "routing taint unreadable";
 /// instance: two guards over the same storage would each report a
 /// session's first mark as new, and consent granted on one would be
 /// invisible to the other.
+/// Model routing Part 3b (A16) — the three per-session sets behind
+/// `on_failure` arming, held under one lock so every transition (`arm`,
+/// `begin_armed_turn`, `end_armed_turn`, `note_consent_requested`, and the
+/// `armed` read) is a single critical section. Splitting these across
+/// separate mutexes (the original shape) let a consent note that arrived
+/// after its turn's `end_armed_turn` had already run leave a stale
+/// `consent_requested` entry that a later, unrelated turn's
+/// `end_armed_turn` would pick up and use to spuriously re-arm — see
+/// task-3-review.md's concurrency finding.
+#[derive(Default)]
+struct ArmState {
+    /// Sessions armed for their *next* turn. A turn's start moves its
+    /// session out of here into `active`; see
+    /// [`RoutingGuard::begin_armed_turn`].
+    armed: HashSet<String>,
+    /// Sessions armed for *this* (currently running) turn.
+    /// `EscalationGuard::armed` reads this set, never `armed` above —
+    /// that's the whole one-shot, next-turn-only design.
+    active: HashSet<String>,
+    /// Sessions whose active-turn arming stopped for operator consent
+    /// (`ask` mode, `NeedsConsent`), so [`RoutingGuard::end_armed_turn`]
+    /// knows to re-arm rather than clear. Only ever set for a session
+    /// that's currently in `active` — see
+    /// [`RoutingGuard::note_consent_requested`].
+    consent_requested: HashSet<String>,
+}
+
 pub struct RoutingGuard {
     storage: DomainHandle,
     /// Every taint this process knows of: persisted rows it has read or
@@ -47,18 +74,9 @@ pub struct RoutingGuard {
     /// under concurrent marks of the same session.
     mark_lock: tokio::sync::Mutex<()>,
     consent: Mutex<HashSet<String>>,
-    /// Model routing Part 3b (A16) — sessions armed for their *next* turn.
-    /// A turn's start moves its session out of here into `active`; see
-    /// [`RoutingGuard::begin_armed_turn`].
-    armed: Mutex<HashSet<String>>,
-    /// Model routing Part 3b (A16) — sessions armed for *this* (currently
-    /// running) turn. `EscalationGuard::armed` reads this set, never
-    /// `armed` above — that's the whole one-shot, next-turn-only design.
-    active: Mutex<HashSet<String>>,
-    /// Model routing Part 3b (A16) — sessions whose active-turn arming
-    /// stopped for operator consent (`ask` mode, `NeedsConsent`), so
-    /// [`RoutingGuard::end_armed_turn`] knows to re-arm rather than clear.
-    consent_requested: Mutex<HashSet<String>>,
+    /// Model routing Part 3b (A16) — the armed/active/consent-requested
+    /// state; see [`ArmState`].
+    arm_state: Mutex<ArmState>,
     /// Model routing Part 3b (A16) — the `ask`-mode hint line handed back
     /// from [`RoutingGuard::arm`] to an untainted session. `None` when
     /// there is nothing to say.
@@ -72,9 +90,7 @@ impl RoutingGuard {
             cache: Mutex::new(HashMap::new()),
             mark_lock: tokio::sync::Mutex::new(()),
             consent: Mutex::new(HashSet::new()),
-            armed: Mutex::new(HashSet::new()),
-            active: Mutex::new(HashSet::new()),
-            consent_requested: Mutex::new(HashSet::new()),
+            arm_state: Mutex::new(ArmState::default()),
             arm_hint: Mutex::new(None),
         }
     }
@@ -211,8 +227,9 @@ pub fn allow_cloud_reply(
     }
 }
 
-/// Lock a std mutex, recovering from poisoning: both guarded sets only
-/// ever grow, so a panicked holder can't leave them inconsistent.
+/// Lock a std mutex, recovering from poisoning. Every mutation this module
+/// makes to a guarded set (or `ArmState`) is a single, non-interruptible
+/// call under the lock, so a panicked holder can't leave one half-updated.
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -229,12 +246,20 @@ impl aivyx_llm::escalation::EscalationGuard for RoutingGuard {
 
     fn armed(&self, session: &str) -> bool {
         // The *active* set (this turn), never `armed` (next turn) — see
-        // the module doc on `active`.
-        lock(&self.active).contains(session)
+        // the doc on `ArmState::active`.
+        lock(&self.arm_state).active.contains(session)
     }
 
     fn note_consent_requested(&self, session: &str) {
-        lock(&self.consent_requested).insert(session.to_owned());
+        // Only recorded while the session is still active this turn — an
+        // OnFailure consent request can only come from an active-turn
+        // call. This is what keeps a late-arriving note (one that lands
+        // after `end_armed_turn` already ran for this turn) from sticking
+        // around to misdirect a later, unrelated turn's exit.
+        let mut state = lock(&self.arm_state);
+        if state.active.contains(session) {
+            state.consent_requested.insert(session.to_owned());
+        }
     }
 }
 
@@ -252,8 +277,11 @@ impl aivyx_core::EscalationArming for RoutingGuard {
     /// returned only when the session is untainted (a tainted session
     /// never escalates, so there is nothing to ask about).
     async fn arm(&self, session: &str, _signal: &str) -> (bool, Option<String>) {
-        let newly = lock(&self.armed).insert(session.to_owned());
-        let hint = if RoutingGuard::taint(self, session).await.is_none() {
+        // Taint check first, outside the lock — it's the only `.await` in
+        // this method and a std mutex must never be held across one.
+        let untainted = RoutingGuard::taint(self, session).await.is_none();
+        let newly = lock(&self.arm_state).armed.insert(session.to_owned());
+        let hint = if untainted {
             lock(&self.arm_hint).clone()
         } else {
             None
@@ -265,19 +293,21 @@ impl aivyx_core::EscalationArming for RoutingGuard {
     /// session armed mid-turn (i.e. not present in `armed` at this call)
     /// is left alone — it will be picked up by the *next* `begin`.
     fn begin_armed_turn(&self, session: &str) {
-        if lock(&self.armed).remove(session) {
-            lock(&self.active).insert(session.to_owned());
+        let mut state = lock(&self.arm_state);
+        if state.armed.remove(session) {
+            state.active.insert(session.to_owned());
         }
     }
 
-    /// Turn end (every exit): clear the active mark. If the turn stopped
-    /// for operator consent, re-arm instead of just clearing, so the next
-    /// turn picks the mark back up.
+    /// Turn end (every exit): clear the active mark and the consent note,
+    /// unconditionally. If the turn stopped for operator consent, re-arm
+    /// instead of just clearing, so the next turn picks the mark back up.
     fn end_armed_turn(&self, session: &str) {
-        let was_consent_requested = lock(&self.consent_requested).remove(session);
-        lock(&self.active).remove(session);
+        let mut state = lock(&self.arm_state);
+        let was_consent_requested = state.consent_requested.remove(session);
+        state.active.remove(session);
         if was_consent_requested {
-            lock(&self.armed).insert(session.to_owned());
+            state.armed.insert(session.to_owned());
         }
     }
 }
@@ -532,6 +562,56 @@ mod tests {
         assert!(
             guard.armed("s1"),
             "the mark made during the active turn survives to the next begin"
+        );
+    }
+
+    #[tokio::test]
+    async fn note_consent_requested_on_an_inactive_session_is_a_no_op() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+
+        // "s1" was never armed or begun — it's not active.
+        guard.note_consent_requested("s1");
+        guard.end_armed_turn("s1");
+        guard.begin_armed_turn("s1");
+        assert!(
+            !guard.armed("s1"),
+            "a consent note for a session that isn't active must not arm anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_consent_note_that_arrives_after_turn_end_does_not_arm_a_later_turn() {
+        // Regression test for the reviewer's interleaving
+        // (task-3-review.md): `end_armed_turn` and `note_consent_requested`
+        // used to touch `consent_requested`/`active`/`armed` under
+        // separate locks, so a consent note that lands *after* its turn
+        // already ended could leave a stale `consent_requested` entry
+        // that a later, unrelated turn's `end_armed_turn` picked up and
+        // used to spuriously re-arm. With every transition serialized
+        // under one lock and `note_consent_requested` only recording
+        // while the session is still active, a late note is a no-op.
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+
+        // Turn A: armed, active, ends normally (no consent involved).
+        assert!(guard.arm("s1", "looping").await.0);
+        guard.begin_armed_turn("s1");
+        guard.end_armed_turn("s1");
+
+        // A consent note for turn A arrives late, after turn A already
+        // ended — the race the reviewer described. It must not stick:
+        // the session is no longer active.
+        guard.note_consent_requested("s1");
+
+        // Turn B: an unrelated, later exit for the same session, with no
+        // arming of its own. It must not be spuriously re-armed by the
+        // stale note.
+        guard.end_armed_turn("s1");
+        guard.begin_armed_turn("s1");
+        assert!(
+            !guard.armed("s1"),
+            "a late consent note for an already-ended turn must not re-arm a later turn"
         );
     }
 
