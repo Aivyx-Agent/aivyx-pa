@@ -6297,6 +6297,9 @@ async fn run_async(
         // Model routing Part 3b — `[routing.sensitive]`: what taints a
         // conversation (wired below only when escalation is active).
         routing_sensitive: config_routing_sensitive,
+        // Routing classifier — `[routing.classifier]`; not wired into
+        // `wrap_with_routing` yet.
+        routing_classifier: _,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {

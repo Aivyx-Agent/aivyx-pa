@@ -5,11 +5,11 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use aivyx_route::{
     EndpointRef, ModelKey, ModelProfile, RoutePlan, RouteQuery, RouteRecord, Router, SessionMap,
-    TaskKind,
+    TaskKind, Tier,
 };
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
@@ -18,7 +18,9 @@ use crate::escalation::{
     EscalationGuard, EscalationMode, EscalationObserver, EscalationRecord, EscalationVerdict,
     Trigger, decide_escalation, payload_hash,
 };
-use crate::{ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStream};
+use crate::{
+    ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, RouteHint,
+};
 
 /// Builds the provider for one endpoint. One provider serves every model
 /// on its endpoint; the model travels in `LlmRequest.model`.
@@ -54,6 +56,15 @@ pub struct EscalationSetup {
     pub observer: EscalationObserver,
 }
 
+/// Routing classifier — `[routing.classifier]`. A fresh chat
+/// conversation's first routed call (its session has no model yet) is
+/// preceded by a side call to a small local model (`TaskKind::Classify`)
+/// asking which tier it needs; the answer becomes the call's soft tier.
+pub struct ClassifierSetup {
+    /// Bounds the whole classifier call; past it the tier is medium.
+    pub timeout: Duration,
+}
+
 /// What an escalation attempt came to.
 enum Escalated {
     /// The call was dispatched to cloud, or stopped for consent: done.
@@ -73,6 +84,7 @@ pub struct RoutedProvider {
     refresher: Option<Arc<dyn ProfileRefresher>>,
     observer: Option<RouteObserver>,
     escalation: Option<EscalationSetup>,
+    classifier: Option<ClassifierSetup>,
     /// Session → the model that served its last routed call, local or
     /// escalated. What a caller attributing a step to a model must read
     /// (the local router's last decision doesn't see escalated calls).
@@ -96,6 +108,7 @@ impl RoutedProvider {
             refresher: None,
             observer: None,
             escalation: None,
+            classifier: None,
             last_served: Mutex::new(SessionMap::default()),
         }
     }
@@ -105,6 +118,17 @@ impl RoutedProvider {
     pub fn with_escalation(mut self, setup: EscalationSetup) -> Self {
         self.escalation = Some(setup);
         self
+    }
+
+    /// Enables the routing classifier. Without it no classifier call is
+    /// ever made.
+    pub fn with_classifier(mut self, setup: ClassifierSetup) -> Self {
+        self.classifier = Some(setup);
+        self
+    }
+
+    pub fn classifier_enabled(&self) -> bool {
+        self.classifier.is_some()
     }
 
     /// The escalation settings (Part 3b), `None` when escalation isn't
@@ -338,6 +362,83 @@ impl RoutedProvider {
         }
     }
 
+    /// Routing classifier — which tier does `request` need? A side call
+    /// (`Classify`, no session) on the local router over the last
+    /// [`CLASSIFIER_RECENT`] user messages' text, bounded as a whole by
+    /// `timeout`. Any failure, timeout or unparseable answer is `Err`.
+    async fn classify(
+        &self,
+        request: &LlmRequest<'_>,
+        cancellation: &CancellationToken,
+        timeout: Duration,
+    ) -> Result<Tier, ()> {
+        let call = async {
+            let mut recent: Vec<String> = request
+                .messages
+                .iter()
+                .rev()
+                .filter_map(|m| match m {
+                    LlmMessage::User { content } => Some(
+                        content
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<String>(),
+                    ),
+                    _ => None,
+                })
+                .take(CLASSIFIER_RECENT)
+                .collect();
+            recent.reverse();
+            let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
+            let prompt = aivyx_route::classifier::prompt(&refs);
+            let estimated_prompt_tokens = u32::try_from(prompt.len() / 4).unwrap_or(u32::MAX);
+            let query = RouteQuery {
+                task: TaskKind::Classify,
+                session: None,
+                tools: false,
+                vision: false,
+                estimated_prompt_tokens,
+                tier: None,
+            };
+            let plan = self.router.plan(&query, Instant::now()).map_err(|_| ())?;
+            let messages = [LlmMessage::user_text(prompt)];
+            let classifier_request = LlmRequest {
+                model: request.model,
+                system: None,
+                messages: &messages,
+                tools: &[],
+                max_tokens: 4,
+                temperature: Some(0.0),
+                id_slot: None,
+                slot_hint: None,
+                route: Some(RouteHint {
+                    task: TaskKind::Classify,
+                    session: None,
+                    estimated_prompt_tokens,
+                }),
+            };
+            // No session: `note_served` records nothing for this call.
+            let (mut stream, record) = self
+                .dispatch(&self.router, &plan, &classifier_request, cancellation)
+                .await
+                .map_err(|_| ())?;
+            if let Some(observer) = &self.observer {
+                observer(&record);
+            }
+            while stream.next_event().await.map_err(|_| ())?.is_some() {}
+            match stream.finish().await.map_err(|_| ())? {
+                LlmStepEnd::FinalMessage { text, .. } => {
+                    aivyx_route::classifier::parse(&text).ok_or(())
+                }
+                _ => Err(()),
+            }
+        };
+        tokio::time::timeout(timeout, call).await.map_err(|_| ())?
+    }
+
     /// The default endpoint is served by the configured provider; every
     /// other endpoint's provider is built once, on first use.
     fn provider_for(&self, endpoint: &EndpointRef) -> Result<Arc<dyn LlmProvider>, String> {
@@ -354,6 +455,9 @@ impl RoutedProvider {
         Ok(Arc::clone(pool.entry(endpoint.clone()).or_insert(built)))
     }
 }
+
+/// Routing classifier — how many of the latest user messages it sees.
+const CLASSIFIER_RECENT: usize = 6;
 
 fn user_blocks_any(messages: &[LlmMessage], pred: impl Fn(&ContentBlock) -> bool) -> bool {
     messages.iter().any(|m| match m {
@@ -411,12 +515,13 @@ impl LlmProvider for RoutedProvider {
                     .await;
             }
         };
-        let query = RouteQuery {
+        let mut query = RouteQuery {
             task: hint.task.clone(),
             session: hint.session.clone(),
             tools: !request.tools.is_empty(),
             vision: has_image(request.messages),
             estimated_prompt_tokens: hint.estimated_prompt_tokens,
+            tier: None,
         };
 
         // Task 2 / A16 — a session armed by a failed local turn escalates
@@ -456,7 +561,29 @@ impl LlmProvider for RoutedProvider {
             }
         }
 
-        let plan = match self.router.plan(&query, Instant::now()) {
+        // Routing classifier — a fresh chat conversation (no pin, no
+        // sticky model yet) gets its tier from a small local model first.
+        // Any failure is medium, Chat's own default tier.
+        let mut classified: Option<String> = None;
+        if let Some(setup) = &self.classifier
+            && hint.task == TaskKind::Chat
+            && let Some(session) = hint.session.as_deref()
+            && self.router.current(session).is_none()
+        {
+            let tier = match self.classify(&request, cancellation, setup.timeout).await {
+                Ok(tier) => {
+                    classified = Some(format!("; tier from classifier: {tier}"));
+                    tier
+                }
+                Err(()) => {
+                    classified = Some("; classifier fell back to medium".to_string());
+                    Tier::Medium
+                }
+            };
+            query.tier = Some(tier);
+        }
+
+        let mut plan = match self.router.plan(&query, Instant::now()) {
             Ok(plan) => plan,
             Err(e) => {
                 if blocked.is_none()
@@ -483,6 +610,9 @@ impl LlmProvider for RoutedProvider {
                 });
             }
         };
+        if let Some(suffix) = classified {
+            plan.reason.push_str(&suffix);
+        }
         let (stream, record) = self
             .dispatch(&self.router, &plan, &request, cancellation)
             .await?;
@@ -521,6 +651,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use aivyx_route::{
         Capability, EndpointRef, ModelKey, ModelProfile, RouteRecord, Router, TaskKind,
@@ -544,22 +675,67 @@ mod tests {
         slot_hint: Option<SlotHint>,
     }
 
-    /// Records every request; answers with an empty successful stream, or
-    /// with `fail` when it is set. `cancel_first` is cancelled before the
-    /// answer, to model an error that arrives after cancellation.
+    /// The rest of what one `chat_stream` call carried (routing
+    /// classifier tests).
+    #[derive(Debug, Clone)]
+    struct Detail {
+        /// Each user message's text blocks, joined.
+        user_texts: Vec<String>,
+        system: Option<String>,
+        tools: usize,
+        max_tokens: u32,
+        temperature: Option<f32>,
+        route: Option<RouteHint>,
+    }
+
+    /// Records every request; answers with a successful stream ending in
+    /// `answer` (empty by default), or with `fail` when it is set.
+    /// `cancel_first` is cancelled before the answer, to model an error
+    /// that arrives after cancellation. `delay` sleeps before answering.
     struct Scripted {
         fail: Option<LlmError>,
         cancel_first: Option<CancellationToken>,
+        answer: String,
+        delay: Option<Duration>,
         seen: Mutex<Vec<Seen>>,
+        details: Mutex<Vec<Detail>>,
     }
 
     impl Scripted {
-        fn ok() -> Arc<Self> {
-            Arc::new(Scripted {
+        fn base() -> Self {
+            Scripted {
                 fail: None,
                 cancel_first: None,
+                answer: String::new(),
+                delay: None,
                 seen: Mutex::new(Vec::new()),
+                details: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn ok() -> Arc<Self> {
+            Arc::new(Self::base())
+        }
+
+        /// A successful stream whose final message is `answer`.
+        fn answering(answer: &str) -> Arc<Self> {
+            Arc::new(Scripted {
+                answer: answer.into(),
+                ..Self::base()
             })
+        }
+
+        /// [`Scripted::answering`], after sleeping `delay`.
+        fn slow(delay: Duration, answer: &str) -> Arc<Self> {
+            Arc::new(Scripted {
+                answer: answer.into(),
+                delay: Some(delay),
+                ..Self::base()
+            })
+        }
+
+        fn details(&self) -> Vec<Detail> {
+            self.details.lock().unwrap().clone()
         }
 
         fn failing(status: u16) -> Arc<Self> {
@@ -572,8 +748,7 @@ mod tests {
         fn failing_with(err: LlmError) -> Arc<Self> {
             Arc::new(Scripted {
                 fail: Some(err),
-                cancel_first: None,
-                seen: Mutex::new(Vec::new()),
+                ..Self::base()
             })
         }
 
@@ -584,7 +759,7 @@ mod tests {
                     message: "down".into(),
                 }),
                 cancel_first: Some(token),
-                seen: Mutex::new(Vec::new()),
+                ..Self::base()
             })
         }
 
@@ -605,17 +780,44 @@ mod tests {
                 id_slot: request.id_slot,
                 slot_hint: request.slot_hint.clone(),
             });
+            self.details.lock().unwrap().push(Detail {
+                user_texts: request
+                    .messages
+                    .iter()
+                    .filter_map(|m| match m {
+                        LlmMessage::User { content } => Some(
+                            content
+                                .iter()
+                                .filter_map(|b| match b {
+                                    ContentBlock::Text { text } => Some(text.as_str()),
+                                    _ => None,
+                                })
+                                .collect::<String>(),
+                        ),
+                        _ => None,
+                    })
+                    .collect(),
+                system: request.system.map(str::to_string),
+                tools: request.tools.len(),
+                max_tokens: request.max_tokens,
+                temperature: request.temperature,
+                route: request.route.clone(),
+            });
             if let Some(token) = &self.cancel_first {
                 token.cancel();
             }
+            if let Some(delay) = self.delay {
+                tokio::time::sleep(delay).await;
+            }
             match &self.fail {
                 Some(err) => Err(err.clone()),
-                None => Ok(Box::new(EmptyStream)),
+                None => Ok(Box::new(EmptyStream(self.answer.clone()))),
             }
         }
     }
 
-    struct EmptyStream;
+    /// No events; finishes with its text as the final message.
+    struct EmptyStream(String);
 
     #[async_trait]
     impl LlmStream for EmptyStream {
@@ -624,7 +826,7 @@ mod tests {
         }
         async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
             Ok(LlmStepEnd::FinalMessage {
-                text: String::new(),
+                text: self.0,
                 usage: LlmUsage::default(),
             })
         }
@@ -1578,5 +1780,216 @@ mod tests {
         assert!(cloud.seen().is_empty());
         assert_eq!(f.default.seen().len(), 1);
         assert!(records.lock().unwrap().is_empty());
+    }
+
+    // ---- Routing classifier: a fresh chat conversation's tier ----
+
+    /// Local candidates `default@default` (Medium), `big@gpu` (Large) and
+    /// `tiny@cpu` (Small, the pick for `Classify`), with `classifier`
+    /// serving `cpu`. The classifier is on when `timeout` is `Some`.
+    /// Returns the provider, `gpu`, and every observed route record.
+    fn classifying(
+        classifier: Arc<Scripted>,
+        timeout: Option<Duration>,
+    ) -> (Fixture, Arc<Scripted>, Arc<Mutex<Vec<RouteRecord>>>) {
+        let gpu = Scripted::ok();
+        let mut f = fixture(
+            vec![
+                default_profile(),
+                profile("gpu", "big", Tier::Large, &[]),
+                profile("cpu", "tiny", Tier::Small, &[]),
+            ],
+            vec![("gpu", Arc::clone(&gpu)), ("cpu", classifier)],
+        );
+        let records: Arc<Mutex<Vec<RouteRecord>>> = Arc::default();
+        let sink = Arc::clone(&records);
+        f.routed = f.routed.with_observer(Arc::new(move |r: &RouteRecord| {
+            sink.lock().unwrap().push(r.clone())
+        }));
+        if let Some(timeout) = timeout {
+            f.routed = f.routed.with_classifier(ClassifierSetup { timeout });
+        }
+        (f, gpu, records)
+    }
+
+    const CLASSIFIER_TIMEOUT: Option<Duration> = Some(Duration::from_secs(5));
+
+    /// The reason of the last observed record for task `task`.
+    fn last_reason(records: &Mutex<Vec<RouteRecord>>, task: TaskKind) -> String {
+        records
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|r| r.task == task)
+            .map(|r| r.reason.clone())
+            .expect("a record for the task")
+    }
+
+    #[tokio::test]
+    async fn a_fresh_chat_is_classified_and_routed_by_its_tier() {
+        let tiny = Scripted::answering("large");
+        let (f, gpu, records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        assert!(f.routed.classifier_enabled());
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        let models: Vec<String> = gpu.seen().into_iter().map(|s| s.model).collect();
+        assert_eq!(models, vec!["big".to_string()]);
+        assert!(f.default.seen().is_empty());
+
+        let seen = tiny.details();
+        assert_eq!(seen.len(), 1, "exactly one classifier call");
+        let classify = &seen[0];
+        assert_eq!(classify.user_texts.len(), 1, "{classify:?}");
+        assert!(classify.user_texts[0].contains("Answer:"), "{classify:?}");
+        assert!(classify.user_texts[0].contains("1. hi"), "{classify:?}");
+        assert_eq!(classify.max_tokens, 4);
+        assert_eq!(classify.temperature, Some(0.0));
+        assert_eq!(classify.system, None);
+        assert_eq!(classify.tools, 0);
+        let route = classify.route.clone().expect("a routed side call");
+        assert_eq!(route.task, TaskKind::Classify);
+        assert_eq!(route.session, None);
+        assert_eq!(tiny.seen()[0].model, "tiny");
+
+        let reason = last_reason(&records, TaskKind::Chat);
+        assert!(reason.contains("tier from classifier: large"), "{reason}");
+        // The classifier's own call is recorded like any routed call...
+        let classified = records.lock().unwrap()[0].clone();
+        assert_eq!(classified.task, TaskKind::Classify);
+        assert_eq!(classified.model, key("cpu", "tiny"));
+        // ...but never attributed to the conversation.
+        assert_eq!(f.routed.last_served("s"), Some(key("gpu", "big")));
+        let decision = f.routed.router().last_decision("s").unwrap();
+        assert!(decision.reason.contains("tier from classifier: large"));
+    }
+
+    #[tokio::test]
+    async fn only_the_first_call_of_a_fresh_conversation_is_classified() {
+        let tiny = Scripted::answering("large");
+        let (f, gpu, records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint.clone())))
+            .await
+            .unwrap();
+        // Sticky now: no second classifier call, and the same model.
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        assert_eq!(tiny.details().len(), 1);
+        assert_eq!(gpu.seen().len(), 2);
+        let reason = last_reason(&records, TaskKind::Chat);
+        assert!(!reason.contains("classifier"), "{reason}");
+
+        // A pinned conversation is never classified.
+        f.routed.router().pin("p", key("default", "default"));
+        let (messages, hint) = routed(TaskKind::Chat, Some("p"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        assert_eq!(tiny.details().len(), 1);
+        assert_eq!(f.default.seen().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn non_chat_and_sessionless_calls_are_not_classified() {
+        let tiny = Scripted::answering("small");
+        let (f, gpu, _records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Plan, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        let (messages, hint) = routed(TaskKind::Chat, None);
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert!(tiny.details().is_empty());
+        assert_eq!(gpu.seen().len(), 1, "plan went to big");
+        assert_eq!(f.default.seen().len(), 1, "sessionless chat went to default");
+    }
+
+    #[tokio::test]
+    async fn the_classifier_sees_the_last_six_user_messages_oldest_first() {
+        let tiny = Scripted::answering("medium");
+        let (f, _gpu, records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let mut messages = Vec::new();
+        for i in 1..=8 {
+            messages.push(LlmMessage::User {
+                content: vec![
+                    ContentBlock::text(format!("ask{i} ")),
+                    ContentBlock::ImageBase64 {
+                        media_type: "image/png".into(),
+                        data: "aGk=".into(),
+                    },
+                    ContentBlock::text("more"),
+                ],
+            });
+            messages.push(LlmMessage::Assistant {
+                text: format!("reply{i}"),
+                tool_calls: Vec::new(),
+            });
+        }
+        // No candidate has vision, so the main call itself fails — but
+        // only after the classifier has run.
+        let (_, hint) = routed(TaskKind::Chat, Some("s"));
+        let _ = call(&f.routed, request(&messages, &[], Some(hint))).await;
+
+        let seen = tiny.details();
+        assert_eq!(seen.len(), 1);
+        let prompt = &seen[0].user_texts[0];
+        assert!(!prompt.contains("ask2 "), "{prompt}");
+        assert!(!prompt.contains("reply"), "{prompt}");
+        let first = prompt.find("1. ask3 more").expect(prompt);
+        let last = prompt.find("6. ask8 more").expect(prompt);
+        assert!(first < last, "{prompt}");
+        let reason = last_reason(&records, TaskKind::Classify);
+        assert!(!reason.contains("classifier"), "{reason}");
+    }
+
+    /// The classifier's `outcome` falls back: the main call goes to the
+    /// Medium default and says so.
+    async fn assert_falls_back_to_medium(classifier: Arc<Scripted>, timeout: Duration) {
+        let (f, gpu, records) = classifying(Arc::clone(&classifier), Some(timeout));
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        let started = std::time::Instant::now();
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2), "bounded by the timeout");
+
+        assert_eq!(classifier.details().len(), 1);
+        assert!(gpu.seen().is_empty());
+        assert_eq!(f.default.seen().len(), 1);
+        let reason = last_reason(&records, TaskKind::Chat);
+        assert!(reason.contains("classifier fell back to medium"), "{reason}");
+        assert!(!reason.contains("tier from classifier"), "{reason}");
+        assert_eq!(f.routed.last_served("s"), Some(key("default", "default")));
+    }
+
+    #[tokio::test]
+    async fn an_unparseable_classifier_answer_falls_back_to_medium() {
+        assert_falls_back_to_medium(Scripted::answering("huge"), Duration::from_secs(5)).await;
+    }
+
+    #[tokio::test]
+    async fn a_failing_classifier_falls_back_to_medium() {
+        assert_falls_back_to_medium(Scripted::failing(400), Duration::from_secs(5)).await;
+    }
+
+    #[tokio::test]
+    async fn a_slow_classifier_times_out_to_medium() {
+        assert_falls_back_to_medium(
+            Scripted::slow(Duration::from_secs(10), "large"),
+            Duration::from_millis(50),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn without_the_classifier_no_classifier_call_is_made() {
+        let tiny = Scripted::answering("large");
+        let (f, gpu, records) = classifying(Arc::clone(&tiny), None);
+        assert!(!f.routed.classifier_enabled());
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert!(tiny.details().is_empty());
+        assert!(gpu.seen().is_empty());
+        assert_eq!(f.default.seen().len(), 1);
+        let records = records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].reason.contains("classifier"), "{}", records[0].reason);
     }
 }

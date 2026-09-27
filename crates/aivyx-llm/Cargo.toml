@@ -82,6 +82,9 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
+# Routing classifier — bounds the classifier side call with
+# `tokio::time::timeout`. Already in every consumer's tree.
+tokio = { workspace = true, features = ["time"] }
 
 # Feature-gated: only compiled when `provider-anthropic`, `provider-openai`,
 # or `provider-ollama` is on. Keeping these optional means `aivyx-core`

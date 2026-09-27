@@ -122,7 +122,7 @@ pub mod verify;
 /// dispatches through providers the caller builds.
 pub mod routed;
 pub use routed::{
-    EscalationSetup, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider, is_routable,
+    ClassifierSetup, EscalationSetup, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider, is_routable,
 };
 
 /// Model routing Part 3b — consent-gated cloud escalation. For now just

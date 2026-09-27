@@ -8927,6 +8927,46 @@ fn routing_escalation_rejects_unknown_keys() {
 }
 
 #[test]
+fn routing_classifier_defaults_when_absent() {
+    let _env = EnvScope::new();
+    let defaults = crate::ClassifierConfig::default();
+    assert!(!defaults.enabled);
+    assert_eq!(defaults.timeout_ms, 2000);
+
+    let cfg = load_with_toml("\n[agent]\nprovider = \"ollama\"\n", "routing-cls-absent");
+    assert_eq!(cfg.routing_classifier, defaults);
+    let cfg = load_with_toml("\n[routing]\nenabled = true\n", "routing-cls-subabsent");
+    assert_eq!(cfg.routing_classifier, defaults);
+}
+
+#[test]
+fn routing_classifier_fields_parse() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[routing]\nenabled = true\n[routing.classifier]\nenabled = true\ntimeout_ms = 500\n",
+        "routing-cls-fields",
+    );
+    assert!(cfg.routing_classifier.enabled);
+    assert_eq!(cfg.routing_classifier.timeout_ms, 500);
+    // The other sub-sections still default.
+    assert_eq!(cfg.routing_escalation, crate::EscalationConfig::default());
+    assert_eq!(cfg.routing_sensitive, crate::SensitiveConfig::default());
+}
+
+#[test]
+fn routing_classifier_rejects_unknown_keys() {
+    let _env = EnvScope::new();
+    let r = load_with_toml_result(
+        "\n[routing]\n[routing.classifier]\nenabeld = true\n",
+        "routing-cls-unknown-key",
+    );
+    assert!(
+        r.is_err(),
+        "a typo under [routing.classifier] must be a config error"
+    );
+}
+
+#[test]
 fn skill_refinement_section_parses_and_defaults() {
     let _env = EnvScope::new();
     // Absent → None.

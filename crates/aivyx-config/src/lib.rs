@@ -1060,7 +1060,7 @@ pub struct AivyxConfig {
     /// `aivyx_route::RoutingConfig` shape (no `Sourced` provenance —
     /// it's the shared crate's type, not this crate's own schema); its
     /// unknown keys are ignored. aivyx-pa's own sub-tables are parsed
-    /// into the two fields below instead.
+    /// into the three fields below instead.
     pub routing: Option<aivyx_route::RoutingConfig>,
     /// Model routing Part 3b — `[routing.escalation]`, defaulted when
     /// absent (including when `[routing]` itself is absent).
@@ -1068,6 +1068,9 @@ pub struct AivyxConfig {
     /// Model routing Part 3b — `[routing.sensitive]`, defaulted when
     /// absent (including when `[routing]` itself is absent).
     pub routing_sensitive: SensitiveConfig,
+    /// Routing classifier — `[routing.classifier]`, defaulted (off) when
+    /// absent (including when `[routing]` itself is absent).
+    pub routing_classifier: ClassifierConfig,
     /// Chapter Synapse — `[memory] profile`. `Off` (default) ⇒ today's
     /// behavior; `Smart` expands the coherent memory bundle into the
     /// `[embedding]` / `[recall_cluster]` / `[wiki]` / `[graph]` fields
@@ -5398,6 +5401,28 @@ fn build_skill_authoring_config(
     })
 }
 
+/// Routing classifier — `[routing.classifier]`. When enabled, a fresh
+/// chat conversation's first routed call (while it has no model yet) is
+/// preceded by a small local model's side call classifying the tier it
+/// needs; any failure, or no answer within `timeout_ms`, means medium.
+/// Unknown keys are a config error, like `[routing.escalation]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClassifierConfig {
+    pub enabled: bool,
+    /// Bounds the whole classifier call, planning and stream included.
+    pub timeout_ms: u64,
+}
+
+impl Default for ClassifierConfig {
+    fn default() -> Self {
+        ClassifierConfig {
+            enabled: false,
+            timeout_ms: 2000,
+        }
+    }
+}
+
 /// Aivyx-Skills Part 3 — `[skill_defaults]` deserialize target. Absent
 /// section → `skill_defaults: None` (bundled skills only).
 #[derive(Debug, Default, Deserialize)]
@@ -5420,6 +5445,8 @@ struct RawRouting {
     escalation: EscalationConfig,
     #[serde(default)]
     sensitive: SensitiveConfig,
+    #[serde(default)]
+    classifier: ClassifierConfig,
 }
 
 /// Aivyx-Skills Part 3 — build the `[skill_defaults]` config. `None`
@@ -6694,8 +6721,8 @@ impl AivyxConfig {
         // Model routing, Part 3a — [routing] parses directly into the
         // shared aivyx_route::RoutingConfig; passed through verbatim,
         // no extra validation at this layer (that's the router's job).
-        // Part 3b — its escalation/sensitive sub-tables default when
-        // absent, and when [routing] itself is absent.
+        // Part 3b — its escalation/sensitive (and classifier) sub-tables
+        // default when absent, and when [routing] itself is absent.
         let routing = toml.routing.as_ref().map(|r| r.shared.clone());
         let routing_escalation = toml
             .routing
@@ -6706,6 +6733,11 @@ impl AivyxConfig {
             .routing
             .as_ref()
             .map(|r| r.sensitive.clone())
+            .unwrap_or_default();
+        let routing_classifier = toml
+            .routing
+            .as_ref()
+            .map(|r| r.classifier.clone())
             .unwrap_or_default();
         let persona_consolidation =
             build_persona_consolidation_config(
@@ -8025,6 +8057,7 @@ impl AivyxConfig {
             routing,
             routing_escalation,
             routing_sensitive,
+            routing_classifier,
             memory_profile,
             persona_consolidation,
             correction_consolidation,
