@@ -2870,9 +2870,11 @@ pub struct EscalationConfig {
     /// `TaskKind` names (`[routing.tasks]` keys, e.g. `"plan"`) that
     /// always prefer a cloud endpoint.
     pub tiers: Vec<String>,
-    /// A16 — a session "armed" by a failed local turn escalates before
-    /// `tiers` is even checked. Only takes effect with `mode = "auto"`
-    /// (Amendment A16's binding constraint); default `false`.
+    /// A16 — after a local failure (Looping, exhausted tool-call repair)
+    /// the conversation's next turn escalates, checked before `tiers`,
+    /// through the same gate: `auto` proceeds, `ask` asks (the failing
+    /// turn's reply says to send /allow-cloud), taint always blocks. The
+    /// autonomous loop arms only in `auto`. Default `false`.
     pub on_failure: bool,
 }
 
