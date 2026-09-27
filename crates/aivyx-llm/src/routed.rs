@@ -95,13 +95,13 @@ pub struct RoutedProvider {
     /// (the local router's last decision doesn't see escalated calls).
     /// Capped like the router's own per-session state.
     last_served: Mutex<SessionMap<ModelKey>>,
-    /// Routing classifier — session → its classified tier and whether
-    /// that was the medium fallback. A conversation is classified at
+    /// Routing classifier — session → what classifying it came to (see
+    /// [`ClassifierMemo`]). A conversation is classified at
     /// most once: while it has no sticky model (a cooling model or a
     /// fallback serve can keep it unstuck) later turns reuse this. Only
     /// read while the session has no model, so it's never cleared; the
     /// cap bounds it. Capped like `last_served`.
-    classified: Mutex<SessionMap<(Tier, bool)>>,
+    classified: Mutex<SessionMap<ClassifierMemo>>,
     /// Usage of side calls made for this conversation (the routing
     /// classifier, so far), not yet billed. Drained by
     /// [`RoutedProvider::take_side_usage`]. Capped like `last_served`.
@@ -517,6 +517,46 @@ impl RoutedProvider {
 /// Routing classifier — how many of the latest user messages it sees.
 const CLASSIFIER_RECENT: usize = 6;
 
+/// What classifying a conversation came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClassifierMemo {
+    /// The classifier answered this tier.
+    Classified(Tier),
+    /// It failed, timed out or answered off-script: medium.
+    FellBack,
+    /// A call is in flight for this conversation; a concurrent first
+    /// call uses medium rather than classify twice.
+    InFlight,
+}
+
+/// Holds a conversation's in-flight classifier claim. Unless a finished
+/// result replaces it, dropping the guard removes the `InFlight` marker,
+/// so a classification abandoned mid-call (the turn was dropped or
+/// cancelled) leaves nothing behind and the next turn classifies afresh.
+struct ClassifierClaim<'a> {
+    memo: &'a Mutex<SessionMap<ClassifierMemo>>,
+    session: String,
+    settled: bool,
+}
+
+impl ClassifierClaim<'_> {
+    fn settle(mut self, result: ClassifierMemo) {
+        self.memo.lock().unwrap().insert(self.session.clone(), result);
+        self.settled = true;
+    }
+}
+
+impl Drop for ClassifierClaim<'_> {
+    fn drop(&mut self) {
+        if !self.settled {
+            let mut memo = self.memo.lock().unwrap_or_else(|e| e.into_inner());
+            if memo.get(&self.session) == Some(&ClassifierMemo::InFlight) {
+                memo.remove(&self.session);
+            }
+        }
+    }
+}
+
 fn user_blocks_any(messages: &[LlmMessage], pred: impl Fn(&ContentBlock) -> bool) -> bool {
     messages.iter().any(|m| match m {
         LlmMessage::User { content } => content.iter().any(&pred),
@@ -660,34 +700,56 @@ impl LlmProvider for RoutedProvider {
         {
             // Check and claim under one lock, so two concurrent first
             // calls can't both miss the memo and both classify: the
-            // winner leaves a medium placeholder the other one uses
-            // without calling. If the winner's future is dropped mid-call,
-            // medium is what stays remembered. The guard is released
-            // before the classifier call is awaited.
+            // winner leaves an `InFlight` marker the other one sees and
+            // uses medium without calling. The lock is released before
+            // the classifier call is awaited; the claim guard removes the
+            // marker if this call is dropped or cancelled mid-way.
             let remembered = {
                 let mut memo = self.classified.lock().unwrap();
                 let found = memo.get(session).copied();
                 if found.is_none() {
-                    memo.insert(session.to_string(), (Tier::Medium, true));
+                    memo.insert(session.to_string(), ClassifierMemo::InFlight);
                 }
                 found
             };
-            let (tier, fell_back) = match remembered {
+            let outcome = match remembered {
                 Some(memo) => memo,
                 None => {
-                    let memo = match self
+                    let claim = ClassifierClaim {
+                        memo: &self.classified,
+                        session: session.to_string(),
+                        settled: false,
+                    };
+                    match self
                         .classify(&request, cancellation, setup.timeout, Some(session))
                         .await
                     {
-                        Ok(tier) => (tier, false),
-                        Err(()) => (Tier::Medium, true),
-                    };
-                    self.classified
-                        .lock()
-                        .unwrap()
-                        .insert(session.to_string(), memo);
-                    memo
+                        Ok(tier) => {
+                            claim.settle(ClassifierMemo::Classified(tier));
+                            ClassifierMemo::Classified(tier)
+                        }
+                        // Cancelled by the caller: not a verdict on the
+                        // model, so nothing is remembered (the claim's
+                        // drop clears the marker).
+                        Err(()) if cancellation.is_cancelled() => ClassifierMemo::FellBack,
+                        Err(()) => {
+                            claim.settle(ClassifierMemo::FellBack);
+                            ClassifierMemo::FellBack
+                        }
+                    }
                 }
+            };
+            let (tier, note) = match outcome {
+                ClassifierMemo::Classified(tier) => {
+                    (tier, format!("; tier from classifier: {tier}"))
+                }
+                ClassifierMemo::FellBack => {
+                    (Tier::Medium, "; classifier fell back to medium".to_string())
+                }
+                ClassifierMemo::InFlight => (
+                    Tier::Medium,
+                    "; classifier still running, used medium".to_string(),
+                ),
             };
             query.tier = Some(tier);
             // Replan with the tier (pure, no I/O). It only re-ranks, so it
@@ -696,12 +758,7 @@ impl LlmProvider for RoutedProvider {
             if let Ok(tiered) = self.router.plan(&query, Instant::now()) {
                 plan = tiered;
             }
-            if fell_back {
-                plan.reason.push_str("; classifier fell back to medium");
-            } else {
-                plan.reason
-                    .push_str(&format!("; tier from classifier: {tier}"));
-            }
+            plan.reason.push_str(&note);
         }
         let (stream, record) = self
             .dispatch(&self.router, &plan, &request, cancellation)
@@ -2153,6 +2210,62 @@ mod tests {
         b.unwrap();
         assert_eq!(tiny.details().len(), 1, "exactly one classifier call");
         assert_eq!(gpu.seen().len() + f.default.seen().len(), 2);
+        // The call that didn't classify says why it used medium.
+        let reasons: Vec<String> = _records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.task == TaskKind::Chat)
+            .map(|r| r.reason.clone())
+            .collect();
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r.contains("; classifier still running, used medium")),
+            "{reasons:?}"
+        );
+    }
+
+    /// A classification abandoned mid-call (the caller dropped the turn)
+    /// leaves no memo: the next turn classifies afresh instead of staying
+    /// at medium for good.
+    #[tokio::test]
+    async fn an_abandoned_classification_is_not_remembered() {
+        let tiny = Scripted::slow(Duration::from_millis(300), "large");
+        let (f, gpu, _records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        let abandoned = tokio::time::timeout(
+            Duration::from_millis(50),
+            call(&f.routed, request(&messages, &[], Some(hint.clone()))),
+        )
+        .await;
+        assert!(abandoned.is_err(), "the first turn was dropped mid-classification");
+        call(&f.routed, request(&messages, &[], Some(hint.clone())))
+            .await
+            .unwrap();
+        assert_eq!(tiny.details().len(), 2, "classified again, not stuck at medium");
+        assert_eq!(gpu.seen().len(), 1, "and routed by the fresh tier");
+    }
+
+    /// A classification that fails because the caller cancelled isn't
+    /// remembered as a medium fallback: the next turn classifies.
+    #[tokio::test]
+    async fn a_cancelled_classification_is_not_remembered() {
+        let tiny = Scripted::answering("large");
+        let (f, gpu, _records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        let token = CancellationToken::new();
+        token.cancel();
+        let cancelled = f
+            .routed
+            .chat_stream(request(&messages, &[], Some(hint.clone())), &token)
+            .await;
+        assert!(cancelled.is_err());
+        call(&f.routed, request(&messages, &[], Some(hint.clone())))
+            .await
+            .unwrap();
+        assert_eq!(tiny.details().len(), 1, "classified on the next turn");
+        assert_eq!(gpu.seen().len(), 1, "routed by that tier");
     }
 
     /// Final-review I1(b) / M1 — with no local candidate, classification
