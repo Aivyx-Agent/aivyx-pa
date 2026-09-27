@@ -5,6 +5,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-28
+
+**The product is now Aivyx PA** — a breaking rename of the binary, config
+file and data paths (see Changed for the manual migration). Also in this
+release: opt-in per-call **model routing** over the shared `aivyx-route`
+crate (discovery, residency, consent-gated cloud escalation, a tier
+classifier), new local providers (**Lemonade Server**, **aivyx-broker**),
+a **2026-09-16 security audit**'s fixes (three rated HIGH — upgrade
+promptly), a shared default skill library, local generation tools
+(`vision.*`), and YubiKey-backed federation identity.
+
 ### Changed
 
 - **The product is now Aivyx PA. BREAKING: binary, config file, and data
@@ -34,6 +45,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
   any systemd/launchd unit, shell alias, or script that invokes it. The
   passphrase itself and the encrypted store's contents are unaffected —
   this is a path/name rename only, not a re-encryption.
+- **The Studio web UI moves to the Wick & Compass identity** — new
+  palette, Fraunces + IBM Plex Sans/Mono type, and the finished brand
+  marks; glass/blur surfaces retired.
+- **The shared crates `aivyx-pa` depends on** (`aivyx-confine`,
+  `aivyx-checkpoint`, `aivyx-kvcache`, `aivyx-recall`,
+  `aivyx-injection-guard`, …) **are now BUSL-1.1**, matching `aivyx-pa`'s
+  own license; pins bumped to their relicense commits.
 
 ### Added
 
@@ -197,6 +215,26 @@ All notable changes to Aivyx are recorded here. This project adheres to
   the subcommand still parses but refuses with a clear rebuild message.
   See `docs/INSTALL.md`'s "Hardware-backed federation identity (YubiKey)"
   section and `docs/FEDERATION.md`.
+- **`provider = "broker"` — run through `aivyx-broker`**, a loopback
+  daemon (default `http://127.0.0.1:8899`, `[broker] base_url`) that
+  coordinates llama-server KV-cache slots across several local processes
+  (e.g. `aivyx-pa` and `aivyx-coder`) sharing one server. Also accepted by
+  `--provider`, and team specialists pass their slot hints through it.
+- **Local generation tools (Aivyx-Vision), in the `aivyx-vision` tool
+  process.** `vision.generate_svg` (LLM-generated, sanitized SVG),
+  `vision.generate_image` (local image generation via `mold serve`, with
+  a `[mold]` section in the tool process's own config), and
+  `vision.generate_3d` (registered but not implemented yet: it always
+  fails with a clear error). One new scope, `vision.generate`,
+  SemiTrusted-reachable. See `crates/aivyx-vision/README.md` and
+  `docs/TOOLS.md`.
+- **`[kvcache] store_path`** (env `AIVYX_PA_KVCACHE_STORE_PATH`) makes the
+  KV-cache store's location configurable, and Ward now denies agent reads
+  of it (previously unprotected: its file names match none of Ward's
+  patterns).
+- **`[agent] injection_scan_enabled` / `injection_scan_exempt`** tune
+  Picket's active prompt-injection scan (on by default; exempt named
+  tools). Bulwark's fencing is never affected by either.
 - **CI now fails fast, by name, if a workspace git dependency ever
   silently reverts to private.** `scripts/check-git-deps-public.sh`
   (Phase 192) is wired into `quality-gate.yml` as an early step —
@@ -205,6 +243,26 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Security
 
+Fixes from a full ecosystem security audit (2026-09-16). **HIGH** first:
+
+- **Rampart (the SSRF guard) had two bypasses.** IPv4-mapped IPv6
+  addresses (`::ffff:169.254.169.254`, `::ffff:127.0.0.1`, …) were never
+  unwrapped, and Rampart's hand-rolled URL parser could see a different
+  host than the one reqwest connects to (a backslash in the authority, a
+  non-dotted IPv4 literal). Host parsing now uses the same WHATWG parser
+  reqwest does, and mapped addresses are classified as IPv4.
+- **Connected integrations no longer auto-grant their write/send/delete
+  scopes.** A default `aivyx-pa connect gmail` granted unqualified
+  `email.send` with no confirmation. The zero-config floor now withholds
+  `email.write`, `email.send`, `drive.write`, `notion.write`,
+  `obsidian.write`, `n8n.write`, `contacts.write` and `calendar.write`
+  unless granted explicitly, and a tool process asking for escalation now
+  actually escalates (it used to surface as a plain tool failure).
+  **Grant those scopes in your role if a workflow relies on them.**
+- **`[access] confirm_destructive` now takes effect.** The gate existed
+  but no production agent was built with it; every agent now honors it
+  (on by default at any access level above `sandbox`), so irreversible
+  operations ask for confirmation.
 - **Webhook-triggered turns now require authentication and run at
   `Untrusted`, not `Trusted`.** Part of the 2026-09-16 security-audit
   fixes: previously any local process (or any webpage the operator
@@ -221,7 +279,38 @@ All notable changes to Aivyx are recorded here. This project adheres to
   rather than restoring blanket trust. Existing webhook records created
   before this change have no `secret` on disk and, by design, an unset
   secret never authorizes — re-create any such webhook to get a fresh
-  secret and keep it callable.
+  secret and keep it callable. The secret is also no longer shown in
+  LLM-visible tool output.
+
+**MEDIUM:**
+
+- **Telegram, Discord and Slack now authorize each sender.** All three
+  gave every sender SemiTrusted; an allowlisted sender now gets
+  SemiTrusted and anyone else Untrusted, as `docs/THREAT_MODEL.md`
+  specifies (Slack's `team_id` is now actually checked, daemon path
+  included).
+- **`shell.exec` and `git.*` output is now fenced (Bulwark) and scanned
+  (Picket)** like other untrusted tool output.
+- **Tool processes can no longer claim scopes the operator didn't
+  expect.** A new `[[tool_process]] expected_scopes` map rejects a
+  registered scope exceeding the configured one and, when non-empty,
+  refuses tool names it doesn't list. Tool processes also now start
+  with a scrubbed environment (proxy variables kept).
+- **Local secrets and IPC are written safely.** The daemon's Unix socket
+  is bound at 0600 atomically (its directory at 0700); `config.toml` is
+  tightened to 0600 on load and written atomically; `daemon.env` is
+  written atomically at 0600, only after checking the OS keyring; and
+  the TOML passphrase is no longer copied in plaintext during load.
+- **The audit chain now detects tail truncation** through a persisted
+  chain anchor (last sequence number + MAC); a corrupt anchor fails
+  closed instead of being ignored.
+- **`toolkit.health_check` URLs are checked against Rampart.**
+- **Pack bundles are bounded before signature verification:** entries
+  capped at 512 MiB, decompression at 20× the input, and manifest
+  `bin`/`team_config` paths validated against traversal.
+- **The federation replay guard is hardened:** per-entry expiry instead
+  of a global flush (up to ~59 s of replayability), a 5 s future-skew
+  bound, and a 10,000-entry cap.
 
 ### Fixed
 
