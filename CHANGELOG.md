@@ -37,6 +37,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **Model routing — the routing classifier is wired in.** New
+  `[routing.classifier]` (`enabled = false`, `timeout_ms = 2000`). When
+  on, a chat conversation's first routed call — its session has no
+  pinned or sticky model yet — gets a side call to a small local model
+  (`TaskKind::Classify`) asking whether it needs a small/medium/large
+  model, bounded by `timeout_ms`; the answer becomes that call's soft
+  tier, and any failure, timeout, or unparseable answer falls back to
+  medium. Later turns stay on the sticky model at no extra cost.
+  `aivyx-pa routing status` and the `routing.status` tool now show
+  whether it's on. Off by default: nothing changes without it. See
+  `examples/aivyx-pa.toml`.
 - **Model routing (Part 3b) — `on_failure` escalation (Amendment
   A16).** New `[routing.escalation] on_failure` (default `false`). When
   on, a local turn that got stuck — `Looping`, or both tool-call repair

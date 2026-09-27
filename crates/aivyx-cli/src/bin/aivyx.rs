@@ -1126,6 +1126,7 @@ fn run() -> Result<(), String> {
             escalation: config.routing_escalation.clone(),
             anthropic_key: config.anthropic_api_key.as_ref().map(|k| k.value.clone()),
             openai_key: config.openai_api_key.as_ref().map(|k| k.value.clone()),
+            classifier: config.routing_classifier.clone(),
             ..routing::CloudAccess::default()
         };
         return rt.block_on(routing::run_routing_status(
@@ -6297,9 +6298,9 @@ async fn run_async(
         // Model routing Part 3b — `[routing.sensitive]`: what taints a
         // conversation (wired below only when escalation is active).
         routing_sensitive: config_routing_sensitive,
-        // Routing classifier — `[routing.classifier]`; not wired into
-        // `wrap_with_routing` yet.
-        routing_classifier: _,
+        // Routing classifier — `[routing.classifier]`, threaded into
+        // `routing_access` below and on into `wrap_with_routing`.
+        routing_classifier: config_routing_classifier,
     } = config;
     for cli in cli_mcp_servers {
         mcp_servers.push(aivyx_config::McpServerConfig {
@@ -6575,6 +6576,7 @@ async fn run_async(
         escalation: config_routing_escalation,
         anthropic_key: anthropic_api_key.as_ref().map(|k| k.value.clone()),
         openai_key: openai_api_key.as_ref().map(|k| k.value.clone()),
+        classifier: config_routing_classifier,
         // Set below, once the routing guard and the audit log exist.
         ..routing::CloudAccess::default()
     };

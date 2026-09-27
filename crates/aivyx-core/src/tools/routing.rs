@@ -133,6 +133,7 @@ impl Tool for RoutingStatusTool {
                 "default": self.routed.default_key().to_string(),
                 "candidates": candidates,
                 "escalation": escalation,
+                "classifier": { "enabled": self.routed.classifier_enabled() },
                 "residency": residency,
             }),
             verified: Verification::Verified,
@@ -561,6 +562,21 @@ mod routing_tool_tests {
         let tool = RoutingStatusTool::new(routed());
         let output = completed(run_execute(&tool, SessionId::new(), json!({})).await);
         assert_eq!(output["escalation"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_classifiers_enabled_state() {
+        let tool = RoutingStatusTool::new(routed());
+        let output = completed(run_execute(&tool, SessionId::new(), json!({})).await);
+        assert_eq!(output["classifier"]["enabled"], false);
+
+        let base = Arc::try_unwrap(routed()).ok().expect("sole owner");
+        let with_classifier = Arc::new(base.with_classifier(aivyx_llm::ClassifierSetup {
+            timeout: std::time::Duration::from_millis(1500),
+        }));
+        let tool = RoutingStatusTool::new(with_classifier);
+        let output = completed(run_execute(&tool, SessionId::new(), json!({})).await);
+        assert_eq!(output["classifier"]["enabled"], true);
     }
 
     #[tokio::test]

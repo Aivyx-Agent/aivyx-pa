@@ -17,11 +17,13 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, SystemTime};
 
 use aivyx_audit::{AuditEvent, PersistentAuditLog, SignedEntry};
-use aivyx_config::{EscalationConfig, EscalationMode, ProviderKind};
+use aivyx_config::{ClassifierConfig, EscalationConfig, EscalationMode, ProviderKind};
 use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::ollama::{AUTO_NUM_CTX_CAP, DEFAULT_OLLAMA_BASE_URL, OllamaConfig, OllamaProvider};
 use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
-use aivyx_llm::{LlmProvider, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider};
+use aivyx_llm::{
+    ClassifierSetup, LlmProvider, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider,
+};
 use aivyx_route::{
     Availability, Capability, DefaultEndpoint, EndpointConfig, EndpointKind, EndpointRef, Locality,
     ModelKey, ModelProfile, ResidencyNote, ResidencySnapshot, RosterEntry, Router,
@@ -75,6 +77,9 @@ pub(crate) struct CloudAccess {
     pub escalation_guard: Option<Arc<dyn aivyx_llm::EscalationGuard>>,
     /// Receives every escalation decision (the daemon audits through it).
     pub escalation_observer: Option<aivyx_llm::EscalationObserver>,
+    /// Routing classifier — `[routing.classifier]`, defaulted (off) same
+    /// as every other sub-table here.
+    pub classifier: ClassifierConfig,
 }
 
 impl CloudAccess {
@@ -574,6 +579,13 @@ pub(crate) async fn wrap_with_routing(
     if let Some(observer) = observer {
         routed = routed.with_observer(observer);
     }
+    // Routing classifier — a fresh chat conversation's tier, via a side
+    // call through the local router. Off by default.
+    if access.classifier.enabled {
+        routed = routed.with_classifier(ClassifierSetup {
+            timeout: Duration::from_millis(access.classifier.timeout_ms),
+        });
+    }
     // Part 3b — escalation only when it's active and the daemon handed us
     // its guard; the cloud models live on their own router, never the
     // local one.
@@ -782,6 +794,7 @@ pub(crate) async fn run_routing_status(
             warning.as_deref()
         )
     );
+    print!("{}", render_classifier(&access.classifier));
     if escalation_active(Some(routing), &access.escalation) {
         let cloud = cloud_candidates(&prepared.config, &prepared.default);
         print!("{}", render_escalation(&access.escalation, &cloud));
@@ -885,6 +898,18 @@ fn routed_entry(entry: &SignedEntry) -> Option<RoutedEntry> {
         task,
         reason,
     })
+}
+
+/// The classifier line of `aivyx-pa routing status`, shown whether it's
+/// on or off (unlike escalation, which prints nothing when inactive —
+/// the classifier has no "active" precondition beyond its own toggle).
+/// Pure.
+pub(crate) fn render_classifier(cfg: &ClassifierConfig) -> String {
+    if cfg.enabled {
+        format!("classifier: on (timeout {}ms)\n", cfg.timeout_ms)
+    } else {
+        "classifier: off\n".to_string()
+    }
 }
 
 /// Part 3b — the escalation section of `aivyx-pa routing status`. Pure.
@@ -1965,6 +1990,51 @@ mod tests {
             assert!(text.contains("claude-big@claude"), "{text}");
             assert!(text.contains("/allow-cloud"), "{text}");
             assert!(text.contains(marker), "{text}");
+        }
+    }
+
+    #[test]
+    fn render_classifier_shows_on_with_its_timeout_or_off() {
+        let on = ClassifierConfig {
+            enabled: true,
+            timeout_ms: 2000,
+        };
+        assert!(render_classifier(&on).contains("classifier: on (timeout 2000ms)"));
+        let off = ClassifierConfig {
+            enabled: false,
+            ..on
+        };
+        assert!(render_classifier(&off).contains("classifier: off"));
+    }
+
+    #[tokio::test]
+    async fn wrap_with_routing_enables_the_classifier_only_when_configured() {
+        let cfg = parse("[routing]\nenabled = true\ndiscover = false\n");
+        for (enabled, expected) in [(true, true), (false, false)] {
+            let access = CloudAccess {
+                classifier: ClassifierConfig {
+                    enabled,
+                    timeout_ms: 1500,
+                },
+                ..CloudAccess::default()
+            };
+            let (_, routed) = wrap_with_routing(
+                Some(&cfg),
+                &access,
+                ProviderKind::Ollama,
+                None,
+                "qwen3:8b",
+                unused_provider(),
+                None,
+                DefaultResidency::None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                routed.expect("routing is on").classifier_enabled(),
+                expected,
+                "enabled = {enabled}"
+            );
         }
     }
 

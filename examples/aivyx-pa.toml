@@ -1809,6 +1809,22 @@ parent_role = "researcher"
 #     with your own key; what that provider retains is governed by its
 #     terms with you. No Aivyx server is in the path.
 
+# Routing classifier — [routing.classifier]
+#
+# [routing.classifier]
+# enabled = false    # off by default
+# timeout_ms = 2000  # bounds the whole side call; past it, medium
+#
+# When on, a fresh chat conversation's FIRST routed call — while its
+# session has no pinned or sticky model yet — is preceded by a side call
+# to a small local model classifying the last 6 user messages as
+# small/medium/large; the answer becomes that call's soft tier ([routing.tasks]
+# classify can steer which model serves it). At most timeout_ms of extra
+# latency, once per conversation — later turns stay on the sticky model
+# at no extra cost. Any failure, timeout, or unparseable answer falls
+# back to medium. `aivyx-pa routing status`/`explain` and `routing.status`
+# show whether it's on.
+
 # ----------------------------------------------------------------
 # Persistent helpfulness ledger (Phase 82) — no config; automatic
 # ----------------------------------------------------------------
