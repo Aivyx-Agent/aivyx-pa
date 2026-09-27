@@ -441,8 +441,13 @@ cloud `[routing.endpoints.*]` entry, and then passes a gate
   cloud model serving an armed turn never becomes the conversation's
   sticky model. Arming is audited once per new mark (`EscalationArmed`)
   and each decision as a `CloudEscalation` with trigger `on_failure`;
-  marks are in memory only. The loop arms only with `mode = "auto"`,
-  and a stalled run gets at most one armed rescue iteration.
+  marks are in memory only. In `ask`, a turn that stops for consent
+  leaves only a pending offer: `/allow-cloud` arms it for the resend,
+  which escalates once, and the next turn sent without it declines the
+  offer and runs locally, so an ignored offer never keeps asking. Only
+  the operator's own turns arm; a trigger, cron, webhook or file-watch
+  fire never does. The loop arms only with `mode = "auto"`, and a
+  stalled run gets at most one armed rescue iteration.
 
 **Residual risk:** a sensitive source the taint rules don't know about
 (an MCP or third-party tool whose name matches no `[routing.sensitive]

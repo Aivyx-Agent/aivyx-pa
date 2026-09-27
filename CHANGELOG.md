@@ -45,7 +45,11 @@ All notable changes to Aivyx are recorded here. This project adheres to
   replay, never a mid-turn model switch, and a tainted conversation
   still never escalates. In `ask` mode the stuck turn ends with "The
   local model got stuck; send /allow-cloud and resend to retry on
-  `<model>`." The autonomous loop arms only with `mode = "auto"`: a
+  `<model>`." An ignored offer lapses: a turn that stops for consent
+  leaves a pending offer that `/allow-cloud` arms for the resend, and
+  the next turn sent without it runs locally. Only the operator's own
+  turns arm; trigger, cron, webhook and file-watch fires never do. The
+  autonomous loop arms only with `mode = "auto"`: a
   Verdict FAIL (the completion judge rejecting a left-pending story)
   arms the next iteration, and a run the stall breaker would end gets
   exactly one armed rescue iteration first; a second stall ends it,

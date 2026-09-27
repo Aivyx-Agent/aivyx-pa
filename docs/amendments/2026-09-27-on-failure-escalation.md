@@ -91,8 +91,8 @@ is covered by tests in the implementing phase.
    escalated turn is a new turn.** Effective capabilities are still
    computed once per turn and not changed mid-turn; "mid-turn
    capability changes... are NOT supported in v1" still holds exactly
-   as A15 left it. The failed turn ends, the armed mark is recorded
-   between turns, and the next turn — sent automatically under `auto`,
+   as A15 left it. The failed turn records the armed mark for the
+   *next* turn as it finishes (never for itself), and the next turn — sent automatically under `auto`,
    or after an `/allow-cloud` resend under `ask` — is where escalation
    takes effect. This is A15's stop-and-allow mechanism, unmodified;
    `on_failure` relies on it rather than replacing it.
@@ -101,7 +101,15 @@ is covered by tests in the implementing phase.
    tainted: `The local model got stuck; send /allow-cloud and resend
    to retry on \`<model>\`.` This is a hint text, not a capability
    grant and not an escalation in itself — it says nothing when no
-   cloud candidate exists or the conversation is tainted.
+   cloud candidate exists or the conversation is tainted. If the
+   operator instead sends an ordinary message, that turn is armed and
+   stops for consent as A15's `ask` mode does; the stop leaves a
+   **pending offer**, not a new mark. `/allow-cloud` (chat, IPC or
+   CLI) turns the offer into an armed mark, so the resend escalates
+   exactly once. The next turn started without `/allow-cloud` declines
+   the offer: it runs locally, and no further consent stops come from
+   the old failure. An ignored offer lapses; it never locks the
+   conversation into repeated consent stops.
 5. **Defaults change nothing.** With `on_failure = false` (the
    default), or with no cloud endpoint configured: nothing arms, no
    new audit entries appear, and output is byte-identical to A15.
@@ -119,6 +127,11 @@ is covered by tests in the implementing phase.
 - **It does not authorize `ask`-mode escalation inside the autonomous
   loop.** The loop arms only under `mode = "auto"`; in `ask` it never
   arms, because no operator is present mid-loop to consent.
+- **It does not authorize arming from a system-originated turn.**
+  Only an operator's own turn arms its conversation. A trigger, cron,
+  webhook or file-watch fire runs on a session that never gets a next
+  turn; the autonomous loop arms its iterations itself, under `auto`
+  only.
 - **It does not authorize persisting armed marks across a restart.**
   Like consent, the mark lives in memory only.
 - **It does not authorize escalating `Failed(..)` in general.**

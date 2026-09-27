@@ -526,7 +526,7 @@ impl Agent for ConcreteAgent {
 
     /// `on_failure` cloud escalation (A16) — bracket the whole turn with
     /// the arming's `begin_armed_turn` / `end_armed_turn`, so the active
-    /// mark is cleared (or re-armed on a consent stop) on *every* exit of
+    /// mark is cleared on *every* exit of
     /// [`ConcreteAgent::turn_inner`]: normal completion, the budget-denied
     /// early return, Cancelled, TimedOut and any `Failed`. Without an
     /// attached arming this is exactly `turn_inner`.

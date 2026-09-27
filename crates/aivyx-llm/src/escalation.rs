@@ -44,7 +44,8 @@ pub trait EscalationGuard: Send + Sync {
     }
 
     /// Record that `session`'s armed `on_failure` escalation stopped for
-    /// operator consent, so the arming can be re-surfaced. Default: no-op.
+    /// operator consent: a pending offer, which `/allow-cloud` arms for
+    /// the resend and the next turn otherwise declines. Default: no-op.
     fn note_consent_requested(&self, _session: &str) {}
 }
 

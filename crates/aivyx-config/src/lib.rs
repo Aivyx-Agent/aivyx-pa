@@ -2873,8 +2873,9 @@ pub struct EscalationConfig {
     /// A16 — after a local failure (Looping, exhausted tool-call repair)
     /// the conversation's next turn escalates, checked before `tiers`,
     /// through the same gate: `auto` proceeds, `ask` asks (the failing
-    /// turn's reply says to send /allow-cloud), taint always blocks. The
-    /// autonomous loop arms only in `auto`. Default `false`.
+    /// turn's reply says to send /allow-cloud; an ignored offer lapses at
+    /// the turn after), taint always blocks. The autonomous loop arms only
+    /// in `auto`. Default `false`.
     pub on_failure: bool,
 }
 

@@ -1205,11 +1205,14 @@ pub trait EscalationArming: Send + Sync {
     /// to say (not `ask`, no cloud candidate, or tainted).
     async fn arm(&self, session: &str, signal: &str) -> (bool, Option<String>);
 
-    /// Turn start: an armed mark becomes this turn's active mark.
+    /// Turn start: an armed mark becomes this turn's active mark, and any
+    /// pending consent offer lapses (the operator declined it).
     fn begin_armed_turn(&self, session: &str);
 
-    /// Turn end (every exit): clear the active mark, or re-arm it if the
-    /// turn stopped for consent.
+    /// Turn end (every exit): clear the active mark. Never re-arms: an
+    /// `ask` turn that stopped for consent leaves a pending offer, which
+    /// only `/allow-cloud` arms (for the resend) and the next turn's
+    /// `begin_armed_turn` otherwise drops.
     fn end_armed_turn(&self, session: &str);
 }
 

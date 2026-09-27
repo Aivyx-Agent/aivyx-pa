@@ -1758,7 +1758,9 @@ parent_role = "researcher"
 # # on_failure = false        # A16: a stuck turn (Looping, or tool-call
 #                             # repair exhausted) arms the NEXT turn only.
 #                             # "ask": the stuck turn ends with a hint — send
-#                             # /allow-cloud and resend. The loop arms only
+#                             # /allow-cloud and resend. Sending anything else
+#                             # declines: that turn asks once more, and the
+#                             # turn after runs locally. The loop arms only
 #                             # under "auto" (Verdict FAIL; one stall rescue
 #                             # per run). Tainted conversations never escalate.
 #

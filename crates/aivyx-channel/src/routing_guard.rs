@@ -26,27 +26,21 @@ use async_trait::async_trait;
 /// Reason reported when a session's taint row exists but can't be read.
 const UNREADABLE_REASON: &str = "routing taint unreadable";
 
-/// Persisted routing taint + in-memory cloud consent. Implements
-/// [`aivyx_llm::escalation::EscalationGuard`] (read side) and
-/// [`aivyx_core::TaintSink`] (write side).
-///
-/// **Build exactly one per process and share it** (`Arc<RoutingGuard>`)
-/// with everything that marks or reads taint — the agent, its planners,
-/// the escalation path. Write-once, first-reason-wins and the
-/// "newly tainted" result of [`RoutingGuard::mark`] (which gates the
-/// once-per-session `ConversationTainted` audit entry) all hold per
-/// instance: two guards over the same storage would each report a
-/// session's first mark as new, and consent granted on one would be
-/// invisible to the other.
 /// Model routing Part 3b (A16) — the three per-session sets behind
 /// `on_failure` arming, held under one lock so every transition (`arm`,
-/// `begin_armed_turn`, `end_armed_turn`, `note_consent_requested`, and the
-/// `armed` read) is a single critical section. Splitting these across
-/// separate mutexes (the original shape) let a consent note that arrived
-/// after its turn's `end_armed_turn` had already run leave a stale
-/// `consent_requested` entry that a later, unrelated turn's
-/// `end_armed_turn` would pick up and use to spuriously re-arm — see
-/// task-3-review.md's concurrency finding.
+/// `begin_armed_turn`, `end_armed_turn`, `note_consent_requested`, the
+/// offer half of [`RoutingGuard::allow`], and the `armed` read) is a
+/// single critical section. Splitting these across separate mutexes (the
+/// original shape) let a consent note that arrived after its turn's
+/// `end_armed_turn` had already run leave a stale entry that a later,
+/// unrelated turn would pick up — see task-3-review.md's concurrency
+/// finding.
+///
+/// `ask`-mode consent stops leave a *pending offer*, never a re-arm
+/// (operator decision, 2026-09-27): `/allow-cloud` turns the offer into
+/// an armed mark, so the resend escalates exactly once; the next turn
+/// starting without it declines the offer, runs locally, and no further
+/// consent stops come from the old failure.
 #[derive(Default)]
 struct ArmState {
     /// Sessions armed for their *next* turn. A turn's start moves its
@@ -58,13 +52,32 @@ struct ArmState {
     /// that's the whole one-shot, next-turn-only design.
     active: HashSet<String>,
     /// Sessions whose active-turn arming stopped for operator consent
-    /// (`ask` mode, `NeedsConsent`), so [`RoutingGuard::end_armed_turn`]
-    /// knows to re-arm rather than clear. Only ever set for a session
-    /// that's currently in `active` — see
-    /// [`RoutingGuard::note_consent_requested`].
-    consent_requested: HashSet<String>,
+    /// (`ask` mode, `NeedsConsent`): a pending offer.
+    /// [`RoutingGuard::allow`] turns it into an armed mark;
+    /// [`RoutingGuard::begin_armed_turn`] drops it (the offer was
+    /// declined). Only ever set for a session that's currently in
+    /// `active` — see [`RoutingGuard::note_consent_requested`].
+    pending_offer: HashSet<String>,
 }
 
+/// Persisted routing taint + in-memory cloud consent, plus the in-memory
+/// `on_failure` arming state (A16, [`ArmState`]). Implements
+/// [`aivyx_llm::escalation::EscalationGuard`] (read side),
+/// [`aivyx_core::TaintSink`] (write side) and
+/// [`aivyx_core::EscalationArming`].
+///
+/// In `ask` mode a consent stop on an armed turn leaves a pending offer:
+/// [`RoutingGuard::allow`] (`/allow-cloud`, from chat, IPC or the CLI)
+/// arms it for the resend, and a new turn without it declines it.
+///
+/// **Build exactly one per process and share it** (`Arc<RoutingGuard>`)
+/// with everything that marks or reads taint — the agent, its planners,
+/// the escalation path. Write-once, first-reason-wins and the
+/// "newly tainted" result of [`RoutingGuard::mark`] (which gates the
+/// once-per-session `ConversationTainted` audit entry) all hold per
+/// instance: two guards over the same storage would each report a
+/// session's first mark as new, and consent granted on one would be
+/// invisible to the other.
 pub struct RoutingGuard {
     storage: DomainHandle,
     /// Every taint this process knows of: persisted rows it has read or
@@ -74,7 +87,7 @@ pub struct RoutingGuard {
     /// under concurrent marks of the same session.
     mark_lock: tokio::sync::Mutex<()>,
     consent: Mutex<HashSet<String>>,
-    /// Model routing Part 3b (A16) — the armed/active/consent-requested
+    /// Model routing Part 3b (A16) — the armed/active/pending-offer
     /// state; see [`ArmState`].
     arm_state: Mutex<ArmState>,
     /// Model routing Part 3b (A16) — the `ask`-mode hint line handed back
@@ -175,8 +188,20 @@ impl RoutingGuard {
 
     /// Allow cloud escalation for `session` for this process's lifetime.
     /// In-memory only; never overrides a taint.
+    ///
+    /// Also (A16) turns a pending `on_failure` offer — left by an `ask`
+    /// turn that stopped for consent — into an armed mark, so the resend
+    /// escalates exactly once. Without a pending offer it arms nothing.
+    ///
+    /// Lock order: the consent lock is taken and released before the
+    /// `ArmState` lock; the two are never held together, here or anywhere
+    /// else in this type, so there is no ordering to invert.
     pub fn allow(&self, session: &str) {
         lock(&self.consent).insert(session.to_owned());
+        let mut state = lock(&self.arm_state);
+        if state.pending_offer.remove(session) {
+            state.armed.insert(session.to_owned());
+        }
     }
 
     /// Has the operator allowed cloud escalation for `session`?
@@ -257,14 +282,14 @@ impl aivyx_llm::escalation::EscalationGuard for RoutingGuard {
     }
 
     fn note_consent_requested(&self, session: &str) {
-        // Only recorded while the session is still active this turn — an
-        // OnFailure consent request can only come from an active-turn
-        // call. This is what keeps a late-arriving note (one that lands
-        // after `end_armed_turn` already ran for this turn) from sticking
-        // around to misdirect a later, unrelated turn's exit.
+        // Records a pending offer, only while the session is still active
+        // this turn — an OnFailure consent request can only come from an
+        // active-turn call. This is what keeps a late-arriving note (one
+        // that lands after `end_armed_turn` already ran for this turn)
+        // from leaving an offer a later `/allow-cloud` would arm.
         let mut state = lock(&self.arm_state);
         if state.active.contains(session) {
-            state.consent_requested.insert(session.to_owned());
+            state.pending_offer.insert(session.to_owned());
         }
     }
 }
@@ -297,24 +322,23 @@ impl aivyx_core::EscalationArming for RoutingGuard {
 
     /// Turn start: an armed mark becomes this turn's active mark. A
     /// session armed mid-turn (i.e. not present in `armed` at this call)
-    /// is left alone — it will be picked up by the *next* `begin`.
+    /// is left alone — it will be picked up by the *next* `begin`. Any
+    /// pending consent offer is dropped: a new turn without `/allow-cloud`
+    /// first means the operator declined it.
     fn begin_armed_turn(&self, session: &str) {
         let mut state = lock(&self.arm_state);
+        state.pending_offer.remove(session);
         if state.armed.remove(session) {
             state.active.insert(session.to_owned());
         }
     }
 
-    /// Turn end (every exit): clear the active mark and the consent note,
-    /// unconditionally. If the turn stopped for operator consent, re-arm
-    /// instead of just clearing, so the next turn picks the mark back up.
+    /// Turn end (every exit): clear the active mark, unconditionally.
+    /// Never re-arms: a consent stop leaves a pending offer (see
+    /// [`RoutingGuard::allow`]), which only `/allow-cloud` turns back into
+    /// an armed mark.
     fn end_armed_turn(&self, session: &str) {
-        let mut state = lock(&self.arm_state);
-        let was_consent_requested = state.consent_requested.remove(session);
-        state.active.remove(session);
-        if was_consent_requested {
-            state.armed.insert(session.to_owned());
-        }
+        lock(&self.arm_state).active.remove(session);
     }
 }
 
@@ -523,21 +547,122 @@ mod tests {
         assert!(!guard.armed_next("s1"), "cleared, not re-armed");
     }
 
-    #[tokio::test]
-    async fn consent_requested_re_arms_at_turn_end() {
-        let scratch = Scratch::new();
-        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+    // ---- I3 (operator decision 2026-09-27): an ignored `ask` offer
+    // lapses at the next turn ----
 
+    /// A failing turn armed `s1`, and the following turn (sent without
+    /// `/allow-cloud`) stopped for consent. Leaves `s1` with a pending
+    /// offer and nothing armed.
+    async fn fail_then_consent_stop(guard: &RoutingGuard) {
         assert!(guard.arm("s1", "looping").await.0);
         guard.begin_armed_turn("s1");
-        assert!(guard.armed("s1"));
-
+        assert!(guard.armed("s1"), "the turn after the failure is escalated");
         guard.note_consent_requested("s1");
         guard.end_armed_turn("s1");
-        assert!(!guard.armed("s1"), "not active between turns");
+    }
 
+    #[tokio::test]
+    async fn a_consent_stop_leaves_a_pending_offer_not_an_armed_mark() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        fail_then_consent_stop(&guard).await;
+        assert!(!guard.armed("s1"), "not active between turns");
+        assert!(
+            !guard.armed_next("s1"),
+            "a consent stop no longer re-arms the next turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn allow_after_a_consent_stop_escalates_the_resend_exactly_once() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        fail_then_consent_stop(&guard).await;
+
+        guard.allow("s1");
+        assert!(guard.consented("s1"));
+        assert!(guard.armed_next("s1"), "allow turns the pending offer into an armed mark");
+
+        // The resend.
         guard.begin_armed_turn("s1");
-        assert!(guard.armed("s1"), "re-armed by the consent-requested exit");
+        assert!(guard.armed("s1"), "the resend escalates");
+        guard.end_armed_turn("s1");
+
+        // The turn after it.
+        guard.begin_armed_turn("s1");
+        assert!(!guard.armed("s1"), "the turn after the resend is local");
+        guard.end_armed_turn("s1");
+        assert!(!guard.armed_next("s1"));
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_turn_after_a_consent_stop_declines_the_offer() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        fail_then_consent_stop(&guard).await;
+
+        // The operator ignores the offer and sends a normal message.
+        guard.begin_armed_turn("s1");
+        assert!(!guard.armed("s1"), "not escalated, so no consent stop either");
+        // A consent note can't arrive for an inactive session, but if one
+        // did it must not revive the offer.
+        guard.note_consent_requested("s1");
+        guard.end_armed_turn("s1");
+        assert!(!guard.armed_next("s1"));
+
+        // The offer is gone: a later allow only records consent.
+        guard.allow("s1");
+        assert!(guard.consented("s1"));
+        assert!(!guard.armed_next("s1"), "the declined offer can't be revived");
+        guard.begin_armed_turn("s1");
+        assert!(!guard.armed("s1"));
+    }
+
+    #[tokio::test]
+    async fn allow_without_a_pending_offer_only_records_consent() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        guard.allow("s1");
+        assert!(guard.consented("s1"));
+        assert!(!guard.armed_next("s1"), "nothing to arm");
+        guard.begin_armed_turn("s1");
+        assert!(!guard.armed("s1"));
+    }
+
+    #[tokio::test]
+    async fn allow_after_a_failure_keeps_the_existing_mark_for_the_resend() {
+        // The happy path the hint describes: fail, `/allow-cloud`, resend.
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        assert!(guard.arm("s1", "looping").await.0);
+        guard.allow("s1");
+        assert!(guard.armed_next("s1"));
+        guard.begin_armed_turn("s1");
+        assert!(guard.armed("s1"), "the resend escalates");
+        guard.end_armed_turn("s1");
+        guard.begin_armed_turn("s1");
+        assert!(!guard.armed("s1"), "once");
+    }
+
+    #[tokio::test]
+    async fn allow_through_the_reply_helper_arms_a_pending_offer() {
+        // `/allow-cloud` (chat intercept and IPC) reaches the guard via
+        // `allow_cloud_reply`.
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        fail_then_consent_stop(&guard).await;
+        assert!(allow_cloud_reply(Some(&guard), "s1", true).0);
+        assert!(guard.armed_next("s1"));
+    }
+
+    #[tokio::test]
+    async fn an_untrusted_allow_does_not_arm_a_pending_offer() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        fail_then_consent_stop(&guard).await;
+        assert!(!allow_cloud_reply(Some(&guard), "s1", false).0);
+        assert!(!guard.armed_next("s1"));
+        assert!(!guard.consented("s1"));
     }
 
     #[tokio::test]
@@ -601,10 +726,11 @@ mod tests {
         // "s1" was never armed or begun — it's not active.
         guard.note_consent_requested("s1");
         guard.end_armed_turn("s1");
+        guard.allow("s1");
         guard.begin_armed_turn("s1");
         assert!(
             !guard.armed("s1"),
-            "a consent note for a session that isn't active must not arm anything"
+            "a consent note for a session that isn't active must not leave an offer to arm"
         );
     }
 
@@ -612,13 +738,12 @@ mod tests {
     async fn a_consent_note_that_arrives_after_turn_end_does_not_arm_a_later_turn() {
         // Regression test for the reviewer's interleaving
         // (task-3-review.md): `end_armed_turn` and `note_consent_requested`
-        // used to touch `consent_requested`/`active`/`armed` under
-        // separate locks, so a consent note that lands *after* its turn
-        // already ended could leave a stale `consent_requested` entry
-        // that a later, unrelated turn's `end_armed_turn` picked up and
-        // used to spuriously re-arm. With every transition serialized
-        // under one lock and `note_consent_requested` only recording
-        // while the session is still active, a late note is a no-op.
+        // used to touch their sets under separate locks, so a consent
+        // note that lands *after* its turn already ended could leave a
+        // stale entry for a later turn to act on. With every transition
+        // serialized under one lock and `note_consent_requested` only
+        // recording a pending offer while the session is still active, a
+        // late note is a no-op: not even `/allow-cloud` arms from it.
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
 
@@ -636,10 +761,11 @@ mod tests {
         // arming of its own. It must not be spuriously re-armed by the
         // stale note.
         guard.end_armed_turn("s1");
+        guard.allow("s1");
         guard.begin_armed_turn("s1");
         assert!(
             !guard.armed("s1"),
-            "a late consent note for an already-ended turn must not re-arm a later turn"
+            "a late consent note for an already-ended turn must not leave an offer to arm"
         );
     }
 
