@@ -52,7 +52,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
   autonomous loop arms only with `mode = "auto"`: a
   Verdict FAIL (the completion judge rejecting a left-pending story)
   arms the next iteration, and a run the stall breaker would end gets
-  exactly one armed rescue iteration first; a second stall ends it,
+  exactly one armed rescue iteration first (also after a stall on a
+  Foreman-delegated story: the rescue always runs as a solo turn, since
+  a delegation can't carry the arm, and a delegation drops any pending
+  Verdict FAIL arm); a second stall ends it,
   with "(after one on_failure rescue)" on the stop reason. New
   `EscalationArmed` audit entry per new mark; the escalation itself is
   a `CloudEscalation` with trigger `on_failure`. Marks live in memory

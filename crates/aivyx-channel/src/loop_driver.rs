@@ -980,7 +980,13 @@ pub async fn run_loop_driver(
             // (headless, inline) instead of firing a solo turn — this does NOT
             // depend on the model choosing `team.run`. A completed mission marks
             // the story done; any other outcome leaves it pending with a note.
-            if let Some((svc, threshold)) = &delegate {
+            //
+            // A16 — a pending stall rescue always fires solo: a delegation
+            // runs no agent turn, so it can't carry the arm, and the run's
+            // one rescue must never be spent without an armed turn.
+            if let Some((svc, threshold)) = &delegate
+                && arm_next != Some(SIGNAL_STALL_RESCUE)
+            {
                 if let Some(story) = backlog.next_pending() {
                     let assessment =
                         crate::task_complexity::assess(&story.title, &story.body);
@@ -1094,13 +1100,40 @@ pub async fn run_loop_driver(
                         // Stall accounting mirrors the solo path: a completed
                         // delegation is progress; a failed/halted one is not, so
                         // repeated failures trip the breaker instead of spinning.
-                        let should_stop = stall.record(made_progress);
+                        let stalled = stall.record(made_progress);
+                        // A16 — the same `next_arm` rule as a solo iteration,
+                        // with no verdict of its own (a delegated result's
+                        // verdict decides done-or-retry above, not arming).
+                        // Assigning `arm_next` drops any Verdict FAIL arm
+                        // pending from an earlier solo iteration: it must not
+                        // reach a later, non-adjacent solo fire. A stall here
+                        // gets the run's one rescue, armed on the next
+                        // iteration, which the guard above keeps solo.
+                        let rescue_was_used = rescue_used;
+                        let (arm, should_stop, now_used) = next_arm(
+                            CloseResult::NotNeeded,
+                            stalled,
+                            rescue_used,
+                            escalate_on_failure,
+                        );
+                        arm_next = arm;
+                        rescue_used = now_used;
+                        if stalled && !should_stop {
+                            stall.grant_one_more();
+                            eprintln!(
+                                "aivyx-pa loop: stalled — one escalated rescue iteration \
+                                 (on_failure)"
+                            );
+                        }
                         shared.record_idle(stall.consecutive_idle);
                         if should_stop {
-                            let reason = format!(
+                            let mut reason = format!(
                                 "no progress for {max_idle_iterations} consecutive \
                                  iteration(s) (stall breaker)"
                             );
+                            if rescue_was_used {
+                                reason.push_str(" (after one on_failure rescue)");
+                            }
                             shared.finish_run(&reason);
                             eprintln!("aivyx-pa loop: run ended — {reason}");
                             break;
@@ -1960,10 +1993,13 @@ mod tests {
         type Log = Arc<StdMutex<Vec<String>>>;
 
         /// Does nothing — every iteration is idle (no note, no completion).
+        /// With `add_on_first_turn`, its first turn adds that story to the
+        /// backlog (to steer the next iteration onto a different story).
         struct IdleAgent {
             id: AgentId,
             caps: CapabilitySet,
             log: Log,
+            add_on_first_turn: StdMutex<Option<(Arc<PersistentLoopBacklog>, u32, String)>>,
         }
 
         #[async_trait::async_trait]
@@ -1976,6 +2012,12 @@ mod tests {
             }
             async fn turn(&self, _message: Message, _channel: &dyn ChannelContext) -> TurnOutcome {
                 self.log.lock().unwrap().push("turn".to_string());
+                let add = self.add_on_first_turn.lock().unwrap().take();
+                if let Some((bl, priority, body)) = add {
+                    bl.add_story("added".into(), 6, priority, "Added story".into(), body)
+                        .await
+                        .unwrap();
+                }
                 TurnOutcome::Completed {
                     final_message: "ok".to_string(),
                     tool_calls_made: 0,
@@ -2033,7 +2075,44 @@ mod tests {
             judge: Option<Arc<crate::completion_judge::CompletionJudge>>,
             escalate_on_failure: bool,
         ) -> (Vec<String>, String) {
+            drive_with(max_iterations, max_idle, judge, escalate_on_failure, None, None).await
+        }
+
+        /// A Foreman delegation service whose every mission fails to plan
+        /// (the fake provider answers with non-JSON), so each delegation
+        /// is a failed, no-progress iteration.
+        async fn failing_delegate() -> Arc<crate::team_mission_driver::TeamMissionService> {
+            use crate::team_mission_driver::{tests as tm, SharedMissionState, TeamMissionService};
+            Arc::new(TeamMissionService::new(
+                SharedMissionState::new(tm::team_domain().await),
+                tm::deps("not a plan"),
+                aivyx_team::default_nonagon(),
+                aivyx_core::GatePolicy::RejectAndAbort,
+            ))
+        }
+
+        /// A story body enumerated enough to score over any small threshold.
+        fn complex_body() -> String {
+            (1..=30).map(|i| format!("- part {i}\n")).collect()
+        }
+
+        /// [`drive`], plus Foreman delegation at `delegate_threshold` (over
+        /// [`failing_delegate`]) and a story the agent's first turn adds
+        /// (`(priority, body)`).
+        async fn drive_with(
+            max_iterations: u32,
+            max_idle: u32,
+            judge: Option<Arc<crate::completion_judge::CompletionJudge>>,
+            escalate_on_failure: bool,
+            delegate_threshold: Option<u32>,
+            add_on_first_turn: Option<(u32, String)>,
+        ) -> (Vec<String>, String) {
             let log: Log = Arc::new(StdMutex::new(Vec::new()));
+            let (bl, _id, _dir) = backlog_with_one_pending().await;
+            let delegate = match delegate_threshold {
+                Some(t) => Some((failing_delegate().await, t)),
+                None => None,
+            };
             let factory: crate::daemon_server::ChannelFactory =
                 Arc::new(|_ft: crate::daemon_ipc::FrontendType| {
                     Arc::new(TestChannel(SessionId::new()))
@@ -2044,11 +2123,13 @@ mod tests {
                     id: AgentId::new(),
                     caps: CapabilitySet::empty(),
                     log: Arc::clone(&log),
+                    add_on_first_turn: StdMutex::new(
+                        add_on_first_turn.map(|(prio, body)| (Arc::clone(&bl), prio, body)),
+                    ),
                 }),
                 factory,
             )
             .with_escalation_arming(Arc::new(RecordingArming { log: Arc::clone(&log) }));
-            let (bl, _id, _dir) = backlog_with_one_pending().await;
             let shared = SharedLoopState::new();
             assert!(shared.request_start(max_iterations, now_unix_ms()));
             // `request_start` stores a wake-up permit for a parked driver. The
@@ -2072,7 +2153,7 @@ mod tests {
                 aivyx_cost::Pricing::default(),
                 max_idle,
                 shutdown.clone(),
-                None,
+                delegate,
                 judge,
                 escalate_on_failure,
             ));
@@ -2106,6 +2187,50 @@ mod tests {
                 "stop reason names the spent rescue: {reason}"
             );
             assert!(reason.contains("stall breaker"), "{reason}");
+        }
+
+        #[tokio::test]
+        async fn a_delegation_stall_gets_the_rescue_as_an_armed_solo_iteration() {
+            // Final review (f) — a delegation iteration can't carry an arm
+            // (it fires no agent turn), so a stall there must not spend
+            // the run's rescue without an armed turn. It follows the same
+            // rule as a solo stall: the rescue arms the next iteration,
+            // which runs solo (not delegated again) so the arm is used.
+            let (events, reason) = drive_with(10, 1, None, true, Some(0), None).await;
+            assert_eq!(events, vec!["arm:loop_stall_rescue", "turn"]);
+            assert!(
+                reason.ends_with("(after one on_failure rescue)"),
+                "stop reason names the spent rescue: {reason}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_delegation_stall_with_escalation_off_ends_the_run_as_before() {
+            let (events, reason) = drive_with(10, 1, None, false, Some(0), None).await;
+            assert!(events.is_empty(), "{events:?}");
+            assert_eq!(
+                reason,
+                "no progress for 1 consecutive iteration(s) (stall breaker)"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_verdict_fail_arm_does_not_survive_a_delegation_iteration() {
+            // Final review (f) — iteration 1 (solo, s1) is judged FAIL and
+            // arms the next fire; its turn adds a higher-priority complex
+            // story, so iterations 2–3 delegate it (both fail; the second
+            // skips it). Iteration 4 is solo again on s1 but not adjacent
+            // to the FAIL: it must not be armed.
+            assert!(!crate::task_complexity::assess(
+                "Write brew-guide.md",
+                "Acceptance: file exists with 3 steps."
+            )
+            .should_delegate(20));
+            assert!(crate::task_complexity::assess("Added story", &complex_body()).should_delegate(20));
+            let judge = Arc::new(judge_returning("FAIL — nothing was written."));
+            let (events, _) =
+                drive_with(4, 10, Some(judge), true, Some(20), Some((0, complex_body()))).await;
+            assert_eq!(events, vec!["turn", "turn"], "no stale verdict arm");
         }
 
         #[tokio::test]
