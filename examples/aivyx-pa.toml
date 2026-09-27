@@ -1827,6 +1827,15 @@ parent_role = "researcher"
 # destination either way. Any failure, timeout, or unparseable answer
 # falls back to medium. `aivyx-pa routing status`/`explain` and
 # `routing.status` show whether it's on.
+#
+# Classification avoids models known to think (reasoning models spend
+# its few tokens thinking and never answer, so it would always fall
+# back to medium). A backend that doesn't report capabilities (an
+# OpenAI-compatible server such as Lemonade or Jan) can't say a model
+# thinks: declare it in the roster, e.g.
+#   [[routing.models]]
+#   id = "Qwen3.5-9B-GGUF"
+#   capabilities = ["tools", "vision", "thinking"]
 
 # ----------------------------------------------------------------
 # Persistent helpfulness ledger (Phase 82) — no config; automatic

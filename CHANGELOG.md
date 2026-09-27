@@ -37,6 +37,12 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
+- **The routing classifier avoids thinking models.** A reasoning model
+  spends the classifier's few tokens thinking and never answers, so it
+  always fell back to medium. Classification now prefers a model not
+  known to think (aivyx-route 4ff5b7f), still using one when nothing else
+  qualifies. Declare `capabilities = ["thinking"]` in `[[routing.models]]`
+  for a thinking model the backend doesn't report.
 - **Local OpenAI-compatible backends now report token usage.** Keyless
   providers (`llamacpp`, `jan`, `broker`, and routed OpenAI-compatible or
   llama-server endpoints) never asked for streamed usage, so every local
