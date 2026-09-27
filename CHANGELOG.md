@@ -50,8 +50,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
   when there is one, but with a cloud `[agent]` provider it can be that
   provider's model. No new destination either way.
   `aivyx-pa routing status` and the `routing.status` tool now show
-  whether it's on. Off by default: nothing changes without it. See
-  `examples/aivyx-pa.toml`.
+  whether it's on. Off by default: nothing changes without it. The
+  classifier's own call is now billed too — its tokens are added to the
+  turn's cost under its own model, alongside the main call's, instead of
+  being silently thrown away. See `examples/aivyx-pa.toml`.
 - **Model routing (Part 3b) — `on_failure` escalation (Amendment
   A16).** New `[routing.escalation] on_failure` (default `false`). When
   on, a local turn that got stuck — `Looping`, or both tool-call repair

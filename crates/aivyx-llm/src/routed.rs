@@ -19,7 +19,8 @@ use crate::escalation::{
     Trigger, decide_escalation, payload_hash,
 };
 use crate::{
-    ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, RouteHint,
+    ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmUsage,
+    RouteHint,
 };
 
 /// Builds the provider for one endpoint. One provider serves every model
@@ -101,6 +102,10 @@ pub struct RoutedProvider {
     /// read while the session has no model, so it's never cleared; the
     /// cap bounds it. Capped like `last_served`.
     classified: Mutex<SessionMap<(Tier, bool)>>,
+    /// Usage of side calls made for this conversation (the routing
+    /// classifier, so far), not yet billed. Drained by
+    /// [`RoutedProvider::take_side_usage`]. Capped like `last_served`.
+    side_usage: Mutex<SessionMap<Vec<(String, LlmUsage)>>>,
 }
 
 impl RoutedProvider {
@@ -122,6 +127,7 @@ impl RoutedProvider {
             classifier: None,
             last_served: Mutex::new(SessionMap::default()),
             classified: Mutex::new(SessionMap::default()),
+            side_usage: Mutex::new(SessionMap::default()),
         }
     }
 
@@ -200,6 +206,28 @@ impl RoutedProvider {
         }
     }
 
+    /// Usage of side calls made for this conversation, e.g. the routing
+    /// classifier, not yet billed; the planner drains it with the step
+    /// that triggered it.
+    pub fn take_side_usage(&self, session: &str) -> Vec<(String, LlmUsage)> {
+        self.side_usage
+            .lock()
+            .unwrap()
+            .remove(session)
+            .unwrap_or_default()
+    }
+
+    /// Records `model`'s `usage` against `session`'s side-usage list
+    /// (a no-op without a session).
+    fn note_side_usage(&self, session: Option<&str>, model: &str, usage: LlmUsage) {
+        if let Some(session) = session {
+            let mut side_usage = self.side_usage.lock().unwrap();
+            let mut entries = side_usage.get(session).cloned().unwrap_or_default();
+            entries.push((model.to_string(), usage));
+            side_usage.insert(session.to_string(), entries);
+        }
+    }
+
     /// Keep `last_served` (and the classifier's per-session tier) for at
     /// most `max` sessions (default
     /// [`aivyx_route::MAX_SESSIONS`]); the least recently served session
@@ -208,6 +236,7 @@ impl RoutedProvider {
     pub fn with_max_sessions(mut self, max: usize) -> Self {
         self.last_served = Mutex::new(SessionMap::with_capacity(max));
         self.classified = Mutex::new(SessionMap::with_capacity(max));
+        self.side_usage = Mutex::new(SessionMap::with_capacity(max));
         self
     }
 
@@ -380,11 +409,17 @@ impl RoutedProvider {
     /// (`Classify`, no session) on the local router over the last
     /// [`CLASSIFIER_RECENT`] user messages' text, bounded as a whole by
     /// `timeout`. Any failure, timeout or unparseable answer is `Err`.
+    /// `session` is the conversation this side call is made for (not the
+    /// classifier call's own, sessionless, `RouteHint`) — its usage is
+    /// recorded there, before the answer is parsed, so an unparseable
+    /// answer is still billed. A timed-out or failed call records none:
+    /// its usage is unknown.
     async fn classify(
         &self,
         request: &LlmRequest<'_>,
         cancellation: &CancellationToken,
         timeout: Duration,
+        session: Option<&str>,
     ) -> Result<Tier, ()> {
         let call = async {
             let mut recent: Vec<String> = request
@@ -443,7 +478,16 @@ impl RoutedProvider {
                 observer(&record);
             }
             while stream.next_event().await.map_err(|_| ())?.is_some() {}
-            match stream.finish().await.map_err(|_| ())? {
+            let step_end = stream.finish().await.map_err(|_| ())?;
+            // Recorded before parsing, so an unparseable answer is still
+            // billed.
+            match &step_end {
+                LlmStepEnd::FinalMessage { usage, .. }
+                | LlmStepEnd::ToolCalls { usage, .. } => {
+                    self.note_side_usage(session, &record.model.id, *usage);
+                }
+            }
+            match step_end {
                 LlmStepEnd::FinalMessage { text, .. } => {
                     aivyx_route::classifier::parse(&text).ok_or(())
                 }
@@ -631,7 +675,10 @@ impl LlmProvider for RoutedProvider {
             let (tier, fell_back) = match remembered {
                 Some(memo) => memo,
                 None => {
-                    let memo = match self.classify(&request, cancellation, setup.timeout).await {
+                    let memo = match self
+                        .classify(&request, cancellation, setup.timeout, Some(session))
+                        .await
+                    {
                         Ok(tier) => (tier, false),
                         Err(()) => (Tier::Medium, true),
                     };
@@ -739,6 +786,7 @@ mod tests {
         fail: Option<LlmError>,
         cancel_first: Option<CancellationToken>,
         answer: String,
+        usage: LlmUsage,
         delay: Option<Duration>,
         seen: Mutex<Vec<Seen>>,
         details: Mutex<Vec<Detail>>,
@@ -750,6 +798,7 @@ mod tests {
                 fail: None,
                 cancel_first: None,
                 answer: String::new(),
+                usage: LlmUsage::default(),
                 delay: None,
                 seen: Mutex::new(Vec::new()),
                 details: Mutex::new(Vec::new()),
@@ -764,6 +813,16 @@ mod tests {
         fn answering(answer: &str) -> Arc<Self> {
             Arc::new(Scripted {
                 answer: answer.into(),
+                ..Self::base()
+            })
+        }
+
+        /// [`Scripted::answering`], whose `LlmStepEnd` carries `usage`
+        /// instead of the zero default.
+        fn answering_with_usage(answer: &str, usage: LlmUsage) -> Arc<Self> {
+            Arc::new(Scripted {
+                answer: answer.into(),
+                usage,
                 ..Self::base()
             })
         }
@@ -854,13 +913,13 @@ mod tests {
             }
             match &self.fail {
                 Some(err) => Err(err.clone()),
-                None => Ok(Box::new(EmptyStream(self.answer.clone()))),
+                None => Ok(Box::new(EmptyStream(self.answer.clone(), self.usage))),
             }
         }
     }
 
-    /// No events; finishes with its text as the final message.
-    struct EmptyStream(String);
+    /// No events; finishes with its text and usage as the final message.
+    struct EmptyStream(String, LlmUsage);
 
     #[async_trait]
     impl LlmStream for EmptyStream {
@@ -870,7 +929,7 @@ mod tests {
         async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
             Ok(LlmStepEnd::FinalMessage {
                 text: self.0,
-                usage: LlmUsage::default(),
+                usage: self.1,
             })
         }
     }
@@ -2162,5 +2221,116 @@ mod tests {
         let records = records.lock().unwrap();
         assert_eq!(records.len(), 1);
         assert!(!records[0].reason.contains("classifier"), "{}", records[0].reason);
+    }
+
+    // ---- Routing classifier: billing its side-call usage ----
+
+    #[tokio::test]
+    async fn a_classified_call_records_its_usage_for_the_session() {
+        let usage = LlmUsage {
+            input_tokens: 11,
+            output_tokens: 2,
+            ..LlmUsage::default()
+        };
+        let tiny = Scripted::answering_with_usage("large", usage);
+        let (f, _gpu, _records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert_eq!(
+            f.routed.take_side_usage("s"),
+            vec![("tiny".to_string(), usage)]
+        );
+        assert_eq!(f.routed.take_side_usage("s"), Vec::new(), "drained by take");
+    }
+
+    #[tokio::test]
+    async fn an_unparseable_classifier_answer_still_records_usage() {
+        let usage = LlmUsage {
+            input_tokens: 6,
+            output_tokens: 1,
+            ..LlmUsage::default()
+        };
+        let tiny = Scripted::answering_with_usage("huge", usage);
+        let (f, _gpu, _records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert_eq!(
+            f.routed.take_side_usage("s"),
+            vec![("tiny".to_string(), usage)],
+            "unparseable, but still billed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_classifier_records_no_usage() {
+        let tiny = Scripted::slow(Duration::from_secs(10), "large");
+        let (f, _gpu, _records) =
+            classifying(Arc::clone(&tiny), Some(Duration::from_millis(50)));
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert!(f.routed.take_side_usage("s").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failing_classifier_records_no_usage() {
+        let tiny = Scripted::failing(400);
+        let (f, _gpu, _records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+
+        assert!(f.routed.take_side_usage("s").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_sticky_conversations_second_turn_records_no_further_usage() {
+        let usage = LlmUsage {
+            input_tokens: 4,
+            output_tokens: 1,
+            ..LlmUsage::default()
+        };
+        let tiny = Scripted::answering_with_usage("large", usage);
+        let (f, _gpu, _records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint.clone())))
+            .await
+            .unwrap();
+        assert_eq!(
+            f.routed.take_side_usage("s"),
+            vec![("tiny".to_string(), usage)]
+        );
+
+        // Sticky now: no second classifier call, so no new side usage.
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        assert!(f.routed.take_side_usage("s").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_remembered_tiers_reuse_records_no_further_usage() {
+        let usage = LlmUsage {
+            input_tokens: 4,
+            output_tokens: 1,
+            ..LlmUsage::default()
+        };
+        let tiny = Scripted::answering_with_usage("large", usage);
+        let (f, _gpu, _records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        // Something cooling: nothing sticks, so the tier is remembered
+        // instead across turns (see `a_remembered_tier_is_reused_with_its_reason`).
+        f.routed
+            .router()
+            .failed(&key("default", "default"), Instant::now());
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        call(&f.routed, request(&messages, &[], Some(hint.clone())))
+            .await
+            .unwrap();
+        assert_eq!(
+            f.routed.take_side_usage("s"),
+            vec![("tiny".to_string(), usage)]
+        );
+
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
+        assert!(f.routed.take_side_usage("s").is_empty(), "tier reused, not reclassified");
     }
 }

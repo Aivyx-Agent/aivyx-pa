@@ -1067,27 +1067,50 @@ impl LlmPlanner {
     /// Add a step's usage to the running total, and to the per-model
     /// total of the model that served the step — the routed provider's
     /// last-served model for this session when routed, else the
-    /// configured model.
+    /// configured model. Then, when routed, drains any side-call usage
+    /// the routed provider recorded for this session (e.g. the routing
+    /// classifier's own call, made before this step): each entry is
+    /// billed the same way, to its own model, so it rides along with
+    /// the step that triggered it rather than going unbilled.
     fn accumulate(&mut self, usage: LlmUsage) {
+        self.add_usage(usage);
+        let served = self.served_model();
+        self.merge_model_cost(served, usage);
+
+        if let Some((routed, session)) = self
+            .routing
+            .as_ref()
+            .map(|(r, _)| Arc::clone(r))
+            .zip(self.route_session.clone())
+        {
+            for (model, side_usage) in routed.take_side_usage(&session) {
+                self.add_usage(side_usage);
+                self.merge_model_cost(model, side_usage);
+            }
+        }
+    }
+
+    /// Adds `usage` to the turn's running total.
+    fn add_usage(&mut self, usage: LlmUsage) {
         self.accumulated_usage.input_tokens += usage.input_tokens;
         self.accumulated_usage.output_tokens += usage.output_tokens;
         self.accumulated_usage.cache_creation_input_tokens += usage.cache_creation_input_tokens;
         self.accumulated_usage.cache_read_input_tokens += usage.cache_read_input_tokens;
+    }
 
-        let served = self.served_model();
+    /// Adds `usage` to `model`'s running total in `turn_costs`, pushing a
+    /// fresh entry the first time `model` serves a step (or a side call)
+    /// this turn.
+    fn merge_model_cost(&mut self, model: String, usage: LlmUsage) {
         let step = crate::TokenUsage::from(usage);
-        match self
-            .turn_costs
-            .iter_mut()
-            .find(|(model, _)| *model == served)
-        {
+        match self.turn_costs.iter_mut().find(|(m, _)| *m == model) {
             Some((_, total)) => {
                 total.input_tokens += step.input_tokens;
                 total.output_tokens += step.output_tokens;
                 total.cache_creation_input_tokens += step.cache_creation_input_tokens;
                 total.cache_read_input_tokens += step.cache_read_input_tokens;
             }
-            None => self.turn_costs.push((served, step)),
+            None => self.turn_costs.push((model, step)),
         }
     }
 
@@ -5820,6 +5843,115 @@ mod tests {
         let usage = planner.turn_usage();
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(planner.turn_costs(), vec![("big".to_string(), usage)]);
+    }
+
+    /// [`routed_over`], plus a Small-tier `tiny@cpu` candidate serving
+    /// `TaskKind::Classify`, with the classifier on. Mirrors
+    /// `aivyx_llm::routed`'s own `classifying` test fixture.
+    fn routed_over_with_classifier(
+        default: Arc<FakeLlmProvider>,
+        gpu: Arc<FakeLlmProvider>,
+        classifier: Arc<FakeLlmProvider>,
+    ) -> Arc<aivyx_llm::RoutedProvider> {
+        let mut tiny = routing_profile("cpu", "tiny", &[]);
+        tiny.tier = aivyx_route::Tier::Small;
+        let router = aivyx_route::Router::new(
+            vec![
+                routing_profile("default", "default", &[]),
+                routing_profile("gpu", "big", &[aivyx_route::Capability::Tools]),
+                tiny,
+            ],
+            aivyx_route::TaskOverrides::default(),
+        );
+        let factory: aivyx_llm::ProviderFactory =
+            Box::new(move |endpoint: &aivyx_route::EndpointRef| {
+                if endpoint.as_str() == "cpu" {
+                    Ok(Arc::clone(&classifier) as Arc<dyn LlmProvider>)
+                } else {
+                    Ok(Arc::clone(&gpu) as Arc<dyn LlmProvider>)
+                }
+            });
+        Arc::new(
+            aivyx_llm::RoutedProvider::new(
+                aivyx_route::ModelKey {
+                    endpoint: aivyx_route::EndpointRef::new("default"),
+                    id: "default".into(),
+                },
+                default as Arc<dyn LlmProvider>,
+                router,
+                factory,
+            )
+            .with_classifier(aivyx_llm::ClassifierSetup {
+                timeout: std::time::Duration::from_secs(5),
+            }),
+        )
+    }
+
+    /// A fresh chat turn under a routed planner whose `RoutedProvider`
+    /// has the routing classifier on bills both the main model's usage
+    /// and the classifier side-call's usage to the turn — the classifier
+    /// tokens are otherwise thrown away (the bug this test guards).
+    #[tokio::test]
+    async fn turn_costs_bill_the_routing_classifiers_tokens() {
+        let default = FakeLlmProvider::new(vec![]);
+        let gpu = FakeLlmProvider::new(vec![final_step(10, 5)]);
+        let classifier_usage = LlmUsage {
+            input_tokens: 7,
+            output_tokens: 1,
+            ..LlmUsage::default()
+        };
+        let classifier = FakeLlmProvider::new(vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "large".to_string(),
+                usage: classifier_usage,
+            },
+        }]);
+        let routed =
+            routed_over_with_classifier(default.clone(), gpu.clone(), classifier.clone());
+        let registry = Arc::new(ToolRegistry::new(vec![
+            Arc::new(FakeTool::new("echo")) as Arc<dyn Tool>
+        ]));
+        let mut planner = LlmPlanner::new(
+            Arc::clone(&routed) as Arc<dyn LlmProvider>,
+            registry,
+            LlmPlannerConfig::new("default"),
+        )
+        .with_routing(routed, aivyx_route::TaskKind::Chat);
+
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+
+        assert!(default.routes.lock().unwrap().is_empty());
+        assert_eq!(gpu.routes.lock().unwrap()[0].0, "big");
+        assert_eq!(
+            classifier.routes.lock().unwrap().len(),
+            1,
+            "exactly one classifier call"
+        );
+
+        let main_cost = crate::TokenUsage::from(LlmUsage {
+            input_tokens: 10,
+            output_tokens: 5,
+            ..LlmUsage::default()
+        });
+        let classifier_cost = crate::TokenUsage::from(classifier_usage);
+        let costs = planner.turn_costs();
+        assert_eq!(
+            costs,
+            vec![
+                ("big".to_string(), main_cost),
+                ("tiny".to_string(), classifier_cost),
+            ],
+            "both the main model and the classifier are billed"
+        );
+
+        let usage = planner.turn_usage();
+        assert_eq!(usage.input_tokens, 10 + 7);
+        assert_eq!(usage.output_tokens, 5 + 1);
     }
 
     /// The `estimated_prompt_tokens` a routed planner sends for one
