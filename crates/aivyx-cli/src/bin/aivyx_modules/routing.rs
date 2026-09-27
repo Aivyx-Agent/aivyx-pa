@@ -88,7 +88,10 @@ impl CloudAccess {
         match kind {
             EndpointKind::Anthropic => Some((self.anthropic_key.as_ref(), "anthropic_api_key")),
             EndpointKind::Openai => Some((self.openai_key.as_ref(), "openai_api_key")),
-            EndpointKind::Ollama | EndpointKind::LlamaRouter | EndpointKind::OpenaiCompat => None,
+            EndpointKind::Ollama
+            | EndpointKind::LlamaRouter
+            | EndpointKind::OpenaiCompat
+            | EndpointKind::Lemonade => None,
         }
     }
 }
@@ -239,10 +242,12 @@ pub(crate) fn provider_factory(cfg: &RoutingConfig, access: &CloudAccess) -> Pro
                 OllamaProvider::new(OllamaConfig::default_local().with_base_url(base))
                     .map_err(err)?,
             ),
-            EndpointKind::LlamaRouter | EndpointKind::OpenaiCompat => Arc::new(
-                OpenAiProvider::new(OpenAiConfig::without_api_key().with_base_url(base))
-                    .map_err(err)?,
-            ),
+            EndpointKind::LlamaRouter | EndpointKind::OpenaiCompat | EndpointKind::Lemonade => {
+                Arc::new(
+                    OpenAiProvider::new(OpenAiConfig::without_api_key().with_base_url(base))
+                        .map_err(err)?,
+                )
+            }
             EndpointKind::Anthropic | EndpointKind::Openai => {
                 return Err(format!(
                     "[routing.endpoints.{endpoint}] is a cloud endpoint with no key mapping"

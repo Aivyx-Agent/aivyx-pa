@@ -663,7 +663,7 @@ dependencies = [
 [[package]]
 name = "aivyx-route"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=4ff5b7f7b1accbc4549dbd39219523bc85601bd7#4ff5b7f7b1accbc4549dbd39219523bc85601bd7"
+source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=af1b7485d175d2f72126ab31a23660f10bb14936#af1b7485d175d2f72126ab31a23660f10bb14936"
 dependencies = [
  "reqwest 0.13.4",
  "serde",
