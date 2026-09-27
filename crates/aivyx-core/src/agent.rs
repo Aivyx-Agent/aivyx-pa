@@ -7140,6 +7140,144 @@ mod tests {
         assert_eq!((count(&log, "begin:"), count(&log, "end:")), (1, 1));
     }
 
+    /// A minimal stateful arming with `RoutingGuard`'s armed → active →
+    /// cleared shape, so a test can observe the active mark mid-turn.
+    #[derive(Default)]
+    struct StatefulArming {
+        armed: Mutex<std::collections::HashSet<String>>,
+        active: Mutex<std::collections::HashSet<String>>,
+    }
+
+    impl StatefulArming {
+        fn active(&self, session: &str) -> bool {
+            self.active.lock().unwrap().contains(session)
+        }
+    }
+
+    #[async_trait]
+    impl crate::EscalationArming for StatefulArming {
+        async fn arm(&self, session: &str, _signal: &str) -> (bool, Option<String>) {
+            (self.armed.lock().unwrap().insert(session.to_owned()), None)
+        }
+        fn begin_armed_turn(&self, session: &str) {
+            if self.armed.lock().unwrap().remove(session) {
+                self.active.lock().unwrap().insert(session.to_owned());
+            }
+        }
+        fn end_armed_turn(&self, session: &str) {
+            self.active.lock().unwrap().remove(session);
+        }
+    }
+
+    /// Runs a nested child turn on the parent's channel (the role-switch
+    /// shape), then records whether the parent's session is still active.
+    struct NestedTurnTool {
+        id: ToolId,
+        schema: Value,
+        child: Arc<dyn Agent>,
+        arming: Arc<StatefulArming>,
+        active_after_child: Arc<Mutex<Option<bool>>>,
+    }
+
+    #[async_trait]
+    impl Tool for NestedTurnTool {
+        fn id(&self) -> ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            "nested.turn"
+        }
+        fn description(&self) -> &str {
+            "test-only: runs a child turn on the parent's channel"
+        }
+        fn input_schema(&self) -> &Value {
+            &self.schema
+        }
+        fn required_scope(&self, _input: &Value) -> Scope {
+            Scope::parse("memory.read").unwrap()
+        }
+        async fn execute(&self, _input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+            let _ = self
+                .child
+                .turn(Message::text(ctx.session_id, "child task"), ctx.channel)
+                .await;
+            let session = ctx.channel.session_id().to_string();
+            *self.active_after_child.lock().unwrap() = Some(self.arming.active(&session));
+            ToolOutcome::Completed {
+                output: json!({"ok": true}),
+                verified: Verification::NotApplicable,
+            }
+        }
+    }
+
+    /// Runs an armed parent turn whose one tool call is a nested child
+    /// turn on the same channel, the child optionally carrying the same
+    /// arming. Returns (active after the child, active after the parent).
+    async fn nested_turn_active_marks(child_armed: bool) -> (Option<bool>, bool) {
+        use crate::EscalationArming as _;
+        let arming = Arc::new(StatefulArming::default());
+        let child = make_agent(
+            CapabilitySet::empty(),
+            vec![],
+            RecordingAudit::new(),
+            vec![NextStep::FinalMessage("child done".into())],
+        );
+        let child: Arc<dyn Agent> = if child_armed {
+            Arc::new(child.with_escalation_arming(arming.clone()))
+        } else {
+            Arc::new(child)
+        };
+        let observed = Arc::new(Mutex::new(None));
+        let tool = Arc::new(NestedTurnTool {
+            id: ToolId::new(),
+            schema: json!({}),
+            child,
+            arming: arming.clone(),
+            active_after_child: observed.clone(),
+        });
+        let tool_id = tool.id();
+        let parent = make_agent(
+            memory_read_caps(),
+            vec![tool],
+            RecordingAudit::new(),
+            vec![call(tool_id), NextStep::FinalMessage("parent done".into())],
+        )
+        .with_escalation_arming(arming.clone());
+        let channel = ArmChannel::new(ArmLog::default());
+        let session = channel.session.to_string();
+        // An earlier failing turn armed this conversation's next turn.
+        arming.arm(&session, "looping").await;
+        let _ = parent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        let after_child = *observed.lock().unwrap();
+        (after_child, arming.active(&session))
+    }
+
+    #[tokio::test]
+    async fn a_nested_turn_without_arming_leaves_the_parents_active_mark() {
+        // Final review I2 — the daemon attaches arming to its own agent
+        // only, never to the role-switch child. The child's model calls
+        // carry the same session, so they share the parent's escalation;
+        // only the outermost turn brackets.
+        let (after_child, after_parent) = nested_turn_active_marks(false).await;
+        assert_eq!(
+            after_child,
+            Some(true),
+            "the parent's turn stays escalated after the nested child turn"
+        );
+        assert!(!after_parent, "the parent's own end clears it");
+    }
+
+    #[tokio::test]
+    async fn a_nested_turn_with_arming_would_de_escalate_the_parent_mid_turn() {
+        // Why the role-switch child must not carry arming: its own end
+        // clears the parent's active mark, so the rest of the parent turn
+        // would change model mid-turn.
+        let (after_child, _) = nested_turn_active_marks(true).await;
+        assert_eq!(after_child, Some(false));
+    }
+
     #[tokio::test]
     async fn a_looping_turn_without_a_hint_keeps_its_message() {
         let log = ArmLog::default();

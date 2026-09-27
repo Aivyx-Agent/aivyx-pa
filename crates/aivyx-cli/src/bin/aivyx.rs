@@ -6923,8 +6923,8 @@ async fn run_async(
         ));
     }
 
-    // Part 3b (A16) — arms the daemon agent and the role-switch child for
-    // `on_failure` escalation, over the exact same `routing_guard` the
+    // Part 3b (A16) — arms the daemon agent (never the role-switch child;
+    // see the factory below) for `on_failure` escalation, over the exact same `routing_guard` the
     // escalation layer above just wired into `routing_access.escalation_guard`
     // — the guard the provider reads consent/taint from and the guard the
     // agent arms must be the same instance, or arming one session would be
@@ -9036,10 +9036,6 @@ async fn run_async(
     // Model routing Part 3b — child turns share the one taint sink.
     let taint_for_factory = taint_sink.clone();
     let sensitive_for_factory = config_routing_sensitive.clone();
-    // Model routing Part 3b (A16) — the role-switch child arms the same
-    // guard the daemon agent does; see the `escalation_arming` build site
-    // above for why it must be the same instance.
-    let arming_for_factory = escalation_arming.clone();
     let audit_for_factory = Arc::clone(&audit);
     let tools_for_factory = Arc::clone(&tools);
     // aivyx-checkpoint — the closure below is `move`, so it needs its
@@ -9295,12 +9291,15 @@ async fn run_async(
                 .with_sensitive_channels(sensitive_for_factory.channels.clone()),
             None => child_agent,
         };
-        // Model routing Part 3b (A16) — the same guard, shared with the
-        // daemon agent (see the `escalation_arming` build site above).
-        let child_agent = match &arming_for_factory {
-            Some(arming) => child_agent.with_escalation_arming(Arc::clone(arming)),
-            None => child_agent,
-        };
+        // Model routing Part 3b (A16) — deliberately NO
+        // `.with_escalation_arming(..)` here. The child's turn runs nested
+        // inside the parent's turn, on the parent's channel and session,
+        // so its model calls already share the parent's active escalation
+        // (they're tagged with the same session). Only the outermost turn
+        // may bracket and arm: a child `end_armed_turn` would clear the
+        // parent's active mark and change model mid-turn, and a child
+        // `begin_armed_turn` would consume a mark an earlier child just
+        // armed inside the very turn that failed (final review I2).
         let child_agent = aivyx_core::TurnSafety::interactive(
             turn_timeout_secs,
             cycle_detection,
