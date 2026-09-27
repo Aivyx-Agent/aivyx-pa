@@ -221,6 +221,15 @@ prevents drift away from the target.
   > unchanged — no Aivyx-hosted component, key proxying or
   > telemetry. Model routing Part 3b.*
 
+  > *See amendment
+  > [`2026-09-27-on-failure-escalation.md`](docs/amendments/2026-09-27-on-failure-escalation.md)
+  > (A16) — authorizes the `on_failure` trigger A15 deferred: a
+  > local model that demonstrably fails a conversation (looping,
+  > tool-call repair exhausted, or, in the autonomous loop, a
+  > Verdict FAIL or Circuit stall) may escalate its next turn
+  > only, under A15's same six privacy rules, consent gate and
+  > audit trail. Model routing Part 3b.*
+
 - **G7 — Third-party tool SDK.** Tools follow a documented
   contract any third party can implement to add new capabilities
   to Aivyx PA. The SDK contract guarantees policy integration:
