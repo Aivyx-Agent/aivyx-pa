@@ -39,12 +39,16 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 - **Model routing — the routing classifier is wired in.** New
   `[routing.classifier]` (`enabled = false`, `timeout_ms = 2000`). When
-  on, a chat conversation's first routed call — its session has no
-  pinned or sticky model yet — gets a side call to a small local model
-  (`TaskKind::Classify`) asking whether it needs a small/medium/large
-  model, bounded by `timeout_ms`; the answer becomes that call's soft
-  tier, and any failure, timeout, or unparseable answer falls back to
-  medium. Later turns stay on the sticky model at no extra cost.
+  on, a chat conversation with no pinned or sticky model yet is
+  classified at most once per conversation, and only when a local model
+  can serve it: a side call (`TaskKind::Classify`) asks whether it
+  needs a small/medium/large model, bounded by `timeout_ms`; the answer
+  becomes its soft tier, remembered for the conversation's later
+  unstuck turns, and any failure, timeout, or unparseable answer falls
+  back to medium. The side call runs on the model `[routing.tasks]
+  classify` picks among the configured candidates: a small local model
+  when there is one, but with a cloud `[agent]` provider it can be that
+  provider's model. No new destination either way.
   `aivyx-pa routing status` and the `routing.status` tool now show
   whether it's on. Off by default: nothing changes without it. See
   `examples/aivyx-pa.toml`.

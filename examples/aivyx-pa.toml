@@ -1815,15 +1815,18 @@ parent_role = "researcher"
 # enabled = false    # off by default
 # timeout_ms = 2000  # bounds the whole side call; past it, medium
 #
-# When on, a fresh chat conversation's FIRST routed call — while its
-# session has no pinned or sticky model yet — is preceded by a side call
-# to a small local model classifying the last 6 user messages as
-# small/medium/large; the answer becomes that call's soft tier ([routing.tasks]
-# classify can steer which model serves it). At most timeout_ms of extra
-# latency, once per conversation — later turns stay on the sticky model
-# at no extra cost. Any failure, timeout, or unparseable answer falls
-# back to medium. `aivyx-pa routing status`/`explain` and `routing.status`
-# show whether it's on.
+# When on, a fresh chat conversation — while its session has no pinned
+# or sticky model yet — is classified at most once per conversation, and
+# only when a local model can serve it: a side call classifies the last
+# 6 user messages as small/medium/large, and the answer becomes the
+# conversation's soft tier (remembered, so a later turn that still has
+# no sticky model reuses it). At most timeout_ms of extra latency, once.
+# The side call runs on the model [routing.tasks] classify picks among
+# the configured candidates: a small local model when there is one, but
+# with a cloud [agent] provider it can be that provider's model. No new
+# destination either way. Any failure, timeout, or unparseable answer
+# falls back to medium. `aivyx-pa routing status`/`explain` and
+# `routing.status` show whether it's on.
 
 # ----------------------------------------------------------------
 # Persistent helpfulness ledger (Phase 82) — no config; automatic

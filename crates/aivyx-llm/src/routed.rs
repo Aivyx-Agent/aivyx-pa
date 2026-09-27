@@ -57,9 +57,13 @@ pub struct EscalationSetup {
 }
 
 /// Routing classifier — `[routing.classifier]`. A fresh chat
-/// conversation's first routed call (its session has no model yet) is
-/// preceded by a side call to a small local model (`TaskKind::Classify`)
-/// asking which tier it needs; the answer becomes the call's soft tier.
+/// conversation (its session has no model yet) that a local candidate
+/// can serve is classified by a side call (`TaskKind::Classify`) asking
+/// which tier it needs; the answer becomes its soft tier. That call runs
+/// on the model `[routing.tasks] classify` picks among the local router's
+/// candidates: normally a small local model, but with a cloud `[agent]`
+/// provider it may be that provider's model (no new destination either
+/// way). At most once per conversation: the tier is remembered.
 pub struct ClassifierSetup {
     /// Bounds the whole classifier call; past it the tier is medium.
     pub timeout: Duration,
@@ -90,6 +94,13 @@ pub struct RoutedProvider {
     /// (the local router's last decision doesn't see escalated calls).
     /// Capped like the router's own per-session state.
     last_served: Mutex<SessionMap<ModelKey>>,
+    /// Routing classifier — session → its classified tier and whether
+    /// that was the medium fallback. A conversation is classified at
+    /// most once: while it has no sticky model (a cooling model or a
+    /// fallback serve can keep it unstuck) later turns reuse this. Only
+    /// read while the session has no model, so it's never cleared; the
+    /// cap bounds it. Capped like `last_served`.
+    classified: Mutex<SessionMap<(Tier, bool)>>,
 }
 
 impl RoutedProvider {
@@ -110,6 +121,7 @@ impl RoutedProvider {
             escalation: None,
             classifier: None,
             last_served: Mutex::new(SessionMap::default()),
+            classified: Mutex::new(SessionMap::default()),
         }
     }
 
@@ -188,12 +200,14 @@ impl RoutedProvider {
         }
     }
 
-    /// Keep `last_served` for at most `max` sessions (default
+    /// Keep `last_served` (and the classifier's per-session tier) for at
+    /// most `max` sessions (default
     /// [`aivyx_route::MAX_SESSIONS`]); the least recently served session
     /// is forgotten first. The local router is capped by its own
     /// [`Router::with_max_sessions`].
     pub fn with_max_sessions(mut self, max: usize) -> Self {
         self.last_served = Mutex::new(SessionMap::with_capacity(max));
+        self.classified = Mutex::new(SessionMap::with_capacity(max));
         self
     }
 
@@ -561,28 +575,6 @@ impl LlmProvider for RoutedProvider {
             }
         }
 
-        // Routing classifier — a fresh chat conversation (no pin, no
-        // sticky model yet) gets its tier from a small local model first.
-        // Any failure is medium, Chat's own default tier.
-        let mut classified: Option<String> = None;
-        if let Some(setup) = &self.classifier
-            && hint.task == TaskKind::Chat
-            && let Some(session) = hint.session.as_deref()
-            && self.router.current(session).is_none()
-        {
-            let tier = match self.classify(&request, cancellation, setup.timeout).await {
-                Ok(tier) => {
-                    classified = Some(format!("; tier from classifier: {tier}"));
-                    tier
-                }
-                Err(()) => {
-                    classified = Some("; classifier fell back to medium".to_string());
-                    Tier::Medium
-                }
-            };
-            query.tier = Some(tier);
-        }
-
         let mut plan = match self.router.plan(&query, Instant::now()) {
             Ok(plan) => plan,
             Err(e) => {
@@ -610,8 +602,54 @@ impl LlmProvider for RoutedProvider {
                 });
             }
         };
-        if let Some(suffix) = classified {
-            plan.reason.push_str(&suffix);
+
+        // Routing classifier — a fresh chat conversation (no pin, no
+        // sticky model yet) gets a tier from the `Classify` model, at
+        // most once per conversation (then remembered), and only when a
+        // local model can serve it: a soft tier never changes hard needs,
+        // so a tier-less `NoRoute` above already escalated or failed, tier
+        // or not. Any failure is medium, Chat's own default tier.
+        if let Some(setup) = &self.classifier
+            && hint.task == TaskKind::Chat
+            && let Some(session) = hint.session.as_deref()
+            && self.router.current(session).is_none()
+        {
+            let remembered = self.classified.lock().unwrap().get(session).copied();
+            let (tier, fell_back) = match remembered {
+                Some(memo) => memo,
+                None => {
+                    // Single-flight: a concurrent first call on this
+                    // session sees this placeholder and uses medium
+                    // without calling. If this future is dropped
+                    // mid-call, medium is what stays remembered.
+                    self.classified
+                        .lock()
+                        .unwrap()
+                        .insert(session.to_string(), (Tier::Medium, true));
+                    let memo = match self.classify(&request, cancellation, setup.timeout).await {
+                        Ok(tier) => (tier, false),
+                        Err(()) => (Tier::Medium, true),
+                    };
+                    self.classified
+                        .lock()
+                        .unwrap()
+                        .insert(session.to_string(), memo);
+                    memo
+                }
+            };
+            query.tier = Some(tier);
+            // Replan with the tier (pure, no I/O). It only re-ranks, so it
+            // can't fail where the tier-less plan succeeded; if it did,
+            // the tier-less plan stands.
+            if let Ok(tiered) = self.router.plan(&query, Instant::now()) {
+                plan = tiered;
+            }
+            if fell_back {
+                plan.reason.push_str("; classifier fell back to medium");
+            } else {
+                plan.reason
+                    .push_str(&format!("; tier from classifier: {tier}"));
+            }
         }
         let (stream, record) = self
             .dispatch(&self.router, &plan, &request, cancellation)
@@ -1784,9 +1822,9 @@ mod tests {
 
     // ---- Routing classifier: a fresh chat conversation's tier ----
 
-    /// Local candidates `default@default` (Medium), `big@gpu` (Large) and
-    /// `tiny@cpu` (Small, the pick for `Classify`), with `classifier`
-    /// serving `cpu`. The classifier is on when `timeout` is `Some`.
+    /// Local candidates `default@default` (Medium), `big@gpu` (Large,
+    /// with vision) and `tiny@cpu` (Small, the pick for `Classify`), with
+    /// `classifier` serving `cpu`. The classifier is on when `timeout` is `Some`.
     /// Returns the provider, `gpu`, and every observed route record.
     fn classifying(
         classifier: Arc<Scripted>,
@@ -1796,7 +1834,7 @@ mod tests {
         let mut f = fixture(
             vec![
                 default_profile(),
-                profile("gpu", "big", Tier::Large, &[]),
+                profile("gpu", "big", Tier::Large, &[Capability::Vision]),
                 profile("cpu", "tiny", Tier::Small, &[]),
             ],
             vec![("gpu", Arc::clone(&gpu)), ("cpu", classifier)],
@@ -1923,10 +1961,10 @@ mod tests {
                 tool_calls: Vec::new(),
             });
         }
-        // No candidate has vision, so the main call itself fails — but
-        // only after the classifier has run.
+        // Only `big@gpu` has vision, so a local model can serve it and
+        // the classifier runs.
         let (_, hint) = routed(TaskKind::Chat, Some("s"));
-        let _ = call(&f.routed, request(&messages, &[], Some(hint))).await;
+        call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
 
         let seen = tiny.details();
         assert_eq!(seen.len(), 1);
@@ -1975,6 +2013,134 @@ mod tests {
             Duration::from_millis(50),
         )
         .await;
+    }
+
+    /// Final-review I1(a) — a classifier model failing with a retryable
+    /// error cools it, so the main model never sticks; the remembered
+    /// tier means the conversation is still classified only once.
+    #[tokio::test]
+    async fn a_retryably_failing_classifier_is_called_once_across_turns() {
+        let tiny = Scripted::failing(503);
+        let (f, gpu, records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        for turn in 1..=3 {
+            call(&f.routed, request(&messages, &[], Some(hint.clone())))
+                .await
+                .unwrap();
+            let chats = f
+                .default
+                .details()
+                .iter()
+                .filter(|d| d.route.as_ref().is_some_and(|r| r.task == TaskKind::Chat))
+                .count();
+            assert_eq!(chats, turn, "the main model serves each turn");
+            let reason = last_reason(&records, TaskKind::Chat);
+            assert!(reason.contains("classifier fell back to medium"), "{reason}");
+        }
+        assert_eq!(f.routed.router().current("s"), None, "never sticky");
+        // One classifier call: `tiny` failed, and its in-call fallback
+        // (the default model) answered unparseably.
+        assert_eq!(tiny.details().len(), 1);
+        let classifies = records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.task == TaskKind::Classify)
+            .count();
+        assert_eq!(classifies, 1, "exactly one classifier call");
+        assert!(gpu.seen().is_empty());
+    }
+
+    /// A remembered tier is reused, with its reason suffix, while the
+    /// conversation has no sticky model.
+    #[tokio::test]
+    async fn a_remembered_tier_is_reused_with_its_reason() {
+        let tiny = Scripted::answering("large");
+        let (f, gpu, records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        // Something cooling: nothing sticks.
+        f.routed
+            .router()
+            .failed(&key("default", "default"), Instant::now());
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        for turn in 1..=2 {
+            call(&f.routed, request(&messages, &[], Some(hint.clone())))
+                .await
+                .unwrap();
+            assert_eq!(gpu.seen().len(), turn);
+            let reason = last_reason(&records, TaskKind::Chat);
+            assert!(reason.contains("; tier from classifier: large"), "{reason}");
+        }
+        assert_eq!(f.routed.router().current("s"), None);
+        assert_eq!(tiny.details().len(), 1, "the second turn reused the tier");
+    }
+
+    /// Final-review I1(c) — two concurrent first calls on one session
+    /// make one classifier call; the other uses medium without waiting.
+    #[tokio::test]
+    async fn concurrent_first_calls_classify_once() {
+        let tiny = Scripted::slow(Duration::from_millis(200), "large");
+        let (f, gpu, _records) = classifying(Arc::clone(&tiny), CLASSIFIER_TIMEOUT);
+        let (messages, hint) = routed(TaskKind::Chat, Some("s"));
+        let (a, b) = tokio::join!(
+            call(&f.routed, request(&messages, &[], Some(hint.clone()))),
+            call(&f.routed, request(&messages, &[], Some(hint.clone()))),
+        );
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(tiny.details().len(), 1, "exactly one classifier call");
+        assert_eq!(gpu.seen().len() + f.default.seen().len(), 2);
+    }
+
+    /// Final-review I1(b) / M1 — with no local candidate, classification
+    /// can't help, so it's skipped; the escalation's cloud pick is the
+    /// tier-less one (the classifier would have answered `small`).
+    #[tokio::test]
+    async fn no_local_candidate_is_not_classified_and_escalates_tier_free() {
+        let tiny = Scripted::answering("small");
+        let cloud = Scripted::ok();
+        let mut f = fixture(
+            vec![default_profile(), profile("cpu", "tiny", Tier::Small, &[])],
+            vec![("cpu", Arc::clone(&tiny)), ("cloud", Arc::clone(&cloud))],
+        );
+        let mut medium = profile("cloud", "claude", Tier::Medium, &[Capability::Tools]);
+        medium.locality = aivyx_route::Locality::Cloud;
+        let mut small = profile("cloud", "haiku", Tier::Small, &[Capability::Tools]);
+        small.locality = aivyx_route::Locality::Cloud;
+        let cloud_router = || {
+            Router::new(vec![medium.clone(), small.clone()], TaskOverrides::default())
+                .with_allow_cloud(true)
+        };
+        // Sanity: a `small` tier would have picked a different model.
+        let mut probe = RouteQuery::new(TaskKind::Chat);
+        probe.tools = true;
+        let tierless = cloud_router().plan(&probe, Instant::now()).unwrap().chain[0].clone();
+        probe.tier = Some(Tier::Small);
+        let tiered = cloud_router().plan(&probe, Instant::now()).unwrap().chain[0].clone();
+        assert_ne!(tierless, tiered);
+
+        f.routed = f
+            .routed
+            .with_classifier(ClassifierSetup {
+                timeout: Duration::from_secs(5),
+            })
+            .with_escalation(EscalationSetup {
+                router: cloud_router(),
+                mode: EscalationMode::Auto,
+                no_local_candidate: true,
+                tiers: vec![],
+                on_failure: false,
+                guard: Arc::new(FakeGuard::default()),
+                observer: Arc::new(|_: &EscalationRecord| {}),
+            });
+        let (messages, hint, tools) = with_tools(Some("s"));
+        for _ in 0..2 {
+            call(&f.routed, request(&messages, &tools, Some(hint.clone())))
+                .await
+                .unwrap();
+        }
+        assert!(tiny.details().is_empty(), "no classifier call");
+        let models: Vec<String> = cloud.seen().into_iter().map(|s| s.model).collect();
+        assert_eq!(models, vec![tierless.id.clone(), tierless.id]);
     }
 
     #[tokio::test]
