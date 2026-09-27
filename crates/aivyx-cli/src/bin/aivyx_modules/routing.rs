@@ -815,10 +815,11 @@ pub(crate) async fn run_routing_explain(
     Ok(())
 }
 
-/// A routing-related entry — `ModelRouted`, or (Part 3b)
-/// `CloudEscalation` / `CloudConsentGranted` / `ConversationTainted`
-/// shown with `escalation` / `consent` / `taint` in the task column —
-/// else `None`. Never includes content (escalations carry only a hash).
+/// A routing-related entry — `ModelRouted`, or (Part 3b/3c)
+/// `CloudEscalation` / `CloudConsentGranted` / `ConversationTainted` /
+/// `EscalationArmed` shown with `escalation` / `consent` / `taint` /
+/// `armed` in the task column — else `None`. Never includes content
+/// (escalations carry only a hash).
 fn routed_entry(entry: &SignedEntry) -> Option<RoutedEntry> {
     let (session_id, model, task, reason) = match &entry.event {
         AuditEvent::ModelRouted {
@@ -854,6 +855,12 @@ fn routed_entry(entry: &SignedEntry) -> Option<RoutedEntry> {
             "-".to_string(),
             "taint".to_string(),
             format!("tainted by {reason} — never escalates to the cloud"),
+        ),
+        AuditEvent::EscalationArmed { session_id, signal } => (
+            Some(session_id.clone()),
+            "-".to_string(),
+            "armed".to_string(),
+            format!("armed for on_failure escalation (signal {signal})"),
         ),
         _ => return None,
     };

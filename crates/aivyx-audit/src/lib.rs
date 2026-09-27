@@ -196,6 +196,12 @@ pub enum AuditEvent {
     /// Additive.
     CloudConsentGranted { session_id: String, via: String },
 
+    /// Model routing Part 3b (A16) — conversation `session_id` was newly
+    /// armed for `on_failure` cloud escalation (see
+    /// `aivyx_core::AuditTag::EscalationArmed`). `signal` is the exact
+    /// failure spelling that armed it. Written once per new mark. Additive.
+    EscalationArmed { session_id: String, signal: String },
+
     /// Dedicated view of a memory operation. Redundant with `ToolCall`
     /// (every memory op *is* also a tool call), but indexed for fast
     /// memory-specific queries. D4 justifies this as the one deviation
@@ -1176,6 +1182,9 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
             },
             AuditTag::CloudConsentGranted { session_id, via } => {
                 AuditEvent::CloudConsentGranted { session_id, via }
+            }
+            AuditTag::EscalationArmed { session_id, signal } => {
+                AuditEvent::EscalationArmed { session_id, signal }
             }
             AuditTag::ToolCall {
                 turn_id,
@@ -2634,6 +2643,37 @@ mod tests {
             AuditEvent::ConversationTainted {
                 session_id: "sess-1".into(),
                 reason: "memory recall".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn escalation_armed_round_trips_through_canonical_json() {
+        let event = AuditEvent::EscalationArmed {
+            session_id: "sess-1".into(),
+            signal: "looping".into(),
+        };
+        let bytes = serde_jcs::to_vec(&event).expect("jcs must accept");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["kind"], "EscalationArmed");
+        assert_eq!(json["session_id"], "sess-1");
+        assert_eq!(json["signal"], "looping");
+        let decoded: AuditEvent = serde_json::from_slice(&bytes).expect("round trip");
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn escalation_armed_audit_tag_bridges_field_for_field() {
+        let event: AuditEvent = aivyx_core::AuditTag::EscalationArmed {
+            session_id: "sess-1".into(),
+            signal: "loop_stall_rescue".into(),
+        }
+        .into();
+        assert_eq!(
+            event,
+            AuditEvent::EscalationArmed {
+                session_id: "sess-1".into(),
+                signal: "loop_stall_rescue".into(),
             }
         );
     }

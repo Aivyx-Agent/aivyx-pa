@@ -47,6 +47,22 @@ pub struct RoutingGuard {
     /// under concurrent marks of the same session.
     mark_lock: tokio::sync::Mutex<()>,
     consent: Mutex<HashSet<String>>,
+    /// Model routing Part 3b (A16) — sessions armed for their *next* turn.
+    /// A turn's start moves its session out of here into `active`; see
+    /// [`RoutingGuard::begin_armed_turn`].
+    armed: Mutex<HashSet<String>>,
+    /// Model routing Part 3b (A16) — sessions armed for *this* (currently
+    /// running) turn. `EscalationGuard::armed` reads this set, never
+    /// `armed` above — that's the whole one-shot, next-turn-only design.
+    active: Mutex<HashSet<String>>,
+    /// Model routing Part 3b (A16) — sessions whose active-turn arming
+    /// stopped for operator consent (`ask` mode, `NeedsConsent`), so
+    /// [`RoutingGuard::end_armed_turn`] knows to re-arm rather than clear.
+    consent_requested: Mutex<HashSet<String>>,
+    /// Model routing Part 3b (A16) — the `ask`-mode hint line handed back
+    /// from [`RoutingGuard::arm`] to an untainted session. `None` when
+    /// there is nothing to say.
+    arm_hint: Mutex<Option<String>>,
 }
 
 impl RoutingGuard {
@@ -56,7 +72,17 @@ impl RoutingGuard {
             cache: Mutex::new(HashMap::new()),
             mark_lock: tokio::sync::Mutex::new(()),
             consent: Mutex::new(HashSet::new()),
+            armed: Mutex::new(HashSet::new()),
+            active: Mutex::new(HashSet::new()),
+            consent_requested: Mutex::new(HashSet::new()),
+            arm_hint: Mutex::new(None),
         }
+    }
+
+    /// Set (or clear) the `ask`-mode hint line [`RoutingGuard::arm`] hands
+    /// back for an untainted session. In memory only.
+    pub fn set_arm_hint(&self, hint: Option<String>) {
+        *lock(&self.arm_hint) = hint;
     }
 
     fn cached(&self, session: &str) -> Option<String> {
@@ -200,12 +226,59 @@ impl aivyx_llm::escalation::EscalationGuard for RoutingGuard {
     fn consented(&self, session: &str) -> bool {
         RoutingGuard::consented(self, session)
     }
+
+    fn armed(&self, session: &str) -> bool {
+        // The *active* set (this turn), never `armed` (next turn) — see
+        // the module doc on `active`.
+        lock(&self.active).contains(session)
+    }
+
+    fn note_consent_requested(&self, session: &str) {
+        lock(&self.consent_requested).insert(session.to_owned());
+    }
 }
 
 #[async_trait]
 impl aivyx_core::TaintSink for RoutingGuard {
     async fn mark(&self, session: &str, reason: &str) -> bool {
         RoutingGuard::mark(self, session, reason).await
+    }
+}
+
+#[async_trait]
+impl aivyx_core::EscalationArming for RoutingGuard {
+    /// Arm `session`'s next turn. `newly` reports whether this call
+    /// inserted a fresh mark (it wasn't already armed); the hint is
+    /// returned only when the session is untainted (a tainted session
+    /// never escalates, so there is nothing to ask about).
+    async fn arm(&self, session: &str, _signal: &str) -> (bool, Option<String>) {
+        let newly = lock(&self.armed).insert(session.to_owned());
+        let hint = if RoutingGuard::taint(self, session).await.is_none() {
+            lock(&self.arm_hint).clone()
+        } else {
+            None
+        };
+        (newly, hint)
+    }
+
+    /// Turn start: an armed mark becomes this turn's active mark. A
+    /// session armed mid-turn (i.e. not present in `armed` at this call)
+    /// is left alone — it will be picked up by the *next* `begin`.
+    fn begin_armed_turn(&self, session: &str) {
+        if lock(&self.armed).remove(session) {
+            lock(&self.active).insert(session.to_owned());
+        }
+    }
+
+    /// Turn end (every exit): clear the active mark. If the turn stopped
+    /// for operator consent, re-arm instead of just clearing, so the next
+    /// turn picks the mark back up.
+    fn end_armed_turn(&self, session: &str) {
+        let was_consent_requested = lock(&self.consent_requested).remove(session);
+        lock(&self.active).remove(session);
+        if was_consent_requested {
+            lock(&self.armed).insert(session.to_owned());
+        }
     }
 }
 
@@ -367,6 +440,99 @@ mod tests {
         assert!(!is_allow_cloud_command("please /allow-cloud"));
         assert!(!is_allow_cloud_command("/ALLOW-CLOUD"));
         assert!(!is_allow_cloud_command("allow-cloud"));
+    }
+
+    // ---- Model routing Part 3b (A16) — EscalationArming state ----
+
+    use aivyx_core::EscalationArming;
+
+    #[tokio::test]
+    async fn arm_begin_end_is_one_shot() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+
+        assert!(guard.arm("s1", "looping").await.0);
+        guard.begin_armed_turn("s1");
+        assert!(guard.armed("s1"), "active this turn");
+
+        guard.end_armed_turn("s1");
+        assert!(!guard.armed("s1"), "cleared at turn end");
+
+        guard.begin_armed_turn("s1");
+        assert!(
+            !guard.armed("s1"),
+            "one-shot: a begin with nothing armed doesn't activate"
+        );
+    }
+
+    #[tokio::test]
+    async fn consent_requested_re_arms_at_turn_end() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+
+        assert!(guard.arm("s1", "looping").await.0);
+        guard.begin_armed_turn("s1");
+        assert!(guard.armed("s1"));
+
+        guard.note_consent_requested("s1");
+        guard.end_armed_turn("s1");
+        assert!(!guard.armed("s1"), "not active between turns");
+
+        guard.begin_armed_turn("s1");
+        assert!(guard.armed("s1"), "re-armed by the consent-requested exit");
+    }
+
+    #[tokio::test]
+    async fn arm_reports_newly_false_on_a_second_arm() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+
+        assert!(guard.arm("s1", "looping").await.0, "first arm is new");
+        assert!(
+            !guard.arm("s1", "loop_verdict_fail").await.0,
+            "second arm before it's consumed is not new"
+        );
+    }
+
+    #[tokio::test]
+    async fn arm_hint_is_returned_only_when_untainted() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        guard.set_arm_hint(Some("The local model got stuck; send /allow-cloud".to_string()));
+
+        let (_, hint) = guard.arm("clean", "looping").await;
+        assert_eq!(hint.as_deref(), Some("The local model got stuck; send /allow-cloud"));
+
+        guard.mark("tainted", "gmail.search output").await;
+        let (_, hint) = guard.arm("tainted", "looping").await;
+        assert_eq!(hint, None, "a tainted session gets no hint");
+    }
+
+    #[tokio::test]
+    async fn arming_during_an_active_turn_survives_to_the_next_begin() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+
+        assert!(guard.arm("s1", "looping").await.0);
+        guard.begin_armed_turn("s1");
+        assert!(guard.armed("s1"), "current turn is active");
+
+        // Arm again while this turn is still active — it must not touch
+        // the current turn's active mark.
+        assert!(
+            guard.arm("s1", "tool_call_repair_exhausted").await.0,
+            "a fresh mark while active is still newly armed"
+        );
+        assert!(guard.armed("s1"), "current turn stays active, not doubled");
+
+        guard.end_armed_turn("s1");
+        assert!(!guard.armed("s1"), "cleared between turns");
+
+        guard.begin_armed_turn("s1");
+        assert!(
+            guard.armed("s1"),
+            "the mark made during the active turn survives to the next begin"
+        );
     }
 
     #[tokio::test]

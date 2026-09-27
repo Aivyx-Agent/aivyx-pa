@@ -7640,6 +7640,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::ConversationTainted { .. } => "ConversationTainted",
         aivyx_audit::AuditEvent::CloudEscalation { .. } => "CloudEscalation",
         aivyx_audit::AuditEvent::CloudConsentGranted { .. } => "CloudConsentGranted",
+        aivyx_audit::AuditEvent::EscalationArmed { .. } => "EscalationArmed",
         aivyx_audit::AuditEvent::MemoryAccess { .. } => "MemoryAccess",
         aivyx_audit::AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         aivyx_audit::AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",

@@ -223,6 +223,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::ConversationTainted { .. } => "ConversationTainted",
         AuditEvent::CloudEscalation { .. } => "CloudEscalation",
         AuditEvent::CloudConsentGranted { .. } => "CloudConsentGranted",
+        AuditEvent::EscalationArmed { .. } => "EscalationArmed",
         AuditEvent::MemoryAccess { .. } => "MemoryAccess",
         AuditEvent::AutoNotifyDispatched { .. } => "AutoNotifyDispatched",
         AuditEvent::SkillAutoProposal { .. } => "SkillAutoProposal",

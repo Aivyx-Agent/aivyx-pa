@@ -785,6 +785,13 @@ pub enum AuditTag {
     /// for conversation `session_id` (in-memory, this process only).
     /// `via` is `"chat"` (`/allow-cloud`) or `"ipc"`.
     CloudConsentGranted { session_id: String, via: String },
+    /// Model routing Part 3b (A16) — conversation `session_id` was newly
+    /// armed for `on_failure` cloud escalation by a failed local turn.
+    /// `signal` is the exact spelling of the failure that armed it
+    /// (`"looping"`, `"tool_call_repair_exhausted"`, `"loop_verdict_fail"`,
+    /// `"loop_stall_rescue"`). Emitted once per new mark, by
+    /// [`AuditedArming`], never on a re-arm of an already-armed session.
+    EscalationArmed { session_id: String, signal: String },
     ToolCall {
         turn_id: TurnId,
         tool_id: ToolId,
@@ -1177,6 +1184,71 @@ impl TaintSink for AuditedTaintSink {
             });
         }
         new
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EscalationArming — model routing Part 3b (A16, on_failure escalation)
+// ---------------------------------------------------------------------------
+
+/// Model routing — arms a conversation's next turn for `on_failure`
+/// escalation (A16) and brackets each turn. In memory only.
+///
+/// Forward-declared here, like [`TaintSink`], so core code (the loop
+/// driver) can arm a session without depending on the persisted
+/// implementation (`aivyx_channel::routing_guard::RoutingGuard`). The read
+/// side is `aivyx_llm::escalation::EscalationGuard::armed`.
+#[async_trait]
+pub trait EscalationArming: Send + Sync {
+    /// Arm `session`'s next turn. Returns `(newly_armed, hint)`: `hint` is
+    /// the `ask`-mode line for the operator, `None` when there is nothing
+    /// to say (not `ask`, no cloud candidate, or tainted).
+    async fn arm(&self, session: &str, signal: &str) -> (bool, Option<String>);
+
+    /// Turn start: an armed mark becomes this turn's active mark.
+    fn begin_armed_turn(&self, session: &str);
+
+    /// Turn end (every exit): clear the active mark, or re-arm it if the
+    /// turn stopped for consent.
+    fn end_armed_turn(&self, session: &str);
+}
+
+/// An [`EscalationArming`] that audits each *new* arm: it forwards `arm`
+/// to the inner arming and, when that returns `newly_armed = true`, emits
+/// [`AuditTag::EscalationArmed`]. A re-arm of an already-armed session
+/// writes nothing. Mirrors [`AuditedTaintSink`] in structure and
+/// placement; the daemon wraps its one shared routing guard in this the
+/// same way.
+pub struct AuditedArming {
+    inner: Arc<dyn EscalationArming>,
+    audit: Arc<dyn AuditHook>,
+}
+
+impl AuditedArming {
+    pub fn new(inner: Arc<dyn EscalationArming>, audit: Arc<dyn AuditHook>) -> Self {
+        AuditedArming { inner, audit }
+    }
+}
+
+#[async_trait]
+impl EscalationArming for AuditedArming {
+    async fn arm(&self, session: &str, signal: &str) -> (bool, Option<String>) {
+        let (newly, hint) = self.inner.arm(session, signal).await;
+        if newly {
+            self.audit.on_event(AuditTag::EscalationArmed {
+                session_id: session.to_owned(),
+                signal: signal.to_owned(),
+            });
+        }
+        (newly, hint)
+    }
+
+    fn begin_armed_turn(&self, session: &str) {
+        self.inner.begin_armed_turn(session)
+    }
+
+    fn end_armed_turn(&self, session: &str) {
+        self.inner.end_armed_turn(session)
     }
 }
 
@@ -1636,6 +1708,78 @@ mod tests {
                 ("s2".to_string(), "email channel".to_string()),
             ]
         );
+    }
+
+    // ---- Model routing Part 3b (A16) — EscalationArming / AuditedArming ----
+
+    /// Write-once in-memory arming: `arm` reports `newly` only for an
+    /// unseen session, matching the "hint only when untainted" contract
+    /// via a caller-supplied tainted set.
+    #[derive(Default)]
+    struct OnceArm {
+        armed: std::sync::Mutex<std::collections::HashSet<String>>,
+        tainted: std::sync::Mutex<std::collections::HashSet<String>>,
+        hint: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl EscalationArming for OnceArm {
+        async fn arm(&self, session: &str, _signal: &str) -> (bool, Option<String>) {
+            let newly = self.armed.lock().unwrap().insert(session.to_owned());
+            let hint = if self.tainted.lock().unwrap().contains(session) {
+                None
+            } else {
+                self.hint.lock().unwrap().clone()
+            };
+            (newly, hint)
+        }
+        fn begin_armed_turn(&self, _session: &str) {}
+        fn end_armed_turn(&self, _session: &str) {}
+    }
+
+    #[tokio::test]
+    async fn audited_arming_audits_only_the_first_arm_of_a_session() {
+        let tags = Arc::new(Tags::default());
+        let arming = AuditedArming::new(Arc::new(OnceArm::default()), tags.clone());
+        assert!(arming.arm("s1", "looping").await.0);
+        assert!(!arming.arm("s1", "looping").await.0);
+        assert!(arming.arm("s2", "loop_stall_rescue").await.0);
+        let got: Vec<(String, String)> = tags
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|t| match t {
+                AuditTag::EscalationArmed { session_id, signal } => {
+                    (session_id.clone(), signal.clone())
+                }
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("s1".to_string(), "looping".to_string()),
+                ("s2".to_string(), "loop_stall_rescue".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn audited_arming_delegates_hint_and_newly_flag_from_the_inner_arming() {
+        let tags = Arc::new(Tags::default());
+        let inner = Arc::new(OnceArm::default());
+        *inner.hint.lock().unwrap() = Some("ask hint".to_string());
+        inner.tainted.lock().unwrap().insert("tainted".to_string());
+        let arming = AuditedArming::new(inner, tags.clone());
+
+        let (newly, hint) = arming.arm("clean", "looping").await;
+        assert!(newly);
+        assert_eq!(hint.as_deref(), Some("ask hint"));
+
+        let (newly, hint) = arming.arm("tainted", "looping").await;
+        assert!(newly, "taint suppresses the hint, not the arm itself");
+        assert_eq!(hint, None);
     }
 
     #[test]
