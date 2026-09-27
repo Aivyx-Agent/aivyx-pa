@@ -287,6 +287,11 @@ pub struct ConcreteAgent {
     /// `[routing.sensitive] channels` — a turn arriving on one of these
     /// platforms taints the session at turn start.
     taint_channels: Vec<String>,
+    /// `on_failure` cloud escalation — where this agent brackets each turn
+    /// (`begin_armed_turn` / `end_armed_turn`) and arms the conversation's
+    /// *next* turn after a failure signal. `None` (the default) runs no
+    /// arming machinery at all. See [`Self::with_escalation_arming`].
+    arming: Option<Arc<dyn crate::EscalationArming>>,
 }
 
 impl ConcreteAgent {
@@ -318,6 +323,7 @@ impl ConcreteAgent {
             taint: None,
             taint_tool_prefixes: Vec::new(),
             taint_channels: Vec::new(),
+            arming: None,
         }
     }
 
@@ -461,6 +467,34 @@ impl ConcreteAgent {
         self.taint_channels = channels;
         self
     }
+
+    /// `on_failure` cloud escalation (A16) — attach the arming the turn
+    /// loop reports to. Every turn is bracketed: `begin_armed_turn` before
+    /// anything else runs (an armed mark becomes this turn's active mark,
+    /// so its model calls escalate) and `end_armed_turn` on every exit.
+    /// Inside the turn, a `Looping` outcome arms with `"looping"` and a
+    /// `Completed` turn whose planner spent both tool-call repair rounds
+    /// arms with `"tool_call_repair_exhausted"` — escalating the *next*
+    /// turn only; this one is never replayed and never changes model
+    /// mid-turn. `MaxStepsExceeded` and `Failed(..)` never arm. Not
+    /// attaching one (the default) runs no arming machinery.
+    pub fn with_escalation_arming(mut self, arming: Arc<dyn crate::EscalationArming>) -> Self {
+        self.arming = Some(arming);
+        self
+    }
+
+    /// `on_failure` cloud escalation — arm `session`'s next turn with
+    /// `signal`, appending the returned `ask`-mode hint (if any) to the
+    /// final message the channel is about to receive. No-op without an
+    /// attached arming.
+    async fn arm_next_turn(&self, session: &str, signal: &str, final_message: &mut String) {
+        if let Some(arming) = &self.arming {
+            let (_newly_armed, hint) = arming.arm(session, signal).await;
+            if let Some(hint) = hint {
+                append_turn_note(final_message, &hint);
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -473,7 +507,29 @@ impl Agent for ConcreteAgent {
         &self.capabilities
     }
 
+    /// `on_failure` cloud escalation (A16) — bracket the whole turn with
+    /// the arming's `begin_armed_turn` / `end_armed_turn`, so the active
+    /// mark is cleared (or re-armed on a consent stop) on *every* exit of
+    /// [`ConcreteAgent::turn_inner`]: normal completion, the budget-denied
+    /// early return, Cancelled, TimedOut and any `Failed`. Without an
+    /// attached arming this is exactly `turn_inner`.
     async fn turn(&self, message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
+        let session = channel.session_id().to_string();
+        if let Some(arming) = &self.arming {
+            arming.begin_armed_turn(&session);
+        }
+        let outcome = self.turn_inner(message, channel).await;
+        if let Some(arming) = &self.arming {
+            arming.end_armed_turn(&session);
+        }
+        outcome
+    }
+}
+
+impl ConcreteAgent {
+    /// The D1 turn loop proper; [`Agent::turn`] brackets it for
+    /// `on_failure` arming.
+    async fn turn_inner(&self, message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
         let turn_id = TurnId::new();
         let session_id = channel.session_id();
         let tier = channel.trust_tier();
@@ -849,6 +905,19 @@ impl Agent for ConcreteAgent {
                     append_turn_note(&mut final_message, &note);
                 }
 
+                // on_failure escalation (A16) — a turn that completed only
+                // after its planner spent both tool-call repair rounds arms
+                // the *next* turn. Before finalize, so an `ask`-mode hint
+                // reaches the channel with the message.
+                if planner.repair_exhausted() {
+                    self.arm_next_turn(
+                        &session_id.to_string(),
+                        "tool_call_repair_exhausted",
+                        &mut final_message,
+                    )
+                    .await;
+                }
+
                 TurnOutcome::Completed {
                     final_message,
                     tool_calls_made,
@@ -866,14 +935,21 @@ impl Agent for ConcreteAgent {
                 max_steps: MAX_STEPS_PER_TURN,
             },
             LoopOutcome::Looping {
-                final_message,
+                mut final_message,
                 repeat_limit,
-            } => TurnOutcome::Looping {
-                final_message,
-                tool_calls_made,
-                duration,
-                repeat_limit,
-            },
+            } => {
+                // on_failure escalation (A16) — a loop-breaker stop arms the
+                // conversation's *next* turn (this one is never replayed).
+                // Before finalize, so an `ask`-mode hint reaches the channel.
+                self.arm_next_turn(&session_id.to_string(), "looping", &mut final_message)
+                    .await;
+                TurnOutcome::Looping {
+                    final_message,
+                    tool_calls_made,
+                    duration,
+                    repeat_limit,
+                }
+            }
             LoopOutcome::Escalated {
                 reason,
                 pending_tool,
@@ -6773,5 +6849,440 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, AuditTag::ConversationTainted { .. }))
         );
+    }
+
+    // ---- on_failure escalation: turn bracketing and arming ----
+
+    /// One shared, ordered log of arming calls (`begin:<s>`,
+    /// `arm:<s>:<signal>`, `end:<s>`) and, from [`ArmChannel`],
+    /// `finalize`, so a test can assert the relative order.
+    type ArmLog = Arc<Mutex<Vec<String>>>;
+
+    /// Records `begin`, `arm` and `end`; `arm` reports a new mark and
+    /// returns the configured hint.
+    struct RecordingArming {
+        log: ArmLog,
+        hint: Option<String>,
+    }
+
+    impl RecordingArming {
+        fn new(log: ArmLog, hint: Option<&str>) -> Arc<Self> {
+            Arc::new(RecordingArming {
+                log,
+                hint: hint.map(str::to_owned),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl crate::EscalationArming for RecordingArming {
+        async fn arm(&self, session: &str, signal: &str) -> (bool, Option<String>) {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("arm:{session}:{signal}"));
+            (true, self.hint.clone())
+        }
+        fn begin_armed_turn(&self, session: &str) {
+            self.log.lock().unwrap().push(format!("begin:{session}"));
+        }
+        fn end_armed_turn(&self, session: &str) {
+            self.log.lock().unwrap().push(format!("end:{session}"));
+        }
+    }
+
+    /// A channel that logs `finalize` into the shared [`ArmLog`] and keeps
+    /// the final message it was handed (Completed or Looping).
+    struct ArmChannel {
+        session: SessionId,
+        token: CancellationToken,
+        log: ArmLog,
+        final_message: Mutex<Option<String>>,
+    }
+
+    impl ArmChannel {
+        fn new(log: ArmLog) -> Self {
+            ArmChannel {
+                session: SessionId::new(),
+                token: CancellationToken::new(),
+                log,
+                final_message: Mutex::new(None),
+            }
+        }
+        fn seen(&self) -> Option<String> {
+            self.final_message.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl ChannelContext for ArmChannel {
+        fn channel_name(&self) -> &str {
+            "arm"
+        }
+        fn platform(&self) -> ChannelPlatform {
+            ChannelPlatform::Local
+        }
+        fn trust_tier(&self) -> TrustTier {
+            TrustTier::Trusted
+        }
+        fn session_id(&self) -> SessionId {
+            self.session
+        }
+        async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        async fn finalize(&self, outcome: &TurnOutcome) -> Result<(), ChannelError> {
+            self.log.lock().unwrap().push("finalize".to_string());
+            let msg = match outcome {
+                TurnOutcome::Completed { final_message, .. }
+                | TurnOutcome::Looping { final_message, .. } => Some(final_message.clone()),
+                _ => None,
+            };
+            *self.final_message.lock().unwrap() = msg;
+            Ok(())
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.token.clone()
+        }
+    }
+
+    /// A scripted planner that also reports `repair_exhausted`.
+    struct RepairSignalPlanner {
+        inner: crate::planner::VecPlanner,
+        exhausted: bool,
+    }
+
+    #[async_trait]
+    impl TurnPlanner for RepairSignalPlanner {
+        async fn next_step(
+            &mut self,
+            observed: &[StepObservation],
+            channel: &dyn ChannelContext,
+        ) -> NextStep {
+            self.inner.next_step(observed, channel).await
+        }
+        fn repair_exhausted(&self) -> bool {
+            self.exhausted
+        }
+    }
+
+    fn repair_agent(exhausted: bool, final_message: &'static str) -> ConcreteAgent {
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        ConcreteAgent::new(
+            AgentId::new(),
+            CapabilitySet::empty(),
+            registry,
+            RecordingAudit::new(),
+            move || {
+                Box::new(RepairSignalPlanner {
+                    inner: crate::planner::VecPlanner::new([NextStep::FinalMessage(
+                        final_message.to_string(),
+                    )]),
+                    exhausted,
+                })
+            },
+        )
+    }
+
+    /// Three identical calls: the default repeat breaker trips `Looping`.
+    fn looping_agent(audit: Arc<dyn AuditHook>) -> ConcreteAgent {
+        let tool = Arc::new(FakeTool::new_bare("web.search", "memory.read"));
+        let tool_id = tool.id();
+        make_agent(
+            memory_read_caps(),
+            vec![tool],
+            audit,
+            vec![call(tool_id), call(tool_id), call(tool_id)],
+        )
+    }
+
+    const HINT: &str =
+        "The local model got stuck; send /allow-cloud and resend to retry on `cloud-m`.";
+
+    fn arm_entries(log: &ArmLog) -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.starts_with("arm:"))
+            .cloned()
+            .collect()
+    }
+
+    fn count(log: &ArmLog, prefix: &str) -> usize {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.starts_with(prefix))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn a_looping_turn_arms_and_the_hint_reaches_the_channel() {
+        let log = ArmLog::default();
+        let agent = looping_agent(RecordingAudit::new())
+            .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = ArmChannel::new(log.clone());
+        let session = channel.session.to_string();
+        let outcome = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+
+        let TurnOutcome::Looping { final_message, .. } = &outcome else {
+            panic!("expected Looping, got {outcome:?}");
+        };
+        let mut want = looping_message(DEFAULT_REPEAT_CALL_LIMIT);
+        append_turn_note(&mut want, HINT);
+        assert_eq!(final_message, &want);
+        assert_eq!(channel.seen(), Some(want), "the channel saw the hint");
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                format!("begin:{session}"),
+                format!("arm:{session}:looping"),
+                "finalize".to_string(),
+                format!("end:{session}"),
+            ],
+            "begin, then arm (before finalize), then end"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_looping_turn_without_a_hint_keeps_its_message() {
+        let log = ArmLog::default();
+        let agent = looping_agent(RecordingAudit::new())
+            .with_escalation_arming(RecordingArming::new(log.clone(), None));
+        let channel = ArmChannel::new(log.clone());
+        let _ = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert_eq!(
+            channel.seen(),
+            Some(looping_message(DEFAULT_REPEAT_CALL_LIMIT))
+        );
+        assert_eq!(arm_entries(&log).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn exhausted_tool_call_repair_arms_the_next_turn() {
+        let log = ArmLog::default();
+        let agent = repair_agent(true, "done")
+            .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = ArmChannel::new(log.clone());
+        let session = channel.session.to_string();
+        let outcome = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert!(
+            matches!(outcome, TurnOutcome::Completed { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                format!("begin:{session}"),
+                format!("arm:{session}:tool_call_repair_exhausted"),
+                "finalize".to_string(),
+                format!("end:{session}"),
+            ]
+        );
+        let mut want = "done".to_string();
+        append_turn_note(&mut want, HINT);
+        assert_eq!(channel.seen(), Some(want));
+    }
+
+    #[tokio::test]
+    async fn a_clean_completed_turn_never_arms() {
+        let log = ArmLog::default();
+        let agent = repair_agent(false, "done")
+            .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = ArmChannel::new(log.clone());
+        let _ = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert!(arm_entries(&log).is_empty());
+        assert_eq!(channel.seen(), Some("done".to_string()), "no hint appended");
+        assert_eq!((count(&log, "begin:"), count(&log, "end:")), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn a_planner_llm_error_never_arms() {
+        // The LLM planner surfaces a provider error as a final message
+        // (`LLM error: ..`); `TurnOutcome::Failed` is never a signal.
+        let log = ArmLog::default();
+        let agent = repair_agent(false, "LLM error: connection refused")
+            .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = ArmChannel::new(log.clone());
+        let _ = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert!(arm_entries(&log).is_empty());
+        assert_eq!((count(&log, "begin:"), count(&log, "end:")), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn max_steps_exceeded_never_arms() {
+        let log = ArmLog::default();
+        let tool = Arc::new(FakeTool::new_bare("web.search", "memory.read"));
+        let tool_id = tool.id();
+        // Distinct inputs, so the repeat breaker never trips first.
+        let plan: Vec<NextStep> = (0..=MAX_STEPS_PER_TURN)
+            .map(|i| NextStep::ToolCall {
+                tool_id,
+                input: json!({ "i": i }),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            })
+            .collect();
+        let agent = make_agent(memory_read_caps(), vec![tool], RecordingAudit::new(), plan)
+            .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = ArmChannel::new(log.clone());
+        let outcome = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert!(
+            matches!(outcome, TurnOutcome::MaxStepsExceeded { .. }),
+            "{outcome:?}"
+        );
+        assert!(arm_entries(&log).is_empty());
+        assert_eq!((count(&log, "begin:"), count(&log, "end:")), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn a_budget_denied_turn_is_still_bracketed() {
+        let log = ArmLog::default();
+        let gate = Arc::new(MockGate {
+            verdict: Err("day budget exceeded".to_string()),
+            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        });
+        let agent = gated_agent(RecordingAudit::new(), "claude-opus-4-8", Some(gate))
+            .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = ArmChannel::new(log.clone());
+        let session = channel.session.to_string();
+        let outcome = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert!(
+            matches!(outcome, TurnOutcome::Failed(AivyxError::BudgetExceeded(_))),
+            "{outcome:?}"
+        );
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                format!("begin:{session}"),
+                "finalize".to_string(),
+                format!("end:{session}"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_channel_failed_turn_is_still_bracketed() {
+        let log = ArmLog::default();
+        let agent = make_agent(
+            CapabilitySet::empty(),
+            vec![],
+            RecordingAudit::new(),
+            vec![NextStep::FinalMessage("done".into())],
+        )
+        .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = FinalizeFailsChannel::new();
+        let session = channel.session.to_string();
+        let outcome = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert!(matches!(outcome, TurnOutcome::Failed(_)), "{outcome:?}");
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![format!("begin:{session}"), format!("end:{session}")]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_turn_is_still_bracketed() {
+        let log = ArmLog::default();
+        let agent = looping_agent(RecordingAudit::new())
+            .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = ArmChannel::new(log.clone());
+        channel.token.cancel();
+        let outcome = agent
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+        assert!(
+            matches!(outcome, TurnOutcome::Cancelled { .. }),
+            "{outcome:?}"
+        );
+        assert!(arm_entries(&log).is_empty());
+        assert_eq!((count(&log, "begin:"), count(&log, "end:")), (1, 1));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_turn_is_still_bracketed() {
+        let log = ArmLog::default();
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            CapabilitySet::empty(),
+            Arc::new(ToolRegistry::new(Vec::new())),
+            RecordingAudit::new(),
+            || Box::new(HangingPlanner),
+        )
+        .with_escalation_arming(RecordingArming::new(log.clone(), Some(HINT)));
+        let channel = ArmChannel::new(log.clone());
+        let turn_fut = agent.turn(Message::text(channel.session, "hang"), &channel);
+        let advance_fut = async {
+            tokio::task::yield_now().await;
+            tokio::time::advance(TURN_TIMEOUT + Duration::from_secs(1)).await;
+        };
+        let (outcome, _) = tokio::join!(turn_fut, advance_fut);
+        assert!(
+            matches!(outcome, TurnOutcome::TimedOut { .. }),
+            "{outcome:?}"
+        );
+        assert!(arm_entries(&log).is_empty());
+        assert_eq!((count(&log, "begin:"), count(&log, "end:")), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn without_arming_a_looping_turn_leaves_the_audit_chain_and_output_unchanged() {
+        // Compatibility invariant: no arming ⇒ the same chain and the
+        // same message as an armed turn whose arm returned no hint, and
+        // no `EscalationArmed` entry.
+        let kinds = |events: Vec<AuditTag>| -> Vec<std::mem::Discriminant<AuditTag>> {
+            events.iter().map(std::mem::discriminant).collect()
+        };
+
+        let plain_audit = RecordingAudit::new();
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let plain = looping_agent(plain_audit.clone())
+            .turn(Message::text(channel.session, "hi"), &channel)
+            .await;
+
+        let armed_audit = RecordingAudit::new();
+        let log = ArmLog::default();
+        let armed_channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let armed = looping_agent(armed_audit.clone())
+            .with_escalation_arming(RecordingArming::new(log.clone(), None))
+            .turn(Message::text(armed_channel.session, "hi"), &armed_channel)
+            .await;
+
+        let (
+            TurnOutcome::Looping {
+                final_message: a, ..
+            },
+            TurnOutcome::Looping {
+                final_message: b, ..
+            },
+        ) = (&plain, &armed)
+        else {
+            panic!("expected two Looping outcomes, got {plain:?} / {armed:?}");
+        };
+        assert_eq!(a, &looping_message(DEFAULT_REPEAT_CALL_LIMIT));
+        assert_eq!(a, b);
+        let plain_events = plain_audit.snapshot();
+        assert!(
+            !plain_events
+                .iter()
+                .any(|e| matches!(e, AuditTag::EscalationArmed { .. }))
+        );
+        assert_eq!(kinds(plain_events), kinds(armed_audit.snapshot()));
     }
 }

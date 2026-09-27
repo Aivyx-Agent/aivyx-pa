@@ -555,6 +555,10 @@ pub struct LlmPlanner {
     /// active). When set, a sensitive `ContextProvider`'s injection marks
     /// the turn's session routing-tainted.
     taint: Option<Arc<dyn crate::TaintSink>>,
+    /// `on_failure` cloud escalation — set when a `next_step` call this
+    /// turn spent both `invalid_input` repair rounds; reset in
+    /// `begin_turn`. Read through `TurnPlanner::repair_exhausted`.
+    turn_repair_exhausted: bool,
 }
 
 struct KvCacheConfig {
@@ -730,6 +734,7 @@ impl LlmPlanner {
             conversation: None,
             turn_costs: Vec::new(),
             taint: None,
+            turn_repair_exhausted: false,
         }
     }
 
@@ -1261,9 +1266,14 @@ impl TurnPlanner for LlmPlanner {
         self.conversation = Some(session);
     }
 
+    fn repair_exhausted(&self) -> bool {
+        self.turn_repair_exhausted
+    }
+
     async fn begin_turn(&mut self, message: &Message, turn_id: crate::TurnId) {
         let conversation = self.conversation.unwrap_or(message.session_id);
         self.route_session = Some(conversation.to_string());
+        self.turn_repair_exhausted = false;
         self.ensure_kv_slot_checked_out().await;
         let mut content = match &message.content {
             MessageContent::Text(text) => vec![ContentBlock::text(text)],
@@ -1604,6 +1614,9 @@ impl TurnPlanner for LlmPlanner {
                         }
                         if had_invalid_input {
                             repair_rounds += 1;
+                            if repair_rounds >= 2 {
+                                self.turn_repair_exhausted = true;
+                            }
                         }
                         if batch.is_empty() {
                             // Every extracted call failed (unknown or
@@ -1689,6 +1702,11 @@ impl TurnPlanner for LlmPlanner {
                     // result spends one of the two repair attempts.
                     if had_invalid_input {
                         repair_rounds += 1;
+                        // on_failure escalation — both repair rounds
+                        // spent: the turn reports `repair_exhausted`.
+                        if repair_rounds >= 2 {
+                            self.turn_repair_exhausted = true;
+                        }
                     }
 
                     if batch.is_empty() {
@@ -4575,6 +4593,123 @@ mod tests {
             })
             .count();
         assert_eq!(repairs, 2, "repair attempts are capped at two");
+    }
+
+    // ---- on_failure escalation: the tool-call-repair-exhausted signal ----
+
+    /// Three rounds of a schema-invalid `fs.read` call: two spend the
+    /// repair budget, the third dispatches as-is.
+    fn three_invalid_rounds() -> Vec<FakeStep> {
+        let bad = || LlmStepEnd::ToolCalls {
+            calls: vec![ToolCallEnd {
+                call_id: "c".to_string(),
+                tool_name: "fs.read".to_string(),
+                input: json!({}),
+                name_resolution: aivyx_llm::NameResolution::Known,
+            }],
+            text_so_far: String::new(),
+            usage: zero_usage(),
+        };
+        (0..3)
+            .map(|_| FakeStep {
+                events: vec![],
+                terminal: bad(),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn two_spent_repair_rounds_report_repair_exhausted() {
+        let tool = Arc::new(FakeTool::with_schema("fs.read", req_path_schema()));
+        let provider = FakeLlmProvider::new(three_invalid_rounds());
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "go"), TurnId::new())
+            .await;
+        assert!(
+            !planner.repair_exhausted(),
+            "nothing spent before the first step"
+        );
+        let _ = planner.next_step(&[], &channel).await;
+        assert!(
+            planner.repair_exhausted(),
+            "both invalid_input repair rounds were spent this turn"
+        );
+        // The flag is turn-scoped: the next turn starts clean.
+        planner
+            .begin_turn(&Message::text(channel.session, "again"), TurnId::new())
+            .await;
+        assert!(!planner.repair_exhausted(), "begin_turn resets the signal");
+    }
+
+    #[tokio::test]
+    async fn a_single_repair_round_does_not_report_repair_exhausted() {
+        let tool = Arc::new(FakeTool::with_schema("fs.read", req_path_schema()));
+        let script = vec![
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "c1".to_string(),
+                        tool_name: "fs.read".to_string(),
+                        input: json!({}),
+                        name_resolution: aivyx_llm::NameResolution::Known,
+                    }],
+                    text_so_far: String::new(),
+                    usage: zero_usage(),
+                },
+            },
+            FakeStep {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "c2".to_string(),
+                        tool_name: "fs.read".to_string(),
+                        input: json!({"path": "fixed.txt"}),
+                        name_resolution: aivyx_llm::NameResolution::Known,
+                    }],
+                    text_so_far: String::new(),
+                    usage: zero_usage(),
+                },
+            },
+        ];
+        let provider = FakeLlmProvider::new(script);
+        let registry = Arc::new(ToolRegistry::new(vec![tool]));
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("m"));
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "go"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+        assert!(
+            !planner.repair_exhausted(),
+            "one repair round is not exhaustion"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clean_turn_does_not_report_repair_exhausted() {
+        let script = vec![FakeStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "hello".to_string(),
+                usage: zero_usage(),
+            },
+        }];
+        let provider = FakeLlmProvider::new(script);
+        let mut planner = LlmPlanner::new(
+            provider,
+            Arc::new(ToolRegistry::new(vec![])),
+            LlmPlannerConfig::new("m"),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        let _ = planner.next_step(&[], &channel).await;
+        assert!(!planner.repair_exhausted());
     }
 
     #[tokio::test]

@@ -116,6 +116,17 @@ pub trait TurnPlanner: Send + Sync {
     /// mint fresh. Planners that don't route ignore it.
     fn set_conversation(&mut self, _session: crate::SessionId) {}
 
+    /// `on_failure` cloud escalation — whether this turn spent both of its
+    /// `invalid_input` tool-call repair rounds (PHASE_101.md Q3) at some
+    /// step. The turn loop reads it after the step loop exits; a
+    /// `Completed` turn that reports it arms the conversation's *next*
+    /// turn with the signal `"tool_call_repair_exhausted"`. Turn-scoped:
+    /// reset by [`Self::begin_turn`]. Planners with no repair loop report
+    /// `false` (the default).
+    fn repair_exhausted(&self) -> bool {
+        false
+    }
+
     /// Return the next step given everything observed so far. The
     /// `channel` handle is available for planners that want to relay
     /// mid-step output (LLM token streaming); planners that don't
