@@ -445,12 +445,54 @@ pub fn render_top_level_help() -> String {
     out
 }
 
+/// Point an argument-parsing error at the help that would have answered it:
+/// the command's own `--help` when `args` names a known command, otherwise
+/// the top-level help. Errors that aren't about an unrecognized argument or
+/// subcommand, or that already mention `--help`, pass through unchanged.
+pub fn with_help_hint(err: String, args: &[String]) -> String {
+    if !err.contains("unrecognized") || err.contains("--help") {
+        return err;
+    }
+    let trimmed = err.trim_end().trim_end_matches('.');
+    match args.first().and_then(|name| command_help(name)) {
+        Some(cmd) => format!("{trimmed}. Run `aivyx-pa {} --help` for usage.", cmd.name),
+        None => format!("{trimmed}. Run `aivyx-pa --help` to see every command."),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn argv(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn unrecognized_errors_point_at_the_commands_own_help() {
+        let err = "unrecognized argument to `aivyx-pa routing status`: `--x`".to_string();
+        assert_eq!(
+            with_help_hint(err, &argv(&["routing", "status", "--x"])),
+            "unrecognized argument to `aivyx-pa routing status`: `--x`. \
+             Run `aivyx-pa routing --help` for usage."
+        );
+    }
+
+    #[test]
+    fn unrecognized_errors_outside_a_command_point_at_top_level_help() {
+        let err = "unrecognized argument: `--x`".to_string();
+        assert_eq!(
+            with_help_hint(err, &argv(&["--x"])),
+            "unrecognized argument: `--x`. Run `aivyx-pa --help` to see every command."
+        );
+    }
+
+    #[test]
+    fn errors_that_already_mention_help_or_are_not_parse_errors_are_untouched() {
+        let hinted = "unrecognized argument: `--x`. Run `aivyx-pa --help` to see every command.";
+        assert_eq!(with_help_hint(hinted.to_string(), &argv(&["--x"])), hinted);
+        let other = "failed to open the store: permission denied";
+        assert_eq!(with_help_hint(other.to_string(), &argv(&["memory", "list"])), other);
     }
 
     #[test]

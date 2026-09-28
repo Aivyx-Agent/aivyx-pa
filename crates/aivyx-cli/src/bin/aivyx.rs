@@ -499,7 +499,8 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("aivyx-pa: {e}");
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            eprintln!("aivyx-pa: {}", help::with_help_hint(e, &args));
             ExitCode::FAILURE
         }
     }
