@@ -5,6 +5,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release pipeline can no longer publish a release without its CLI
+  binaries.** cargo-dist's generated `host` job treated skipped build
+  jobs as fine and didn't wait for the quality gate, so a dropped plan
+  output (what hit 0.10.0) or a failing quality gate still published a
+  green, binary-less release. `host` now depends on the quality gate and
+  fails, before uploading anything, unless the gate and every build
+  succeeded. `release.yml` is hand-edited for this, so
+  `dist-workspace.toml` sets `allow-dirty = ["ci"]` (regenerate and
+  re-apply the guard when upgrading cargo-dist).
+
 ## [0.10.1] — 2026-09-28
 
 Republishes 0.10.0 with its CLI binaries and shell installer; no code

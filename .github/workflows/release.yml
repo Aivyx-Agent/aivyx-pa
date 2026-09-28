@@ -219,16 +219,37 @@ jobs:
   host:
     needs:
       - plan
+      - custom-quality-gate
       - build-local-artifacts
       - build-global-artifacts
-    # Only run if we're "publishing", and only if plan, local and global didn't fail (skipped is fine)
-    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}
+    # HAND-EDITED (dist-workspace.toml sets allow-dirty = ["ci"]): dist's
+    # generated condition accepted *skipped* builds, so a release with no
+    # CLI binaries still published and the run went green — v0.10.0 did
+    # exactly that when GitHub dropped the plan's output ("Skip output
+    # 'val' since it may contain secret"), and a failing quality gate
+    # would have done the same. Run whenever we're publishing, then
+    # refuse (red run, nothing uploaded) unless every build succeeded.
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
+      - name: Refuse to publish an incomplete release
+        env:
+          QUALITY_GATE: ${{ needs.custom-quality-gate.result }}
+          BUILD_LOCAL: ${{ needs.build-local-artifacts.result }}
+          BUILD_GLOBAL: ${{ needs.build-global-artifacts.result }}
+        run: |
+          ok=1
+          for job in "quality-gate=$QUALITY_GATE" "build-local-artifacts=$BUILD_LOCAL" "build-global-artifacts=$BUILD_GLOBAL"; do
+            if [ "${job#*=}" != "success" ]; then
+              echo "::error::${job%%=*} was '${job#*=}', not 'success': refusing to publish a release without every artifact"
+              ok=0
+            fi
+          done
+          [ "$ok" = 1 ]
       - uses: actions/checkout@v6
         with:
           persist-credentials: false

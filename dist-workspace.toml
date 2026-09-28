@@ -36,15 +36,23 @@ install-updater = false
 # (no ALSA, and ALSA doesn't fit a static-musl binary). `aivyx-cli`'s default
 # feature set excludes voice, so a precise per-package build never touches it.
 precise-builds = true
-# Phase 61 Task 4 — make the release pipeline's `plan` job depend
-# on the shared quality-gate reusable workflow at
-# `.github/workflows/quality-gate.yml`. This causes the entire
-# release pipeline (build-local-artifacts, build-global-artifacts,
-# host, announce) to short-circuit if `cargo test --workspace` or
-# `cargo clippy --workspace --all-targets -- -D warnings` fails.
-# Mirrors the local pre-commit hook discipline; defense in depth
-# alongside `.github/workflows/ci.yml`.
+# Phase 61 Task 4 — run the shared quality-gate reusable workflow
+# (`.github/workflows/quality-gate.yml`: `cargo test --workspace` +
+# `cargo clippy --workspace --all-targets -- -D warnings`) alongside the
+# release pipeline's `plan` job; the build jobs need it. On its own that
+# did NOT stop publishing: dist's generated `host` job accepted skipped
+# builds, so a failed gate would still have published a release with no
+# CLI binaries. The `host` guard in release.yml (see allow-dirty below)
+# is what makes a failed gate block the release.
 plan-jobs = ["./quality-gate"]
+# release.yml is hand-edited: its `host` job refuses to publish unless
+# the quality gate and every build job succeeded (dist's generated
+# condition accepted skipped builds — v0.10.0 shipped without its CLI
+# binaries that way). With "ci" here dist neither checks nor regenerates
+# release.yml, so after changing this file or upgrading
+# cargo-dist-version, regenerate it (`dist generate --mode=ci`) and
+# re-apply the `host` guard by hand.
+allow-dirty = ["ci"]
 # Don't run the release workflow on pull requests — ci.yml already runs
 # the quality gate on every PR, so a PR-time release run would just
 # duplicate it. The release pipeline runs on version tags only.
