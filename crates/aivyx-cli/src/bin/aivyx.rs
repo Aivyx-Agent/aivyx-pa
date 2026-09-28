@@ -123,6 +123,11 @@ mod doctor;
 mod federation;
 #[path = "aivyx_modules/headless.rs"]
 mod headless;
+// Spec A3 (First-Run Coherence) — the central `--help` table + renderer for
+// `aivyx-pa --help`/`-h`/`help` and `<command> --help`/`-h`. Never
+// feature-gated: help must work in every build.
+#[path = "aivyx_modules/help.rs"]
+mod help;
 #[path = "aivyx_modules/identity.rs"]
 mod identity;
 #[path = "aivyx_modules/init.rs"]
@@ -520,6 +525,19 @@ fn run() -> Result<(), String> {
     // no running daemon.
     if mode == CliMode::Version {
         println!("aivyx-pa {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    // ---- Spec A3 (First-Run Coherence): real --help ---------------------
+    // Same posture as --version above — no config, no store, no daemon.
+    if let CliMode::Help(target) = &mode {
+        let rendered = match target {
+            None => help::render_top_level_help(),
+            Some(name) => help::command_help(name)
+                .map(help::render_command_help)
+                .unwrap_or_else(|| unreachable!("parser only reaches Help(Some) for a table hit")),
+        };
+        print!("{rendered}");
         return Ok(());
     }
 
@@ -2009,6 +2027,12 @@ enum CliMode {
     /// shipped via package managers and required by cargo-dist's
     /// installer smoke test.
     Version,
+    /// Spec A3 (First-Run Coherence) — real `--help`. `None` is
+    /// top-level help (`aivyx-pa --help` / `-h` / `help`); `Some(name)`
+    /// is `aivyx-pa <name> --help` / `-h`, intercepted before that
+    /// command's own parsing so no subcommand module needs to change.
+    /// Both print to stdout and exit 0. See `aivyx_modules/help.rs`.
+    Help(Option<String>),
     /// `aivyx-pa --headless ["<task>"]`: unattended turn(s) over the
     /// running daemon (Chapter H follow-on). The daemon refuses at any
     /// approval gate rather than parking for an operator; the process
@@ -2665,6 +2689,28 @@ fn synthesize_default_webui_target(
 
 /// Testable core of [`parse_cli_args`].
 fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
+    // Spec A3 (First-Run Coherence) — real `--help`. Bare `aivyx-pa
+    // --help`, `-h` and `help`, or `<command> --help`/`-h` for a known
+    // dispatcher name, short-circuit to help before any subcommand's
+    // own parsing runs — see `help::intercept`. Matches before every
+    // subcommand and flag, exactly like `--version` below.
+    if let Some(request) = help::intercept(args) {
+        let mode = match request {
+            help::HelpRequest::TopLevel => CliMode::Help(None),
+            help::HelpRequest::Command(cmd) => CliMode::Help(Some(cmd.name.to_string())),
+        };
+        return Ok(CliArgs {
+            mode,
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
     // Phase 61 Task 2 — `--version` / `-V` short-circuit. Matches
     // before every subcommand and flag so the version probe is
     // stable regardless of future surface additions.
@@ -2754,7 +2800,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         other => {
                             return Err(format!(
                                 "unrecognized argument after `daemon install`: `{other}`. \
-                                 Supports: --web-ui, --no-start"
+                                 Run `aivyx-pa --help` to see every command."
                             ));
                         }
                     }
@@ -2778,7 +2824,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized daemon subcommand: `{other}`. \
-                     Supported: daemon run, daemon status, daemon stop, install, uninstall"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -2865,7 +2911,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // returns a descriptive error that names what's supported.
     if !args.is_empty() && args[0] == "identity" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa identity` requires a subcommand. Supported: export <path>".to_string()
+            "`aivyx-pa identity` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
+                .to_string()
         })?;
         let subcommand = match sub.as_str() {
             "export" => {
@@ -2917,7 +2965,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized identity subcommand: `{other}`. \
-                     Supported: identity export <path>"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -2939,8 +2987,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Federation`'s doc comment); only `run`'s dispatch arm requires it.
     if !args.is_empty() && args[0] == "federation" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa federation` requires a subcommand. Supported: yubikey-init <instance-id> \
-             <key-binding-path>"
+            "`aivyx-pa federation` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
@@ -2969,8 +3017,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             other => {
                 return Err(format!(
-                    "unrecognized federation subcommand: `{other}`. Supported: federation \
-                     yubikey-init <instance-id> <key-binding-path>"
+                    "unrecognized federation subcommand: `{other}`. \
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -2992,7 +3040,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // same dispatcher.
     if !args.is_empty() && args[0] == "notify" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa notify` requires a subcommand. Supported: history".to_string()
+            "`aivyx-pa notify` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
+                .to_string()
         })?;
         match sub.as_str() {
             "history" => {
@@ -3048,7 +3098,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized `aivyx-pa notify` subcommand: `{other}`. \
-                     Supported: history"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         }
@@ -3057,8 +3107,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Phase 74 — `aivyx-pa memory <subcommand>` CLI surface.
     if !args.is_empty() && args[0] == "memory" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa memory` requires a subcommand. Supported: \
-             list, show, search, evict"
+            "`aivyx-pa memory` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
                 .to_string()
         })?;
         // Helper: parse a trailing `--limit N` flag from the
@@ -3229,8 +3279,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized `aivyx-pa memory` subcommand: `{other}`. \
-                     Supported: list, show, search, evict, wiki, graph, \
-                     conflicts, resolve, dismiss"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -3381,7 +3430,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized `aivyx-pa pack` subcommand: `{other}`. \
-                     Supported: keygen, build, inspect, install"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -3926,9 +3975,11 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Phase 103 — `aivyx-pa tool <subcommand>`. The first sub-
     // subcommand is `init <path> [--force]`.
     if !args.is_empty() && args[0] == "tool" {
-        let sub = args
-            .get(1)
-            .ok_or_else(|| "`aivyx-pa tool` requires a subcommand. Supported: init".to_string())?;
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx-pa tool` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
+                .to_string()
+        })?;
         match sub.as_str() {
             "init" => {
                 let path_arg = args
@@ -3967,7 +4018,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized `aivyx-pa tool` subcommand: `{other}`. \
-                     Supported: init"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         }
@@ -3980,9 +4031,11 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // missing `--from` means seq 0, missing `--limit` means no
     // upper bound.
     if !args.is_empty() && args[0] == "audit" {
-        let sub = args
-            .get(1)
-            .ok_or_else(|| "`aivyx-pa audit` requires a subcommand. Supported: export".to_string())?;
+        let sub = args.get(1).ok_or_else(|| {
+            "`aivyx-pa audit` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
+                .to_string()
+        })?;
         match sub.as_str() {
             "export" => {
                 let mut from: Option<u64> = None;
@@ -4078,7 +4131,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized `aivyx-pa audit` subcommand: `{other}`. \
-                     Supported: export"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         }
@@ -4091,7 +4144,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // operator-facing surface.
     if !args.is_empty() && args[0] == "mcp" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa mcp` requires a subcommand. Supported: recipes, status".to_string()
+            "`aivyx-pa mcp` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
+                .to_string()
         })?;
         match sub.as_str() {
             "status" => {
@@ -4146,7 +4201,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized `aivyx-pa mcp` subcommand: `{other}`. \
-                     Supported: recipes, status"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         }
@@ -4193,7 +4248,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 other => {
                     return Err(format!(
                         "`aivyx-pa init`: unrecognized argument `{other}`. \
-                         Supported: `--template <name>`, `--list-templates`",
+                         Run `aivyx-pa --help` to see every command.",
                     ));
                 }
             }
@@ -4217,8 +4272,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // ---- Chapter Tutor: `aivyx-pa skills <teach|update|forget>` -----
     if !args.is_empty() && args[0] == "skills" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa skills` requires a subcommand. Supported: \
-             teach, update, forget"
+            "`aivyx-pa skills` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
@@ -4280,7 +4335,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         other => {
                             return Err(format!(
                                 "`aivyx-pa skills update` unrecognized argument: \
-                                 `{other}`. Supported: --trigger, --procedure."
+                                 `{other}`. Run `aivyx-pa --help` to see every command."
                             ));
                         }
                     }
@@ -4312,7 +4367,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "`aivyx-pa skills` unknown subcommand `{other}`. \
-                     Supported: teach, update, forget."
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -4330,8 +4385,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 
     if !args.is_empty() && args[0] == "persona" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa persona` requires a subcommand. Supported: \
-             show, list, revert, proposals"
+            "`aivyx-pa persona` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
@@ -4365,7 +4420,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         other => {
                             return Err(format!(
                                 "`aivyx-pa persona list` unrecognized argument: `{other}`. \
-                                 Supported flags: --auto-only, --manual-only."
+                                 Run `aivyx-pa --help` to see every command."
                             ));
                         }
                     }
@@ -4398,7 +4453,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 // Sub-subcommand: list / show / approve / reject.
                 let sub2 = args.get(2).ok_or_else(|| {
                     "`aivyx-pa persona proposals` requires a subcommand. \
-                     Supported: list, show, approve, reject"
+                     Run `aivyx-pa --help` to see every command."
                         .to_string()
                 })?;
                 let proposals_sub = match sub2.as_str() {
@@ -4511,7 +4566,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         return Err(format!(
                             "unrecognized `aivyx-pa persona proposals` \
                              subcommand: `{other}`. \
-                             Supported: list, show, approve, reject"
+                             Run `aivyx-pa --help` to see every command."
                         ));
                     }
                 };
@@ -4582,10 +4637,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized persona subcommand: `{other}`. \
-                     Supported: persona show, persona list, \
-                     persona revert <id>, persona proposals <sub>, \
-                     persona conflicts, persona resolve <id> --remove <a|b>, \
-                     persona dismiss <id>"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -4606,7 +4658,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // and Edit variants today; future variants land additively.
     if !args.is_empty() && args[0] == "profile" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa profile` requires a subcommand. Supported: show, edit, apply-hint <id>"
+            "`aivyx-pa profile` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
@@ -4640,7 +4693,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     } else if arg.starts_with('-') {
                         return Err(format!(
                             "unrecognized flag for `aivyx-pa profile apply-hint`: `{arg}`. \
-                             Supported flag: --yes"
+                             Run `aivyx-pa --help` to see every command."
                         ));
                     } else if proposal_id.is_none() {
                         proposal_id = Some(arg.clone());
@@ -4664,8 +4717,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized profile subcommand: `{other}`. \
-                     Supported: profile show, profile edit, \
-                     profile apply-hint <id>"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -4684,8 +4736,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Chapter N — `aivyx-pa access <show|set>`.
     if !args.is_empty() && args[0] == "access" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa access` requires a subcommand. Supported: show, \
-             set <level> [--root <dir>] [--yes]"
+            "`aivyx-pa access` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
@@ -4716,7 +4768,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         other if other.starts_with('-') => {
                             return Err(format!(
                                 "unrecognized flag for `aivyx-pa access set`: `{other}`. \
-                                 Supported: --root <dir>, --yes"
+                                 Run `aivyx-pa --help` to see every command."
                             ));
                         }
                         other if level.is_none() => {
@@ -4741,7 +4793,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized access subcommand: `{other}`. \
-                     Supported: access show, access set <level>"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -4760,8 +4812,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Chapter Reins — `aivyx-pa autonomy <show|set>`.
     if !args.is_empty() && args[0] == "autonomy" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa autonomy` requires a subcommand. Supported: show, \
-             set <level> [--yes]"
+            "`aivyx-pa autonomy` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
@@ -4784,7 +4836,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                         other if other.starts_with('-') => {
                             return Err(format!(
                                 "unrecognized flag for `aivyx-pa autonomy set`: `{other}`. \
-                                 Supported: --yes"
+                                 Run `aivyx-pa --help` to see every command."
                             ));
                         }
                         other if level.is_none() => {
@@ -4809,7 +4861,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized autonomy subcommand: `{other}`. \
-                     Supported: autonomy show, autonomy set <level>"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -4828,8 +4880,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Chapter O — `aivyx-pa workspace <path|ls|cat>`.
     if !args.is_empty() && args[0] == "workspace" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa workspace` requires a subcommand. Supported: path, \
-             ls [path], cat <path>"
+            "`aivyx-pa workspace` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
@@ -4846,8 +4898,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized workspace subcommand: `{other}`. \
-                     Supported: workspace path, workspace ls [path], \
-                     workspace cat <path>"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -4872,7 +4923,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             Some(other) => {
                 return Err(format!(
                     "unknown `aivyx-pa keyring` subcommand: `{other}`. \
-                     Supported: set, clear, status"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -4911,7 +4962,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Phase 119 Task 5 — `aivyx-pa role <subcommand>`.
     if !args.is_empty() && args[0] == "role" {
         let sub = args.get(1).ok_or_else(|| {
-            "`aivyx-pa role` requires a subcommand. Supported: import <id>".to_string()
+            "`aivyx-pa role` requires a subcommand. \
+             Run `aivyx-pa --help` to see every command."
+                .to_string()
         })?;
         let subcommand = match sub.as_str() {
             "import" => {
@@ -4926,7 +4979,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     } else if arg.starts_with('-') {
                         return Err(format!(
                             "unrecognized flag for `aivyx-pa role import`: `{arg}`. \
-                             Supported flags: --yes, --force"
+                             Run `aivyx-pa --help` to see every command."
                         ));
                     } else if proposal_id.is_none() {
                         proposal_id = Some(arg.clone());
@@ -4951,7 +5004,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized role subcommand: `{other}`. \
-                     Supported: role import <id>"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -4971,7 +5024,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     if !args.is_empty() && args[0] == "tool-relevance" {
         let sub = args.get(1).ok_or_else(|| {
             "`aivyx-pa tool-relevance` requires a subcommand. \
-             Supported: dump [--keyword-key <key>]"
+             Run `aivyx-pa --help` to see every command."
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
@@ -4991,7 +5044,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     } else if arg.starts_with('-') {
                         return Err(format!(
                             "unrecognized flag for `aivyx-pa tool-relevance dump`: \
-                             `{arg}`. Supported flag: --keyword-key <key>"
+                             `{arg}`. Run `aivyx-pa --help` to see every command."
                         ));
                     } else {
                         return Err(format!(
@@ -5005,7 +5058,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized tool-relevance subcommand: `{other}`. \
-                     Supported: tool-relevance dump"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         };
@@ -5024,7 +5077,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     // Check for `mcp-server <name>` subcommand — bundled MCP server (Phase 46).
     if !args.is_empty() && args[0] == "mcp-server" {
         let name = args.get(1).ok_or_else(|| {
-            "`aivyx-pa mcp-server` requires a server name. Supported: web-search".to_string()
+            "`aivyx-pa mcp-server` requires a server name. \
+             Run `aivyx-pa --help` to see every command."
+                .to_string()
         })?;
         if args.len() > 2 {
             return Err(format!(
@@ -5038,7 +5093,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "web-search" => {}
             other => {
                 return Err(format!(
-                    "unknown MCP server name: `{other}`. Supported: web-search"
+                    "unknown MCP server name: `{other}`. \
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         }
@@ -5200,7 +5256,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             other => {
                 return Err(format!(
                     "unrecognized argument: `{other}`. \
-                     Supported: --verify-only, --channel <local|voice|telegram|discord|slack>, --role <name>, --print-role <name>, --no-daemon, --provider <anthropic|openai|ollama>, --mcp-server <name:command[:args]>, daemon run|status|stop"
+                     Run `aivyx-pa --help` to see every command."
                 ));
             }
         }
@@ -13401,13 +13457,13 @@ mod tests {
 
     #[test]
     fn daemon_unknown_subcommand_is_an_error() {
+        // Spec A3 — the inline "Supported: daemon run, ..." list is gone;
+        // the error now points at `--help` instead (see help::COMMANDS).
         let err = parse_cli_args_from(&argv(&["daemon", "restart"]))
             .expect_err("`daemon restart` must error");
         assert!(
-            err.contains("daemon run")
-                && err.contains("daemon status")
-                && err.contains("daemon stop"),
-            "error must list all subcommands: {err}"
+            err.ends_with("Run `aivyx-pa --help` to see every command."),
+            "error: {err}"
         );
     }
 
@@ -13844,10 +13900,12 @@ mod tests {
 
     #[test]
     fn profile_without_subcommand_is_an_error() {
+        // Spec A3 — the inline "Supported: show, edit, ..." list is gone;
+        // the error now points at `--help` instead (see help::COMMANDS).
         let err = parse_cli_args_from(&argv(&["profile"])).expect_err("`profile` alone must error");
         assert!(
-            err.contains("show") && err.contains("edit"),
-            "error must list both subcommands: {err}"
+            err.ends_with("Run `aivyx-pa --help` to see every command."),
+            "error: {err}"
         );
     }
 
@@ -13984,10 +14042,12 @@ mod tests {
                 keyfile: "k.bin".into()
             })
         );
+        // Spec A3 — the inline "Supported: keygen, build, ..." list is
+        // gone; the error now points at `--help` instead.
         let err = parse_cli_args_from(&argv(&["pack", "frobnicate"]))
             .expect_err("unknown subcommand must error");
         assert!(
-            err.contains("keygen, build, inspect, install"),
+            err.ends_with("Run `aivyx-pa --help` to see every command."),
             "error: {err}"
         );
     }
@@ -14396,8 +14456,13 @@ mod tests {
 
     #[test]
     fn role_without_subcommand_is_an_error() {
+        // Spec A3 — the inline "Supported: import <id>" list is gone; the
+        // error now points at `--help` instead.
         let err = parse_cli_args_from(&argv(&["role"])).expect_err("`role` alone must error");
-        assert!(err.contains("import"), "error must list import: {err}");
+        assert!(
+            err.ends_with("Run `aivyx-pa --help` to see every command."),
+            "error: {err}"
+        );
     }
 
     #[test]
@@ -14464,9 +14529,14 @@ mod tests {
 
     #[test]
     fn tool_relevance_without_subcommand_is_an_error() {
+        // Spec A3 — the inline "Supported: dump [...]" list is gone; the
+        // error now points at `--help` instead.
         let err = parse_cli_args_from(&argv(&["tool-relevance"]))
             .expect_err("`tool-relevance` alone must error");
-        assert!(err.contains("dump"), "error must list dump: {err}");
+        assert!(
+            err.ends_with("Run `aivyx-pa --help` to see every command."),
+            "error: {err}"
+        );
     }
 
     #[test]
@@ -14637,10 +14707,12 @@ mod tests {
 
     #[test]
     fn persona_without_subcommand_is_an_error() {
+        // Spec A3 — the inline "Supported: show, list, ..." list is gone;
+        // the error now points at `--help` instead.
         let err = parse_cli_args_from(&argv(&["persona"])).expect_err("`persona` alone must error");
         assert!(
-            err.contains("show") && err.contains("list") && err.contains("revert"),
-            "error must list all subcommands: {err}"
+            err.ends_with("Run `aivyx-pa --help` to see every command."),
+            "error: {err}"
         );
     }
 
@@ -14997,9 +15069,14 @@ mod tests {
 
     #[test]
     fn notify_without_subcommand_errors() {
+        // Spec A3 — the inline "Supported: history" list is gone; the
+        // error now points at `--help` instead.
         let err = parse_cli_args_from(&argv(&["notify"])).expect_err("must error");
         assert!(err.contains("requires a subcommand"), "{err}");
-        assert!(err.contains("history"), "{err}");
+        assert!(
+            err.ends_with("Run `aivyx-pa --help` to see every command."),
+            "{err}"
+        );
     }
 
     #[test]
@@ -15376,6 +15453,110 @@ mod tests {
         assert!(line.contains("\"none\""), "{line}");
         assert!(line.contains("family: llama3"), "{line}");
         assert!(line.contains("default"), "{line}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Spec A3 (First-Run Coherence) — real `--help`.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn top_level_help_flag_parses_to_help_mode() {
+        for args in [vec!["--help"], vec!["-h"], vec!["help"]] {
+            let parsed = parse_cli_args_from(&argv(&args)).expect("must parse");
+            assert_eq!(parsed.mode, CliMode::Help(None), "args: {args:?}");
+        }
+    }
+
+    #[test]
+    fn command_help_flag_parses_to_help_mode_for_a_sample_of_commands() {
+        for name in ["routing", "doctor", "init", "daemon", "tui"] {
+            for flag in ["--help", "-h"] {
+                let parsed = parse_cli_args_from(&argv(&[name, flag]))
+                    .unwrap_or_else(|e| panic!("`{name} {flag}` must parse: {e}"));
+                assert_eq!(
+                    parsed.mode,
+                    CliMode::Help(Some(name.to_string())),
+                    "args: {name} {flag}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn command_help_flag_does_not_intercept_unknown_commands() {
+        // `bogus --help` isn't a known dispatcher name, so it falls through
+        // to the normal (unrecognized) dispatch path rather than help.
+        let err = parse_cli_args_from(&argv(&["bogus", "--help"])).expect_err("must error");
+        assert_ne!(err, "");
+    }
+
+    /// Drift guard: every dispatch guard of the form `args[0] == /name/`
+    /// in this file's own source has a `help::COMMANDS` entry,
+    /// `--version`/`-V` excepted (they're version probes, not
+    /// subcommands — see `help::NON_SUBCOMMAND_DISPATCH_NAMES`). Scans
+    /// the source (see `PATTERN` below) rather than a shared constant
+    /// per the implementation note: the dispatch arms are individual
+    /// `if args[0] == /name/` guards scattered through
+    /// `parse_cli_args_from`, not driven by one existing list. (This
+    /// comment spells the pattern with `/name/` rather than quotes so
+    /// it doesn't get picked up as a false match by its own scan.)
+    #[test]
+    fn help_table_has_no_drift_from_dispatcher() {
+        const SOURCE: &str = include_str!("aivyx.rs");
+        const PATTERN: &str = "args[0] == \"";
+        let mut names = std::collections::BTreeSet::new();
+        let mut rest = SOURCE;
+        while let Some(idx) = rest.find(PATTERN) {
+            rest = &rest[idx + PATTERN.len()..];
+            let end = rest.find('"').expect("unterminated string literal after args[0] == \"");
+            names.insert(rest[..end].to_string());
+            rest = &rest[end..];
+        }
+        assert!(
+            names.len() > 20,
+            "drift-guard scan found suspiciously few dispatcher names ({}) — pattern broke",
+            names.len()
+        );
+        for name in &names {
+            if help::NON_SUBCOMMAND_DISPATCH_NAMES.contains(&name.as_str()) {
+                continue;
+            }
+            assert!(
+                help::command_help(name).is_some(),
+                "dispatcher recognises `{name}` (via `args[0] == \"{name}\"`) but \
+                 help::COMMANDS has no entry for it"
+            );
+        }
+    }
+
+    #[test]
+    fn unrecognized_argument_errors_point_to_help_and_drop_the_stale_supported_list() {
+        let err = parse_cli_args_from(&argv(&["--bogus-flag"])).expect_err("must error");
+        assert!(
+            err.ends_with("Run `aivyx-pa --help` to see every command."),
+            "error: {err}"
+        );
+        assert!(!err.contains("Supported:"), "error still lists Supported: {err}");
+    }
+
+    #[test]
+    fn unrecognized_subcommand_errors_drop_the_stale_supported_list() {
+        for args in [
+            vec!["identity", "bogus"],
+            vec!["memory", "bogus"],
+            vec!["persona", "bogus"],
+            vec!["access", "bogus"],
+            vec!["autonomy", "bogus"],
+            vec!["workspace", "bogus"],
+            vec!["keyring", "bogus"],
+            vec!["role", "bogus"],
+        ] {
+            let err = parse_cli_args_from(&argv(&args)).expect_err("must error");
+            assert!(
+                !err.contains("Supported:"),
+                "args {args:?}: error still lists Supported: {err}"
+            );
+        }
     }
 }
 
