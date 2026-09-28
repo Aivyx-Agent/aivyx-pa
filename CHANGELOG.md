@@ -5,6 +5,15 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-09-28
+
+Republishes 0.10.0 with its CLI binaries and shell installer; no code
+changes. The 0.10.0 release published only the desktop, WSL and Docker
+builds: a literal bearer-token header example in its release notes
+looked like a credential to GitHub Actions, which silently dropped the
+release plan, so the CLI build jobs were skipped. See 0.10.0 below for
+everything in this release.
+
 ## [0.10.0] — 2026-09-28
 
 **The product is now Aivyx PA** — a breaking rename of the binary, config
@@ -270,7 +279,7 @@ Fixes from a full ecosystem security audit (2026-09-16). **HIGH** first:
   through the webhook listener with no shared secret, and that turn ran
   at the same trust tier as a local CLI session. Every webhook now
   carries a `secret` (generated once at creation, shown only then) that
-  callers must present as `Authorization: Bearer <secret>`, and the
+  callers must present as a bearer token in the `Authorization` header, and the
   triggered turn runs at `Untrusted`. **If an existing webhook's prompt
   relies on tools gated above `Untrusted`** (e.g. `fs.write`,
   `shell.exec`), those tool calls will now fail their capability check
