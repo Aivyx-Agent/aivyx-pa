@@ -174,8 +174,12 @@ pub struct DaemonConfig {
     /// the hostnames a remotely-exposed Studio is served at.
     pub web_ui_allowed_origins: Vec<String>,
     /// Chapter Postern — shared-secret token gating the web UI's control plane.
-    /// `None` (default) → no auth. When set, `/ws` requires the token and static
-    /// routes prompt via HTTP Basic.
+    /// `None` → no auth. When set, `/ws` requires the token and static
+    /// routes prompt via HTTP Basic (or accept the `/?token=` sign-in link).
+    /// First-run coherence A2: this is the *effective* token — the CLI
+    /// resolves it with [`crate::studio_token::effective_token`] (operator
+    /// token, else none under `web_ui_insecure_no_auth`, else the automatic
+    /// `studio-token` file).
     pub web_ui_auth_token: Option<String>,
     /// Studio Gallery — base URL of the `comfyui`-named `[[mcp_server]]`'s
     /// backing ComfyUI instance (its `COMFYUI_URL` env entry, defaulting to
@@ -1494,8 +1498,18 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         let web_origins = web_ui_allowed_origins.clone();
         let web_auth_token = web_ui_auth_token.clone();
         let web_comfyui_base_url = comfyui_base_url.clone();
+        // First-run coherence A2 — the `daemon run` banner's sign-in link,
+        // printed only once the port is really bound (a taken port logs
+        // the bind error below instead, and shows no link).
+        let banner_token = web_ui_auth_token.clone();
+        let on_listening: crate::web_ui::OnListening = Box::new(move |addr| {
+            eprintln!(
+                "{}",
+                crate::studio_token::banner_line(addr, banner_token.as_deref())
+            );
+        });
         tokio::spawn(async move {
-            if let Err(e) = crate::web_ui::run_web_ui_server(
+            if let Err(e) = crate::web_ui::run_web_ui_server_notify(
                 web_socket_path,
                 web_ui_host,
                 port,
@@ -1504,6 +1518,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 web_comfyui_base_url,
                 web_shutdown,
                 web_broadcaster,
+                Some(on_listening),
             )
             .await
             {

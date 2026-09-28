@@ -1359,9 +1359,10 @@ pub struct AivyxConfig {
     /// (7842). Loaded from `[daemon] webhook_port` in the TOML file.
     pub webhook_port: Option<u16>,
     /// Web UI port. `Some(port)` enables the web UI on that port.
-    /// `None` means the web UI is disabled. Set via `[daemon] web_ui = true`
-    /// (uses default 7843) or `[daemon] web_ui_port = <N>` (enables on
-    /// that port). Phase 39.
+    /// `None` means the web UI is disabled. On by default since first-run
+    /// coherence A2 (port 7843); `[daemon] web_ui_port = <N>` picks the
+    /// port and `[daemon] web_ui = false` turns it off (winning over a
+    /// written port). Phase 39.
     pub web_ui_port: Option<u16>,
     /// Web UI bind host. `None` (default) binds `127.0.0.1` — the
     /// localhost-only posture every native install keeps. Chapter Harbor:
@@ -1374,7 +1375,9 @@ pub struct AivyxConfig {
     /// Chapter Gatehouse — `true` acknowledges an off-host bind with no
     /// auth token (behind the operator's own authenticating reverse
     /// proxy). Without it, off-host + no-token is refused at config
-    /// load — the two-key launch. Default `false`.
+    /// load — the two-key launch. Default `false`. First-run coherence A2:
+    /// it also turns off the daemon's automatic `studio-token` on a
+    /// loopback bind (no token at all, the pre-A2 posture).
     pub web_ui_insecure_no_auth: bool,
     /// Extra WS Origin allowlist entries beyond the built-in loopback origins
     /// (`http://127.0.0.1:<port>`, `http://localhost:<port>`, `http://[::1]:<port>`).
@@ -1384,8 +1387,9 @@ pub struct AivyxConfig {
     /// entry must be a bare origin (scheme://host[:port], no path).
     pub web_ui_allowed_origins: Vec<String>,
     /// Chapter Postern — shared-secret auth token for the web UI's control
-    /// plane. `None` (default) = no auth, the localhost-only posture every
-    /// native install keeps (byte-identical). When set (`[daemon]
+    /// plane. `None` (default) = no operator token: the daemon then uses its
+    /// automatic `studio-token` file (first-run coherence A2) unless
+    /// `web_ui_insecure_no_auth` is set. When set (`[daemon]
     /// web_ui_auth_token = "…"`), the Studio's `/ws` WebSocket — the channel
     /// that drives the agent, reads memory, and writes config — requires the
     /// token, and static routes prompt for it via HTTP Basic. This closes the
@@ -6027,6 +6031,19 @@ impl AivyxConfig {
         resolve_posture(self.autonomy_level.value, &self.autonomy_overrides, domain)
     }
 
+    /// First-run coherence A2 — where the daemon serves the Studio, or
+    /// `None` when it's off (`[daemon] web_ui = false`). The host defaults to
+    /// `127.0.0.1`, exactly as the daemon's bind does. This is the config's
+    /// view only: the daemon's `--web-ui` / `--web-ui-port` flags can still
+    /// override it for one run.
+    pub fn studio_addr(&self) -> Option<std::net::SocketAddr> {
+        let host = self
+            .web_ui_host
+            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+        self.web_ui_port
+            .map(|port| std::net::SocketAddr::new(host, port))
+    }
+
     /// Phase 1 of the two-phase load: env vars + TOML file.
     ///
     /// Precedence per field: env > TOML > default (or `None` for
@@ -8117,12 +8134,14 @@ impl AivyxConfig {
             reflection_schedules,
             webhook_port: toml.daemon.webhook_port,
             web_ui_port: match (toml.daemon.web_ui, toml.daemon.web_ui_port) {
-                // Explicit port always wins (and implicitly enables).
+                // First-run coherence A2 — `web_ui = false` is the one
+                // opt-out, and it wins even over a written port.
+                (Some(false), _) => None,
+                // An explicit port picks where it's served.
                 (_, Some(port)) => Some(port),
-                // `web_ui = true` without explicit port → default.
-                (Some(true), None) => Some(7843),
-                // Not configured or explicitly disabled.
-                _ => None,
+                // On by default (and `web_ui = true`): loopback 7843,
+                // behind the daemon's automatic token.
+                (_, None) => Some(7843),
             },
             web_ui_host,
             web_ui_insecure_no_auth,

@@ -51,9 +51,18 @@ from the daemon's own log instead of needing a packet capture.
 ## Deliberately not here
 
 - No accounts, sessions, or OIDC — Nexus/Passport-era.
-- No token generation in `aivyx-pa daemon install` for native installs:
-  they are loopback-default, the interlock only bites when an operator
-  configures exposure, and the config error at that moment names the
-  exact remedy. Add it only if operator friction shows up in practice.
-- The Studio needs no token prompt of its own — Postern's HTTP Basic
-  page-load prompt plants the cookie the `/ws` upgrade carries.
+- ~~No token generation in `aivyx-pa daemon install` for native
+  installs.~~ **Reversed 2026-09-29 (first-run coherence A2):** the
+  Studio is now on by default, and a loopback bind is reachable by every
+  local account on the machine — "loopback-default" was never a boundary
+  between users, only against the network. So every native install now
+  gets a token without asking: when neither `web_ui_auth_token` nor
+  `web_ui_insecure_no_auth` is set, the daemon itself (not `daemon
+  install`) generates one into `studio-token` next to the store (256-bit,
+  43 alphanumeric, `0600`, atomic, reused; Ward-denied to the agent) and
+  prints a one-time sign-in link, `/?token=…`, which redirects and plants
+  the cookie. The interlock above is unchanged: it still governs a
+  configured host beyond loopback. See `docs/THREAT_MODEL.md` §4.11.
+- The Studio needs no token prompt of its own — the sign-in link (or
+  Postern's HTTP Basic page-load prompt) plants the cookie the `/ws`
+  upgrade carries.

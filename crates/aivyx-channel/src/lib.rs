@@ -149,6 +149,8 @@ mod daemon_session;
 mod local;
 pub mod keyring_store;
 pub mod passphrase;
+/// First-run coherence A2 — the Studio's automatic sign-in token.
+pub mod studio_token;
 pub mod persona;
 pub mod persona_consolidation;
 pub mod persona_context;

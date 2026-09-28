@@ -185,6 +185,10 @@ base64 = { workspace = true }
 # workspace standard entropy source, same choice aivyx-storage makes
 # for its AEAD nonces.
 uuid = { workspace = true }
+# First-run coherence A2 — the Studio's automatic token is drawn from
+# `rand::rngs::OsRng` (already a workspace dependency; aivyx-pack and
+# aivyx-federation use it for key material).
+rand = { workspace = true }
 cron = { workspace = true }
 chrono = { workspace = true }
 # Phase 27 Task 3 — webhook trigger listener. hyper is already a

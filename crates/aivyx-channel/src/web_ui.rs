@@ -170,6 +170,39 @@ pub async fn run_web_ui_server(
     shutdown: CancellationToken,
     web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
 ) -> Result<(), DaemonError> {
+    run_web_ui_server_notify(
+        socket_path,
+        host,
+        port,
+        allowed_origins,
+        auth_token,
+        comfyui_base_url,
+        shutdown,
+        web_ui_broadcaster,
+        None,
+    )
+    .await
+}
+
+/// Called once with the bound address, right after the listener binds.
+pub type OnListening = Box<dyn FnOnce(std::net::SocketAddr) + Send>;
+
+/// [`run_web_ui_server`], plus an `on_listening` hook called once the port
+/// is actually bound (never when the bind fails). First-run coherence A2:
+/// the `daemon run` banner prints the Studio's sign-in link from it, so the
+/// link is only ever shown for a Studio that is really there.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_web_ui_server_notify(
+    socket_path: PathBuf,
+    host: Option<std::net::IpAddr>,
+    port: u16,
+    allowed_origins: Vec<String>,
+    auth_token: Option<String>,
+    comfyui_base_url: Option<String>,
+    shutdown: CancellationToken,
+    web_ui_broadcaster: Option<Arc<WebUiBroadcaster>>,
+    on_listening: Option<OnListening>,
+) -> Result<(), DaemonError> {
     let host = host.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
     let addr = std::net::SocketAddr::new(host, port);
     let allowed_origins = Arc::new(allowed_origins);
@@ -216,6 +249,9 @@ pub async fn run_web_ui_server(
         })?;
 
     eprintln!("aivyx-pa web ui: listening on http://{addr}");
+    if let Some(hook) = on_listening {
+        hook(listener.local_addr().unwrap_or(addr));
+    }
 
     let socket_path = Arc::new(socket_path);
 
@@ -467,7 +503,27 @@ async fn handle_connection(
         // login UX + cookie in one step.
         let mut set_cookie: Option<String> = None;
         if let Some(token) = auth_token {
-            if !request_carries_token(&request_head, token) {
+            // First-run coherence A2 — the one-time sign-in link. `GET
+            // /?token=<t>` (only `/`) with the right token answers 302 to `/`
+            // and plants the cookie, so the token leaves the address bar and
+            // history at once. A wrong token falls through to the 401 below.
+            let sign_in = sign_in_redirect(&request_head, token);
+            if sign_in == Some(true) {
+                return serve_bytes_ext(
+                    stream,
+                    "302 Found",
+                    "text/plain; charset=utf-8",
+                    &format!(
+                        "Location: /\r\n\
+                         Cache-Control: no-store\r\n\
+                         Referrer-Policy: no-referrer\r\n\
+                         Set-Cookie: {AUTH_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/\r\n"
+                    ),
+                    b"",
+                )
+                .await;
+            }
+            if sign_in == Some(false) || !request_carries_token(&request_head, token) {
                 log_rejected_token_once(remote_addr.ip());
                 return serve_bytes_ext(
                     stream,
@@ -493,6 +549,19 @@ async fn handle_connection(
         // no-bundle notice at `/` while the bundle is unbuilt.
         serve_static(stream, request_path(&request_head), set_cookie.as_deref()).await
     }
+}
+
+/// First-run coherence A2 — the sign-in link check. `None` when the request
+/// isn't a sign-in (not `GET /`, or no `token` query parameter);
+/// `Some(true)` when its `?token=` matches `token` (compared in constant
+/// time, like [`request_carries_token`]); `Some(false)` when it doesn't.
+fn sign_in_redirect(request_head: &str, token: &str) -> Option<bool> {
+    let request_line = request_head.split("\r\n").next().unwrap_or("");
+    if !request_line.starts_with("GET ") || request_path(request_line) != "/" {
+        return None;
+    }
+    let presented = query_param(request_query(request_head), "token")?;
+    Some(ct_eq(presented.as_bytes(), token.as_bytes()))
 }
 
 /// The raw query string (no leading `?`) from an HTTP request line, e.g.
@@ -1183,6 +1252,20 @@ mod tests {
     }
 
     #[test]
+    fn sign_in_redirect_is_only_get_root_with_a_token_param() {
+        let t = "tok";
+        let head = |line: &str| format!("{line}\r\nHost: x\r\n\r\n");
+        assert_eq!(sign_in_redirect(&head("GET /?token=tok HTTP/1.1"), t), Some(true));
+        assert_eq!(sign_in_redirect(&head("GET /?a=1&token=tok HTTP/1.1"), t), Some(true));
+        assert_eq!(sign_in_redirect(&head("GET /?token=tak HTTP/1.1"), t), Some(false));
+        assert_eq!(sign_in_redirect(&head("GET /?token= HTTP/1.1"), t), Some(false));
+        assert_eq!(sign_in_redirect(&head("GET / HTTP/1.1"), t), None);
+        assert_eq!(sign_in_redirect(&head("GET /?other=1 HTTP/1.1"), t), None);
+        assert_eq!(sign_in_redirect(&head("GET /index.html?token=tok HTTP/1.1"), t), None);
+        assert_eq!(sign_in_redirect(&head("POST /?token=tok HTTP/1.1"), t), None);
+    }
+
+    #[test]
     fn no_credentials_is_rejected() {
         let head = "GET /ws HTTP/1.1\r\nOrigin: http://127.0.0.1:7843\r\n\r\n";
         assert!(!request_carries_token(head, "tok-123"));
@@ -1447,6 +1530,172 @@ mod tests {
             ws.starts_with("HTTP/1.1 401"),
             "unauth /ws must be 401: {ws:.60}"
         );
+
+        shutdown.cancel();
+        let _ = handle.await;
+    }
+
+    /// Spawn a token-protected server on a free port; returns (port, shutdown, handle).
+    async fn spawn_authed(token: &str) -> (u16, CancellationToken, tokio::task::JoinHandle<()>) {
+        let port = free_port().await;
+        let shutdown = CancellationToken::new();
+        let server_shutdown = shutdown.clone();
+        let token = token.to_string();
+        let handle = tokio::spawn(async move {
+            let _ = run_web_ui_server(
+                PathBuf::from("/nonexistent/aivyx-sign-in-test.sock"),
+                Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                port,
+                Vec::new(),
+                Some(token),
+                None,
+                server_shutdown,
+                None,
+            )
+            .await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        (port, shutdown, handle)
+    }
+
+    #[tokio::test]
+    async fn sign_in_link_redirects_home_and_plants_the_cookie() {
+        // First-run coherence A2 — `GET /?token=<t>` with the right token
+        // answers 302 to `/` and sets the same cookie Basic auth plants, so
+        // the token leaves the address bar (and history) at once.
+        let tok = "SignInTok0123456789abcdefghijklmnopqrstuvw";
+        let (port, shutdown, handle) = spawn_authed(tok).await;
+
+        let resp =
+            http_roundtrip(port, &format!("GET /?token={tok} HTTP/1.1\r\nHost: x\r\n\r\n")).await;
+        assert!(resp.starts_with("HTTP/1.1 302"), "good link: {resp:.80}");
+        assert!(resp.contains("\r\nLocation: /\r\n"), "must redirect home: {resp}");
+        assert!(
+            resp.contains(&format!(
+                "Set-Cookie: {AUTH_COOKIE}={tok}; HttpOnly; SameSite=Strict; Path=/\r\n"
+            )),
+            "must plant the cookie: {resp}"
+        );
+
+        // The cookie it planted then opens `/` normally.
+        let home = http_roundtrip(
+            port,
+            &format!("GET / HTTP/1.1\r\nHost: x\r\nCookie: {AUTH_COOKIE}={tok}\r\n\r\n"),
+        )
+        .await;
+        assert!(home.starts_with("HTTP/1.1 200"), "cookie load: {home:.80}");
+
+        shutdown.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn sign_in_link_with_a_wrong_token_is_401() {
+        let tok = "SignInTok0123456789abcdefghijklmnopqrstuvw";
+        let (port, shutdown, handle) = spawn_authed(tok).await;
+
+        for bad in ["wrong", "SignInTok0123456789abcdefghijklmnopqrstuvX", ""] {
+            let resp =
+                http_roundtrip(port, &format!("GET /?token={bad} HTTP/1.1\r\nHost: x\r\n\r\n"))
+                    .await;
+            assert!(resp.starts_with("HTTP/1.1 401"), "bad link {bad:?}: {resp:.80}");
+            assert!(resp.contains("WWW-Authenticate: Basic"), "{resp:.160}");
+            assert!(!resp.contains("Set-Cookie"), "no cookie for a bad token: {resp}");
+        }
+        // The query sign-in is only for `/`: elsewhere `?token=` is not a
+        // credential, so an asset request carrying it is still a 401.
+        let resp = http_roundtrip(
+            port,
+            &format!("GET /assets/app.js?token={tok} HTTP/1.1\r\nHost: x\r\n\r\n"),
+        )
+        .await;
+        assert!(resp.starts_with("HTTP/1.1 401"), "non-root ?token=: {resp:.80}");
+
+        shutdown.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn basic_and_bearer_still_open_the_studio() {
+        let tok = "SignInTok0123456789abcdefghijklmnopqrstuvw";
+        let (port, shutdown, handle) = spawn_authed(tok).await;
+
+        use base64::Engine;
+        let creds = base64::engine::general_purpose::STANDARD.encode(format!("any:{tok}"));
+        let basic = http_roundtrip(
+            port,
+            &format!("GET / HTTP/1.1\r\nHost: x\r\nAuthorization: Basic {creds}\r\n\r\n"),
+        )
+        .await;
+        assert!(basic.starts_with("HTTP/1.1 200"), "basic: {basic:.80}");
+        let bearer = http_roundtrip(
+            port,
+            &format!("GET / HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {tok}\r\n\r\n"),
+        )
+        .await;
+        assert!(bearer.starts_with("HTTP/1.1 200"), "bearer: {bearer:.80}");
+        let wrong = http_roundtrip(
+            port,
+            "GET / HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer nope\r\n\r\n",
+        )
+        .await;
+        assert!(wrong.starts_with("HTTP/1.1 401"), "wrong bearer: {wrong:.80}");
+
+        shutdown.cancel();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn on_listening_fires_only_after_a_successful_bind() {
+        // The `daemon run` banner prints the sign-in link from this hook, so
+        // it must fire once the port is really bound — and never when the
+        // bind fails (port taken).
+        let port = free_port().await;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let shutdown = CancellationToken::new();
+        let server_shutdown = shutdown.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_web_ui_server_notify(
+                PathBuf::from("/nonexistent/aivyx-listening-test.sock"),
+                None,
+                port,
+                Vec::new(),
+                Some("tok".to_string()),
+                None,
+                server_shutdown,
+                None,
+                Some(Box::new(move |addr| {
+                    let _ = tx.send(addr);
+                })),
+            )
+            .await;
+        });
+        let addr = tokio::time::timeout(std::time::Duration::from_secs(3), rx)
+            .await
+            .expect("hook fired")
+            .expect("sender kept");
+        assert_eq!(addr.port(), port);
+        assert!(addr.ip().is_loopback());
+
+        // A second server on the same (now taken) port fails to bind and
+        // never calls its hook.
+        let (tx2, mut rx2) = tokio::sync::oneshot::channel::<std::net::SocketAddr>();
+        let second = run_web_ui_server_notify(
+            PathBuf::from("/nonexistent/aivyx-listening-test.sock"),
+            None,
+            port,
+            Vec::new(),
+            Some("tok".to_string()),
+            None,
+            CancellationToken::new(),
+            None,
+            Some(Box::new(move |addr| {
+                let _ = tx2.send(addr);
+            })),
+        )
+        .await;
+        assert!(second.is_err(), "the taken port must fail to bind");
+        assert!(rx2.try_recv().is_err(), "no hook call after a failed bind");
 
         shutdown.cancel();
         let _ = handle.await;

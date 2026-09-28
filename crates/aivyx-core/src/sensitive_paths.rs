@@ -64,6 +64,11 @@ const SENSITIVE_BASENAMES: &[&str] = &[
     "credentials",
     "credentials.json",
     "daemon.env",
+    // The Studio's automatic sign-in token (first-run coherence A2). The
+    // CLI also puts its exact path on the extra-deny list; the basename
+    // catches the relative spellings `shell.exec`'s text scan would miss
+    // (`cd ~/.aivyx-pa && cat studio-token`).
+    "studio-token",
     "id_rsa",
     "id_dsa",
     "id_ecdsa",
@@ -257,6 +262,7 @@ mod tests {
             // Aivyx's own crown jewels:
             "/home/alice/.config/aivyx-pa/daemon.env",
             "/home/alice/.local/share/aivyx-pa/store.redb",
+            "/home/alice/.aivyx-pa/studio-token",
         ] {
             assert!(g.classify(Path::new(p)).is_some(), "should block {p}");
         }

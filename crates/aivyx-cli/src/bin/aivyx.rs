@@ -6022,6 +6022,33 @@ fn effective_kvcache_store_path(config: &aivyx_config::AivyxConfig) -> std::path
     std::fs::canonicalize(&raw).unwrap_or(raw)
 }
 
+/// First-run coherence A2 — the Studio's automatic token file for this
+/// run's store, with its directory canonicalized (Ward compares canonical
+/// paths) so a symlinked store directory still matches.
+fn effective_studio_token_path(storage_path: &std::path::Path) -> std::path::PathBuf {
+    let raw = aivyx_channel::studio_token::token_path(storage_path);
+    match (raw.parent(), raw.file_name()) {
+        (Some(dir), Some(name)) => std::fs::canonicalize(dir)
+            .map(|d| d.join(name))
+            .unwrap_or(raw),
+        _ => raw,
+    }
+}
+
+/// Ward's extra-deny list: paths the agent's read (and shell) tools must
+/// never reach on top of the built-in secret set — the kvcache store and
+/// the Studio's automatic token (first-run coherence A2), so an agent can't
+/// read the token and sign itself into the Studio's control plane.
+fn ward_extra_deny(
+    kvcache_store_path: &std::path::Path,
+    studio_token_path: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    vec![
+        kvcache_store_path.to_path_buf(),
+        studio_token_path.to_path_buf(),
+    ]
+}
+
 #[allow(clippy::too_many_arguments)] // Startup wiring; bundling deferred to SDK phase
 async fn run_async(
     config: AivyxConfig,
@@ -6134,7 +6161,9 @@ async fn run_async(
         workspace_path,
         workspace_journaling_enabled,
         workspace_journaling_interval_secs,
-        storage_path: _,
+        // First-run coherence A2 — locates the Studio's automatic token
+        // (`studio-token`, next to the store), for Ward and the daemon.
+        storage_path,
         // Already resolved into `kvcache_store_path` above instead of as
         // an individual local -- `effective_kvcache_store_path` wants the
         // whole config, which is no longer available after this destructure.
@@ -6289,9 +6318,10 @@ async fn run_async(
         web_ui_host: config_web_ui_host,
         web_ui_allowed_origins: config_web_ui_allowed_origins,
         web_ui_auth_token: config_web_ui_auth_token,
-        // Chapter Gatehouse — the interlock is enforced at config load;
-        // the daemon needs no runtime branch on the acknowledgement flag.
-        web_ui_insecure_no_auth: _,
+        // Chapter Gatehouse — the interlock is enforced at config load.
+        // First-run coherence A2: the flag also means "no automatic
+        // token" when the daemon resolves the Studio's effective token.
+        web_ui_insecure_no_auth: config_web_ui_insecure_no_auth,
         // Chapter Freight — pack trust is read by the `aivyx-pa pack` CLI
         // path, not the daemon.
         pack_trusted_publishers: _,
@@ -7140,10 +7170,11 @@ async fn run_async(
     // Chapter Ward — the sensitive-path read guard (privacy-by-default). Built
     // once and shared by every read surface (fs.read, the data readers, the
     // Documents browser) so a credential store is off-limits everywhere.
+    let studio_token_path = effective_studio_token_path(&storage_path.value);
     let sensitive_policy = std::sync::Arc::new(if guard_sensitive_paths.value {
         aivyx_core::sensitive_paths::SensitivePolicy::new(
             allow_sensitive_paths.clone(),
-            vec![kvcache_store_path.clone()],
+            ward_extra_deny(&kvcache_store_path, &studio_token_path),
         )
     } else {
         aivyx_core::sensitive_paths::SensitivePolicy::disabled()
@@ -10238,6 +10269,27 @@ async fn run_async(
             )
         });
 
+        // First-run coherence A2 — the Studio's effective token: the
+        // operator's `web_ui_auth_token`, else none under
+        // `web_ui_insecure_no_auth`, else the automatic `studio-token`
+        // file. A damaged token file keeps the Studio off (with the
+        // reason) rather than serving it unauthenticated or replacing the
+        // file; the rest of the daemon runs on.
+        let (studio_port, studio_token) = match cli_web_ui_port.or(config_web_ui_port) {
+            None => (None, None),
+            Some(port) => match aivyx_channel::studio_token::effective_token(
+                config_web_ui_auth_token,
+                config_web_ui_insecure_no_auth,
+                &studio_token_path,
+            ) {
+                Ok(token) => (Some(port), token),
+                Err(e) => {
+                    eprintln!("aivyx-pa daemon: the Studio is off — {e}");
+                    (None, None)
+                }
+            },
+        };
+
         let result = run_daemon(DaemonConfig {
             socket_path,
             agent,
@@ -10379,10 +10431,10 @@ async fn run_async(
             webhook_store: Some(webhook_domain),
             file_watch_store: Some(file_watch_domain),
             webhook_port: config_webhook_port,
-            web_ui_port: cli_web_ui_port.or(config_web_ui_port),
+            web_ui_port: studio_port,
             web_ui_host: config_web_ui_host,
             web_ui_allowed_origins: config_web_ui_allowed_origins,
-            web_ui_auth_token: config_web_ui_auth_token,
+            web_ui_auth_token: studio_token,
             comfyui_base_url: comfyui_base_url.clone(),
             memory: Some(Arc::clone(&memory)),
             memory_ttl_secs: memory_ttl_secs.map(|s| s.value),
@@ -15371,6 +15423,44 @@ mod tests {
             overridden_guard.classify(&default_path).is_none(),
             "once overridden, the stale default path must no longer be the one protected"
         );
+    }
+
+    #[test]
+    fn ward_denies_reading_the_studio_token() {
+        // First-run coherence A2 — the agent must not be able to read the
+        // Studio's automatic token (it would sign itself into the control
+        // plane). Mirrors the kvcache check above, through the same
+        // extra-deny list the Ward wiring builds.
+        let dir = std::env::temp_dir().join(format!(
+            "aivyx-ward-studio-token-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage_path = dir.join("store.redb");
+        let token_path = effective_studio_token_path(&storage_path);
+        assert_eq!(
+            token_path,
+            std::fs::canonicalize(&dir).unwrap().join("studio-token")
+        );
+        let kvcache = effective_kvcache_store_path(&load_phase_122_config(""));
+        let guard = aivyx_core::sensitive_paths::SensitivePolicy::new(
+            Vec::new(),
+            ward_extra_deny(&kvcache, &token_path),
+        );
+        assert!(
+            guard.classify(&token_path).is_some(),
+            "a read of the Studio token must be denied"
+        );
+        assert!(guard.classify_write(&token_path).is_some());
+        assert!(
+            guard.classify(&kvcache.join("slots")).is_some(),
+            "the kvcache store stays protected"
+        );
+        assert!(
+            guard.classify(&dir.join("notes.txt")).is_none(),
+            "only the token itself is denied, not its whole directory"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

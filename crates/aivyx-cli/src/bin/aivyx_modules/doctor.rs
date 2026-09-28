@@ -112,7 +112,8 @@ enum GatehouseStatus {
     /// No token, and bound beyond loopback — the interlock-refusable case
     /// (unless `web_ui_insecure_no_auth` was set to bypass it).
     NoTokenOffHost { host: std::net::IpAddr },
-    /// No token, loopback-only — the default, fine posture.
+    /// No operator token, loopback-only — the default: the daemon uses its
+    /// automatic `studio-token` (unless `web_ui_insecure_no_auth`).
     NoTokenLoopback,
 }
 
@@ -125,8 +126,42 @@ fn gatehouse_status(token: Option<&str>, host: Option<std::net::IpAddr>) -> Gate
     }
 }
 
+/// First-run coherence A2 — the Studio sign-in link doctor shows, or
+/// `None`: the Studio is off (`addr` is `None`), or it runs with no token
+/// at all (`web_ui_insecure_no_auth`), or the automatic token hasn't been
+/// created yet. An operator-set token wins over the automatic one, exactly
+/// as in the daemon.
+fn studio_sign_in_link(
+    addr: Option<std::net::SocketAddr>,
+    configured_token: Option<&str>,
+    insecure_no_auth: bool,
+    auto_token: Option<&str>,
+) -> Option<String> {
+    let addr = addr?;
+    let token = match configured_token {
+        Some(t) => t,
+        None if insecure_no_auth => return None,
+        None => auto_token?,
+    };
+    Some(aivyx_channel::studio_token::sign_in_url(
+        addr.ip(),
+        addr.port(),
+        token,
+    ))
+}
+
 fn check_gatehouse(cfg: &AivyxConfig) {
     println!("\nWeb UI (Gatehouse):");
+    let Some(addr) = cfg.studio_addr() else {
+        println!("  • the Studio is off (`[daemon] web_ui = false`).");
+        return;
+    };
+    let token_path = aivyx_channel::studio_token::token_path(&cfg.storage_path.value);
+    let auto_token = if cfg.web_ui_auth_token.is_none() && !cfg.web_ui_insecure_no_auth {
+        aivyx_channel::studio_token::read_existing(&token_path)
+    } else {
+        None
+    };
     match gatehouse_status(cfg.web_ui_auth_token.as_deref(), cfg.web_ui_host) {
         GatehouseStatus::TokenSet { off_host } => {
             let host_note = off_host.map_or(String::new(), |h| format!(" (bound off-host at {h})"));
@@ -145,13 +180,29 @@ fn check_gatehouse(cfg: &AivyxConfig) {
                  authenticates. See docs/GATEHOUSE.md."
             );
         }
-        GatehouseStatus::NoTokenLoopback => {
+        GatehouseStatus::NoTokenLoopback if cfg.web_ui_insecure_no_auth => {
             println!(
-                "  • no auth token set — fine for loopback-only use.\n     \
-                 → to expose the Studio off-host, set both `web_ui_host` and \
-                 `web_ui_auth_token` in aivyx-pa.toml (see docs/GATEHOUSE.md)."
+                "  ⚠ no auth token (`web_ui_insecure_no_auth = true`) — any account \
+                 on this machine can open the Studio at {}",
+                aivyx_channel::studio_token::studio_url(addr.ip(), addr.port())
             );
         }
+        GatehouseStatus::NoTokenLoopback => match &auto_token {
+            Some(_) => pass(&format!("automatic sign-in token ({})", token_path.display())),
+            None => println!(
+                "  • no sign-in token yet — the daemon creates {} the first \
+                 time it serves the Studio.",
+                token_path.display()
+            ),
+        },
+    }
+    if let Some(link) = studio_sign_in_link(
+        Some(addr),
+        cfg.web_ui_auth_token.as_deref(),
+        cfg.web_ui_insecure_no_auth,
+        auto_token.as_deref(),
+    ) {
+        println!("     sign-in: {link}");
     }
 }
 
@@ -837,6 +888,31 @@ mod tests {
             gatehouse_status(None, Some(lan)),
             GatehouseStatus::NoTokenOffHost { host: lan }
         );
+    }
+
+    #[test]
+    fn studio_sign_in_link_follows_the_daemons_token_choice() {
+        // First-run coherence A2 — doctor shows the sign-in link for the
+        // token the daemon would actually use.
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let addr = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843));
+        assert_eq!(
+            studio_sign_in_link(addr, None, false, Some("auto")).as_deref(),
+            Some("http://127.0.0.1:7843/?token=auto"),
+            "the token file exists and no token is configured"
+        );
+        assert_eq!(
+            studio_sign_in_link(addr, Some("mine"), false, Some("auto")).as_deref(),
+            Some("http://127.0.0.1:7843/?token=mine"),
+            "an operator token wins"
+        );
+        assert_eq!(studio_sign_in_link(addr, None, false, None), None, "no file yet");
+        assert_eq!(
+            studio_sign_in_link(addr, None, true, Some("auto")),
+            None,
+            "insecure_no_auth: no token at all"
+        );
+        assert_eq!(studio_sign_in_link(None, None, false, Some("auto")), None, "Studio off");
     }
 
     #[test]

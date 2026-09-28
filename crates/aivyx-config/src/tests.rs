@@ -4358,7 +4358,10 @@ web_ui = false
 }
 
 #[test]
-fn daemon_web_ui_absent_means_none() {
+fn daemon_web_ui_absent_defaults_on() {
+    // First-run coherence A2 — the Studio is on by default (loopback,
+    // behind the automatic token the daemon resolves). An empty file,
+    // an empty `[daemon]` section, and no file at all all mean "on".
     let env = EnvScope::new();
     let tmp = TempDir::new("web-ui-absent");
     let toml_path = tmp.path().join("aivyx-pa.toml");
@@ -4372,7 +4375,49 @@ fn daemon_web_ui_absent_means_none() {
         role_override: None,
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert_eq!(cfg.web_ui_port, Some(7843));
+    let cfg = load_with_toml("\n[daemon]\nwebhook_port = 7842\n", "web-ui-daemon-no-key");
+    assert_eq!(cfg.web_ui_port, Some(7843));
+    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).expect("load");
+    assert_eq!(cfg.web_ui_port, Some(7843));
+    drop(env);
+}
+
+#[test]
+fn daemon_web_ui_false_wins_over_an_explicit_port() {
+    // With the Studio on by default, `web_ui = false` is the one opt-out
+    // and must stay authoritative even when a port is also written.
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[daemon]\nweb_ui = false\nweb_ui_port = 9000\n",
+        "web-ui-false-port",
+    );
     assert_eq!(cfg.web_ui_port, None);
+    let cfg = load_with_toml("\n[daemon]\nweb_ui_port = 9000\n", "web-ui-port-only");
+    assert_eq!(cfg.web_ui_port, Some(9000));
+    drop(env);
+}
+
+#[test]
+fn studio_addr_reports_the_effective_bind() {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    let env = EnvScope::new();
+    let cfg = load_with_toml("", "studio-addr-default");
+    assert_eq!(
+        cfg.studio_addr(),
+        Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843))
+    );
+    let cfg = load_with_toml(
+        "\n[daemon]\nweb_ui_port = 9001\nweb_ui_host = \"0.0.0.0\"\n\
+         web_ui_auth_token = \"t0ken-t0ken\"\n",
+        "studio-addr-custom",
+    );
+    assert_eq!(
+        cfg.studio_addr(),
+        Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9001))
+    );
+    let cfg = load_with_toml("\n[daemon]\nweb_ui = false\n", "studio-addr-off");
+    assert_eq!(cfg.studio_addr(), None);
     drop(env);
 }
 

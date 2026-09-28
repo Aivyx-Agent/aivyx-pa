@@ -390,6 +390,47 @@ sandboxed `null` origin are all rejected with `403`. This closes
 the Cross-Site WebSocket Hijacking / DNS-rebinding vector against
 the daemon's now-writable web surface.
 
+**Threat (another account on the same machine):** a loopback bind is
+not a boundary between local users either. Any account on the host can
+connect to `127.0.0.1:7843`, and the `Origin` check does nothing
+against a non-browser client (which sends no `Origin`). Since
+first-run coherence A2 turned the Studio **on by default**, an
+unauthenticated Studio would hand every local account the operator's
+agent — its filesystem and shell reach, its memory, its config.
+
+**Mitigation:** on by default never means unauthenticated. When the
+operator sets neither `[daemon] web_ui_auth_token` nor
+`web_ui_insecure_no_auth`, the daemon uses an **automatic token**
+(`aivyx-channel/src/studio_token.rs`): 256 bits, 43 alphanumeric
+characters (the Harbor entrypoint's shape), kept in `studio-token` next
+to the store, written atomically with mode `0600` and reused on later
+starts. A damaged or unreadable token file is an error that keeps the
+Studio off, never silently replaced. The `/ws` control plane and every
+static route require the token (Chapter Postern: Bearer, HTTP Basic, or
+the `aivyx_web_token` cookie, all compared in constant time). The
+operator signs in with a one-time link, `http://127.0.0.1:7843/?token=…`,
+which `aivyx-pa daemon run` prints once the port is bound and
+`aivyx-pa doctor` shows: `GET /?token=<t>` compares in constant time,
+answers `302` to `/` and plants the `HttpOnly; SameSite=Strict` cookie,
+so the token leaves the address bar and history; a wrong token gets
+`401`. Another local account can't read the `0600` file, and the
+operator's own agent can't either: the exact path is on Ward's
+extra-deny list (`aivyx-cli`, `ward_extra_deny`) and `studio-token` is a
+built-in sensitive basename (`aivyx-core/src/sensitive_paths.rs`), so
+`fs.read`, the data readers and the Documents browser refuse it, and
+`shell.exec`'s command scan refuses the obvious spellings (best-effort:
+a shell can obfuscate a path). An operator-set token always wins
+(no file is created), and `web_ui_insecure_no_auth = true` is the
+explicit, documented way back to no token at all.
+
+**Residual:** the link is printed to the daemon's stderr, which under a
+service manager lands in the operator's journal (readable by the
+operator, root, and on many distributions the `adm`/`systemd-journal`
+groups). Anyone who can read the operator's files or journal already
+sits inside the trust boundary this does not claim to defend. A second
+account's own daemon can't bind the same default port while the first
+holds it.
+
 ### 4.12 Private data leaves the machine through cloud model escalation
 
 **Threat:** with model routing's cloud escalation configured (Amendment
