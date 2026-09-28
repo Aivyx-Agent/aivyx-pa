@@ -6,7 +6,9 @@
 //! configured model present → a real test generation that returns **non-empty**
 //! text (the exact failure modes — empty thinking content, dropped tool calls,
 //! starved `num_ctx` — that ruined first impressions). Lemonade Server gets a
-//! reachability + model-downloaded check. Cloud providers get a lighter
+//! reachability + model-downloaded check, aivyx-broker a reachability check
+//! of the broker and the llama-server behind it, and embedded mistral.rs a
+//! build-feature + model-file check. Cloud providers get a lighter
 //! config-presence check. Read-only; no daemon, no passphrase.
 
 use std::path::{Path, PathBuf};
@@ -28,6 +30,8 @@ pub async fn run_doctor() -> Result<(), String> {
     let provider_ok = match cfg.provider.value {
         ProviderKind::Ollama => check_ollama(&cfg).await,
         ProviderKind::Lemonade => check_lemonade(&cfg).await,
+        ProviderKind::Broker => check_broker(&cfg).await,
+        ProviderKind::MistralRs => check_mistralrs(&cfg),
         other => check_cloud(other, &cfg),
     };
 
@@ -370,6 +374,144 @@ async fn check_lemonade_at(base_url: &str, model: &str) -> bool {
                 None => println!("  no model loaded yet — the first turn loads `{model}`"),
             }
             true
+        }
+    }
+}
+
+/// How long doctor waits on a local server before calling it unreachable.
+const LOCAL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// aivyx-broker checks: the broker answers `GET /status`, and the
+/// llama-server it proxies to answers `GET /health` (a running broker in
+/// front of a stopped llama-server is the likely failure). Returns `true`
+/// iff both answered.
+async fn check_broker(cfg: &AivyxConfig) -> bool {
+    let base_url = cfg
+        .broker_base_url
+        .clone()
+        .unwrap_or_else(|| crate::DEFAULT_BROKER_BASE_URL.to_string());
+    println!("Provider: broker (model `{}`, {base_url})\n", cfg.model.value);
+    check_broker_at(&base_url).await
+}
+
+async fn check_broker_at(base_url: &str) -> bool {
+    let client = reqwest::Client::new();
+    let base = base_url.trim_end_matches('/');
+    let status: Result<serde_json::Value, String> = async {
+        client
+            .get(format!("{base}/status"))
+            .timeout(LOCAL_PROBE_TIMEOUT)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| e.to_string())?
+            .json()
+            .await
+            .map_err(|e| e.to_string())
+    }
+    .await;
+    let status = match status {
+        Ok(v) => v,
+        Err(why) => {
+            fail(
+                &format!("aivyx-broker is not reachable at {base_url} ({why})"),
+                "Start it (`aivyx-broker`, see its README), or set `[broker] base_url` \
+                 (default http://127.0.0.1:8899).",
+            );
+            return false;
+        }
+    };
+    pass("aivyx-broker is running");
+    let Some(upstream) = status.get("llama_server_url").and_then(|v| v.as_str()) else {
+        println!("  (the broker did not say which llama-server it fronts)");
+        return true;
+    };
+    let upstream = upstream.trim_end_matches('/');
+    let health = client
+        .get(format!("{upstream}/health"))
+        .timeout(LOCAL_PROBE_TIMEOUT)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status());
+    match health {
+        Ok(_) => {
+            pass(&format!("its llama-server is answering ({upstream})"));
+            true
+        }
+        Err(e) => {
+            fail(
+                &format!("the broker's llama-server is not answering at {upstream} ({e})"),
+                "Start llama-server (or check the broker's `--llama-server-url`); \
+                 the broker only forwards to it.",
+            );
+            false
+        }
+    }
+}
+
+/// The model file mistral.rs would load, or why it can't: `model_path`
+/// must be set and exist; a directory needs `model_file` inside it, or
+/// else at least one `.gguf`.
+fn mistralrs_model_check(opts: &aivyx_config::MistralRsOptions) -> Result<PathBuf, String> {
+    let path = opts
+        .model_path
+        .as_ref()
+        .ok_or_else(|| "[mistralrs] model_path is not set".to_string())?;
+    if path.is_file() {
+        return Ok(path.clone());
+    }
+    if !path.is_dir() {
+        return Err(format!("[mistralrs] model_path {} does not exist", path.display()));
+    }
+    match &opts.model_file {
+        Some(file) => {
+            let full = path.join(file);
+            if full.is_file() {
+                Ok(full)
+            } else {
+                Err(format!("[mistralrs] model_file {} does not exist", full.display()))
+            }
+        }
+        None => {
+            let has_gguf = std::fs::read_dir(path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+                .filter_map(Result::ok)
+                .any(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("gguf")));
+            if has_gguf {
+                Ok(path.clone())
+            } else {
+                Err(format!("no .gguf file in {}", path.display()))
+            }
+        }
+    }
+}
+
+/// Embedded mistral.rs checks: this binary was built with the
+/// `provider-mistral-rs` feature, and the configured GGUF exists. The model
+/// itself is not loaded (that can take minutes). Returns `true` iff both hold.
+fn check_mistralrs(cfg: &AivyxConfig) -> bool {
+    println!("Provider: mistralrs (embedded, model `{}`)\n", cfg.model.value);
+    if !cfg!(feature = "provider-mistral-rs") {
+        fail(
+            "this aivyx-pa was built without mistral.rs support",
+            "Rebuild with `--features provider-mistral-rs` (or `recommended-providers`).",
+        );
+        return false;
+    }
+    pass("built with mistral.rs support");
+    match mistralrs_model_check(&cfg.mistralrs_options) {
+        Ok(path) => {
+            pass(&format!("model found: {}", path.display()));
+            println!("  (not loaded here; the first turn loads it, which can take a while)");
+            true
+        }
+        Err(why) => {
+            fail(
+                &why,
+                "Set `[mistralrs] model_path` to a GGUF file, or a directory of them \
+                 (plus `model_file` to pick one).",
+            );
+            false
         }
     }
 }
@@ -760,6 +902,89 @@ mod tests {
     #[tokio::test]
     async fn check_lemonade_fails_when_the_server_is_unreachable() {
         assert!(!check_lemonade_at("http://127.0.0.1:1/api", "some-model").await);
+    }
+
+    /// Serves one canned HTTP response per connection, for `n` connections.
+    async fn serve_canned(bodies: Vec<(&'static str, String)>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for (status, body) in bodies {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn check_broker_fails_when_the_broker_is_unreachable() {
+        assert!(!check_broker_at("http://127.0.0.1:1").await);
+    }
+
+    #[tokio::test]
+    async fn check_broker_fails_when_its_llama_server_is_down() {
+        let base = serve_canned(vec![(
+            "200 OK",
+            r#"{"llama_server_url":"http://127.0.0.1:1","queue_depth":0}"#.to_string(),
+        )])
+        .await;
+        assert!(!check_broker_at(&base).await);
+    }
+
+    #[tokio::test]
+    async fn check_broker_passes_when_the_broker_and_its_llama_server_answer() {
+        let upstream = serve_canned(vec![("200 OK", r#"{"status":"ok"}"#.to_string())]).await;
+        let base = serve_canned(vec![(
+            "200 OK",
+            format!(r#"{{"llama_server_url":"{upstream}","queue_depth":0}}"#),
+        )])
+        .await;
+        assert!(check_broker_at(&base).await);
+    }
+
+    #[test]
+    fn mistralrs_model_check_covers_unset_missing_file_and_dir() {
+        let dir = tempfile_dir("doctor-mistralrs");
+        let opts = |path: Option<PathBuf>, file: Option<&str>| aivyx_config::MistralRsOptions {
+            model_path: path,
+            model_file: file.map(str::to_string),
+            ..Default::default()
+        };
+        assert!(mistralrs_model_check(&opts(None, None)).is_err());
+        assert!(mistralrs_model_check(&opts(Some(dir.join("nope.gguf")), None)).is_err());
+        // A directory with no GGUF in it.
+        assert!(mistralrs_model_check(&opts(Some(dir.clone()), None)).is_err());
+        std::fs::write(dir.join("m.gguf"), b"x").unwrap();
+        assert_eq!(
+            mistralrs_model_check(&opts(Some(dir.clone()), None)).unwrap(),
+            dir
+        );
+        // A named model_file must exist inside the directory.
+        assert!(mistralrs_model_check(&opts(Some(dir.clone()), Some("other.gguf"))).is_err());
+        assert_eq!(
+            mistralrs_model_check(&opts(Some(dir.clone()), Some("m.gguf"))).unwrap(),
+            dir.join("m.gguf")
+        );
+        // A single file path.
+        assert_eq!(
+            mistralrs_model_check(&opts(Some(dir.join("m.gguf")), None)).unwrap(),
+            dir.join("m.gguf")
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn tempfile_dir(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[tokio::test]

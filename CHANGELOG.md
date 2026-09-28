@@ -5,6 +5,16 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`aivyx-pa doctor` checks local broker and mistral.rs setups.** With
+  `provider = "broker"` it checks that `aivyx-broker` answers and that the
+  llama-server behind it is up (a running broker in front of a stopped
+  llama-server is reported as such). With `provider = "mistralrs"` it
+  checks that the binary was built with mistral.rs support and that the
+  configured GGUF exists, without loading it. Both previously fell into
+  the cloud check and printed "an API key is configured".
+
 ### Fixed
 
 - **The release pipeline can no longer publish a release without its CLI
