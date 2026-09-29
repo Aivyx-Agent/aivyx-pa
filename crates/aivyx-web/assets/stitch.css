@@ -1140,6 +1140,7 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .models-table th { color: var(--color-text-secondary); font-weight: 600; white-space: nowrap; }
 .models-table td { color: var(--color-text-primary); }
 .models-table td.mono { font-family: var(--font-mono); font-size: 12.5px; white-space: nowrap; }
+.cap-unknown { color: var(--color-text-disabled); }
 @media (max-width: 860px) {
   .statusbar .seg-model { display: none; }
 }

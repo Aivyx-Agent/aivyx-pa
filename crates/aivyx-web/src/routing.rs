@@ -5,26 +5,46 @@
 
 use aivyx_ipc::protocol::{RoutingStatusView, turn_outcome_correction};
 
-/// A candidate's capabilities in plain words: the known ones joined with
-/// " · ", then each assumed-but-unconfirmed one as "`name`: unknown" —
-/// `tools · vision · thinking: unknown`. `completion` is left out (every
-/// candidate completes text); a candidate with nothing else is "text only".
+/// The "Can do" column, split so the UI can mute the unknown clause: the
+/// known capabilities already joined with " · " (empty when there are
+/// none), and — when there's something unclear — a trailing clause. One
+/// unknown capability keeps the older inline form ("`name`: unknown"); two
+/// or more are grouped into one clause ("unknown: a, b, c") so the column
+/// doesn't read as a wall of "X: unknown" repeats. `completion` is left out
+/// of both (every candidate completes text); a candidate with nothing else
+/// gets "text only" as its known part.
+pub struct CapabilitiesDisplay {
+    pub known: String,
+    pub unknown: Option<String>,
+}
+
+/// See [`CapabilitiesDisplay`].
+pub fn capabilities_display(known: &[String], unknown: &[String]) -> CapabilitiesDisplay {
+    let known_parts: Vec<&str> = known.iter().map(String::as_str).filter(|c| *c != "completion").collect();
+    let unknown_parts: Vec<&str> = unknown.iter().map(String::as_str).filter(|c| *c != "completion").collect();
+
+    if known_parts.is_empty() && unknown_parts.is_empty() {
+        return CapabilitiesDisplay { known: "text only".to_string(), unknown: None };
+    }
+
+    let unknown = match unknown_parts.len() {
+        0 => None,
+        1 => Some(format!("{}: unknown", unknown_parts[0])),
+        _ => Some(format!("unknown: {}", unknown_parts.join(", "))),
+    };
+    CapabilitiesDisplay { known: known_parts.join(" · "), unknown }
+}
+
+/// A candidate's capabilities in plain words — [`capabilities_display`]'s
+/// two parts joined into one string, e.g. `tools · vision · thinking:
+/// unknown` (one unknown) or `tools · unknown: vision, thinking, audio,
+/// embedding` (two or more).
 pub fn plain_capabilities(known: &[String], unknown: &[String]) -> String {
-    let parts: Vec<String> = known
-        .iter()
-        .filter(|c| c.as_str() != "completion")
-        .cloned()
-        .chain(
-            unknown
-                .iter()
-                .filter(|c| c.as_str() != "completion")
-                .map(|c| format!("{c}: unknown")),
-        )
-        .collect();
-    if parts.is_empty() {
-        "text only".to_string()
-    } else {
-        parts.join(" · ")
+    let d = capabilities_display(known, unknown);
+    match d.unknown {
+        Some(u) if d.known.is_empty() => u,
+        Some(u) => format!("{} · {u}", d.known),
+        None => d.known,
     }
 }
 
@@ -92,6 +112,39 @@ pub fn vram_label(total: Option<u64>, available: Option<u64>) -> String {
     }
 }
 
+/// The router's reason, formatted for display: backticks stripped (the
+/// Models "Why" line and the status-bar tooltip already set the reason off
+/// visually, so raw `` ` `` markers would just show literally), and any
+/// bare run of 4+ digits comma-grouped the same way [`with_thousands`]
+/// grades a token count (`12578` → `12,578`). A digit run touching a
+/// letter (`9B`, `GGUF`, a model id) is left alone — only free-standing
+/// numbers are touched. Pure display only; the daemon's own reason text is
+/// unchanged.
+pub fn plain_reason(reason: &str) -> String {
+    let chars: Vec<char> = reason.chars().filter(|&c| c != '`').collect();
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            let run: String = chars[start..i].iter().collect();
+            let touches_letter = (start > 0 && chars[start - 1].is_alphabetic())
+                || chars.get(i).is_some_and(|c| c.is_alphabetic());
+            match (run.len() >= 4 && !touches_letter, run.parse::<u64>()) {
+                (true, Ok(n)) => out.push_str(&with_thousands(n)),
+                _ => out.push_str(&run),
+            }
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// The escalation mode in plain words.
 pub fn escalation_label(mode: &str) -> String {
     match mode {
@@ -131,14 +184,44 @@ pub fn pin_request(value: &str) -> Option<String> {
     (value != AUTO_PIN).then(|| value.to_string())
 }
 
-/// The consent card's sentence — the same channel-neutral two sentences
-/// as `aivyx-llm`'s `consent_lead`, built from the event's fields.
+/// One piece of the consent card's sentence: plain text, or the model /
+/// endpoint id, shown as inline code where there's a UI to style it with.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConsentPart {
+    Text(String),
+    Code(String),
+}
+
+/// The consent card's sentence — the same channel-neutral two sentences as
+/// `aivyx-llm`'s `consent_lead` — split into pieces so the Chat card can
+/// render the model and endpoint as inline `code` while [`consent_lead`]
+/// (used wherever the sentence is plain text, e.g. the stored `ChatLine`)
+/// stays the one source both read from.
+pub fn consent_parts(model: &str, endpoint: &str, why: &str, estimated_tokens: u32) -> Vec<ConsentPart> {
+    vec![
+        ConsentPart::Text("This needs a cloud model: ".to_string()),
+        ConsentPart::Code(model.to_string()),
+        ConsentPart::Text(" (your ".to_string()),
+        ConsentPart::Code(endpoint.to_string()),
+        ConsentPart::Text(format!(
+            " endpoint), because {why}. About {} tokens — this conversation plus the assistant's \
+             instructions — would be sent.",
+            with_thousands(u64::from(estimated_tokens))
+        )),
+    ]
+}
+
+/// [`consent_parts`] flattened to plain text (each [`ConsentPart::Code`]
+/// backtick-quoted) — the same channel-neutral wording as `aivyx-llm`'s
+/// `consent_lead`, built from the event's fields.
 pub fn consent_lead(model: &str, endpoint: &str, why: &str, estimated_tokens: u32) -> String {
-    format!(
-        "This needs a cloud model: `{model}` (your `{endpoint}` endpoint), because {why}. About {} \
-         tokens — this conversation plus the assistant's instructions — would be sent.",
-        with_thousands(u64::from(estimated_tokens))
-    )
+    consent_parts(model, endpoint, why, estimated_tokens)
+        .into_iter()
+        .map(|part| match part {
+            ConsentPart::Text(t) => t,
+            ConsentPart::Code(c) => format!("`{c}`"),
+        })
+        .collect()
 }
 
 /// The outcome line to add after a turn: none when a consent card was
@@ -177,7 +260,7 @@ impl StatusModel {
     /// The segment's tooltip.
     pub fn tooltip(&self) -> String {
         match self {
-            StatusModel::Routed { reason, .. } => reason.clone(),
+            StatusModel::Routed { reason, .. } => plain_reason(reason),
             StatusModel::NoneYet => "No routed call in this conversation yet.".to_string(),
             StatusModel::Off => "Model routing is off — every turn uses the configured model.".to_string(),
         }
@@ -241,10 +324,14 @@ mod tests {
     }
 
     #[test]
-    fn only_unknown_capabilities_still_read_plainly() {
+    fn two_or_more_unknown_capabilities_are_grouped() {
         assert_eq!(
             plain_capabilities(&s(&["completion"]), &s(&["tools", "vision"])),
-            "tools: unknown · vision: unknown"
+            "unknown: tools, vision"
+        );
+        assert_eq!(
+            plain_capabilities(&s(&["tools"]), &s(&["vision", "thinking", "audio", "embedding"])),
+            "tools · unknown: vision, thinking, audio, embedding"
         );
     }
 
@@ -289,6 +376,26 @@ mod tests {
         assert_eq!(vram_label(Some(24 * gib), Some(20 * gib + gib / 2)), "20.5 GiB free of 24.0 GiB");
         assert_eq!(vram_label(Some(24 * gib), None), "24.0 GiB total");
         assert_eq!(vram_label(None, None), "not reported yet");
+    }
+
+    #[test]
+    fn plain_reason_strips_backticks_and_groups_bare_thousands() {
+        assert_eq!(
+            plain_reason(
+                "chose `Qwen3.5-9B-GGUF`: tool calling required; a context window of at least \
+                 12578 tokens required"
+            ),
+            "chose Qwen3.5-9B-GGUF: tool calling required; a context window of at least 12,578 \
+             tokens required"
+        );
+    }
+
+    #[test]
+    fn plain_reason_leaves_digits_touching_letters_alone() {
+        // "9B" and "3.5" inside a model id shouldn't get comma-grouped, and
+        // a short number (under 4 digits) is untouched either way.
+        assert_eq!(plain_reason("Qwen3.5-9B-GGUF already loaded, 128 tokens free"), "Qwen3.5-9B-GGUF already loaded, 128 tokens free");
+        assert_eq!(plain_reason("needs tools"), "needs tools");
     }
 
     #[test]
@@ -340,6 +447,39 @@ mod tests {
             "This needs a cloud model: `claude-sonnet-5` (your `claude` endpoint), because this \
              kind of request is set to use the cloud. About 12,578 tokens — this conversation \
              plus the assistant's instructions — would be sent."
+        );
+    }
+
+    #[test]
+    fn consent_parts_is_the_one_source_consent_lead_flattens() {
+        let parts = consent_parts("claude-sonnet-5", "claude", "this kind of request is set to use the cloud", 12578);
+        assert_eq!(
+            parts,
+            vec![
+                ConsentPart::Text("This needs a cloud model: ".to_string()),
+                ConsentPart::Code("claude-sonnet-5".to_string()),
+                ConsentPart::Text(" (your ".to_string()),
+                ConsentPart::Code("claude".to_string()),
+                ConsentPart::Text(
+                    " endpoint), because this kind of request is set to use the cloud. About \
+                     12,578 tokens — this conversation plus the assistant's instructions — would \
+                     be sent."
+                        .to_string()
+                ),
+            ]
+        );
+        // Flattening the parts (Code pieces backtick-quoted) is exactly
+        // consent_lead's plain text — one source, not two.
+        let flattened: String = parts
+            .into_iter()
+            .map(|p| match p {
+                ConsentPart::Text(t) => t,
+                ConsentPart::Code(c) => format!("`{c}`"),
+            })
+            .collect();
+        assert_eq!(
+            flattened,
+            consent_lead("claude-sonnet-5", "claude", "this kind of request is set to use the cloud", 12578)
         );
     }
 

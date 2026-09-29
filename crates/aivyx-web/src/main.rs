@@ -352,6 +352,12 @@ struct RoutingUi {
     routed: Option<(String, String)>,
     /// The pin selector's last outcome: (ok, message).
     pin_notice: Option<(bool, String)>,
+    /// Bumped on every `RoutingPinned` and every `routing-pin` `QueryError`
+    /// — used as the pin `<select>`'s `key` so a failed pin (which the
+    /// browser's native select otherwise keeps showing, since the app's
+    /// computed `value` reverts to the same string it started at) is
+    /// forced to re-render to the actual pinned value.
+    pin_key: u64,
     /// The transcript index of the live consent card; `None` once the
     /// operator sends another message (older cards stay as plain text).
     consent_line: Option<usize>,
@@ -4257,8 +4263,14 @@ fn ChatPanel() -> Element {
                                 let text = input().trim().to_string();
                                 if !text.is_empty() {
                                     transcript.write().push(ChatLine::operator(text.clone()));
-                                    // A new message retires the live consent card.
-                                    routing.write().consent_line = None;
+                                    // A new message retires the live consent card, and — if the
+                                    // last turn asked for consent but never got a TurnComplete
+                                    // (e.g. the operator moved on without answering) — clears the
+                                    // stale flag so it can't suppress this new turn's outcome line.
+                                    let mut r = routing.write();
+                                    r.consent_line = None;
+                                    r.consent_this_turn = false;
+                                    drop(r);
                                     ws.send(submit_query(sid, text));
                                     input.set(String::new());
                                 }
@@ -4273,8 +4285,12 @@ fn ChatPanel() -> Element {
                                 let text = input().trim().to_string();
                                 if !text.is_empty() {
                                     transcript.write().push(ChatLine::operator(text.clone()));
-                                    // A new message retires the live consent card.
-                                    routing.write().consent_line = None;
+                                    // A new message retires the live consent card, and clears any
+                                    // stale consent-this-turn flag — see the Enter handler above.
+                                    let mut r = routing.write();
+                                    r.consent_line = None;
+                                    r.consent_this_turn = false;
+                                    drop(r);
                                     ws.send(submit_query(sid, text));
                                     input.set(String::new());
                                 }
@@ -4300,23 +4316,26 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
     let mut transcript = use_context::<Signal<Vec<ChatLine>>>();
     let mut routing = use_context::<Signal<RoutingUi>>();
     let state = routing().consent.clone();
-    let tokens = routing::with_thousands(u64::from(info.estimated_tokens));
     let allow = move |_| {
         if let Some(sid) = session() {
             routing.write().consent = ConsentState::Allowing;
             ws.send(allow_cloud_query(sid));
         }
     };
+    // One source for the sentence: routing::consent_parts (also what
+    // ChatLine::consent_card's plain-text `text` field flattens from),
+    // rendered here with the model/endpoint as inline code.
+    let parts = routing::consent_parts(&info.model, &info.endpoint, &info.why, info.estimated_tokens);
     rsx! {
         div { class: "glass-card consent-card", role: "status",
             span { class: "gate-label", "☁ cloud consent needed" }
             p { class: "consent-text",
-                "This needs a cloud model: "
-                code { "{info.model}" }
-                " (your "
-                code { "{info.endpoint}" }
-                " endpoint), because {info.why}. About {tokens} tokens — this conversation \
-                 plus the assistant's instructions — would be sent."
+                for part in parts {
+                    match part {
+                        routing::ConsentPart::Text(t) => rsx! { "{t}" },
+                        routing::ConsentPart::Code(c) => rsx! { code { "{c}" } },
+                    }
+                }
             }
             if !info.can_allow_here {
                 p { class: "label-tech",
@@ -4342,7 +4361,10 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
                                     let Some(sid) = session() else { return };
                                     let Some(text) = last_operator_message(&transcript()) else { return };
                                     transcript.write().push(ChatLine::operator(text.clone()));
-                                    routing.write().consent_line = None;
+                                    let mut r = routing.write();
+                                    r.consent_line = None;
+                                    r.consent_this_turn = false;
+                                    drop(r);
                                     ws.send(submit_query(sid, text));
                                 },
                                 "Resend"
@@ -5896,7 +5918,21 @@ fn ModelsPanel() -> Element {
                                     tr {
                                         td { class: "mono", "{c.model}" }
                                         td { "{c.tier}" }
-                                        td { {routing::plain_capabilities(&c.capabilities, &c.unknown_capabilities)} }
+                                        td {
+                                            title: "{routing::plain_capabilities(&c.capabilities, &c.unknown_capabilities)}",
+                                            {
+                                                let d = routing::capabilities_display(&c.capabilities, &c.unknown_capabilities);
+                                                rsx! {
+                                                    "{d.known}"
+                                                    if let Some(u) = d.unknown {
+                                                        if !d.known.is_empty() {
+                                                            " · "
+                                                        }
+                                                        span { class: "cap-unknown", "{u}" }
+                                                    }
+                                                }
+                                            }
+                                        }
                                         td { class: "mono", {routing::context_label(c.context_window)} }
                                         td {
                                             span { class: routing::availability_chip(&c.availability), "{c.availability}" }
@@ -5928,16 +5964,23 @@ fn ModelsPanel() -> Element {
                     }
                 }
                 if let Some(reason) = conv.as_ref().and_then(|c| c.last_reason.clone()) {
-                    p { span { class: "label-tech", "Why · " } "{reason}" }
+                    p { span { class: "label-tech", "Why · " } {routing::plain_reason(&reason)} }
                 }
                 if let Some(taint) = conv.as_ref().and_then(|c| c.tainted.clone()) {
                     p { class: "label-tech sub", "Never escalates to the cloud: {taint}" }
                 } else if conv.as_ref().is_some_and(|c| c.cloud_allowed) {
-                    p { class: "label-tech sub", "Cloud use allowed for this conversation until the daemon restarts." }
+                    p { class: "label-tech sub",
+                        "Cloud use allowed for this conversation until the page reloads or the daemon restarts."
+                    }
                 }
                 div { class: "field-row",
                     label { "Pin" }
                     select {
+                        // A failed pin must not leave the native <select>
+                        // showing the choice the operator picked but that
+                        // didn't take — this key forces a fresh element
+                        // bound to the actual pinned value.
+                        key: "{r.pin_key}",
                         class: "input",
                         "aria-label": "Pin this conversation to a model",
                         disabled: !has_session,
@@ -5956,7 +5999,8 @@ fn ModelsPanel() -> Element {
                     div { class: if ok { "notice ok" } else { "notice err" }, "{text}" }
                 }
                 p { class: "label-tech sub",
-                    "The pin applies to this Studio chat conversation only; a daemon restart clears it."
+                    "The pin applies to this Studio chat conversation only. Reloading the page, a \
+                     reconnect, or a daemon restart starts a new conversation without it."
                 }
             }
         }
@@ -10277,6 +10321,10 @@ async fn read_task(
                     r.routed = None;
                     r.consent_line = None;
                     r.consent_this_turn = false;
+                    // The pin note now says a reload/reconnect/restart all
+                    // start a new conversation without it — a stale notice
+                    // from the old one shouldn't linger into this one.
+                    r.pin_notice = None;
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::TeamMissionList { missions: records },
@@ -11160,20 +11208,29 @@ async fn read_task(
                     payload: QueryResponsePayload::RoutingPinned { model },
                     ..
                 } => {
-                    routing.write().pin_notice = Some((
+                    let mut r = routing.write();
+                    r.pin_notice = Some((
                         true,
                         match model {
                             Some(m) => format!("This conversation is pinned to {m}."),
                             None => "Routing picks the model again (Auto).".to_string(),
                         },
                     ));
+                    r.pin_key += 1;
+                    drop(r);
                     ws.send(routing_status_query(session.peek().clone()));
                 }
                 DaemonEnvelope::QueryResponse {
                     id,
                     payload: QueryResponsePayload::QueryError { message, .. },
                 } if id == "routing-pin" => {
-                    routing.write().pin_notice = Some((false, message));
+                    // A failed pin must not leave the select showing the
+                    // choice the operator picked but that didn't take —
+                    // bumping the key forces a fresh <select> bound to the
+                    // still-accurate `selected` (the status never changed).
+                    let mut r = routing.write();
+                    r.pin_notice = Some((false, message));
+                    r.pin_key += 1;
                 }
                 // The consent card's "Allow cloud for this conversation".
                 DaemonEnvelope::QueryResponse {
