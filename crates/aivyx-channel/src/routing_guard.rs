@@ -20,6 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use aivyx_llm::escalation::{ConsentRequest, Trigger, stuck_hint};
 use aivyx_storage::{DomainHandle, KeyDomain, Storage};
 use async_trait::async_trait;
 
@@ -90,10 +91,14 @@ pub struct RoutingGuard {
     /// Model routing Part 3b (A16) — the armed/active/pending-offer
     /// state; see [`ArmState`].
     arm_state: Mutex<ArmState>,
-    /// Model routing Part 3b (A16) — the `ask`-mode hint line handed back
-    /// from [`RoutingGuard::arm`] to an untainted session. `None` when
-    /// there is nothing to say.
-    arm_hint: Mutex<Option<String>>,
+    /// Model routing Part 3b (A16) — the cloud model id the `ask`-mode
+    /// hint from [`RoutingGuard::arm`] names for an untainted session.
+    /// `None` when there is nothing to say.
+    on_failure_model: Mutex<Option<String>>,
+    /// Routing visibility B1 — each session's latest cloud-consent stop,
+    /// until [`RoutingGuard::take_consent_request`] hands it over or the
+    /// session's next turn begins.
+    consent_requests: Mutex<HashMap<String, ConsentRequest>>,
 }
 
 impl RoutingGuard {
@@ -104,14 +109,25 @@ impl RoutingGuard {
             mark_lock: tokio::sync::Mutex::new(()),
             consent: Mutex::new(HashSet::new()),
             arm_state: Mutex::new(ArmState::default()),
-            arm_hint: Mutex::new(None),
+            on_failure_model: Mutex::new(None),
+            consent_requests: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Set (or clear) the `ask`-mode hint line [`RoutingGuard::arm`] hands
-    /// back for an untainted session. In memory only.
-    pub fn set_arm_hint(&self, hint: Option<String>) {
-        *lock(&self.arm_hint) = hint;
+    /// Set (or clear) the cloud model id the `ask`-mode hint from
+    /// [`RoutingGuard::arm`] names for an untainted session; the hint's
+    /// wording is [`aivyx_llm::escalation::stuck_hint`], per channel. In
+    /// memory only.
+    pub fn set_on_failure_model(&self, model: Option<String>) {
+        *lock(&self.on_failure_model) = model;
+    }
+
+    /// Routing visibility B1 — hand over `session`'s latest cloud-consent
+    /// stop, once: the daemon calls this after a turn to show the request
+    /// per channel. `None` when the session's calls didn't stop for
+    /// consent since its last turn began (or it was already taken).
+    pub fn take_consent_request(&self, session: &str) -> Option<ConsentRequest> {
+        lock(&self.consent_requests).remove(session)
     }
 
     fn cached(&self, session: &str) -> Option<String> {
@@ -288,7 +304,15 @@ impl aivyx_llm::escalation::EscalationGuard for RoutingGuard {
         lock(&self.arm_state).armed.contains(session)
     }
 
-    fn note_consent_requested(&self, session: &str) {
+    fn note_consent_requested(&self, session: &str, request: &ConsentRequest) {
+        // Routing visibility B1 — keep the request for the front end (the
+        // latest wins). Its own lock, released before the `ArmState` one:
+        // the two are never held together.
+        lock(&self.consent_requests).insert(session.to_owned(), request.clone());
+        if request.trigger != Trigger::OnFailure.name() {
+            // Only an `on_failure` stop is an offer `/allow-cloud` arms.
+            return;
+        }
         // Records a pending offer, only while the session is still active
         // this turn — an OnFailure consent request can only come from an
         // active-turn call. This is what keeps a late-arriving note (one
@@ -313,14 +337,22 @@ impl aivyx_core::EscalationArming for RoutingGuard {
     /// Arm `session`'s next turn. `newly` reports whether this call
     /// inserted a fresh mark (it wasn't already armed); the hint is
     /// returned only when the session is untainted (a tainted session
-    /// never escalates, so there is nothing to ask about).
-    async fn arm(&self, session: &str, _signal: &str) -> (bool, Option<String>) {
+    /// never escalates, so there is nothing to ask about), worded for
+    /// whether the channel `can_allow_here`.
+    async fn arm(
+        &self,
+        session: &str,
+        _signal: &str,
+        can_allow_here: bool,
+    ) -> (bool, Option<String>) {
         // Taint check first, outside the lock — it's the only `.await` in
         // this method and a std mutex must never be held across one.
         let untainted = RoutingGuard::taint(self, session).await.is_none();
         let newly = lock(&self.arm_state).armed.insert(session.to_owned());
         let hint = if untainted {
-            lock(&self.arm_hint).clone()
+            lock(&self.on_failure_model)
+                .as_deref()
+                .map(|model| stuck_hint(model, can_allow_here))
         } else {
             None
         };
@@ -333,6 +365,9 @@ impl aivyx_core::EscalationArming for RoutingGuard {
     /// pending consent offer is dropped: a new turn without `/allow-cloud`
     /// first means the operator declined it.
     fn begin_armed_turn(&self, session: &str) {
+        // Routing visibility B1 — an untaken consent request belongs to an
+        // earlier turn; it must never answer for this one.
+        lock(&self.consent_requests).remove(session);
         let mut state = lock(&self.arm_state);
         state.pending_offer.remove(session);
         if state.armed.remove(session) {
@@ -354,7 +389,7 @@ mod tests {
     use super::*;
     use aivyx_core::TaintSink;
     use aivyx_crypto::MasterKey;
-    use aivyx_llm::escalation::EscalationGuard;
+    use aivyx_llm::escalation::{ConsentRequest, EscalationGuard};
     use aivyx_storage::{RedbStorage, StorageConfig};
     use std::path::PathBuf;
 
@@ -518,7 +553,7 @@ mod tests {
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
 
-        assert!(guard.arm("s1", "looping").await.0);
+        assert!(guard.arm("s1", "looping", true).await.0);
         guard.begin_armed_turn("s1");
         assert!(guard.armed("s1"), "active this turn");
 
@@ -538,7 +573,7 @@ mod tests {
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
 
         assert!(!guard.armed_next("s1"), "unarmed session");
-        assert!(guard.arm("s1", "looping").await.0);
+        assert!(guard.arm("s1", "looping", true).await.0);
         assert!(guard.armed_next("s1"), "armed for its next turn");
         assert!(!guard.armed("s1"), "not active yet — the turn hasn't begun");
 
@@ -561,10 +596,10 @@ mod tests {
     /// `/allow-cloud`) stopped for consent. Leaves `s1` with a pending
     /// offer and nothing armed.
     async fn fail_then_consent_stop(guard: &RoutingGuard) {
-        assert!(guard.arm("s1", "looping").await.0);
+        assert!(guard.arm("s1", "looping", true).await.0);
         guard.begin_armed_turn("s1");
         assert!(guard.armed("s1"), "the turn after the failure is escalated");
-        guard.note_consent_requested("s1");
+        guard.note_consent_requested("s1", &on_failure_request());
         guard.end_armed_turn("s1");
     }
 
@@ -613,7 +648,7 @@ mod tests {
         assert!(!guard.armed("s1"), "not escalated, so no consent stop either");
         // A consent note can't arrive for an inactive session, but if one
         // did it must not revive the offer.
-        guard.note_consent_requested("s1");
+        guard.note_consent_requested("s1", &on_failure_request());
         guard.end_armed_turn("s1");
         assert!(!guard.armed_next("s1"));
 
@@ -641,7 +676,7 @@ mod tests {
         // The happy path the hint describes: fail, `/allow-cloud`, resend.
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
-        assert!(guard.arm("s1", "looping").await.0);
+        assert!(guard.arm("s1", "looping", true).await.0);
         guard.allow("s1");
         assert!(guard.armed_next("s1"));
         guard.begin_armed_turn("s1");
@@ -677,9 +712,9 @@ mod tests {
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
 
-        assert!(guard.arm("s1", "looping").await.0, "first arm is new");
+        assert!(guard.arm("s1", "looping", true).await.0, "first arm is new");
         assert!(
-            !guard.arm("s1", "loop_verdict_fail").await.0,
+            !guard.arm("s1", "loop_verdict_fail", true).await.0,
             "second arm before it's consumed is not new"
         );
     }
@@ -688,14 +723,111 @@ mod tests {
     async fn arm_hint_is_returned_only_when_untainted() {
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
-        guard.set_arm_hint(Some("The local model got stuck; send /allow-cloud".to_string()));
+        guard.set_on_failure_model(Some("cloud-m".to_string()));
 
-        let (_, hint) = guard.arm("clean", "looping").await;
-        assert_eq!(hint.as_deref(), Some("The local model got stuck; send /allow-cloud"));
+        let (_, hint) = guard.arm("clean", "looping", true).await;
+        assert_eq!(
+            hint.as_deref(),
+            Some("The local model got stuck; send /allow-cloud and resend to retry on `cloud-m`.")
+        );
 
         guard.mark("tainted", "gmail.search output").await;
-        let (_, hint) = guard.arm("tainted", "looping").await;
+        let (_, hint) = guard.arm("tainted", "looping", true).await;
         assert_eq!(hint, None, "a tainted session gets no hint");
+    }
+
+    #[tokio::test]
+    async fn the_arm_hint_is_per_channel() {
+        // Routing visibility B1 — a channel that can't grant consent is
+        // told who can, not invited to send `/allow-cloud`.
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        guard.set_on_failure_model(Some("cloud-m".to_string()));
+
+        let (_, hint) = guard.arm("bot", "looping", false).await;
+        assert_eq!(
+            hint.as_deref(),
+            Some(
+                "The local model got stuck; it could retry on `cloud-m`. Cloud use can only be \
+                 allowed by the operator — from the terminal (`/allow-cloud`) or the Studio."
+            )
+        );
+
+        guard.set_on_failure_model(None);
+        assert_eq!(guard.arm("other", "looping", true).await.1, None, "no cloud model, no hint");
+    }
+
+    // ---- Routing visibility B1 — the consent request ----
+
+    fn on_failure_request() -> ConsentRequest {
+        ConsentRequest {
+            model: "cloud-m".to_string(),
+            endpoint: "claude".to_string(),
+            trigger: "on_failure".to_string(),
+            estimated_tokens: 42,
+        }
+    }
+
+    fn tier_request(tokens: u32) -> ConsentRequest {
+        ConsentRequest {
+            model: "cloud-m".to_string(),
+            endpoint: "claude".to_string(),
+            trigger: "tier".to_string(),
+            estimated_tokens: tokens,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_guard_keeps_the_latest_consent_request_and_hands_it_over_once() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        assert_eq!(guard.take_consent_request("s1"), None);
+
+        guard.note_consent_requested("s1", &tier_request(10));
+        guard.note_consent_requested("s1", &tier_request(20));
+        guard.note_consent_requested("s2", &tier_request(30));
+
+        assert_eq!(guard.take_consent_request("s1"), Some(tier_request(20)), "the latest");
+        assert_eq!(guard.take_consent_request("s1"), None, "handed over once");
+        assert_eq!(guard.take_consent_request("s2"), Some(tier_request(30)), "per session");
+    }
+
+    #[tokio::test]
+    async fn a_non_on_failure_consent_stop_is_no_pending_offer() {
+        // Only `on_failure`'s stop is an offer `/allow-cloud` arms; a tier
+        // stop on an armed turn records the request and nothing else.
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        assert!(guard.arm("s1", "looping", true).await.0);
+        guard.begin_armed_turn("s1");
+        guard.note_consent_requested("s1", &tier_request(10));
+        guard.end_armed_turn("s1");
+        guard.allow("s1");
+        assert!(!guard.armed_next("s1"), "no offer to arm");
+        assert_eq!(guard.take_consent_request("s1"), Some(tier_request(10)));
+    }
+
+    #[tokio::test]
+    async fn an_on_failure_consent_stop_still_leaves_a_pending_offer() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        fail_then_consent_stop(&guard).await;
+        assert_eq!(guard.take_consent_request("s1"), Some(on_failure_request()));
+        guard.allow("s1");
+        assert!(guard.armed_next("s1"), "taking the request leaves the offer alone");
+    }
+
+    #[tokio::test]
+    async fn a_new_turn_drops_an_untaken_consent_request() {
+        let scratch = Scratch::new();
+        let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
+        guard.note_consent_requested("s1", &tier_request(10));
+        guard.begin_armed_turn("s1");
+        assert_eq!(
+            guard.take_consent_request("s1"),
+            None,
+            "a stale request never answers for a later turn"
+        );
     }
 
     #[tokio::test]
@@ -703,14 +835,14 @@ mod tests {
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
 
-        assert!(guard.arm("s1", "looping").await.0);
+        assert!(guard.arm("s1", "looping", true).await.0);
         guard.begin_armed_turn("s1");
         assert!(guard.armed("s1"), "current turn is active");
 
         // Arm again while this turn is still active — it must not touch
         // the current turn's active mark.
         assert!(
-            guard.arm("s1", "tool_call_repair_exhausted").await.0,
+            guard.arm("s1", "tool_call_repair_exhausted", true).await.0,
             "a fresh mark while active is still newly armed"
         );
         assert!(guard.armed("s1"), "current turn stays active, not doubled");
@@ -726,12 +858,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn note_consent_requested_on_an_inactive_session_is_a_no_op() {
+    async fn note_consent_requested_on_an_inactive_session_leaves_no_offer() {
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
 
         // "s1" was never armed or begun — it's not active.
-        guard.note_consent_requested("s1");
+        guard.note_consent_requested("s1", &on_failure_request());
         guard.end_armed_turn("s1");
         guard.allow("s1");
         guard.begin_armed_turn("s1");
@@ -755,14 +887,14 @@ mod tests {
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
 
         // Turn A: armed, active, ends normally (no consent involved).
-        assert!(guard.arm("s1", "looping").await.0);
+        assert!(guard.arm("s1", "looping", true).await.0);
         guard.begin_armed_turn("s1");
         guard.end_armed_turn("s1");
 
         // A consent note for turn A arrives late, after turn A already
         // ended — the race the reviewer described. It must not stick:
         // the session is no longer active.
-        guard.note_consent_requested("s1");
+        guard.note_consent_requested("s1", &on_failure_request());
 
         // Turn B: an unrelated, later exit for the same session, with no
         // arming of its own. It must not be spuriously re-armed by the

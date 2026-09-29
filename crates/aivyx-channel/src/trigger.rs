@@ -470,7 +470,9 @@ impl TriggerDispatch {
         let _guard = self.turn_lock.lock().await;
         if let (Some(signal), Some(arming)) = (arm_signal, &self.arming) {
             let session = channel.session_id().to_string();
-            let (newly, _hint) = arming.arm(&session, signal).await;
+            // This path discards the hint, so whether the channel could
+            // allow cloud use doesn't matter: say it can't.
+            let (newly, _hint) = arming.arm(&session, signal, false).await;
             eprintln!(
                 "aivyx-pa trigger: {source} {trigger_id:?} armed for on_failure \
                  escalation ({signal}{})",
@@ -1179,7 +1181,12 @@ mod tests {
 
         #[async_trait::async_trait]
         impl EscalationArming for RecordingArming {
-            async fn arm(&self, session: &str, signal: &str) -> (bool, Option<String>) {
+            async fn arm(
+                &self,
+                session: &str,
+                signal: &str,
+                _can_allow_here: bool,
+            ) -> (bool, Option<String>) {
                 self.log.lock().unwrap().push(format!("arm:{session}:{signal}"));
                 (true, None)
             }

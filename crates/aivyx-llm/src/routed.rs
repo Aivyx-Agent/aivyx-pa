@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::escalation::{
-    EscalationGuard, EscalationMode, EscalationObserver, EscalationRecord, EscalationVerdict,
-    Trigger, decide_escalation, payload_hash,
+    ConsentRequest, EscalationGuard, EscalationMode, EscalationObserver, EscalationRecord,
+    EscalationVerdict, Trigger, consent_lead, decide_escalation, payload_hash,
 };
 use crate::{
     ContentBlock, LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmUsage,
@@ -357,11 +357,6 @@ impl RoutedProvider {
                 Escalated::Blocked(reason)
             }
             EscalationVerdict::NeedsConsent => {
-                if trigger == Trigger::OnFailure
-                    && let Some(s) = session
-                {
-                    esc.guard.note_consent_requested(s);
-                }
                 let plan = match esc.router.plan(query, Instant::now()) {
                     Ok(plan) => plan,
                     Err(e) => {
@@ -369,14 +364,22 @@ impl RoutedProvider {
                         return Escalated::Done(Err(no_cloud_model(&e)));
                     }
                 };
-                let model = plan.chain[0].to_string();
-                (esc.observer)(&record(Some(model.clone()), "consent_requested"));
-                Escalated::Done(Err(LlmError::Routing(format!(
-                    "this needs a cloud model: `{model}` ({}), about {} tokens would be sent. \
-                     Send /allow-cloud to allow it for this conversation, then resend your message.",
-                    trigger.name(),
-                    query.estimated_prompt_tokens
-                ))))
+                let key = &plan.chain[0];
+                (esc.observer)(&record(Some(key.to_string()), "consent_requested"));
+                // Routing visibility B1 — the request travels through the
+                // guard (every trigger; `on_failure`'s is also the pending
+                // offer) so the daemon can show it per channel. The error
+                // text is the channel-neutral lead only.
+                let consent = ConsentRequest {
+                    model: key.id.clone(),
+                    endpoint: key.endpoint.to_string(),
+                    trigger: trigger.name().to_string(),
+                    estimated_tokens: query.estimated_prompt_tokens,
+                };
+                if let Some(s) = session {
+                    esc.guard.note_consent_requested(s, &consent);
+                }
+                Escalated::Done(Err(LlmError::NeedsCloudConsent(consent_lead(&consent))))
             }
             EscalationVerdict::Proceed => {
                 let plan = match esc.router.plan(query, Instant::now()) {
@@ -1516,18 +1519,19 @@ mod tests {
     // ---- Model routing Part 3b: cloud escalation ----
 
     use crate::escalation::{
-        EscalationGuard, EscalationMode, EscalationRecord, Trigger, payload_hash,
+        ConsentRequest, EscalationGuard, EscalationMode, EscalationRecord, Trigger, consent_lead,
+        payload_hash,
     };
 
     /// Per-session taint, consent and (Task 2) `on_failure` arming, set by
-    /// the test. `consent_requested` records every session
-    /// `note_consent_requested` was called for.
+    /// the test. `consent_requested` records every session and request
+    /// `note_consent_requested` was called with.
     #[derive(Default)]
     struct FakeGuard {
         taint: Mutex<HashMap<String, String>>,
         consent: Mutex<Vec<String>>,
         armed: Mutex<Vec<String>>,
-        consent_requested: Mutex<Vec<String>>,
+        consent_requested: Mutex<Vec<(String, ConsentRequest)>>,
     }
 
     impl FakeGuard {
@@ -1555,6 +1559,9 @@ mod tests {
             Arc::new(g)
         }
         fn consent_requested_sessions(&self) -> Vec<String> {
+            self.consent_requested.lock().unwrap().iter().map(|(s, _)| s.clone()).collect()
+        }
+        fn consent_requests(&self) -> Vec<(String, ConsentRequest)> {
             self.consent_requested.lock().unwrap().clone()
         }
     }
@@ -1570,8 +1577,8 @@ mod tests {
         fn armed(&self, session: &str) -> bool {
             self.armed.lock().unwrap().iter().any(|s| s == session)
         }
-        fn note_consent_requested(&self, session: &str) {
-            self.consent_requested.lock().unwrap().push(session.into());
+        fn note_consent_requested(&self, session: &str, request: &ConsentRequest) {
+            self.consent_requested.lock().unwrap().push((session.into(), request.clone()));
         }
     }
 
@@ -1691,24 +1698,78 @@ mod tests {
 
     #[tokio::test]
     async fn ask_without_consent_stops_and_names_the_model() {
+        let guard = Arc::new(FakeGuard::default());
         let (f, cloud, records) = escalating(
             EscalationMode::Ask,
             true,
             vec![],
-            Arc::new(FakeGuard::default()),
+            Arc::clone(&guard) as Arc<dyn EscalationGuard>,
         );
-        let (messages, hint, tools) = with_tools(Some("s"));
-        let Err(LlmError::Routing(msg)) =
-            call(&f.routed, request(&messages, &tools, Some(hint))).await
-        else {
-            panic!("expected a consent request");
+        let (messages, mut hint, tools) = with_tools(Some("s"));
+        hint.estimated_prompt_tokens = 12578;
+        let err = call(&f.routed, request(&messages, &tools, Some(hint)))
+            .await
+            .unwrap_err();
+        let want = ConsentRequest {
+            model: "claude".to_string(),
+            endpoint: "cloud".to_string(),
+            trigger: "no_local_candidate".to_string(),
+            estimated_tokens: 12578,
         };
-        assert!(msg.contains("claude@cloud"), "{msg}");
-        assert!(msg.contains("/allow-cloud"), "{msg}");
+        // Routing visibility B1 — the channel-neutral two sentences, with
+        // no framing, no internal trigger name and no `id@endpoint`.
+        assert_eq!(err, LlmError::NeedsCloudConsent(consent_lead(&want)));
+        let msg = err.to_string();
+        assert_eq!(
+            msg,
+            "This needs a cloud model: `claude` (your `cloud` endpoint), because no local model \
+             can handle this request. About 12,578 tokens — this conversation plus the \
+             assistant's instructions — would be sent."
+        );
+        assert!(!msg.contains("claude@cloud"), "{msg}");
+        assert!(!msg.contains("no_local_candidate"), "{msg}");
+        assert!(!msg.contains("model routing"), "{msg}");
+        // The guard holds the request for the front end.
+        assert_eq!(guard.consent_requests(), vec![("s".to_string(), want)]);
         assert!(cloud.seen().is_empty());
         let recs = records.lock().unwrap().clone();
         assert_eq!(recs[0].outcome, "consent_requested");
         assert_eq!(recs[0].model.as_deref(), Some("claude@cloud"));
+    }
+
+    #[tokio::test]
+    async fn a_tier_consent_stop_carries_its_request_through_the_guard() {
+        // Routing visibility B1 — every trigger's consent stop reaches the
+        // guard (not only `on_failure`'s), so the daemon can show it.
+        let guard = Arc::new(FakeGuard::default());
+        let (f, cloud, _records) = escalating(
+            EscalationMode::Ask,
+            false,
+            vec![TaskKind::Chat],
+            Arc::clone(&guard) as Arc<dyn EscalationGuard>,
+        );
+        let (messages, mut hint) = routed(TaskKind::Chat, Some("s"));
+        hint.estimated_prompt_tokens = 900;
+        let Err(LlmError::NeedsCloudConsent(msg)) =
+            call(&f.routed, request(&messages, &[], Some(hint))).await
+        else {
+            panic!("expected a consent request");
+        };
+        assert!(msg.contains("because this kind of request is set to use the cloud"), "{msg}");
+        assert!(!msg.contains("(tier)"), "{msg}");
+        assert_eq!(
+            guard.consent_requests(),
+            vec![(
+                "s".to_string(),
+                ConsentRequest {
+                    model: "claude".to_string(),
+                    endpoint: "cloud".to_string(),
+                    trigger: "tier".to_string(),
+                    estimated_tokens: 900,
+                }
+            )]
+        );
+        assert!(cloud.seen().is_empty());
     }
 
     #[tokio::test]
@@ -1877,12 +1938,14 @@ mod tests {
             Arc::clone(&guard) as Arc<dyn EscalationGuard>,
         );
         let (messages, hint) = routed(TaskKind::Chat, Some("s"));
-        let Err(LlmError::Routing(msg)) =
+        let Err(LlmError::NeedsCloudConsent(msg)) =
             call(&f.routed, request(&messages, &[], Some(hint))).await
         else {
             panic!("expected a consent request");
         };
-        assert!(msg.contains("on_failure"), "{msg}");
+        assert!(msg.contains("because the local model got stuck"), "{msg}");
+        assert!(!msg.contains("on_failure"), "{msg}");
+        assert_eq!(guard.consent_requests()[0].1.trigger, "on_failure");
         assert!(cloud.seen().is_empty());
         let recs = records.lock().unwrap().clone();
         assert_eq!(recs[0].outcome, "consent_requested");

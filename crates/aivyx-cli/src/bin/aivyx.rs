@@ -7189,9 +7189,10 @@ async fn run_async(
         escalation_arming.is_some(),
     );
 
-    // Part 3b (A16) — in `ask` mode, give the guard the hint line it hands
-    // back to an armed, untainted session (`RoutingGuard::arm`), naming the
-    // first cloud candidate. Nothing to hint without one.
+    // Part 3b (A16) — in `ask` mode, give the guard the cloud model the hint
+    // it hands back to an armed, untainted session names (`RoutingGuard::arm`,
+    // worded per channel): the first cloud candidate. Nothing to hint
+    // without one.
     if routing_access.escalation.mode == aivyx_config::EscalationMode::Ask
         && routing_access.escalation.on_failure
         && let Some(guard) = &routing_guard
@@ -7200,10 +7201,7 @@ async fn run_async(
         let default_endpoint =
             routing::default_endpoint(provider_kind.value, routing_base_url.as_deref());
         if let Some(first) = routing::cloud_candidates(cfg, &default_endpoint).first() {
-            guard.set_arm_hint(Some(format!(
-                "The local model got stuck; send /allow-cloud and resend to retry on `{}`.",
-                first.id
-            )));
+            guard.set_on_failure_model(Some(first.id.clone()));
         }
     }
 

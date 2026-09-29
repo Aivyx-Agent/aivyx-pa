@@ -1203,7 +1203,15 @@ pub trait EscalationArming: Send + Sync {
     /// Arm `session`'s next turn. Returns `(newly_armed, hint)`: `hint` is
     /// the `ask`-mode line for the operator, `None` when there is nothing
     /// to say (not `ask`, no cloud candidate, or tainted).
-    async fn arm(&self, session: &str, signal: &str) -> (bool, Option<String>);
+    /// `can_allow_here` is whether the channel the hint goes to can grant
+    /// consent itself (Trusted or Kernel), so the hint says `/allow-cloud`
+    /// only where that works (routing visibility B1).
+    async fn arm(
+        &self,
+        session: &str,
+        signal: &str,
+        can_allow_here: bool,
+    ) -> (bool, Option<String>);
 
     /// Turn start: an armed mark becomes this turn's active mark, and any
     /// pending consent offer lapses (the operator declined it).
@@ -1235,8 +1243,13 @@ impl AuditedArming {
 
 #[async_trait]
 impl EscalationArming for AuditedArming {
-    async fn arm(&self, session: &str, signal: &str) -> (bool, Option<String>) {
-        let (newly, hint) = self.inner.arm(session, signal).await;
+    async fn arm(
+        &self,
+        session: &str,
+        signal: &str,
+        can_allow_here: bool,
+    ) -> (bool, Option<String>) {
+        let (newly, hint) = self.inner.arm(session, signal, can_allow_here).await;
         if newly {
             self.audit.on_event(AuditTag::EscalationArmed {
                 session_id: session.to_owned(),
@@ -1723,11 +1736,18 @@ mod tests {
         armed: std::sync::Mutex<std::collections::HashSet<String>>,
         tainted: std::sync::Mutex<std::collections::HashSet<String>>,
         hint: std::sync::Mutex<Option<String>>,
+        can_allow: std::sync::Mutex<Vec<bool>>,
     }
 
     #[async_trait]
     impl EscalationArming for OnceArm {
-        async fn arm(&self, session: &str, _signal: &str) -> (bool, Option<String>) {
+        async fn arm(
+            &self,
+            session: &str,
+            _signal: &str,
+            can_allow_here: bool,
+        ) -> (bool, Option<String>) {
+            self.can_allow.lock().unwrap().push(can_allow_here);
             let newly = self.armed.lock().unwrap().insert(session.to_owned());
             let hint = if self.tainted.lock().unwrap().contains(session) {
                 None
@@ -1744,9 +1764,9 @@ mod tests {
     async fn audited_arming_audits_only_the_first_arm_of_a_session() {
         let tags = Arc::new(Tags::default());
         let arming = AuditedArming::new(Arc::new(OnceArm::default()), tags.clone());
-        assert!(arming.arm("s1", "looping").await.0);
-        assert!(!arming.arm("s1", "looping").await.0);
-        assert!(arming.arm("s2", "loop_stall_rescue").await.0);
+        assert!(arming.arm("s1", "looping", true).await.0);
+        assert!(!arming.arm("s1", "looping", true).await.0);
+        assert!(arming.arm("s2", "loop_stall_rescue", true).await.0);
         let got: Vec<(String, String)> = tags
             .0
             .lock()
@@ -1774,15 +1794,20 @@ mod tests {
         let inner = Arc::new(OnceArm::default());
         *inner.hint.lock().unwrap() = Some("ask hint".to_string());
         inner.tainted.lock().unwrap().insert("tainted".to_string());
-        let arming = AuditedArming::new(inner, tags.clone());
+        let arming = AuditedArming::new(inner.clone(), tags.clone());
 
-        let (newly, hint) = arming.arm("clean", "looping").await;
+        let (newly, hint) = arming.arm("clean", "looping", true).await;
         assert!(newly);
         assert_eq!(hint.as_deref(), Some("ask hint"));
 
-        let (newly, hint) = arming.arm("tainted", "looping").await;
+        let (newly, hint) = arming.arm("tainted", "looping", false).await;
         assert!(newly, "taint suppresses the hint, not the arm itself");
         assert_eq!(hint, None);
+        assert_eq!(
+            *inner.can_allow.lock().unwrap(),
+            vec![true, false],
+            "can_allow_here reaches the inner arming unchanged"
+        );
     }
 
     #[test]

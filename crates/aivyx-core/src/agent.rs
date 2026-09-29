@@ -35,7 +35,7 @@ use async_trait::async_trait;
 use futures_util::future::join_all;
 use sha2::{Digest, Sha256};
 
-use aivyx_capability::{CapabilitySet, Scope};
+use aivyx_capability::{CapabilitySet, Scope, TrustTier};
 
 use crate::planner::{NextStep, StepObservation, ToolRegistry, TurnPlanner};
 use crate::{
@@ -498,6 +498,7 @@ impl ConcreteAgent {
     async fn arm_next_turn(
         &self,
         origin: MessageOrigin,
+        tier: TrustTier,
         session: &str,
         signal: &str,
         final_message: &mut String,
@@ -506,7 +507,11 @@ impl ConcreteAgent {
             return;
         }
         if let Some(arming) = &self.arming {
-            let (_newly_armed, hint) = arming.arm(session, signal).await;
+            // Routing visibility B1 — the same test the daemon applies to
+            // `/allow-cloud`: only a Trusted or Kernel channel can grant
+            // consent, so only there does the hint invite it.
+            let can_allow_here = matches!(tier, TrustTier::Trusted | TrustTier::Kernel);
+            let (_newly_armed, hint) = arming.arm(session, signal, can_allow_here).await;
             if let Some(hint) = hint {
                 append_turn_note(final_message, &hint);
             }
@@ -931,6 +936,7 @@ impl ConcreteAgent {
                 if planner.repair_exhausted() {
                     self.arm_next_turn(
                         origin,
+                        tier,
                         &session_id.to_string(),
                         "tool_call_repair_exhausted",
                         &mut final_message,
@@ -963,6 +969,7 @@ impl ConcreteAgent {
                 // Before finalize, so an `ask`-mode hint reaches the channel.
                 self.arm_next_turn(
                     origin,
+                    tier,
                     &session_id.to_string(),
                     "looping",
                     &mut final_message,
@@ -6888,6 +6895,8 @@ mod tests {
     struct RecordingArming {
         log: ArmLog,
         hint: Option<String>,
+        /// Every `arm`'s `can_allow_here`.
+        can_allow: Mutex<Vec<bool>>,
     }
 
     impl RecordingArming {
@@ -6895,13 +6904,20 @@ mod tests {
             Arc::new(RecordingArming {
                 log,
                 hint: hint.map(str::to_owned),
+                can_allow: Mutex::new(Vec::new()),
             })
         }
     }
 
     #[async_trait]
     impl crate::EscalationArming for RecordingArming {
-        async fn arm(&self, session: &str, signal: &str) -> (bool, Option<String>) {
+        async fn arm(
+            &self,
+            session: &str,
+            signal: &str,
+            can_allow_here: bool,
+        ) -> (bool, Option<String>) {
+            self.can_allow.lock().unwrap().push(can_allow_here);
             self.log
                 .lock()
                 .unwrap()
@@ -6923,6 +6939,7 @@ mod tests {
         token: CancellationToken,
         log: ArmLog,
         final_message: Mutex<Option<String>>,
+        tier: TrustTier,
     }
 
     impl ArmChannel {
@@ -6932,7 +6949,12 @@ mod tests {
                 token: CancellationToken::new(),
                 log,
                 final_message: Mutex::new(None),
+                tier: TrustTier::Trusted,
             }
+        }
+        fn with_tier(mut self, tier: TrustTier) -> Self {
+            self.tier = tier;
+            self
         }
         fn seen(&self) -> Option<String> {
             self.final_message.lock().unwrap().clone()
@@ -6948,7 +6970,7 @@ mod tests {
             ChannelPlatform::Local
         }
         fn trust_tier(&self) -> TrustTier {
-            TrustTier::Trusted
+            self.tier
         }
         fn session_id(&self) -> SessionId {
             self.session
@@ -7183,7 +7205,12 @@ mod tests {
 
     #[async_trait]
     impl crate::EscalationArming for StatefulArming {
-        async fn arm(&self, session: &str, _signal: &str) -> (bool, Option<String>) {
+        async fn arm(
+            &self,
+            session: &str,
+            _signal: &str,
+            _can_allow_here: bool,
+        ) -> (bool, Option<String>) {
             (self.armed.lock().unwrap().insert(session.to_owned()), None)
         }
         fn begin_armed_turn(&self, session: &str) {
@@ -7273,7 +7300,7 @@ mod tests {
         let channel = ArmChannel::new(ArmLog::default());
         let session = channel.session.to_string();
         // An earlier failing turn armed this conversation's next turn.
-        arming.arm(&session, "looping").await;
+        arming.arm(&session, "looping", true).await;
         let _ = parent
             .turn(Message::text(channel.session, "hi"), &channel)
             .await;
@@ -7319,6 +7346,27 @@ mod tests {
             Some(looping_message(DEFAULT_REPEAT_CALL_LIMIT))
         );
         assert_eq!(arm_entries(&log).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn arming_tells_the_guard_whether_this_channel_can_allow_cloud() {
+        // Routing visibility B1 — the `ask`-mode hint is per channel: only
+        // a Trusted or Kernel channel can send `/allow-cloud` itself.
+        for (tier, want) in [
+            (TrustTier::Untrusted, false),
+            (TrustTier::SemiTrusted, false),
+            (TrustTier::Trusted, true),
+            (TrustTier::Kernel, true),
+        ] {
+            let log = ArmLog::default();
+            let arming = RecordingArming::new(log.clone(), Some(HINT));
+            let agent = repair_agent(true, "done").with_escalation_arming(arming.clone());
+            let channel = ArmChannel::new(log.clone()).with_tier(tier);
+            let _ = agent
+                .turn(Message::text(channel.session, "hi"), &channel)
+                .await;
+            assert_eq!(*arming.can_allow.lock().unwrap(), vec![want], "{tier:?}");
+        }
     }
 
     #[tokio::test]

@@ -130,7 +130,11 @@ pub use routed::{
 /// the read-side [`escalation::EscalationGuard`] trait (per-conversation
 /// taint + consent) that `RoutedProvider` consults.
 pub mod escalation;
-pub use escalation::{EscalationGuard, EscalationMode, EscalationObserver, EscalationRecord, EscalationVerdict, Trigger, decide_escalation, payload_hash};
+pub use escalation::{
+    ConsentRequest, EscalationGuard, EscalationMode, EscalationObserver, EscalationRecord,
+    EscalationVerdict, Trigger, consent_lead, consent_text, decide_escalation, payload_hash,
+    plain_why, stuck_hint, with_thousands,
+};
 
 // ---------------------------------------------------------------------------
 // Conversation messages
@@ -676,6 +680,8 @@ pub trait LlmStream: Send {
 ///   produced (truncated response, disconnected mid-stream)
 /// - `UnknownModel` — the `model` field in the request isn't recognized
 /// - `Config` — provider misconfiguration (missing API key, bad URL)
+/// - `Routing` — model routing couldn't serve the call
+/// - `NeedsCloudConsent` — an `ask`-mode cloud escalation stopped for consent
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum LlmError {
     #[error("http transport error: {0}")]
@@ -701,6 +707,13 @@ pub enum LlmError {
 
     #[error("model routing: {0}")]
     Routing(String),
+
+    /// Routing visibility B1 — an `ask`-mode call stopped for cloud
+    /// consent. The text is [`escalation::consent_lead`]'s channel-neutral
+    /// two sentences, shown as-is (no framing); the structured request is
+    /// on the escalation guard.
+    #[error("{0}")]
+    NeedsCloudConsent(String),
 }
 
 // ---------------------------------------------------------------------------

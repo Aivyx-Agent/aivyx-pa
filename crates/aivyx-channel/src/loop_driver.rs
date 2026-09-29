@@ -2032,7 +2032,12 @@ mod tests {
 
         #[async_trait::async_trait]
         impl EscalationArming for RecordingArming {
-            async fn arm(&self, _session: &str, signal: &str) -> (bool, Option<String>) {
+            async fn arm(
+                &self,
+                _session: &str,
+                signal: &str,
+                _can_allow_here: bool,
+            ) -> (bool, Option<String>) {
                 self.log.lock().unwrap().push(format!("arm:{signal}"));
                 (true, None)
             }
