@@ -61,6 +61,12 @@ pub use tools::{
     WebExtractToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
     render_default_skills_section,
 };
+// Routing visibility B1 — the router state shared by `routing.status` and
+// the daemon's `GetRoutingStatus` query, and `/model`-style id resolution.
+pub use tools::{
+    RoutingCandidate, RoutingConversation, RoutingEscalation, RoutingStatus, RoutingVram,
+    resolve_model, routing_status,
+};
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

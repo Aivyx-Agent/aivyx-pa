@@ -669,6 +669,12 @@ pub(crate) fn render_events_for_slack(events: &[StreamEventPayload]) -> String {
                 buf.push('\n');
             }
             StreamEventPayload::ToolOutput { .. } => {}
+            // Routing visibility B1 — a chat app shows neither: the routed
+            // model is a front-end status detail, and the daemon already
+            // words a consent request into the turn's outcome text for
+            // this channel (which the correction line below surfaces).
+            StreamEventPayload::ModelRouted { .. }
+            | StreamEventPayload::CloudConsentRequested { .. } => {}
             StreamEventPayload::ApprovalGate {
                 mission_id,
                 gate_id,
@@ -1324,5 +1330,37 @@ mod tests {
 
         let _ = server.await;
         let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn slack_shows_the_consent_outcome_and_ignores_routing_events() {
+        let outcome = "completed: This needs a cloud model: `m` (your `e` endpoint), because \
+                       no local model can handle this request. About 1,234 tokens — this \
+                       conversation plus the assistant's instructions — would be sent. Cloud use \
+                       can only be allowed by the operator — from the terminal (`/allow-cloud`) \
+                       or the Studio.";
+        let events = vec![
+            crate::daemon_ipc::StreamEventPayload::CloudConsentRequested {
+                model: "m".into(),
+                endpoint: "e".into(),
+                why: "no local model can handle this request".into(),
+                estimated_tokens: 1234,
+                can_allow_here: false,
+            },
+            crate::daemon_ipc::StreamEventPayload::ModelRouted {
+                model: "small@default".into(),
+                task: "chat".into(),
+                reason: "r".into(),
+            },
+        ];
+        let reply = build_slack_reply(&events, outcome);
+        // The consent text arrives as the outcome's correction line (after
+        // the adapter's existing "(no reply)" marker for a text-less turn).
+        assert!(
+            reply.trim_end().ends_with(outcome.strip_prefix("completed: ").unwrap()),
+            "{reply}"
+        );
+        assert!(!reply.contains("routing →"), "{reply}");
+        assert!(!reply.contains("small@default"), "{reply}");
     }
 }

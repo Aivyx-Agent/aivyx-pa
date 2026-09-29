@@ -88,107 +88,284 @@ impl Tool for RoutingStatusTool {
     }
 
     async fn execute(&self, _input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
-        let profiles = self.routed.router().profiles();
-        let candidates: Vec<Value> = profiles.iter().map(candidate_json).collect();
-        // Model routing Part 4 — the router's residency snapshot, refreshed
-        // in the background every 5s; empty until a source responds.
-        let residency = residency_json(&self.routed.router().residency(), &profiles);
-        // Model routing Part 3b — escalation settings and this
-        // conversation's taint / consent (`null` when not configured).
-        let escalation = match self.routed.escalation_settings() {
-            None => Value::Null,
-            Some((mode, no_local_candidate, tiers)) => {
-                let session = ctx.session_id.to_string();
-                let (tainted, cloud_allowed) = self
-                    .routed
-                    .escalation_state(&session)
-                    .await
-                    .unwrap_or((None, false));
-                // A16 — "armed" here means the *next* turn will escalate
-                // (the ARMED set), not that a call is escalating mid-turn
-                // right now (the ACTIVE set `EscalationGuard::armed`
-                // reads) — that's the question `routing.status` answers.
-                let armed = self.routed.escalation_armed_next(&session);
-                json!({
-                    "mode": mode.name(),
-                    "no_local_candidate": no_local_candidate,
-                    "tiers": tiers.iter().map(|t| t.name()).collect::<Vec<_>>(),
-                    "on_failure": self.routed.escalation_on_failure().unwrap_or(false),
-                    "cloud_candidates": self
-                        .routed
-                        .escalation_candidates()
-                        .iter()
-                        .map(candidate_json)
-                        .collect::<Vec<_>>(),
-                    "this_conversation": {
-                        "tainted": tainted,
-                        "cloud_allowed": cloud_allowed,
-                        "armed": armed,
-                    },
-                })
-            }
-        };
+        let session = ctx.session_id.to_string();
+        let status = routing_status(&self.routed, Some(&session)).await;
         ToolOutcome::Completed {
-            output: json!({
-                "default": self.routed.default_key().to_string(),
-                "candidates": candidates,
-                "escalation": escalation,
-                "classifier": { "enabled": self.routed.classifier_enabled() },
-                "residency": residency,
-            }),
+            output: status_tool_json(&status),
             verified: Verification::Verified,
         }
     }
 }
 
-/// One routing candidate as `routing.status` reports it.
-fn candidate_json(p: &aivyx_route::ModelProfile) -> Value {
-    json!({
-        "model": p.key().to_string(),
-        "tier": p.tier.to_string(),
-        "capabilities": p.capabilities.iter().map(ToString::to_string).collect::<Vec<_>>(),
-        "unknown_capabilities": p
-            .unknown_capabilities
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        "context_window": p.context_window,
-        "availability": p.availability,
-    })
+// ---------------------------------------------------------------------------
+// The shared status builder (Routing visibility B1)
+// ---------------------------------------------------------------------------
+
+/// The model router's state: what `routing.status` reports and what the
+/// daemon's `GetRoutingStatus` query answers. ONE builder
+/// ([`routing_status`]) feeds both, so the two can't drift.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutingStatus {
+    /// The configured model, `id@endpoint`.
+    pub default_model: String,
+    pub candidates: Vec<RoutingCandidate>,
+    /// Total / used / available-for-a-new-load VRAM, once a residency
+    /// source has answered.
+    pub vram: Option<RoutingVram>,
+    /// Endpoints residency counts as fully loaded.
+    pub resident_endpoints: Vec<String>,
+    /// `None` when no cloud escalation is configured.
+    pub escalation: Option<RoutingEscalation>,
+    pub classifier_enabled: bool,
+    /// The asked-about conversation, when one was given.
+    pub conversation: Option<RoutingConversation>,
 }
 
-/// The router's residency snapshot, as `routing.status` reports it: total
-/// VRAM plus what a new load could use, which endpoints count as fully
-/// loaded, and each candidate's load note (`null` when residency has no
-/// opinion on it — an empty snapshot, or an unlisted model on a
-/// non-resident endpoint).
-fn residency_json(
-    snapshot: &aivyx_route::ResidencySnapshot,
-    profiles: &[aivyx_route::ModelProfile],
-) -> Value {
-    let vram = snapshot.vram.map(|v| {
-        json!({
-            "total_bytes": v.total_bytes,
-            "used_bytes": v.used_bytes,
-            "available_bytes": snapshot.available_vram().unwrap_or(0),
-        })
+/// One routing candidate. Every field is already in its wire spelling.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutingCandidate {
+    /// `id@endpoint`.
+    pub model: String,
+    pub tier: String,
+    pub capabilities: Vec<String>,
+    pub unknown_capabilities: Vec<String>,
+    pub context_window: Option<u32>,
+    /// `available`, `unverified` or `unavailable`.
+    pub availability: String,
+    /// `loaded`, `needs_load` or `wont_fit`; `None` when residency has no
+    /// opinion.
+    pub residency: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoutingVram {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+}
+
+/// The cloud escalation settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutingEscalation {
+    /// `ask`, `auto` or `never`.
+    pub mode: String,
+    pub no_local_candidate: bool,
+    pub tiers: Vec<String>,
+    pub on_failure: bool,
+    pub cloud_candidates: Vec<RoutingCandidate>,
+}
+
+/// One conversation's routing state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutingConversation {
+    pub session: String,
+    /// Its pin, else the model routing made it stick to (`id@endpoint`).
+    pub current_model: Option<String>,
+    pub pinned: Option<String>,
+    /// The last routed call: `(id@endpoint, task, reason)`.
+    pub last_decision: Option<(String, String, String)>,
+    /// The taint reason (only tracked while escalation is configured).
+    pub tainted: Option<String>,
+    pub cloud_allowed: bool,
+    /// A16 — the *next* turn will escalate (the ARMED set).
+    pub armed: bool,
+}
+
+/// Builds [`RoutingStatus`] from the daemon's `RoutedProvider`; `session`
+/// adds that conversation's block.
+pub async fn routing_status(routed: &RoutedProvider, session: Option<&str>) -> RoutingStatus {
+    let router = routed.router();
+    let profiles = router.profiles();
+    // Model routing Part 4 — the router's residency snapshot, refreshed
+    // in the background every 5s; empty until a source responds.
+    let snapshot = router.residency();
+    let candidates = profiles.iter().map(|p| candidate(p, Some(&snapshot))).collect();
+    let vram = snapshot.vram.map(|v| RoutingVram {
+        total_bytes: v.total_bytes,
+        used_bytes: v.used_bytes,
+        available_bytes: snapshot.available_vram().unwrap_or(0),
     });
-    let mut candidates = serde_json::Map::new();
-    for p in profiles {
-        candidates.insert(
-            p.key().to_string(),
-            serde_json::to_value(snapshot.cost(p).1).unwrap_or(Value::Null),
-        );
-    }
-    json!({
-        "vram": vram,
-        "resident_endpoints": snapshot
+    let escalation = routed
+        .escalation_settings()
+        .map(|(mode, no_local_candidate, tiers)| RoutingEscalation {
+            mode: mode.name().to_string(),
+            no_local_candidate,
+            tiers: tiers.iter().map(|t| t.name().to_string()).collect(),
+            on_failure: routed.escalation_on_failure().unwrap_or(false),
+            cloud_candidates: routed
+                .escalation_candidates()
+                .iter()
+                .map(|p| candidate(p, None))
+                .collect(),
+        });
+    let conversation = match session {
+        None => None,
+        Some(session) => {
+            // Model routing Part 3b — taint / consent are tracked only while
+            // escalation is configured.
+            let (tainted, cloud_allowed) = if escalation.is_some() {
+                routed
+                    .escalation_state(session)
+                    .await
+                    .unwrap_or((None, false))
+            } else {
+                (None, false)
+            };
+            Some(RoutingConversation {
+                session: session.to_string(),
+                current_model: router.current(session).map(|k| k.to_string()),
+                pinned: router.pinned(session).map(|k| k.to_string()),
+                last_decision: router.last_decision(session).map(|r| {
+                    (r.model.to_string(), r.task.name().to_string(), r.reason)
+                }),
+                tainted,
+                cloud_allowed,
+                // A16 — "armed" here means the *next* turn will escalate
+                // (the ARMED set), not that a call is escalating mid-turn
+                // right now (the ACTIVE set `EscalationGuard::armed` reads).
+                armed: escalation.is_some() && routed.escalation_armed_next(session),
+            })
+        }
+    };
+    RoutingStatus {
+        default_model: routed.default_key().to_string(),
+        candidates,
+        vram,
+        resident_endpoints: snapshot
             .resident_endpoints
             .iter()
             .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-        "candidates": candidates,
+            .collect(),
+        escalation,
+        classifier_enabled: routed.classifier_enabled(),
+        conversation,
+    }
+}
+
+/// One candidate; `residency` is `None` for the escalation router's cloud
+/// candidates (residency is a local-hardware signal).
+fn candidate(
+    p: &aivyx_route::ModelProfile,
+    residency: Option<&aivyx_route::ResidencySnapshot>,
+) -> RoutingCandidate {
+    RoutingCandidate {
+        model: p.key().to_string(),
+        tier: p.tier.to_string(),
+        capabilities: p.capabilities.iter().map(ToString::to_string).collect(),
+        unknown_capabilities: p
+            .unknown_capabilities
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        context_window: p.context_window,
+        availability: wire_name(&p.availability),
+        residency: residency
+            .and_then(|r| r.cost(p).1)
+            .map(|note| wire_name(&note)),
+    }
+}
+
+/// A unit enum's serde (snake_case) spelling.
+fn wire_name<T: serde::Serialize>(value: &T) -> String {
+    match serde_json::to_value(value) {
+        Ok(Value::String(s)) => s,
+        _ => String::new(),
+    }
+}
+
+/// `routing.status`'s JSON output (its shape is the tool's contract).
+fn status_tool_json(status: &RoutingStatus) -> Value {
+    let escalation = match &status.escalation {
+        None => Value::Null,
+        Some(esc) => {
+            let this = status.conversation.as_ref();
+            json!({
+                "mode": esc.mode,
+                "no_local_candidate": esc.no_local_candidate,
+                "tiers": esc.tiers,
+                "on_failure": esc.on_failure,
+                "cloud_candidates": esc
+                    .cloud_candidates
+                    .iter()
+                    .map(candidate_json)
+                    .collect::<Vec<_>>(),
+                "this_conversation": {
+                    "tainted": this.and_then(|c| c.tainted.clone()),
+                    "cloud_allowed": this.is_some_and(|c| c.cloud_allowed),
+                    "armed": this.is_some_and(|c| c.armed),
+                },
+            })
+        }
+    };
+    let vram = status.vram.map(|v| {
+        json!({
+            "total_bytes": v.total_bytes,
+            "used_bytes": v.used_bytes,
+            "available_bytes": v.available_bytes,
+        })
+    });
+    let mut residency = serde_json::Map::new();
+    for c in &status.candidates {
+        residency.insert(c.model.clone(), json!(c.residency));
+    }
+    json!({
+        "default": status.default_model,
+        "candidates": status.candidates.iter().map(candidate_json).collect::<Vec<_>>(),
+        "escalation": escalation,
+        "classifier": { "enabled": status.classifier_enabled },
+        "residency": {
+            "vram": vram,
+            "resident_endpoints": status.resident_endpoints,
+            "candidates": residency,
+        },
     })
+}
+
+/// One routing candidate as `routing.status` reports it.
+fn candidate_json(c: &RoutingCandidate) -> Value {
+    json!({
+        "model": c.model,
+        "tier": c.tier,
+        "capabilities": c.capabilities,
+        "unknown_capabilities": c.unknown_capabilities,
+        "context_window": c.context_window,
+        "availability": c.availability,
+    })
+}
+
+/// Resolves a model argument against the router's candidates, as
+/// `aivyx-coder`'s `/model` does: `id@endpoint`, or a bare id served by
+/// exactly one endpoint. The error texts are the operator-facing replies.
+pub fn resolve_model(
+    profiles: &[aivyx_route::ModelProfile],
+    arg: &str,
+) -> Result<aivyx_route::ModelKey, String> {
+    use aivyx_route::{ModelKey, ModelProfile};
+    if let Some((id, endpoint)) = arg.rsplit_once('@') {
+        let k = ModelKey {
+            endpoint: aivyx_route::EndpointRef::new(endpoint),
+            id: id.to_string(),
+        };
+        return aivyx_route::find(profiles, &k)
+            .map(ModelProfile::key)
+            .ok_or_else(|| format!("No model `{arg}` — see /models."));
+    }
+    let matches: Vec<ModelKey> = profiles
+        .iter()
+        .filter(|p| p.id == arg)
+        .map(ModelProfile::key)
+        .collect();
+    match matches.as_slice() {
+        [] => Err(format!("No model `{arg}` — see /models.")),
+        [one] => Ok(one.clone()),
+        many => {
+            let names: Vec<String> = many.iter().map(ToString::to_string).collect();
+            Err(format!(
+                "`{arg}` is served by several endpoints ({}) — use id@endpoint.",
+                names.join(", ")
+            ))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +875,73 @@ mod routing_tool_tests {
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    // ---- Routing visibility B1: the shared builder + pin resolution ----
+
+    #[tokio::test]
+    async fn the_shared_builder_reports_this_conversations_model_pin_and_last_decision() {
+        let routed = routed();
+        route_once(&routed, "sess-1").await;
+        let status = routing_status(&routed, Some("sess-1")).await;
+        assert_eq!(status.default_model, "small@default");
+        assert_eq!(status.candidates.len(), 2);
+        assert_eq!(status.escalation, None);
+        assert!(!status.classifier_enabled);
+        let conv = status.conversation.expect("a session was asked about");
+        assert_eq!(conv.session, "sess-1");
+        // A `plan` call isn't sticky: routing ranks every call afresh.
+        assert_eq!(conv.current_model, None);
+        assert_eq!(conv.pinned, None);
+        let (model, task, reason) = conv.last_decision.expect("one routed call");
+        assert_eq!(model, "big@gpu");
+        assert_eq!(task, "plan");
+        assert!(!reason.is_empty());
+        assert_eq!(conv.tainted, None);
+        assert!(!conv.cloud_allowed);
+
+        routed.router().pin(
+            "sess-1",
+            ModelKey {
+                endpoint: EndpointRef::new("default"),
+                id: "small".into(),
+            },
+        );
+        let conv = routing_status(&routed, Some("sess-1")).await.conversation.unwrap();
+        assert_eq!(conv.pinned.as_deref(), Some("small@default"));
+        assert_eq!(conv.current_model.as_deref(), Some("small@default"));
+
+        // No session asked about: no conversation block.
+        assert_eq!(routing_status(&routed, None).await.conversation, None);
+    }
+
+    #[test]
+    fn resolve_model_accepts_bare_ids_and_disambiguates() {
+        let mut a = ModelProfile::new("qwen3:8b", EndpointRef::new("a-gpu"));
+        a.tier = Tier::Small;
+        let b = ModelProfile::new("qwen3:8b", EndpointRef::new("b-gpu"));
+        let coder = ModelProfile::new("coder", EndpointRef::new("a-gpu"));
+        let ps = vec![a, b, coder];
+        let key = |e: &str, id: &str| ModelKey {
+            endpoint: EndpointRef::new(e),
+            id: id.into(),
+        };
+        assert_eq!(resolve_model(&ps, "coder"), Ok(key("a-gpu", "coder")));
+        assert_eq!(resolve_model(&ps, "qwen3:8b@b-gpu"), Ok(key("b-gpu", "qwen3:8b")));
+        assert_eq!(
+            resolve_model(&ps, "qwen3:8b"),
+            Err("`qwen3:8b` is served by several endpoints (qwen3:8b@a-gpu, qwen3:8b@b-gpu) \
+                 — use id@endpoint."
+                .to_string())
+        );
+        assert_eq!(
+            resolve_model(&ps, "nope"),
+            Err("No model `nope` — see /models.".to_string())
+        );
+        assert_eq!(
+            resolve_model(&ps, "coder@b-gpu"),
+            Err("No model `coder@b-gpu` — see /models.".to_string())
+        );
     }
 
     #[test]

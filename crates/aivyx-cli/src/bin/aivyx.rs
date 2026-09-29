@@ -10467,6 +10467,9 @@ async fn run_async(
             // reminder driver) is also the `GetReminders` query's source.
             reminder_store: Some(Arc::clone(&reminder_store)),
             routing_guard: routing_guard.clone(),
+            // Routing visibility B1 — `ModelRouted` after each routed turn,
+            // and the `GetRoutingStatus` / `SetRoutingPin` queries.
+            routed: routed.clone(),
             // Part 3b (A16) — the loop's `on_failure` arming (see the
             // `escalation_arming` build site above).
             escalation_arming: escalation_arming.clone(),

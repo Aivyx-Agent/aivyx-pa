@@ -547,6 +547,27 @@ pub enum QueryPayload {
     /// [`QueryResponsePayload::CloudEscalationNotEnabled`] when no cloud
     /// escalation is configured.
     AllowCloudEscalation { session_id: String },
+    /// Routing visibility B1 — the model router's state: candidates,
+    /// residency, escalation mode, classifier, and (when `session_id` is
+    /// given) that conversation's model, pin, last decision, taint and
+    /// cloud consent. Responds with [`QueryResponsePayload::RoutingStatus`];
+    /// with routing off that is `enabled: false` and empty lists, never an
+    /// error.
+    GetRoutingStatus {
+        #[serde(default)]
+        session_id: Option<String>,
+    },
+    /// Routing visibility B1 — pin one conversation to a model, or unpin it
+    /// (`model: None`). `model` is `id@endpoint`, or a bare id served by
+    /// exactly one endpoint. Responds with
+    /// [`QueryResponsePayload::RoutingPinned`] (the resolved `id@endpoint`)
+    /// or `QueryError` (routing off, an unknown or ambiguous id, or a bad
+    /// session id).
+    SetRoutingPin {
+        session_id: String,
+        #[serde(default)]
+        model: Option<String>,
+    },
     /// Chapter Reins — rewrite `[autonomy] level`. `level` is one of `manual |
     /// assisted | supervised | autonomous | unleashed`. `confirm` MUST be `true`
     /// for the autonomy-granting levels (`autonomous` / `unleashed`) — the
@@ -1486,6 +1507,11 @@ pub enum QueryResponsePayload {
     /// Response to [`QueryPayload::AllowCloudEscalation`] when the daemon
     /// has no cloud escalation configured (nothing was recorded).
     CloudEscalationNotEnabled,
+    /// Response to [`QueryPayload::GetRoutingStatus`].
+    RoutingStatus(RoutingStatusView),
+    /// Response to [`QueryPayload::SetRoutingPin`]: the conversation's pin
+    /// now (`id@endpoint`), or `None` after unpinning.
+    RoutingPinned { model: Option<String> },
     /// Response to [`QueryPayload::SetProfile`]. Chapter V — carries the
     /// **fresh** `ProfileSummary` (re-read from disk so the editor re-renders
     /// from authoritative state) and `restart_required` (always `true` today —
@@ -2888,6 +2914,101 @@ pub enum DaemonLifecycleEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Routing visibility B1 — the model router's state for GetRoutingStatus
+// ---------------------------------------------------------------------------
+
+/// The model router's state, as [`QueryResponsePayload::RoutingStatus`]
+/// carries it. Built by the same function the `routing.status` tool uses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoutingStatusView {
+    /// `[routing] enabled` — `false` leaves every list empty.
+    pub enabled: bool,
+    /// The configured model, `id@endpoint`.
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub candidates: Vec<RoutingCandidateView>,
+    /// Total VRAM, once a residency source has answered.
+    #[serde(default)]
+    pub vram_total_bytes: Option<u64>,
+    /// What a new model load could use.
+    #[serde(default)]
+    pub vram_available_bytes: Option<u64>,
+    /// `off` (no cloud escalation configured), `ask`, `auto` or `never`.
+    pub escalation_mode: String,
+    #[serde(default)]
+    pub classifier_enabled: bool,
+    /// The asked-about conversation; `None` when no session was given (or
+    /// routing is off).
+    #[serde(default)]
+    pub session: Option<RoutingSessionView>,
+}
+
+impl RoutingStatusView {
+    /// Routing off: `enabled: false`, empty lists, escalation `off`.
+    pub fn disabled() -> Self {
+        RoutingStatusView {
+            enabled: false,
+            default_model: None,
+            candidates: Vec::new(),
+            vram_total_bytes: None,
+            vram_available_bytes: None,
+            escalation_mode: "off".to_string(),
+            classifier_enabled: false,
+            session: None,
+        }
+    }
+}
+
+/// One routing candidate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoutingCandidateView {
+    /// `id@endpoint`.
+    pub model: String,
+    /// `small`, `medium` or `large`.
+    pub tier: String,
+    /// Known capabilities (`completion`, `tools`, `vision`, …).
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// Assumed but unconfirmed capabilities.
+    #[serde(default)]
+    pub unknown_capabilities: Vec<String>,
+    /// Tokens, when known.
+    #[serde(default)]
+    pub context_window: Option<u32>,
+    /// `available`, `unverified` or `unavailable`.
+    pub availability: String,
+    /// `loaded`, `needs_load` or `wont_fit`; `None` when residency has no
+    /// opinion.
+    #[serde(default)]
+    pub residency: Option<String>,
+}
+
+/// One conversation's routing state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoutingSessionView {
+    pub session_id: String,
+    /// The model this conversation is on: its pin, else the model routing
+    /// made it stick to (`id@endpoint`).
+    #[serde(default)]
+    pub current_model: Option<String>,
+    #[serde(default)]
+    pub pinned: Option<String>,
+    /// The last routed call's model (`id@endpoint`) and the router's reason.
+    #[serde(default)]
+    pub last_model: Option<String>,
+    #[serde(default)]
+    pub last_reason: Option<String>,
+    /// Why this conversation can never escalate to the cloud, when it is
+    /// tainted (only tracked while cloud escalation is configured).
+    #[serde(default)]
+    pub tainted: Option<String>,
+    /// Cloud consent given for this conversation (this daemon process).
+    #[serde(default)]
+    pub cloud_allowed: bool,
+}
+
+// ---------------------------------------------------------------------------
 // StreamEventPayload — owned, serializable mirror of core::StreamEvent<'a>
 // ---------------------------------------------------------------------------
 
@@ -2920,6 +3041,29 @@ pub enum StreamEventPayload {
         gate_id: String,
         reason: String,
         scope: Option<String>,
+    },
+    /// Routing visibility B1 — daemon-only (no core `StreamEvent`
+    /// counterpart): the model the router last chose for this
+    /// conversation. Sent after a turn whose calls were routed, just before
+    /// `TurnComplete`. `model` is `id@endpoint`; `task` the routed call's
+    /// kind; `reason` the router's human sentence.
+    ModelRouted {
+        model: String,
+        task: String,
+        reason: String,
+    },
+    /// Routing visibility B1 — daemon-only: the turn stopped to ask for
+    /// cloud consent. `model` is the model id, `endpoint` the endpoint
+    /// name, `why` plain words, `estimated_tokens` what would be sent.
+    /// `can_allow_here` is true when this channel (Trusted/Kernel) may send
+    /// `/allow-cloud`. The turn's outcome text carries the same request,
+    /// worded for the channel.
+    CloudConsentRequested {
+        model: String,
+        endpoint: String,
+        why: String,
+        estimated_tokens: u32,
+        can_allow_here: bool,
     },
 }
 
@@ -2960,6 +3104,12 @@ impl StreamEventPayload {
                      {reason}{scope_str}\n"
                 )
             }
+            StreamEventPayload::ModelRouted { model, reason, .. } => {
+                format!("  routing → {model} ({reason})\n")
+            }
+            // The turn's outcome text carries the request, worded for the
+            // channel; rendering it here too would print it twice.
+            StreamEventPayload::CloudConsentRequested { .. } => String::new(),
         }
     }
 }
@@ -4748,6 +4898,143 @@ mod tests {
         }
     }
 
+    // ---- Routing visibility B1 ----
+
+    #[test]
+    fn routing_stream_events_round_trip() {
+        for event in [
+            StreamEventPayload::ModelRouted {
+                model: "qwen3:8b@default".into(),
+                task: "chat".into(),
+                reason: "the best local fit for chat".into(),
+            },
+            StreamEventPayload::CloudConsentRequested {
+                model: "claude-sonnet-4-5".into(),
+                endpoint: "anthropic".into(),
+                why: "no local model can handle this request".into(),
+                estimated_tokens: 12_578,
+                can_allow_here: false,
+            },
+        ] {
+            let msg = DaemonMessage::StreamEvent {
+                session_id: "s".into(),
+                event: event.clone(),
+            };
+            let frame = encode_frame(&msg).expect("encode");
+            let (back, _): (DaemonMessage, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, msg);
+        }
+        // The wire shape later front ends (and the Python SDK) key on.
+        let wire = serde_json::to_value(StreamEventPayload::ModelRouted {
+            model: "m@e".into(),
+            task: "chat".into(),
+            reason: "r".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "kind": "ModelRouted", "model": "m@e", "task": "chat", "reason": "r"
+            })
+        );
+        let wire = serde_json::to_value(StreamEventPayload::CloudConsentRequested {
+            model: "m".into(),
+            endpoint: "e".into(),
+            why: "w".into(),
+            estimated_tokens: 7,
+            can_allow_here: true,
+        })
+        .unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "kind": "CloudConsentRequested", "model": "m", "endpoint": "e",
+                "why": "w", "estimated_tokens": 7, "can_allow_here": true
+            })
+        );
+    }
+
+    fn sample_routing_status() -> RoutingStatusView {
+        RoutingStatusView {
+            enabled: true,
+            default_model: Some("small@default".into()),
+            candidates: vec![RoutingCandidateView {
+                model: "big@gpu".into(),
+                tier: "large".into(),
+                capabilities: vec!["completion".into(), "tools".into()],
+                unknown_capabilities: vec!["vision".into()],
+                context_window: Some(32_768),
+                availability: "available".into(),
+                residency: Some("needs_load".into()),
+            }],
+            vram_total_bytes: Some(24 << 30),
+            vram_available_bytes: Some(20 << 30),
+            escalation_mode: "ask".into(),
+            classifier_enabled: true,
+            session: Some(RoutingSessionView {
+                session_id: "s".into(),
+                current_model: Some("big@gpu".into()),
+                pinned: None,
+                last_model: Some("big@gpu".into()),
+                last_reason: Some("r".into()),
+                tainted: None,
+                cloud_allowed: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn routing_queries_round_trip() {
+        for payload in [
+            QueryPayload::GetRoutingStatus { session_id: None },
+            QueryPayload::GetRoutingStatus {
+                session_id: Some("s".into()),
+            },
+            QueryPayload::SetRoutingPin {
+                session_id: "s".into(),
+                model: Some("big".into()),
+            },
+            QueryPayload::SetRoutingPin {
+                session_id: "s".into(),
+                model: None,
+            },
+        ] {
+            let msg = FrontendMessage::Query {
+                id: "q".into(),
+                payload,
+            };
+            let frame = encode_frame(&msg).expect("encode");
+            let (decoded, _): (FrontendMessage, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(decoded, msg);
+        }
+        for payload in [
+            QueryResponsePayload::RoutingStatus(sample_routing_status()),
+            QueryResponsePayload::RoutingStatus(RoutingStatusView::disabled()),
+            QueryResponsePayload::RoutingPinned {
+                model: Some("big@gpu".into()),
+            },
+            QueryResponsePayload::RoutingPinned { model: None },
+        ] {
+            let frame = encode_frame(&payload).expect("encode");
+            let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
+            assert_eq!(back, payload);
+        }
+        // A bare `{kind}` status query decodes (the session is optional).
+        let q: QueryPayload =
+            serde_json::from_value(serde_json::json!({"kind": "GetRoutingStatus"})).unwrap();
+        assert_eq!(q, QueryPayload::GetRoutingStatus { session_id: None });
+    }
+
+    #[test]
+    fn a_disabled_routing_status_has_empty_lists() {
+        let off = RoutingStatusView::disabled();
+        assert!(!off.enabled);
+        assert!(off.candidates.is_empty());
+        assert_eq!(off.default_model, None);
+        assert_eq!(off.escalation_mode, "off");
+        assert_eq!(off.session, None);
+    }
+
     #[test]
     fn settings_responses_round_trip() {
         let snap = sample_snapshot();
@@ -5298,6 +5585,33 @@ mod tests {
     }
 
     // ---- render_for_cli ----
+
+    #[test]
+    fn render_for_cli_model_routed_names_the_model_and_reason() {
+        let payload = StreamEventPayload::ModelRouted {
+            model: "qwen3:8b@default".into(),
+            task: "chat".into(),
+            reason: "the best local fit".into(),
+        };
+        assert_eq!(
+            payload.render_for_cli(),
+            "  routing → qwen3:8b@default (the best local fit)\n"
+        );
+    }
+
+    #[test]
+    fn render_for_cli_consent_request_is_left_to_the_outcome() {
+        // The daemon words the turn's outcome text per channel; rendering
+        // the event too would print the request twice.
+        let payload = StreamEventPayload::CloudConsentRequested {
+            model: "m".into(),
+            endpoint: "e".into(),
+            why: "w".into(),
+            estimated_tokens: 1,
+            can_allow_here: true,
+        };
+        assert_eq!(payload.render_for_cli(), "");
+    }
 
     #[test]
     fn render_for_cli_text_passes_through() {

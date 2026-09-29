@@ -898,6 +898,7 @@ async fn two_concurrent_connections() {
             document_roots: Default::default(),
             reminder_store: None,
             routing_guard: None,
+            routed: None,
             escalation_arming: None,
             loop_escalate_on_failure: false,
             wiki_sweep: None,
@@ -1243,6 +1244,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             document_roots: Default::default(),
             reminder_store: None,
             routing_guard: None,
+            routed: None,
             escalation_arming: None,
             loop_escalate_on_failure: false,
             wiki_sweep: None,
@@ -1384,6 +1386,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             document_roots: Default::default(),
             reminder_store: None,
             routing_guard: None,
+            routed: None,
             escalation_arming: None,
             loop_escalate_on_failure: false,
             wiki_sweep: None,
@@ -1870,6 +1873,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             document_roots: Default::default(),
             reminder_store: None,
             routing_guard: None,
+            routed: None,
             escalation_arming: None,
             loop_escalate_on_failure: false,
             wiki_sweep: None,
@@ -2191,6 +2195,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             document_roots: Default::default(),
             reminder_store: None,
             routing_guard: None,
+            routed: None,
             escalation_arming: None,
             loop_escalate_on_failure: false,
             wiki_sweep: None,
@@ -2731,6 +2736,7 @@ async fn mission_queries_round_trip_over_ipc() {
             document_roots: Default::default(),
             reminder_store: None,
             routing_guard: None,
+            routed: None,
             escalation_arming: None,
             loop_escalate_on_failure: false,
             wiki_sweep: None,
@@ -3201,6 +3207,7 @@ async fn audit_queries_round_trip_over_ipc() {
             document_roots: Default::default(),
             reminder_store: None,
             routing_guard: None,
+            routed: None,
             escalation_arming: None,
             loop_escalate_on_failure: false,
             wiki_sweep: None,
@@ -3550,4 +3557,798 @@ async fn allow_cloud_from_an_untrusted_channel_grants_nothing() {
     assert!(outcome.contains("only be allowed by the operator"), "{outcome}");
     assert_eq!(turns, 0, "the command still never reaches the agent");
     assert!(!consented);
+}
+
+// ---------------------------------------------------------------------------
+// Routing visibility B1 — `ModelRouted`, `CloudConsentRequested`, and the
+// `GetRoutingStatus` / `SetRoutingPin` queries.
+// ---------------------------------------------------------------------------
+
+mod routing_visibility {
+    use super::*;
+    use aivyx_llm::{
+        ConsentRequest, EscalationGuard, LlmError, LlmMessage, LlmProvider, LlmRequest,
+        LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage, ProviderFactory, RouteHint,
+        RoutedProvider,
+    };
+    use aivyx_route::{
+        Capability, EndpointRef, Locality, ModelKey, ModelProfile, Router, TaskKind,
+        TaskOverrides, Tier,
+    };
+
+    /// Answers every call with an empty successful stream.
+    struct OkProvider;
+
+    #[async_trait]
+    impl LlmProvider for OkProvider {
+        async fn chat_stream(
+            &self,
+            _request: LlmRequest<'_>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            Ok(Box::new(EmptyStream))
+        }
+    }
+
+    struct EmptyStream;
+
+    #[async_trait]
+    impl LlmStream for EmptyStream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(None)
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            Ok(LlmStepEnd::FinalMessage {
+                text: String::new(),
+                usage: LlmUsage::default(),
+            })
+        }
+    }
+
+    /// `small@default` (the configured model), `big@gpu`, and — when
+    /// `ambiguous` — a second `big` on `cpu`.
+    fn profiles(ambiguous: bool) -> Vec<ModelProfile> {
+        let mut small = ModelProfile::new("small", EndpointRef::new("default"));
+        small.tier = Tier::Small;
+        small.capabilities.insert(Capability::Completion);
+        let mut big = ModelProfile::new("big", EndpointRef::new("gpu"));
+        big.tier = Tier::Large;
+        big.capabilities
+            .extend([Capability::Completion, Capability::Tools]);
+        let mut out = vec![small, big];
+        if ambiguous {
+            let mut big_cpu = ModelProfile::new("big", EndpointRef::new("cpu"));
+            big_cpu.tier = Tier::Medium;
+            big_cpu.capabilities.insert(Capability::Completion);
+            out.push(big_cpu);
+        }
+        out
+    }
+
+    fn routed_provider(ambiguous: bool) -> RoutedProvider {
+        let factory: ProviderFactory =
+            Box::new(|_: &EndpointRef| Ok(Arc::new(OkProvider) as Arc<dyn LlmProvider>));
+        RoutedProvider::new(
+            ModelKey {
+                endpoint: EndpointRef::new("default"),
+                id: "small".into(),
+            },
+            Arc::new(OkProvider),
+            Router::new(profiles(ambiguous), TaskOverrides::default()),
+            factory,
+        )
+    }
+
+    /// `ask`-mode escalation sending every `chat` call to `claude@cloud`
+    /// (the `tiers` trigger), consulting `guard`.
+    fn escalating(guard: Arc<aivyx_channel::routing_guard::RoutingGuard>) -> RoutedProvider {
+        let mut claude = ModelProfile::new("claude", EndpointRef::new("cloud"));
+        claude.tier = Tier::Large;
+        claude.capabilities.insert(Capability::Completion);
+        claude.locality = Locality::Cloud;
+        routed_provider(false).with_escalation(aivyx_llm::EscalationSetup {
+            router: Router::new(vec![claude], TaskOverrides::default()).with_allow_cloud(true),
+            mode: aivyx_llm::EscalationMode::Ask,
+            no_local_candidate: false,
+            tiers: vec![TaskKind::Chat],
+            on_failure: false,
+            guard: guard as Arc<dyn EscalationGuard>,
+            observer: Arc::new(|_: &aivyx_llm::EscalationRecord| {}),
+        })
+    }
+
+    /// Makes one routed `chat` call the way the planner does — tagged with
+    /// the turn's session — and answers with the planner's own error
+    /// framing on failure.
+    struct RoutingAgent {
+        id: AgentId,
+        caps: CapabilitySet,
+        routed: Arc<RoutedProvider>,
+    }
+
+    #[async_trait]
+    impl Agent for RoutingAgent {
+        fn id(&self) -> AgentId {
+            self.id
+        }
+        fn capabilities(&self) -> &CapabilitySet {
+            &self.caps
+        }
+        async fn turn(&self, _message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
+            let messages = [LlmMessage::user_text("hi")];
+            let request = LlmRequest {
+                model: "small",
+                system: None,
+                messages: &messages,
+                tools: &[],
+                max_tokens: 8,
+                temperature: None,
+                id_slot: None,
+                slot_hint: None,
+                route: Some(RouteHint {
+                    task: TaskKind::Chat,
+                    session: Some(channel.session_id().to_string()),
+                    estimated_prompt_tokens: 12_578,
+                }),
+            };
+            let final_message = match self
+                .routed
+                .chat_stream(request, &CancellationToken::new())
+                .await
+            {
+                Ok(stream) => match stream.finish().await {
+                    Ok(_) => "a routed answer".to_string(),
+                    Err(e) => format!("LLM error: {e}"),
+                },
+                Err(e) => format!("LLM error: {e}"),
+            };
+            TurnOutcome::Completed {
+                final_message,
+                tool_calls_made: 0,
+                duration: Duration::from_millis(1),
+            }
+        }
+    }
+
+    /// A channel at a chosen trust tier.
+    struct TierChannel(aivyx_core::SessionId, aivyx_capability::TrustTier);
+
+    #[async_trait]
+    impl ChannelContext for TierChannel {
+        fn channel_name(&self) -> &str {
+            "tier-test"
+        }
+        fn platform(&self) -> aivyx_core::ChannelPlatform {
+            aivyx_core::ChannelPlatform::Telegram
+        }
+        fn trust_tier(&self) -> aivyx_capability::TrustTier {
+            self.1
+        }
+        fn session_id(&self) -> aivyx_core::SessionId {
+            self.0
+        }
+        async fn stream_event(
+            &self,
+            _event: StreamEvent<'_>,
+        ) -> Result<(), aivyx_core::ChannelError> {
+            Ok(())
+        }
+        async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), aivyx_core::ChannelError> {
+            Ok(())
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            CancellationToken::new()
+        }
+    }
+
+    async fn guard(scratch: &ScratchDir) -> Arc<aivyx_channel::routing_guard::RoutingGuard> {
+        let storage = aivyx_storage::RedbStorage::open(
+            aivyx_storage::StorageConfig::new(scratch.path.join("store.redb")),
+            aivyx_crypto::MasterKey::from_raw([3; 32]),
+        )
+        .await
+        .expect("storage opens");
+        Arc::new(aivyx_channel::routing_guard::RoutingGuard::new(storage))
+    }
+
+    /// A raw connection with one started session.
+    struct Conn {
+        reader: tokio::net::unix::OwnedReadHalf,
+        writer: tokio::net::unix::OwnedWriteHalf,
+        buf: Vec<u8>,
+        sid: String,
+    }
+
+    impl Conn {
+        async fn open(socket_path: &std::path::Path) -> Conn {
+            let stream = UnixStream::connect(socket_path).await.expect("connect");
+            let (mut reader, mut writer) = stream.into_split();
+            let mut buf = Vec::new();
+            loop {
+                match decode_frame::<DaemonEnvelope>(&buf) {
+                    Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+                        buf.drain(..consumed);
+                        break;
+                    }
+                    Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+                    other => panic!("expected DaemonReady, got {other:?}"),
+                }
+            }
+            let frame = encode_frame(&FrontendMessage::StartSession {
+                role: None,
+                frontend_type: None,
+            })
+            .unwrap();
+            writer.write_all(&frame).await.unwrap();
+            let sid = loop {
+                match decode_frame::<DaemonEnvelope>(&buf) {
+                    Ok((DaemonEnvelope::SessionStarted { session_id }, consumed)) => {
+                        buf.drain(..consumed);
+                        break session_id;
+                    }
+                    Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+                    other => panic!("expected SessionStarted, got {other:?}"),
+                }
+            };
+            Conn {
+                reader,
+                writer,
+                buf,
+                sid,
+            }
+        }
+
+        async fn submit(&mut self, text: &str) -> (Vec<StreamEventPayload>, String) {
+            let frame = encode_frame(&FrontendMessage::SubmitInput {
+                session_id: self.sid.clone(),
+                text: text.to_string(),
+                mission_id: None,
+                attachments: Vec::new(),
+                headless: false,
+            })
+            .unwrap();
+            self.writer.write_all(&frame).await.unwrap();
+            collect_turn_events(&mut self.reader, &mut self.buf).await
+        }
+
+        async fn query(&mut self, payload: QueryPayload) -> QueryResponsePayload {
+            let frame = encode_frame(&FrontendMessage::Query {
+                id: "q".into(),
+                payload,
+            })
+            .unwrap();
+            self.writer.write_all(&frame).await.unwrap();
+            loop {
+                match decode_frame::<DaemonEnvelope>(&self.buf) {
+                    Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
+                        self.buf.drain(..consumed);
+                        return payload;
+                    }
+                    Err(FrameError::IncompleteBuf) => {
+                        read_more(&mut self.reader, &mut self.buf).await
+                    }
+                    other => panic!("expected QueryResponse, got {other:?}"),
+                }
+            }
+        }
+
+        async fn close(mut self) {
+            let frame = encode_frame(&FrontendMessage::Disconnect).unwrap();
+            let _ = self.writer.write_all(&frame).await;
+        }
+    }
+
+    /// Runs a single-connection daemon over `channel` with the given routing
+    /// pieces; returns the scratch dir (keep it alive), the connection and
+    /// the daemon task.
+    async fn start<C: ChannelContext + Send + Sync + 'static>(
+        scratch: &ScratchDir,
+        agent: Arc<dyn Agent>,
+        channel: Arc<C>,
+        guard: Option<Arc<aivyx_channel::routing_guard::RoutingGuard>>,
+        routed: Option<Arc<RoutedProvider>>,
+    ) -> (Conn, tokio::task::JoinHandle<()>) {
+        let socket_path = scratch.socket_path();
+        let daemon_socket = socket_path.clone();
+        let handle = tokio::spawn(async move {
+            aivyx_channel::daemon_server::run_poc_daemon_with_routing(
+                &daemon_socket,
+                agent,
+                channel,
+                guard,
+                routed,
+            )
+            .await
+            .expect("daemon must complete successfully");
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        (Conn::open(&socket_path).await, handle)
+    }
+
+    fn routing_agent(routed: &Arc<RoutedProvider>) -> Arc<dyn Agent> {
+        Arc::new(RoutingAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+            routed: Arc::clone(routed),
+        })
+    }
+
+    fn local_channel() -> Arc<LocalChannel<Vec<u8>>> {
+        Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()))
+    }
+
+    #[tokio::test]
+    async fn a_routed_turn_sends_model_routed_just_before_turn_complete() {
+        let scratch = ScratchDir::new();
+        let routed = Arc::new(routed_provider(false));
+        let (mut conn, handle) = start(
+            &scratch,
+            routing_agent(&routed),
+            local_channel(),
+            None,
+            Some(Arc::clone(&routed)),
+        )
+        .await;
+        let (events, outcome) = conn.submit("hi").await;
+        assert_eq!(outcome, "completed: a routed answer");
+        let record = routed.router().last_decision(&conn.sid).expect("routed");
+        assert_eq!(
+            events.last(),
+            Some(&StreamEventPayload::ModelRouted {
+                model: record.model.to_string(),
+                task: "chat".into(),
+                reason: record.reason.clone(),
+            }),
+            "{events:?}"
+        );
+        assert!(!record.reason.is_empty());
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn no_model_routed_when_routing_is_off_or_nothing_was_routed() {
+        // Routing off.
+        let scratch = ScratchDir::new();
+        let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+        });
+        let (mut conn, handle) = start(&scratch, agent, local_channel(), None, None).await;
+        let (events, _) = conn.submit("hi").await;
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEventPayload::ModelRouted { .. })),
+            "{events:?}"
+        );
+        conn.close().await;
+        handle.await.unwrap();
+
+        // Routing on, but this conversation made no routed call.
+        let scratch = ScratchDir::new();
+        let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+        });
+        let routed = Arc::new(routed_provider(false));
+        let (mut conn, handle) =
+            start(&scratch, agent, local_channel(), None, Some(routed)).await;
+        let (events, _) = conn.submit("hi").await;
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEventPayload::ModelRouted { .. })),
+            "{events:?}"
+        );
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    /// One consent-stopping turn over a channel at `tier`; returns its
+    /// events and outcome.
+    async fn consent_turn(tier: aivyx_capability::TrustTier) -> (Vec<StreamEventPayload>, String) {
+        let scratch = ScratchDir::new();
+        let guard = guard(&scratch).await;
+        let routed = Arc::new(escalating(Arc::clone(&guard)));
+        let channel = Arc::new(TierChannel(aivyx_core::SessionId::new(), tier));
+        let (mut conn, handle) = start(
+            &scratch,
+            routing_agent(&routed),
+            channel,
+            Some(Arc::clone(&guard)),
+            Some(routed),
+        )
+        .await;
+        let out = conn.submit("hi").await;
+        assert_eq!(
+            guard.take_consent_request(&conn.sid),
+            None,
+            "the daemon took the request"
+        );
+        conn.close().await;
+        handle.await.unwrap();
+        out
+    }
+
+    fn request() -> ConsentRequest {
+        ConsentRequest {
+            model: "claude".into(),
+            endpoint: "cloud".into(),
+            trigger: "tier".into(),
+            estimated_tokens: 12_578,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_consent_stop_on_a_trusted_channel_offers_allow_cloud() {
+        let (events, outcome) = consent_turn(aivyx_capability::TrustTier::Trusted).await;
+        assert!(
+            events.contains(&StreamEventPayload::CloudConsentRequested {
+                model: "claude".into(),
+                endpoint: "cloud".into(),
+                why: "this kind of request is set to use the cloud".into(),
+                estimated_tokens: 12_578,
+                can_allow_here: true,
+            }),
+            "{events:?}"
+        );
+        assert_eq!(
+            outcome,
+            format!("completed: {}", aivyx_llm::consent_text(&request(), true))
+        );
+        assert!(outcome.contains("Send /allow-cloud"), "{outcome}");
+        assert!(outcome.contains("12,578"), "{outcome}");
+        assert!(!outcome.contains("LLM error"), "{outcome}");
+    }
+
+    #[tokio::test]
+    async fn a_consent_stop_on_a_semi_trusted_channel_names_the_operator() {
+        let (events, outcome) = consent_turn(aivyx_capability::TrustTier::SemiTrusted).await;
+        assert!(
+            events.contains(&StreamEventPayload::CloudConsentRequested {
+                model: "claude".into(),
+                endpoint: "cloud".into(),
+                why: "this kind of request is set to use the cloud".into(),
+                estimated_tokens: 12_578,
+                can_allow_here: false,
+            }),
+            "{events:?}"
+        );
+        assert_eq!(
+            outcome,
+            format!("completed: {}", aivyx_llm::consent_text(&request(), false))
+        );
+        assert!(outcome.contains("only be allowed by the operator"), "{outcome}");
+        assert!(!outcome.contains("Send /allow-cloud"), "{outcome}");
+        assert!(!outcome.contains("LLM error"), "{outcome}");
+    }
+
+    /// Notes a consent request on the guard mid-turn (as a routed side
+    /// call would) but answers normally.
+    struct SideCallConsentAgent {
+        id: AgentId,
+        caps: CapabilitySet,
+        guard: Arc<aivyx_channel::routing_guard::RoutingGuard>,
+    }
+
+    #[async_trait]
+    impl Agent for SideCallConsentAgent {
+        fn id(&self) -> AgentId {
+            self.id
+        }
+        fn capabilities(&self) -> &CapabilitySet {
+            &self.caps
+        }
+        async fn turn(&self, _message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
+            self.guard
+                .note_consent_requested(&channel.session_id().to_string(), &request());
+            TurnOutcome::Completed {
+                final_message: "a real answer".into(),
+                tool_calls_made: 0,
+                duration: Duration::from_millis(1),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_side_calls_consent_request_never_replaces_a_real_answer() {
+        let scratch = ScratchDir::new();
+        let guard = guard(&scratch).await;
+        let agent: Arc<dyn Agent> = Arc::new(SideCallConsentAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+            guard: Arc::clone(&guard),
+        });
+        let (mut conn, handle) =
+            start(&scratch, agent, local_channel(), Some(Arc::clone(&guard)), None).await;
+        let (events, outcome) = conn.submit("hi").await;
+        assert_eq!(outcome, "completed: a real answer");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEventPayload::CloudConsentRequested { .. })),
+            "{events:?}"
+        );
+        assert_eq!(guard.take_consent_request(&conn.sid), None, "still taken");
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    /// Answers with the consent text for `request()` without noting it —
+    /// so a request shown for this turn can only be a leftover.
+    struct EchoesAStaleLeadAgent {
+        id: AgentId,
+        caps: CapabilitySet,
+    }
+
+    #[async_trait]
+    impl Agent for EchoesAStaleLeadAgent {
+        fn id(&self) -> AgentId {
+            self.id
+        }
+        fn capabilities(&self) -> &CapabilitySet {
+            &self.caps
+        }
+        async fn turn(&self, _message: Message, _channel: &dyn ChannelContext) -> TurnOutcome {
+            TurnOutcome::Completed {
+                final_message: format!("LLM error: {}", aivyx_llm::consent_lead(&request())),
+                tool_calls_made: 0,
+                duration: Duration::from_millis(1),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_consent_request_left_from_an_earlier_turn_is_never_shown_on_a_later_one() {
+        let scratch = ScratchDir::new();
+        let guard = guard(&scratch).await;
+        let agent: Arc<dyn Agent> = Arc::new(EchoesAStaleLeadAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+        });
+        let (mut conn, handle) =
+            start(&scratch, agent, local_channel(), Some(Arc::clone(&guard)), None).await;
+        // Left over between turns (e.g. by a background call on this
+        // conversation after the previous turn's take).
+        guard.note_consent_requested(&conn.sid, &request());
+        let (events, outcome) = conn.submit("hi").await;
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEventPayload::CloudConsentRequested { .. })),
+            "{events:?}"
+        );
+        assert!(outcome.starts_with("completed: LLM error:"), "{outcome}");
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    // ---- queries ----
+
+    #[tokio::test]
+    async fn get_routing_status_with_routing_off_is_disabled_not_an_error() {
+        let scratch = ScratchDir::new();
+        let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+        });
+        let (mut conn, handle) = start(&scratch, agent, local_channel(), None, None).await;
+        let sid = conn.sid.clone();
+        for session_id in [None, Some(sid)] {
+            assert_eq!(
+                conn.query(QueryPayload::GetRoutingStatus { session_id }).await,
+                QueryResponsePayload::RoutingStatus(
+                    aivyx_channel::daemon_ipc::RoutingStatusView::disabled()
+                )
+            );
+        }
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_routing_status_with_routing_on_reports_candidates_and_the_conversation() {
+        let scratch = ScratchDir::new();
+        let guard = guard(&scratch).await;
+        let routed = Arc::new(escalating(Arc::clone(&guard)));
+        let plain = Arc::new(routed_provider(false));
+        let (mut conn, handle) = start(
+            &scratch,
+            routing_agent(&plain),
+            local_channel(),
+            Some(Arc::clone(&guard)),
+            Some(Arc::clone(&routed)),
+        )
+        .await;
+        let sid = conn.sid.clone();
+        routed.router().pin(
+            &sid,
+            ModelKey {
+                endpoint: EndpointRef::new("gpu"),
+                id: "big".into(),
+            },
+        );
+        guard.allow(&sid);
+        let QueryResponsePayload::RoutingStatus(view) = conn
+            .query(QueryPayload::GetRoutingStatus {
+                session_id: Some(sid.clone()),
+            })
+            .await
+        else {
+            panic!("expected RoutingStatus");
+        };
+        assert!(view.enabled);
+        assert_eq!(view.default_model.as_deref(), Some("small@default"));
+        let models: Vec<&str> = view.candidates.iter().map(|c| c.model.as_str()).collect();
+        assert_eq!(models, ["small@default", "big@gpu"]);
+        let big = &view.candidates[1];
+        assert_eq!(big.tier, "large");
+        assert_eq!(big.capabilities, ["completion", "tools"]);
+        assert_eq!(big.availability, "available");
+        assert_eq!(big.residency, None);
+        assert_eq!(view.escalation_mode, "ask");
+        assert!(!view.classifier_enabled);
+        let session = view.session.expect("asked about a session");
+        assert_eq!(session.session_id, sid);
+        assert_eq!(session.pinned.as_deref(), Some("big@gpu"));
+        assert_eq!(session.current_model.as_deref(), Some("big@gpu"));
+        assert_eq!(session.last_model, None);
+        assert_eq!(session.tainted, None);
+        assert!(session.cloud_allowed);
+
+        // Without a session: no conversation block.
+        let QueryResponsePayload::RoutingStatus(view) = conn
+            .query(QueryPayload::GetRoutingStatus { session_id: None })
+            .await
+        else {
+            panic!("expected RoutingStatus");
+        };
+        assert_eq!(view.session, None);
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_routing_status_reports_the_last_decision_after_a_routed_turn() {
+        let scratch = ScratchDir::new();
+        let routed = Arc::new(routed_provider(false));
+        let (mut conn, handle) = start(
+            &scratch,
+            routing_agent(&routed),
+            local_channel(),
+            None,
+            Some(Arc::clone(&routed)),
+        )
+        .await;
+        conn.submit("hi").await;
+        let sid = conn.sid.clone();
+        let QueryResponsePayload::RoutingStatus(view) = conn
+            .query(QueryPayload::GetRoutingStatus {
+                session_id: Some(sid.clone()),
+            })
+            .await
+        else {
+            panic!("expected RoutingStatus");
+        };
+        let record = routed.router().last_decision(&sid).unwrap();
+        let session = view.session.unwrap();
+        assert_eq!(session.last_model, Some(record.model.to_string()));
+        assert_eq!(session.last_reason, Some(record.reason));
+        // Escalation isn't configured: its mode reads `off`.
+        assert_eq!(view.escalation_mode, "off");
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_routing_pin_resolves_ids_like_aivyx_coder() {
+        let scratch = ScratchDir::new();
+        let routed = Arc::new(routed_provider(true));
+        let (mut conn, handle) = start(
+            &scratch,
+            routing_agent(&routed),
+            local_channel(),
+            None,
+            Some(Arc::clone(&routed)),
+        )
+        .await;
+        let sid = conn.sid.clone();
+        let pin = |model: Option<&str>| QueryPayload::SetRoutingPin {
+            session_id: sid.clone(),
+            model: model.map(str::to_string),
+        };
+
+        // A bare id served by exactly one endpoint.
+        assert_eq!(
+            conn.query(pin(Some("small"))).await,
+            QueryResponsePayload::RoutingPinned {
+                model: Some("small@default".into())
+            }
+        );
+        assert_eq!(
+            routed.router().pinned(&sid).map(|k| k.to_string()).as_deref(),
+            Some("small@default")
+        );
+
+        // An ambiguous bare id: an error naming both, and the pin stays.
+        match conn.query(pin(Some("big"))).await {
+            QueryResponsePayload::QueryError { message, .. } => assert_eq!(
+                message,
+                "`big` is served by several endpoints (big@gpu, big@cpu) — use id@endpoint."
+            ),
+            other => panic!("expected QueryError, got {other:?}"),
+        }
+        // …which id@endpoint disambiguates.
+        assert_eq!(
+            conn.query(pin(Some("big@cpu"))).await,
+            QueryResponsePayload::RoutingPinned {
+                model: Some("big@cpu".into())
+            }
+        );
+
+        // An unknown id.
+        match conn.query(pin(Some("nope"))).await {
+            QueryResponsePayload::QueryError { message, .. } => {
+                assert_eq!(message, "No model `nope` — see /models.")
+            }
+            other => panic!("expected QueryError, got {other:?}"),
+        }
+        assert_eq!(
+            routed.router().pinned(&sid).map(|k| k.to_string()).as_deref(),
+            Some("big@cpu"),
+            "a failed pin leaves the previous one"
+        );
+
+        // `None` unpins.
+        assert_eq!(
+            conn.query(pin(None)).await,
+            QueryResponsePayload::RoutingPinned { model: None }
+        );
+        assert_eq!(routed.router().pinned(&sid), None);
+
+        // A session id that isn't one.
+        match conn
+            .query(QueryPayload::SetRoutingPin {
+                session_id: "not-a-session".into(),
+                model: Some("small".into()),
+            })
+            .await
+        {
+            QueryResponsePayload::QueryError { code, .. } => assert_eq!(code, "invalid_session"),
+            other => panic!("expected QueryError, got {other:?}"),
+        }
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_routing_pin_with_routing_off_says_how_to_turn_it_on() {
+        let scratch = ScratchDir::new();
+        let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+        });
+        let (mut conn, handle) = start(&scratch, agent, local_channel(), None, None).await;
+        let sid = conn.sid.clone();
+        match conn
+            .query(QueryPayload::SetRoutingPin {
+                session_id: sid,
+                model: Some("small".into()),
+            })
+            .await
+        {
+            QueryResponsePayload::QueryError { code, message } => {
+                assert_eq!(code, "routing_disabled");
+                assert_eq!(
+                    message,
+                    "Model routing commands are not available here — they need \
+                     `[routing] enabled = true`."
+                );
+            }
+            other => panic!("expected QueryError, got {other:?}"),
+        }
+        conn.close().await;
+        handle.await.unwrap();
+    }
 }

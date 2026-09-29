@@ -43,7 +43,10 @@ pub use fs::{
 pub use git::{GitCommitTool, GitDiffTool, GitReadToolConfig, GitStatusTool, GitWriteToolConfig};
 pub use net_dns::NetDnsTool;
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
-pub use routing::{RoutingExplainTool, RoutingStatusTool};
+pub use routing::{
+    RoutingCandidate, RoutingConversation, RoutingEscalation, RoutingExplainTool, RoutingStatus,
+    RoutingStatusTool, RoutingVram, resolve_model, routing_status,
+};
 pub use shell::{ShellExecTool, ShellExecToolConfig};
 pub use skill_defaults::{
     SkillDefaultsListTool, SkillDefaultsReadTool, render_default_skills_section,

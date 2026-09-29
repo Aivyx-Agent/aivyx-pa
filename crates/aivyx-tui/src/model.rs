@@ -813,6 +813,11 @@ pub fn lines_from_event(event: &StreamEventPayload) -> Vec<ChatLine> {
         | StreamEventPayload::ToolCallFinished { .. }
         | StreamEventPayload::ToolOutput { .. } => LineKind::Tool,
         StreamEventPayload::ApprovalGate { .. } => LineKind::Gate,
+        // Routing visibility B1 — not chat lines: the routed model belongs
+        // in the status bar, and the consent request reaches the chat as
+        // the turn's outcome text (the daemon words it for this channel).
+        StreamEventPayload::ModelRouted { .. }
+        | StreamEventPayload::CloudConsentRequested { .. } => return Vec::new(),
     };
 
     let rendered = event.render_for_cli();
@@ -837,6 +842,26 @@ mod tests {
 
     fn typed(state: AppState, s: &str) -> AppState {
         s.chars().fold(state, |st, c| update(st, Msg::InsertChar(c)))
+    }
+
+    // ---- routing visibility B1 ----
+
+    #[test]
+    fn routing_events_add_no_chat_lines() {
+        let routed = StreamEventPayload::ModelRouted {
+            model: "small@default".into(),
+            task: "chat".into(),
+            reason: "r".into(),
+        };
+        let consent = StreamEventPayload::CloudConsentRequested {
+            model: "m".into(),
+            endpoint: "e".into(),
+            why: "w".into(),
+            estimated_tokens: 1,
+            can_allow_here: true,
+        };
+        assert!(lines_from_event(&routed).is_empty());
+        assert!(lines_from_event(&consent).is_empty());
     }
 
     // ---- input editing ----

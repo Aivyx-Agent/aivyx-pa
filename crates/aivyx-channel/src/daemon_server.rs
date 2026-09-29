@@ -27,8 +27,8 @@ use crate::daemon_ipc::{
     AuditEntrySummary, DaemonLifecycleEvent, DaemonMessage, FrameError, FrontendMessage,
     FrontendType, GalleryImage, GateSummary, MissionDetail, MissionSummary,
     NotificationHistoryEntry, PROTOCOL_VERSION, ProfileSummary, QueryPayload, QueryResponsePayload,
-    ReminderView, SessionSummary, StreamEventPayload, WireChannelPlatform, decode_frame,
-    encode_frame,
+    ReminderView, RoutingCandidateView, RoutingSessionView, RoutingStatusView, SessionSummary,
+    StreamEventPayload, WireChannelPlatform, decode_frame, encode_frame,
 };
 use crate::mission;
 
@@ -530,6 +530,12 @@ pub struct DaemonConfig {
     /// query record consent on it. `None` ⇒ escalation isn't configured and
     /// both answer "not enabled".
     pub routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
+    /// Routing visibility B1 — the daemon's `RoutedProvider`, `Some` only
+    /// when `[routing] enabled`: each routed turn ends with a `ModelRouted`
+    /// event, and `GetRoutingStatus` / `SetRoutingPin` read and pin its
+    /// router. `None` ⇒ no `ModelRouted`, a disabled status, and
+    /// `SetRoutingPin` answers "not available".
+    pub routed: Option<Arc<aivyx_llm::RoutedProvider>>,
     /// Model routing Part 3b (A16) — the process's `on_failure` arming (the
     /// audited wrapper over `routing_guard`), `Some` only when `on_failure`
     /// is on. Attached to the autonomous loop's trigger dispatch.
@@ -815,6 +821,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         document_roots,
         reminder_store,
         routing_guard,
+        routed,
         escalation_arming,
         loop_escalate_on_failure,
         wiki_sweep,
@@ -1809,6 +1816,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             reminder_store: reminder_store.clone(),
             comfyui_base_url: comfyui_base_url.clone(),
             routing_guard: routing_guard.clone(),
+            routed: routed.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -2123,6 +2131,8 @@ struct ConnectionContext {
     reminder_store: Option<crate::reminder_tool::SharedReminderStore>,
     /// Model routing Part 3b — see `DaemonConfig::routing_guard`.
     routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
+    /// Routing visibility B1 — see `DaemonConfig::routed`.
+    routed: Option<Arc<aivyx_llm::RoutedProvider>>,
     /// Studio Gallery — base URL of the `comfyui` `[[mcp_server]]`'s
     /// backing ComfyUI instance, for the `GetGallery` query handler.
     comfyui_base_url: Option<String>,
@@ -2182,6 +2192,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         reminder_store,
         comfyui_base_url,
         routing_guard,
+        routed,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -2339,11 +2350,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 // the bridge's session, which falls back
                                 // to the inner channel's (not a fresh id)
                                 // when `sid` isn't a UUID.
-                                let key = sid
-                                    .parse::<uuid::Uuid>()
-                                    .map(aivyx_core::SessionId)
-                                    .unwrap_or_else(|_| ch.session_id())
-                                    .to_string();
+                                let key = routing_session_key(&sid, ch.as_ref());
                                 // Consent is the operator's act: an
                                 // Untrusted/SemiTrusted sender (a bot
                                 // channel without an allowlist) can't
@@ -2369,6 +2376,19 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 writer.write_all(&frame).await?;
                                 continue;
                             }
+                            // Routing visibility B1 — the conversation's
+                            // routing key and whether this channel may give
+                            // cloud consent (Trusted/Kernel, as `/allow-cloud`
+                            // checks), for the events sent after the turn;
+                            // and drop any consent request left over from an
+                            // earlier turn, so it can't answer for this one.
+                            let routing_key = routing_session_key(&sid, ch.as_ref());
+                            let can_allow_here = matches!(
+                                ch.trust_tier(),
+                                aivyx_capability::TrustTier::Trusted
+                                    | aivyx_capability::TrustTier::Kernel
+                            );
+                            discard_stale_consent_request(routing_guard.as_deref(), &routing_key);
                             // Phase 86 — keep the user text for the
                             // conversation-window write site below
                             // (Message::text consumes it).
@@ -2811,7 +2831,20 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 }
                             }
 
-                            let outcome_str = format_outcome(&outcome);
+                            let mut outcome_str = format_outcome(&outcome);
+                            for event in routing_turn_events(
+                                routing_guard.as_deref(),
+                                routed.as_deref(),
+                                &routing_key,
+                                can_allow_here,
+                                &mut outcome_str,
+                            ) {
+                                let msg = DaemonMessage::StreamEvent {
+                                    session_id: sid.clone(),
+                                    event,
+                                };
+                                writer.write_all(&encode_frame(&msg)?).await?;
+                            }
 
                             let resp = DaemonMessage::TurnComplete {
                                 session_id: sid,
@@ -2888,6 +2921,19 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                                 resume_text,
                                             );
                                             let sid = session_id.clone().unwrap_or_default();
+                                            // Routing visibility B1 — as a
+                                            // SubmitInput turn does.
+                                            let routing_key =
+                                                routing_session_key(&sid, ch.as_ref());
+                                            let can_allow_here = matches!(
+                                                ch.trust_tier(),
+                                                aivyx_capability::TrustTier::Trusted
+                                                    | aivyx_capability::TrustTier::Kernel
+                                            );
+                                            discard_stale_consent_request(
+                                                routing_guard.as_deref(),
+                                                &routing_key,
+                                            );
                                             let bridge = IpcChannelBridge {
                                                 inner: ch,
                                                 writer: Arc::new(tokio::sync::Mutex::new(writer)),
@@ -2909,7 +2955,21 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                                 })?
                                                 .into_inner();
 
-                                            let outcome_str = format_outcome(&resume_outcome);
+                                            let mut outcome_str =
+                                                format_outcome(&resume_outcome);
+                                            for event in routing_turn_events(
+                                                routing_guard.as_deref(),
+                                                routed.as_deref(),
+                                                &routing_key,
+                                                can_allow_here,
+                                                &mut outcome_str,
+                                            ) {
+                                                let msg = DaemonMessage::StreamEvent {
+                                                    session_id: sid.clone(),
+                                                    event,
+                                                };
+                                                writer.write_all(&encode_frame(&msg)?).await?;
+                                            }
                                             let resp = DaemonMessage::TurnComplete {
                                                 session_id: sid,
                                                 outcome: outcome_str,
@@ -3013,6 +3073,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 comfyui_base_url.as_deref(),
                                 reminder_store.as_ref(),
                                 routing_guard.as_deref(),
+                                routed.as_deref(),
                                 audit_log.as_deref(),
                             )
                             .await;
@@ -3788,7 +3849,7 @@ pub async fn run_poc_daemon<C: ChannelContext + Send + Sync + 'static>(
 ) -> Result<(), DaemonError> {
     let channel: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
-    run_single_connection_daemon(socket_path, agent, factory, None).await
+    run_single_connection_daemon(socket_path, agent, factory, None, None).await
 }
 
 /// [`run_poc_daemon`] with a model-routing guard attached, so a test can
@@ -3799,9 +3860,23 @@ pub async fn run_poc_daemon_with_routing_guard<C: ChannelContext + Send + Sync +
     channel: Arc<C>,
     routing_guard: Arc<crate::routing_guard::RoutingGuard>,
 ) -> Result<(), DaemonError> {
+    run_poc_daemon_with_routing(socket_path, agent, channel, Some(routing_guard), None).await
+}
+
+/// [`run_poc_daemon`] with the model-routing pieces attached — the guard
+/// (cloud consent) and the routed provider — so a test can drive
+/// `ModelRouted`, `CloudConsentRequested` and the routing queries end to
+/// end (Routing visibility B1).
+pub async fn run_poc_daemon_with_routing<C: ChannelContext + Send + Sync + 'static>(
+    socket_path: &Path,
+    agent: Arc<dyn Agent>,
+    channel: Arc<C>,
+    routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
+    routed: Option<Arc<aivyx_llm::RoutedProvider>>,
+) -> Result<(), DaemonError> {
     let channel: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
-    run_single_connection_daemon(socket_path, agent, factory, Some(routing_guard)).await
+    run_single_connection_daemon(socket_path, agent, factory, routing_guard, routed).await
 }
 
 /// Accept exactly one connection, serve it to completion, then return.
@@ -3811,6 +3886,7 @@ async fn run_single_connection_daemon(
     agent: Arc<dyn Agent>,
     channel_factory: ChannelFactory,
     routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
+    routed: Option<Arc<aivyx_llm::RoutedProvider>>,
 ) -> Result<(), DaemonError> {
     let _ = std::fs::remove_file(socket_path);
 
@@ -3888,6 +3964,7 @@ async fn run_single_connection_daemon(
         reminder_store: None,
         comfyui_base_url: None,
         routing_guard,
+        routed,
     })
     .await
 }
@@ -3984,6 +4061,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         document_roots: Default::default(),
         reminder_store: None,
         routing_guard: None,
+        routed: None,
         escalation_arming: None,
         loop_escalate_on_failure: false,
         wiki_sweep: None,
@@ -3998,6 +4076,120 @@ async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reaso
     };
     if let Ok(frame) = encode_frame(&event) {
         let _ = writer.write_all(&frame).await;
+    }
+}
+
+/// Routing visibility B1 — the routing key of a daemon turn's conversation:
+/// the bridge's session (the same key the turn's router and the routing
+/// guard see), falling back to the inner channel's when `sid` isn't a UUID.
+fn routing_session_key(sid: &str, ch: &(dyn ChannelContext + Send + Sync)) -> String {
+    sid.parse::<uuid::Uuid>()
+        .map(aivyx_core::SessionId)
+        .unwrap_or_else(|_| ch.session_id())
+        .to_string()
+}
+
+/// Routing visibility B1 — a consent request must never outlive its turn:
+/// before a turn runs, drop any request left over for its conversation.
+fn discard_stale_consent_request(
+    routing_guard: Option<&crate::routing_guard::RoutingGuard>,
+    key: &str,
+) {
+    if let Some(guard) = routing_guard {
+        let _ = guard.take_consent_request(key);
+    }
+}
+
+/// Routing visibility B1 — after a turn: the events to send before
+/// `TurnComplete`, rewriting `outcome` when the turn stopped to ask for
+/// cloud consent.
+///
+/// - The request is always taken (so it never outlives its turn), but only
+///   shown when the turn actually stopped on it — its outcome carries the
+///   request's channel-neutral lead. A routed side call that stopped while
+///   the turn still answered never replaces the answer.
+/// - Shown, it becomes `CloudConsentRequested` plus an outcome worded for
+///   the channel (`can_allow_here`: Trusted/Kernel, the same test
+///   `/allow-cloud` applies), without the planner's `LLM error:` framing.
+/// - `ModelRouted` (last, just before `TurnComplete`) carries the router's
+///   latest decision for the conversation; nothing when routing is off or
+///   the conversation has no routed call.
+fn routing_turn_events(
+    routing_guard: Option<&crate::routing_guard::RoutingGuard>,
+    routed: Option<&aivyx_llm::RoutedProvider>,
+    key: &str,
+    can_allow_here: bool,
+    outcome: &mut String,
+) -> Vec<StreamEventPayload> {
+    let mut events = Vec::new();
+    if let Some(req) = routing_guard.and_then(|g| g.take_consent_request(key))
+        && outcome.contains(&aivyx_llm::consent_lead(&req))
+    {
+        let kind = outcome.split_once(": ").map_or("completed", |(kind, _)| kind);
+        *outcome = format!("{kind}: {}", aivyx_llm::consent_text(&req, can_allow_here));
+        events.push(StreamEventPayload::CloudConsentRequested {
+            why: aivyx_llm::plain_why(&req.trigger).to_string(),
+            model: req.model,
+            endpoint: req.endpoint,
+            estimated_tokens: req.estimated_tokens,
+            can_allow_here,
+        });
+    }
+    if let Some(record) = routed.and_then(|r| r.router().last_decision(key)) {
+        events.push(StreamEventPayload::ModelRouted {
+            model: record.model.to_string(),
+            task: record.task.name().to_string(),
+            reason: record.reason,
+        });
+    }
+    events
+}
+
+/// Routing visibility B1 — what a routing request answers with routing off
+/// (the spec's wording, naming aivyx-pa's config).
+const ROUTING_OFF_REPLY: &str =
+    "Model routing commands are not available here — they need `[routing] enabled = true`.";
+
+/// Routing visibility B1 — the shared builder's [`aivyx_core::RoutingStatus`]
+/// as the wire's [`RoutingStatusView`].
+fn routing_status_view(status: aivyx_core::RoutingStatus) -> RoutingStatusView {
+    RoutingStatusView {
+        enabled: true,
+        default_model: Some(status.default_model),
+        candidates: status
+            .candidates
+            .into_iter()
+            .map(|c| RoutingCandidateView {
+                model: c.model,
+                tier: c.tier,
+                capabilities: c.capabilities,
+                unknown_capabilities: c.unknown_capabilities,
+                context_window: c.context_window,
+                availability: c.availability,
+                residency: c.residency,
+            })
+            .collect(),
+        vram_total_bytes: status.vram.map(|v| v.total_bytes),
+        vram_available_bytes: status.vram.map(|v| v.available_bytes),
+        escalation_mode: status
+            .escalation
+            .map_or_else(|| "off".to_string(), |e| e.mode),
+        classifier_enabled: status.classifier_enabled,
+        session: status.conversation.map(|c| {
+            let (last_model, last_reason) = match c.last_decision {
+                Some((model, _task, reason)) => (Some(model), Some(reason)),
+                None => (None, None),
+            };
+            RoutingSessionView {
+                session_id: c.session,
+                current_model: c.current_model,
+                pinned: c.pinned,
+                last_model,
+                last_reason,
+                tainted: c.tainted,
+                cloud_allowed: c.cloud_allowed,
+            }
+        }),
     }
 }
 
@@ -4264,6 +4456,8 @@ async fn handle_query(
     reminder_store: Option<&crate::reminder_tool::SharedReminderStore>,
     // Model routing Part 3b — see `DaemonConfig::routing_guard`.
     routing_guard: Option<&crate::routing_guard::RoutingGuard>,
+    // Routing visibility B1 — see `DaemonConfig::routed`.
+    routed: Option<&aivyx_llm::RoutedProvider>,
     // The audit log again, for `CloudConsentGranted` (the parameter above
     // is shared with the read-only audit queries).
     consent_audit: Option<&PersistentAuditLog>,
@@ -4440,6 +4634,61 @@ async fn handle_query(
                     QueryResponsePayload::CloudEscalationAllowed { session_id: session }
                 }
                 false => QueryResponsePayload::CloudEscalationNotEnabled,
+            }
+        }
+        QueryPayload::GetRoutingStatus { session_id } => {
+            let session = match session_id {
+                None => None,
+                Some(id) => match id.parse::<uuid::Uuid>() {
+                    Ok(uuid) => Some(aivyx_core::SessionId(uuid).to_string()),
+                    Err(_) => {
+                        return QueryResponsePayload::QueryError {
+                            code: "invalid_session".into(),
+                            message: format!("`{id}` is not a session id"),
+                        };
+                    }
+                },
+            };
+            let view = match routed {
+                None => RoutingStatusView::disabled(),
+                Some(routed) => routing_status_view(
+                    aivyx_core::routing_status(routed, session.as_deref()).await,
+                ),
+            };
+            QueryResponsePayload::RoutingStatus(view)
+        }
+        QueryPayload::SetRoutingPin { session_id, model } => {
+            let Some(routed) = routed else {
+                return QueryResponsePayload::QueryError {
+                    code: "routing_disabled".into(),
+                    message: ROUTING_OFF_REPLY.into(),
+                };
+            };
+            let Ok(uuid) = session_id.parse::<uuid::Uuid>() else {
+                return QueryResponsePayload::QueryError {
+                    code: "invalid_session".into(),
+                    message: format!("`{session_id}` is not a session id"),
+                };
+            };
+            let session = aivyx_core::SessionId(uuid).to_string();
+            let router = routed.router();
+            match model {
+                None => {
+                    router.unpin(&session);
+                    QueryResponsePayload::RoutingPinned { model: None }
+                }
+                Some(arg) => match aivyx_core::resolve_model(&router.profiles(), arg.trim()) {
+                    Ok(key) => {
+                        router.pin(&session, key.clone());
+                        QueryResponsePayload::RoutingPinned {
+                            model: Some(key.to_string()),
+                        }
+                    }
+                    Err(message) => QueryResponsePayload::QueryError {
+                        code: "unknown_model".into(),
+                        message,
+                    },
+                },
             }
         }
         QueryPayload::DumpToolRelevance { keyword_key_filter } => {

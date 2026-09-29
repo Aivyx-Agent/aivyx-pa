@@ -121,6 +121,8 @@ that converts to/from the core type at the process boundary.
 | `ToolCallFinished`   | `tool_id: String`, `tool_name: String`, `outcome_summary: String` |
 | `ToolOutput`         | `tool_id: String`, `tool_name: String`, `chunk: String` |
 | `ApprovalGate`       | `mission_id: String`, `gate_id: String`, `reason: String`, `scope: Option<String>` |
+| `ModelRouted`        | `model: String`, `task: String`, `reason: String` — daemon-only; see the routing visibility addendum |
+| `CloudConsentRequested` | `model: String`, `endpoint: String`, `why: String`, `estimated_tokens: u32`, `can_allow_here: bool` — daemon-only; see the routing visibility addendum |
 
 `Attachment` is excluded from the Phase 16 PoC. Binary payloads
 over JSON require base64 encoding; the complexity is deferred to a
@@ -340,3 +342,91 @@ against its own `GetMcpStatus` server list client-side to render a
 
 The query returns `QueryError { code: "no_audit_log" }` on a daemon
 with no audit log configured — the same posture as `GetToolStats`.
+
+## Routing visibility addendum (B1) — routed-model and cloud-consent events; routing queries
+
+Additive: adapters skip stream-event kinds they don't know (the Channel
+SDK contract), so older front ends are unaffected.
+
+### Stream events
+
+Both are daemon-only — there is no core `StreamEvent` counterpart — and
+both are sent after the turn's own events, before `TurnComplete`.
+
+**`ModelRouted { model, task, reason }`** — the model routing last chose
+for this conversation (`Router::last_decision`), sent after every turn
+once the conversation has a routed call. `model` is `id@endpoint`,
+`task` the routed call's kind (`chat`, `plan`, …), `reason` the router's
+human sentence. Never sent with `[routing]` off, or before the
+conversation's first routed call.
+
+```json
+{"kind": "ModelRouted", "model": "qwen3:8b@default", "task": "chat",
+ "reason": "…"}
+```
+
+**`CloudConsentRequested { model, endpoint, why, estimated_tokens,
+can_allow_here }`** — the turn stopped to ask for cloud consent (A15
+`ask` mode). `model` is the model id, `endpoint` the
+`[routing.endpoints.*]` name, `why` plain words (`no local model can
+handle this request`, `this kind of request is set to use the cloud`,
+`the local model got stuck`), `estimated_tokens` what would be sent.
+`can_allow_here` is `true` when the session's channel is Trusted or
+Kernel — the channels `/allow-cloud` accepts consent from.
+
+```json
+{"kind": "CloudConsentRequested", "model": "claude-sonnet-4-5",
+ "endpoint": "anthropic", "why": "no local model can handle this request",
+ "estimated_tokens": 12578, "can_allow_here": true}
+```
+
+When the event is sent, the `TurnComplete` outcome text is replaced by
+the same request worded for the channel (no `LLM error:` framing), so a
+front end that ignores the event still shows it:
+
+- `can_allow_here`: "This needs a cloud model: `<model>` (your
+  `<endpoint>` endpoint), because `<why>`. About `<N>` tokens — this
+  conversation plus the assistant's instructions — would be sent. Send
+  /allow-cloud to allow it for this conversation, then resend your
+  message."
+- otherwise: the same first two sentences, then "Cloud use can only be
+  allowed by the operator — from the terminal (`/allow-cloud`) or the
+  Studio."
+
+A consent request never outlives its turn: the daemon drops any request
+left for the conversation before the turn runs, and takes it after. It
+is shown only when the turn's outcome actually carries it — a routed
+side call that stopped for consent while the turn still answered never
+replaces the answer.
+
+### Queries
+
+**`GetRoutingStatus { session_id: Option<String> }`** →
+`RoutingStatus(RoutingStatusView)`. Built by the same function as the
+`routing.status` tool. Fields: `enabled`, `default_model`
+(`id@endpoint`), `candidates` (each `model`, `tier`, `capabilities`,
+`unknown_capabilities`, `context_window`, `availability`, `residency`:
+`loaded` / `needs_load` / `wont_fit` / `null`), `vram_total_bytes`,
+`vram_available_bytes`, `escalation_mode` (`off` / `ask` / `auto` /
+`never`), `classifier_enabled`, and — for the given session — `session`
+(`session_id`, `current_model`, `pinned`, `last_model`, `last_reason`,
+`tainted`, `cloud_allowed`). With routing off the answer is `enabled:
+false` with empty lists and `escalation_mode: "off"`, never an error. A
+`session_id` that isn't a session UUID is `QueryError { code:
+"invalid_session" }`.
+
+**`SetRoutingPin { session_id: String, model: Option<String> }`** →
+`RoutingPinned { model: Option<String> }` (the resolved `id@endpoint`,
+or `None` after unpinning). `model` is `id@endpoint`, or a bare id
+served by exactly one endpoint — resolved like `aivyx-coder`'s `/model`.
+Errors (`QueryError`):
+
+| `code` | `message` |
+|---|---|
+| `routing_disabled` | "Model routing commands are not available here — they need `[routing] enabled = true`." |
+| `unknown_model` | "No model `<arg>` — see /models." or "`<id>` is served by several endpoints (a@x, b@y) — use id@endpoint." |
+| `invalid_session` | "`<id>` is not a session id" |
+
+Trust: the same as the other Studio settings queries — the socket's
+`0600` mode is the auth boundary. A pin changes which local model a
+conversation uses; it never grants cloud escalation (A15 unchanged).
