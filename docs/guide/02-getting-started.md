@@ -5,7 +5,7 @@ This page gets you from a fresh install to a running assistant.
 ## 1. Install
 
 Pick the path that matches your machine — the full instructions live in the
-[install guide](https://github.com/Aivyx-Agent/aivyx/blob/main/docs/INSTALL.md):
+[install guide](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md):
 
 - **macOS / Linux** — run the one-line installer, or build from source.
 - **Windows** — run Aivyx PA under WSL2, or use the Docker appliance. (There is no
@@ -17,10 +17,14 @@ Pick the path that matches your machine — the full instructions live in the
 
 Aivyx PA needs an AI model to reason with. You have two kinds of choice:
 
-- **Local model (free, private, no API key).** Install [Ollama](https://ollama.ai)
-  and pull a tool-capable model — `qwen3:8b` is the recommended starter. Aivyx PA
-  detects Ollama automatically and sizes everything for you. Nothing leaves your
-  machine.
+- **Local model (free, private, no API key).** Nothing leaves your machine. Any
+  of these works:
+  - [Ollama](https://ollama.com) — the easiest start; pull a tool-capable model
+    such as `qwen3:8b`.
+  - [Lemonade Server](https://lemonade-server.ai), a llama.cpp `llama-server`,
+    or [Jan](https://jan.ai).
+  - `aivyx-broker`, if you want Aivyx PA and Aivyx Coder to share one
+    llama-server.
 - **A provider (Anthropic or OpenAI).** Paste an API key during setup. These
   models are more capable; you pay the provider per use.
 
@@ -34,9 +38,12 @@ Run the setup wizard once:
 aivyx-pa init
 ```
 
-It detects your model, then walks you through **creating your agent** — giving
-your assistant a name, a personality, and a level of access to your machine.
-That flow is covered in detail on the next page.
+It looks for a local model server that's already running (Ollama, Lemonade,
+llama.cpp, Jan or the broker), offers the ones it finds first, and lets you pick
+one of their models. If it finds none, it asks you to choose — it never picks a
+cloud provider for you. Then it walks you through **creating your agent** —
+giving your assistant a name, a personality, and a level of access to your
+machine. That flow is covered in detail on the next page.
 
 When the wizard finishes it writes a small config file (`aivyx-pa.toml`) and you're
 ready. Launch the assistant with:
@@ -45,14 +52,32 @@ ready. Launch the assistant with:
 aivyx-pa
 ```
 
-This starts the daemon (if it isn't already running), drops you into a chat
-session, and serves this Studio at **http://127.0.0.1:7843**.
+This drops you into a chat session. If your passphrase is stored — in your OS
+keyring (`aivyx-pa keyring set`) or the `AIVYX_PA_PASSPHRASE` environment
+variable — `aivyx-pa` also starts the **daemon** in the background: the
+long-running part that serves the Studio, runs scheduled routines and keeps
+going after you close the terminal. If it can't start the daemon, it says so and
+chats without it; `aivyx-pa daemon run` starts it by hand.
+
+Run `aivyx-pa --help` any time to see every command.
 
 ## 4. Open the Studio
 
-Visit **http://127.0.0.1:7843** in your browser. The first time, you'll land on
-the **Create your agent** screen if you haven't set up an identity yet;
-otherwise you arrive at the **Command Center** dashboard.
+While the daemon runs, the Studio is served at **http://127.0.0.1:7843**. It's
+protected by a sign-in token, so another account on the same machine can't use
+it. To sign in, run:
+
+```sh
+aivyx-pa studio
+```
+
+and open the link it prints (it looks like `http://127.0.0.1:7843/?token=…`).
+You only need it once per browser — after that the Studio remembers you.
+
+The first time, you'll land on the **Create your agent** screen if you haven't
+set up an identity yet; otherwise you arrive at the **Command Center** dashboard.
+Don't want the Studio at all? Set `web_ui = false` under `[daemon]` in
+`aivyx-pa.toml`.
 
 > **Prefer a real app?** The [desktop app](11-desktop-app.md) puts the Studio in
 > its own window and your assistant in the system tray — with approval

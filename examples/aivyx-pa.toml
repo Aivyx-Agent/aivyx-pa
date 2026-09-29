@@ -326,7 +326,9 @@ parent_role = "researcher"
 # ----------------------------------------------------------------
 #
 # `[agent] provider` selects the LLM backend. Default: "anthropic".
-# Supported values: "anthropic", "openai", "ollama", "lemonade".
+# Supported values: "anthropic", "openai", "ollama", "lemonade",
+# "llamacpp", "jan", "broker", "mistralrs". `aivyx-pa init` detects
+# whichever local runtime is running and writes this for you.
 #
 # - "openai" targets cloud OpenAI or any compatible endpoint.
 # - "ollama" is sugar for local Ollama — defaults to
@@ -337,6 +339,15 @@ parent_role = "researcher"
 #   http://127.0.0.1:13305/api (its OpenAI-compatible API lives
 #   under /api; port 13305), no API key unless [openai] api_key
 #   is set. Override with [openai] base_url, keeping the /api suffix.
+# - "llamacpp" is a llama.cpp `llama-server` — defaults to
+#   http://localhost:8080. "jan" is Jan — defaults to
+#   http://localhost:1337 (a trailing /v1 is tolerated). Both take
+#   [openai] base_url to override.
+# - "broker" routes through `aivyx-broker`, which shares one
+#   llama-server between several local processes — defaults to
+#   http://127.0.0.1:8899; override with [broker] base_url.
+# - "mistralrs" runs a GGUF model in-process (needs a build with the
+#   `provider-mistral-rs` feature); set [mistralrs] model_path.
 #
 # Can also be overridden via `AIVYX_PA_PROVIDER` env var or
 # `--provider` CLI flag.
@@ -350,6 +361,28 @@ parent_role = "researcher"
 # [openai]
 # api_key = "sk-..."
 # base_url = "https://api.openai.com"  # default for "openai"
+
+# ----------------------------------------------------------------
+# The Studio web UI
+# ----------------------------------------------------------------
+#
+# The daemon serves the Studio at http://127.0.0.1:7843 by default,
+# loopback only. Because every account on the machine can reach
+# loopback, it is protected by a sign-in token: when you don't set
+# one, the daemon creates a random token in `studio-token` next to
+# the store (mode 0600, reused across restarts; delete it to rotate).
+# `aivyx-pa studio` prints your one-time sign-in link — open it once
+# and the browser stays signed in. `aivyx-pa daemon run` also shows the
+# link when started in a terminal, and `aivyx-pa doctor` shows it too.
+#
+# [daemon]
+# web_ui = false                 # turn the Studio off (wins over web_ui_port)
+# web_ui_port = 7843             # serve it on another port
+# web_ui_auth_token = "..."      # your own token instead of the automatic one
+# web_ui_host = "0.0.0.0"        # expose beyond loopback — requires a token
+#                                # (or web_ui_insecure_no_auth = true behind
+#                                # your own authenticating proxy); see
+#                                # docs/GATEHOUSE.md
 
 # ----------------------------------------------------------------
 # Agent personal workspace (Chapter O)
@@ -493,9 +526,9 @@ parent_role = "researcher"
 # Phase 69 — Web UI desktop notification.
 #
 # Sends an OS-level browser notification + an in-page toast
-# banner to every connected Web UI browser tab. Requires the
-# `[daemon] web_ui = true` (or a `web_ui_port`) below so the
-# Web UI server is running. No credentials, no addresses —
+# banner to every connected Web UI browser tab. Needs the
+# Studio running (the default; see the Studio section above).
+# No credentials, no addresses —
 # operators just grant the browser notification permission
 # once when the page first loads.
 #

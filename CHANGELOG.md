@@ -5,7 +5,46 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **The Studio is on by default, behind a sign-in token.** The daemon now
+  serves the Studio at `http://127.0.0.1:7843` without any `[daemon]`
+  setting. Loopback is reachable by every account on the machine, so
+  unless you set `web_ui_auth_token` (or `web_ui_insecure_no_auth`), the
+  daemon creates a random token in `studio-token` next to the store
+  (0600, reused; delete it to rotate), and the agent can't read it (Ward).
+  Sign in once with the link from `aivyx-pa studio`; `aivyx-pa daemon run`
+  shows it too when started in a terminal (never in the journal or
+  `docker logs`), and so does `aivyx-pa doctor`. **To opt out:
+  `[daemon] web_ui = false`**, which now also wins over an explicit
+  `web_ui_port`. Side effects of the default: the in-memory "studio"
+  notify target now exists on every install that has no default target,
+  and a config that already set `web_ui_host` beyond loopback with
+  `web_ui_insecure_no_auth = true` but never enabled the Studio now
+  serves it (both keys were signed; check that's intended).
+- **`aivyx-pa` starts the daemon for you.** An interactive `aivyx-pa`
+  with no daemon running now starts one in the background (log next to
+  the socket) and connects, when the passphrase is available without a
+  prompt (the OS keyring, `AIVYX_PA_PASSPHRASE`, or the TOML). Otherwise
+  it chats in-process and says why — and what's unavailable. Piped input
+  and `--no-daemon` behave as before; `--provider`, `--mcp-server` and
+  `--mcp-sse` keep a session in-process, since they apply to it alone.
+  Daemons started this way (and by `aivyx-pa tui`) now run in their own
+  process group, so ctrl-C or closing the terminal no longer kills them.
+- **`aivyx-pa init` detects every local runtime and never defaults to a
+  cloud provider.** It probes Ollama, Lemonade, llama.cpp, Jan and the
+  broker, lists the ones running first, and offers their models; with
+  nothing found it asks you to choose (no pre-selected answer). Every
+  provider is listed, and the separate "Also serve the Studio web UI?"
+  question is gone.
+
 ### Added
+
+- **Real help.** `aivyx-pa --help` (or `-h`, `help`) lists every command;
+  `aivyx-pa <command> --help` shows that command's usage; and an
+  unrecognized argument points at the right help instead of a stale list.
+- **`aivyx-pa studio [--token]`** prints the Studio sign-in link (or just
+  the token). The desktop app uses it to sign in by itself.
 
 - **`aivyx-pa doctor` checks local broker and mistral.rs setups.** With
   `provider = "broker"` it checks that `aivyx-broker` answers and that the
@@ -16,6 +55,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
   the cloud check and printed "an API key is configured".
 
 ### Fixed
+
+- **An interactive `aivyx-pa` could never use a running daemon** — it
+  opened the store first and hit the daemon's lock. The daemon decision
+  now comes before the store is opened.
+- **`/allow-cloud` in a session without the daemon was sent to the
+  model** as an ordinary message. It now gets a local reply explaining
+  that cloud escalation needs the daemon, and such sessions warn at
+  startup when routing has a cloud endpoint.
+- **`provider = "jan"` sent every request to `/v1/v1/chat/completions`**:
+  its default address (and the documented override) ended in `/v1`, which
+  the OpenAI provider adds itself. The default is now
+  `http://localhost:1337`, and a trailing `/v1` is dropped.
+- **The desktop app's approval watcher printed long runs of spaces** in
+  its two "401" messages.
 
 - **The release pipeline can no longer publish a release without its CLI
   binaries.** cargo-dist's generated `host` job treated skipped build

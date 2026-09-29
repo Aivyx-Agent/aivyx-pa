@@ -34,7 +34,7 @@ Right-click (or click) the tray icon for:
 ## Getting it
 
 The desktop app is installed separately from the command-line version. See the
-[installation guide](https://github.com/Aivyx-Agent/aivyx/blob/main/docs/INSTALL.md#desktop-app)
+[installation guide](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md#desktop-app)
 for downloads and the build-from-source steps.
 
 > **On Linux** the desktop app needs a few system packages (a webview and the
