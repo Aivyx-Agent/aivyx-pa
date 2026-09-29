@@ -401,6 +401,7 @@ async fn audit_chain_survives_clean_close_and_second_session_verifies_it() {
             Arc::clone(&provider) as Arc<dyn LlmProvider>,
             audit_hook,
             None,
+            None,
             config,
             channel,
             reader,
@@ -629,6 +630,7 @@ async fn tampered_audit_row_fails_verification_with_chain_broken() {
         run_session(
             Arc::clone(&provider) as Arc<dyn LlmProvider>,
             audit_hook,
+            None,
             None,
             config,
             channel,

@@ -40,11 +40,15 @@ use async_trait::async_trait;
 use aivyx_audit::{AuditBridge, AuditEvent, AuditLog, HmacChainLog};
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::{run_session, LocalChannel, SessionConfig};
-use aivyx_core::{AuditHook, CancellationToken, ToolRegistry, TurnOutcome, TurnOutcomeSummary};
+use aivyx_core::{
+    AuditHook, CancellationToken, ChannelContext, ToolRegistry, TurnOutcome, TurnOutcomeSummary,
+};
 use aivyx_crypto::MasterKey;
 use aivyx_llm::{
     LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+    ProviderFactory, RoutedProvider,
 };
+use aivyx_route::{Capability, EndpointRef, ModelKey, ModelProfile, Router, TaskOverrides, Tier};
 use aivyx_storage::{RedbStorage, Storage, StorageConfig};
 
 // ---------------------------------------------------------------------------
@@ -263,7 +267,7 @@ async fn scripted_session_drives_two_turns_end_to_end() {
     };
 
     // -- Drive the session.
-    let report = run_session(provider, audit_hook, None, config, channel, reader)
+    let report = run_session(provider, audit_hook, None, None, config, channel, reader)
         .await
         .expect("run_session must complete cleanly on scripted EOF");
 
@@ -425,7 +429,7 @@ async fn in_process_allow_cloud_gets_a_local_reply_and_never_calls_the_model() {
         confirm_destructive: false,
     };
 
-    let report = run_session(provider, audit_hook, None, config, channel, reader)
+    let report = run_session(provider, audit_hook, None, None, config, channel, reader)
         .await
         .expect("run_session completes on EOF");
 
@@ -442,5 +446,205 @@ async fn in_process_allow_cloud_gets_a_local_reply_and_never_calls_the_model() {
              your passphrase so aivyx-pa starts it), then allow it there."
         ),
         "{output:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Routing visibility B2 — `/models`/`/model` in the in-process REPL.
+// ---------------------------------------------------------------------------
+
+/// Fails any call — these tests assert the model is never reached for a
+/// routing command.
+struct PanicProvider;
+
+#[async_trait]
+impl LlmProvider for PanicProvider {
+    async fn chat_stream(
+        &self,
+        _request: LlmRequest<'_>,
+        _cancellation: &CancellationToken,
+    ) -> Result<Box<dyn LlmStream>, LlmError> {
+        panic!("the model must never be called for a routing command");
+    }
+}
+
+/// `small@default` (the configured model) and `big@gpu`.
+fn routed_provider() -> Arc<RoutedProvider> {
+    let factory: ProviderFactory =
+        Box::new(|_: &EndpointRef| Ok(Arc::new(PanicProvider) as Arc<dyn LlmProvider>));
+    let mut small = ModelProfile::new("small", EndpointRef::new("default"));
+    small.tier = Tier::Small;
+    small.capabilities.insert(Capability::Completion);
+    let mut big = ModelProfile::new("big", EndpointRef::new("gpu"));
+    big.tier = Tier::Large;
+    big.capabilities.insert(Capability::Completion);
+    Arc::new(RoutedProvider::new(
+        ModelKey {
+            endpoint: EndpointRef::new("default"),
+            id: "small".into(),
+        },
+        Arc::new(PanicProvider),
+        Router::new(vec![small, big], TaskOverrides::default()),
+        factory,
+    ))
+}
+
+fn empty_session_config(storage: Arc<dyn Storage>) -> SessionConfig {
+    SessionConfig {
+        model: "claude-haiku-4-5-20251001".to_string(),
+        system_prompt: "test".to_string(),
+        max_tokens: 256,
+        capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+        tools: Arc::new(ToolRegistry::new(Vec::new())),
+        storage,
+        prompt: String::new(),
+        banner: None,
+        tool_allowlist: None,
+        memory_topic_prefix: None,
+        role_overrides: None,
+        context_window_tokens: None,
+        prune_sink: None,
+        context_provider: None,
+        system_prompt_refiner: None,
+        prompt_refresher: None,
+        turn_safety: Default::default(),
+        confirm_destructive: false,
+    }
+}
+
+/// `/models` is a whole-message command in-process too: never reaches the
+/// model, never counts as a turn.
+#[tokio::test]
+async fn in_process_models_lists_candidates_without_running_a_turn() {
+    let provider = ScriptedProvider::new(Vec::new());
+    let audit_log = HmacChainLog::new([42u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+    let reader = Cursor::new(&b"/models\n"[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let sink = channel.writer_handle();
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+    let config = empty_session_config(storage);
+
+    let report = run_session(
+        provider,
+        audit_hook,
+        None,
+        Some(routed_provider()),
+        config,
+        channel,
+        reader,
+    )
+    .await
+    .expect("run_session completes on EOF");
+
+    assert_eq!(report.turns_run, 0, "/models is not a turn");
+    let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
+    assert!(output.contains("Routing candidates"), "{output:?}");
+    assert!(output.contains("small@default"), "{output:?}");
+    assert!(output.contains("big@gpu"), "{output:?}");
+}
+
+/// `/model <id>` pins the conversation and `/model auto` clears it —
+/// changing the very `Router` the daemon would introspect, in-process.
+#[tokio::test]
+async fn in_process_model_pin_and_auto_change_the_router() {
+    let provider = ScriptedProvider::new(Vec::new());
+    let audit_log = HmacChainLog::new([42u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+    let reader = Cursor::new(&b"/model big\n/model auto\n"[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let sink = channel.writer_handle();
+    let session_id = channel.session_id().to_string();
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+    let config = empty_session_config(storage);
+    let routed = routed_provider();
+
+    let report = run_session(
+        provider,
+        audit_hook,
+        None,
+        Some(Arc::clone(&routed)),
+        config,
+        channel,
+        reader,
+    )
+    .await
+    .expect("run_session completes on EOF");
+
+    assert_eq!(report.turns_run, 0);
+    let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
+    assert!(output.contains("Pinned this conversation to `big@gpu`."), "{output:?}");
+    assert!(
+        output.contains(
+            "Pin cleared; routing chooses this conversation's model again on the next call."
+        ),
+        "{output:?}"
+    );
+    assert_eq!(routed.router().pinned(&session_id), None, "auto cleared it");
+}
+
+/// Without a router (routing off, or none threaded through), the reply
+/// says how to turn it on — the model is still never called.
+#[tokio::test]
+async fn in_process_models_with_routing_off_says_how_to_turn_it_on() {
+    let provider = ScriptedProvider::new(Vec::new());
+    let audit_log = HmacChainLog::new([42u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+    let reader = Cursor::new(&b"/model coder\n"[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let sink = channel.writer_handle();
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+    let config = empty_session_config(storage);
+
+    let report = run_session(provider, audit_hook, None, None, config, channel, reader)
+        .await
+        .expect("run_session completes on EOF");
+
+    assert_eq!(report.turns_run, 0);
+    let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
+    assert!(
+        output.contains(
+            "Model routing commands are not available here — they need \
+             `[routing] enabled = true`."
+        ),
+        "{output:?}"
+    );
+}
+
+/// An unrecognized `/models` argument is not a command — it's a normal
+/// turn, sent to the model like anything else.
+#[tokio::test]
+async fn in_process_models_please_is_a_normal_turn() {
+    let provider = ScriptedProvider::new(vec![final_step(&["hi"], "hi")]);
+    let audit_log = HmacChainLog::new([42u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+    let reader = Cursor::new(&b"/models please\n"[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+    let config = empty_session_config(storage);
+
+    let report = run_session(
+        provider,
+        audit_hook,
+        None,
+        Some(routed_provider()),
+        config,
+        channel,
+        reader,
+    )
+    .await
+    .expect("run_session completes on EOF");
+
+    assert_eq!(
+        report.turns_run, 1,
+        "an unrecognized /models argument is not a command"
     );
 }

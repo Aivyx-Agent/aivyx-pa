@@ -4352,4 +4352,156 @@ mod routing_visibility {
         conn.close().await;
         handle.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn set_routing_pin_rejects_an_unknown_session() {
+        let scratch = ScratchDir::new();
+        let routed = Arc::new(routed_provider(false));
+        let (mut conn, handle) = start(
+            &scratch,
+            routing_agent(&routed),
+            local_channel(),
+            None,
+            Some(Arc::clone(&routed)),
+        )
+        .await;
+        // A well-formed session id the daemon never started (no
+        // `StartSession` for it) — final review's flaw for Task 2's
+        // `SetRoutingPin`: it must not create pin state for a session the
+        // daemon doesn't know about.
+        let unknown = aivyx_core::SessionId::new().to_string();
+        match conn
+            .query(QueryPayload::SetRoutingPin {
+                session_id: unknown.clone(),
+                model: Some("small".into()),
+            })
+            .await
+        {
+            QueryResponsePayload::QueryError { code, .. } => assert_eq!(code, "unknown_session"),
+            other => panic!("expected QueryError, got {other:?}"),
+        }
+        assert_eq!(routed.router().pinned(&unknown), None, "no pin state created");
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    // ---------------------------------------------------------------------
+    // Routing visibility B2 — the `/models`/`/model` chat commands,
+    // intercepted like `/allow-cloud`: a whole message never reaches the
+    // agent, the history, or the model, and never counts as a turn.
+    // ---------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn chat_models_lists_candidates_without_running_a_turn() {
+        let scratch = ScratchDir::new();
+        let routed = Arc::new(routed_provider(false));
+        let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent: Arc<dyn Agent> = Arc::new(CountingAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+            turns: Arc::clone(&turns),
+        });
+        let (mut conn, handle) = start(
+            &scratch,
+            agent,
+            local_channel(),
+            None,
+            Some(Arc::clone(&routed)),
+        )
+        .await;
+        let (events, outcome) = conn.submit("/models").await;
+        assert!(events.is_empty(), "{events:?}");
+        assert!(
+            outcome.starts_with("completed: Routing candidates"),
+            "{outcome}"
+        );
+        assert!(outcome.contains("small@default"), "{outcome}");
+        assert!(outcome.contains("big@gpu"), "{outcome}");
+        assert_eq!(
+            turns.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the model must never be called for a routing command"
+        );
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn chat_model_pin_and_auto_change_the_router() {
+        let scratch = ScratchDir::new();
+        let routed = Arc::new(routed_provider(false));
+        let (mut conn, handle) = start(
+            &scratch,
+            routing_agent(&routed),
+            local_channel(),
+            None,
+            Some(Arc::clone(&routed)),
+        )
+        .await;
+        let sid = conn.sid.clone();
+
+        let (_, outcome) = conn.submit("/model big").await;
+        assert_eq!(outcome, "completed: Pinned this conversation to `big@gpu`.");
+        assert_eq!(
+            routed.router().pinned(&sid).map(|k| k.to_string()).as_deref(),
+            Some("big@gpu")
+        );
+
+        let (_, outcome) = conn.submit("/model auto").await;
+        assert_eq!(
+            outcome,
+            "completed: Pin cleared; routing chooses this conversation's model again on the \
+             next call."
+        );
+        assert_eq!(routed.router().pinned(&sid), None);
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn chat_models_with_routing_off_says_how_to_turn_it_on() {
+        let scratch = ScratchDir::new();
+        let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+        });
+        let (mut conn, handle) = start(&scratch, agent, local_channel(), None, None).await;
+        let (_, outcome) = conn.submit("/model coder").await;
+        assert_eq!(
+            outcome,
+            "completed: Model routing commands are not available here — they need \
+             `[routing] enabled = true`."
+        );
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn models_please_is_a_normal_turn_not_a_command() {
+        let scratch = ScratchDir::new();
+        let routed = Arc::new(routed_provider(false));
+        let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let agent: Arc<dyn Agent> = Arc::new(CountingAgent {
+            id: AgentId::new(),
+            caps: CapabilitySet::empty(),
+            turns: Arc::clone(&turns),
+        });
+        let (mut conn, handle) = start(
+            &scratch,
+            agent,
+            local_channel(),
+            None,
+            Some(Arc::clone(&routed)),
+        )
+        .await;
+        let (_, outcome) = conn.submit("/models please").await;
+        assert_eq!(outcome, "completed: a real turn");
+        assert_eq!(
+            turns.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an unrecognized /models argument is not a command"
+        );
+        conn.close().await;
+        handle.await.unwrap();
+    }
 }

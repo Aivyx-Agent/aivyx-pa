@@ -2376,6 +2376,32 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 writer.write_all(&frame).await?;
                                 continue;
                             }
+                            // Routing visibility B2 — `/models`/`/model`
+                            // are whole-message commands too: never reach
+                            // the agent, the history, or the model, and
+                            // never count as a turn. Available from any
+                            // channel (reading and pinning aren't
+                            // escalation) — unlike `/allow-cloud`, no
+                            // trust-tier check. The session always exists
+                            // in `daemon_state` by the time `SubmitInput`
+                            // runs (pushed at `StartSession` above), so
+                            // pinning here can never create state for a
+                            // session the daemon doesn't know.
+                            if let Some(reply) = crate::routing_commands::run(
+                                routed.as_deref(),
+                                &routing_session_key(&sid, ch.as_ref()),
+                                &text,
+                            )
+                            .await
+                            {
+                                let resp = DaemonMessage::TurnComplete {
+                                    session_id: sid,
+                                    outcome: format!("completed: {reply}"),
+                                };
+                                let frame = encode_frame(&resp)?;
+                                writer.write_all(&frame).await?;
+                                continue;
+                            }
                             // Routing visibility B1 — the conversation's
                             // routing key and whether this channel may give
                             // cloud consent (Trusted/Kernel, as `/allow-cloud`
@@ -4146,9 +4172,10 @@ fn routing_turn_events(
 }
 
 /// Routing visibility B1 — what a routing request answers with routing off
-/// (the spec's wording, naming aivyx-pa's config).
-const ROUTING_OFF_REPLY: &str =
-    "Model routing commands are not available here — they need `[routing] enabled = true`.";
+/// (the spec's wording, naming aivyx-pa's config). Routing visibility B2
+/// made this the canonical copy, shared with the chat commands'
+/// interception — `routing_commands::run` gives the identical reply.
+use crate::routing_commands::ROUTING_OFF_REPLY;
 
 /// Routing visibility B1 — the shared builder's [`aivyx_core::RoutingStatus`]
 /// as the wire's [`RoutingStatusView`].
@@ -4671,6 +4698,20 @@ async fn handle_query(
                 };
             };
             let session = aivyx_core::SessionId(uuid).to_string();
+            // Final review (Task 2) — a well-formed but unknown session
+            // id must not create pin state: only pin a session the
+            // daemon actually knows about (pushed into `daemon_state` at
+            // `StartSession`), the same set `ListSessions` reports.
+            let known = daemon_state
+                .lock()
+                .map(|st| st.sessions.iter().any(|r| r.session_id == session))
+                .unwrap_or(false);
+            if !known {
+                return QueryResponsePayload::QueryError {
+                    code: "unknown_session".into(),
+                    message: format!("no session `{session_id}` is active on this daemon"),
+                };
+            }
             let router = routed.router();
             match model {
                 None => {

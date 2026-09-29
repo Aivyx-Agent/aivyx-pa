@@ -10891,6 +10891,7 @@ async fn run_async(
                 provider,
                 audit,
                 checkpointer.clone(),
+                routed.clone(),
                 session_config,
                 channel,
                 reader,

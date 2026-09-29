@@ -415,10 +415,20 @@ pub struct SessionReport {
 /// the test wants to inspect the chain afterwards via its own
 /// `AuditBridge::writer()` handle, and the binary wants to use
 /// `/dev/urandom` for the key while the test wants a deterministic one.
+///
+/// `routed` (Routing visibility B2) is the same `RoutedProvider` `provider`
+/// may already be wrapped in (`Some` only when `[routing] enabled = true`
+/// — the binary threads through the very same value it built `provider`
+/// from), so this loop's `/models`/`/model` interception can introspect
+/// and pin the router. `None` means routing is off (or a caller, like most
+/// of this crate's own tests, has no routing to offer): those commands
+/// answer that they need `[routing] enabled = true` instead of reaching
+/// the model.
 pub async fn run_session<R, W>(
     provider: Arc<dyn LlmProvider>,
     audit: Arc<dyn AuditHook>,
     checkpointer: Option<std::sync::Arc<aivyx_core::GitCheckpointer>>,
+    routed: Option<Arc<aivyx_llm::RoutedProvider>>,
     config: SessionConfig,
     channel: LocalChannel<W>,
     mut reader: R,
@@ -566,6 +576,23 @@ where
                     "{}",
                     crate::routing_guard::IN_PROCESS_ALLOW_CLOUD_REPLY
                 );
+                let _ = guard.flush();
+            }
+            continue;
+        }
+
+        // Routing visibility B2 — `/models`/`/model` are whole-message
+        // commands here too: never reach the model (nor count as a
+        // turn). `routed` is `Some` only when `[routing] enabled = true`
+        // gave this session a router to introspect; without one the
+        // reply says so, same wording the daemon gives.
+        let routing_session_id = channel.session_id().to_string();
+        if let Some(reply) =
+            crate::routing_commands::run(routed.as_deref(), &routing_session_id, input).await
+        {
+            let writer = channel.writer_handle();
+            if let Ok(mut guard) = writer.lock() {
+                let _ = writeln!(&mut *guard, "{reply}");
                 let _ = guard.flush();
             }
             continue;
