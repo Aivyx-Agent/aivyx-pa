@@ -1650,7 +1650,7 @@ provider = "jan"
 model    = "qwen2.5-7b-instruct"
 
 [openai]
-base_url = "http://localhost:1337/v1"  # override if you changed Jan's port
+base_url = "http://localhost:1337"  # override if you changed Jan's port (a trailing /v1 is fine)
 ```
 
 ### Coordinating GPU-slot access across multiple processes (`aivyx-broker`)

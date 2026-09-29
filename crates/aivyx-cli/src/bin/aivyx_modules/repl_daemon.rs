@@ -32,6 +32,9 @@ pub enum InProcessReason {
     /// The passphrase can only come from an interactive prompt, which a
     /// background daemon can't show.
     PassphraseNeedsPrompt,
+    /// `--provider`, `--mcp-server` or `--mcp-sse` was given: they configure
+    /// this session only, and a daemon runs on its own config.
+    SessionOverrides,
 }
 
 /// What the interactive REPL does about the daemon.
@@ -49,6 +52,7 @@ pub enum Decision {
 pub fn decide(
     is_tty: bool,
     no_daemon: bool,
+    session_overrides: bool,
     daemon_running: bool,
     passphrase_non_interactive: bool,
 ) -> Decision {
@@ -60,6 +64,11 @@ pub fn decide(
     if !is_tty {
         return Decision::InProcess {
             reason: InProcessReason::NotATerminal,
+        };
+    }
+    if session_overrides {
+        return Decision::InProcess {
+            reason: InProcessReason::SessionOverrides,
         };
     }
     if daemon_running {
@@ -91,6 +100,11 @@ pub fn in_process_notice(reason: &InProcessReason) -> Option<String> {
             "{WITHOUT_THE_DAEMON} Store your passphrase (`aivyx-pa keyring set`) and \
              aivyx-pa will start it for you."
         )),
+        InProcessReason::SessionOverrides => Some(
+            "Running in-process: --provider, --mcp-server and --mcp-sse apply only to \
+             this session, and a daemon runs on its own config."
+                .to_string(),
+        ),
         InProcessReason::NotATerminal | InProcessReason::NoDaemonFlag => None,
     }
 }
@@ -104,10 +118,13 @@ pub fn start_failed_notice(error: &str, log_path: &std::path::Path) -> String {
     )
 }
 
-/// The in-process startup warning when `[routing.endpoints]` names a cloud
-/// endpoint: escalation needs the daemon, so this session can't use it.
+/// The in-process startup warning when routing is enabled and
+/// `[routing.endpoints]` names a cloud endpoint: escalation needs the
+/// daemon, so this session can't use it.
 pub fn in_process_cloud_warning(routing: Option<&aivyx_route::RoutingConfig>) -> Option<String> {
-    let cloud: Vec<&str> = routing?
+    // A cloud endpoint under disabled routing is inert either way.
+    let routing = routing.filter(|r| r.enabled)?;
+    let cloud: Vec<&str> = routing
         .endpoints
         .iter()
         .filter(|(_, ep)| ep.kind.locality() == aivyx_route::Locality::Cloud)
@@ -277,28 +294,39 @@ mod tests {
                 // `--no-daemon` always wins, TTY or not.
                 for tty in [false, true] {
                     assert_eq!(
-                        decide(tty, true, running, non_interactive),
+                        decide(tty, true, false, running, non_interactive),
                         InProcess { reason: NoDaemonFlag },
                         "--no-daemon (tty={tty}, running={running}, ni={non_interactive})"
                     );
                 }
                 // Piped input keeps the old in-process path.
                 assert_eq!(
-                    decide(false, false, running, non_interactive),
+                    decide(false, false, false, running, non_interactive),
                     InProcess { reason: NotATerminal },
                     "piped (running={running}, ni={non_interactive})"
                 );
             }
             // A running daemon is connected to whatever the passphrase source.
         }
-        assert_eq!(decide(true, false, true, false), Connect);
-        assert_eq!(decide(true, false, true, true), Connect);
+        assert_eq!(decide(true, false, false, true, false), Connect);
+        assert_eq!(decide(true, false, false, true, true), Connect);
         // No daemon: start one only when it can get the passphrase itself.
-        assert_eq!(decide(true, false, false, true), SpawnThenConnect);
+        assert_eq!(decide(true, false, false, false, true), SpawnThenConnect);
         assert_eq!(
-            decide(true, false, false, false),
+            decide(true, false, false, false, false),
             InProcess { reason: PassphraseNeedsPrompt }
         );
+        // `--provider` / `--mcp-server` / `--mcp-sse` apply to this session
+        // only: never started or connected past, whatever else holds.
+        for running in [false, true] {
+            for non_interactive in [false, true] {
+                assert_eq!(
+                    decide(true, false, true, running, non_interactive),
+                    InProcess { reason: SessionOverrides },
+                    "overrides (running={running}, ni={non_interactive})"
+                );
+            }
+        }
     }
 
     #[test]
@@ -318,6 +346,11 @@ mod tests {
         );
         assert_eq!(in_process_notice(&InProcessReason::NotATerminal), None);
         assert_eq!(in_process_notice(&InProcessReason::NoDaemonFlag), None);
+        let overrides = in_process_notice(&InProcessReason::SessionOverrides).unwrap();
+        assert!(
+            overrides.contains("--provider") && overrides.contains("only to this session"),
+            "{overrides}"
+        );
     }
 
     #[test]
@@ -379,5 +412,8 @@ mod tests {
             in_process_cloud_warning(Some(&routing_with(&[("gpt", "openai")]))).is_some(),
             "openai is cloud too"
         );
+        let mut off = routing_with(&[("claude", "anthropic")]);
+        off.enabled = false;
+        assert_eq!(in_process_cloud_warning(Some(&off)), None, "routing off: nothing to warn about");
     }
 }

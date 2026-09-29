@@ -386,7 +386,7 @@ pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx PA";
 ///   raw `llama-server` OpenAI-compat endpoint; no model
 ///   management UX (operator downloads GGUF manually). No
 ///   `ollama.list/show/pull` tools registered.
-/// - `Jan` (Phase 133) — `base_url = http://localhost:1337/v1`;
+/// - `Jan` (Phase 133) — `base_url = http://localhost:1337` (a trailing `/v1` is tolerated);
 ///   model management via Jan's desktop GUI. No
 ///   `ollama.list/show/pull` tools registered.
 /// - `Broker` (GPU-slot broker coordination) — `base_url = http://127.0.0.1:8899`

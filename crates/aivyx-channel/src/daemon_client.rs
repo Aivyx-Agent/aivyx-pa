@@ -2215,16 +2215,32 @@ pub async fn spawn_daemon_and_wait(
     // that group) must not take the background daemon down with it.
     #[cfg(unix)]
     command.process_group(0);
-    let _child = command
+    let mut child = command
         .spawn()
         .map_err(|e| DaemonError::Internal(format!("failed to spawn daemon: {e}")))?;
+    wait_for_socket(&mut child, socket_path, timeout).await
+}
 
-    // Poll for the socket to appear with exponential backoff.
+/// Poll for `child`'s socket to appear, with exponential backoff. A child
+/// that exits first (a wrong passphrase, a bad config) fails at once rather
+/// than after the whole `timeout`, pointing at its log. The child is not
+/// killed on return: a started daemon is meant to outlive its launcher.
+async fn wait_for_socket(
+    child: &mut tokio::process::Child,
+    socket_path: &Path,
+    timeout: Duration,
+) -> Result<PathBuf, DaemonError> {
     let start = tokio::time::Instant::now();
     let mut delay = Duration::from_millis(20);
     loop {
         if daemon_is_running(socket_path).await {
             return Ok(socket_path.to_path_buf());
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(DaemonError::Internal(format!(
+                "the daemon exited during startup ({status}) — see {}",
+                daemon_log_path(socket_path).display(),
+            )));
         }
         if start.elapsed() > timeout {
             return Err(DaemonError::Internal(format!(
@@ -2381,6 +2397,26 @@ mod tests {
 
         let _ = server.await;
         let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn a_child_that_exits_at_once_fails_fast_not_at_the_timeout() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = std::env::temp_dir().join(format!("spawnwait-{}", std::process::id()));
+            let socket = dir.join("never.sock");
+            let mut child = tokio::process::Command::new("false").spawn().unwrap();
+            let start = std::time::Instant::now();
+            let err = wait_for_socket(&mut child, &socket, Duration::from_secs(10))
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(start.elapsed() < Duration::from_secs(3), "took {:?}", start.elapsed());
+            assert!(err.contains("exited"), "{err}");
+        });
     }
 
     #[test]

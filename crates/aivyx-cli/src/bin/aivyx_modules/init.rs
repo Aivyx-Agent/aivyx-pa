@@ -951,7 +951,7 @@ const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
 /// OpenAI provider appends `/v1/chat/completions` itself, so this default
 /// yields `.../v1/v1/...`; `init` therefore always writes Jan's server root
 /// (see [`base_url_to_write`]).
-const DEFAULT_JAN_BASE_URL: &str = "http://localhost:1337/v1";
+const DEFAULT_JAN_BASE_URL: &str = "http://localhost:1337";
 
 /// Where `init` looks for each local runtime. The base URL is the one the
 /// provider would use (so it is what gets written when non-default); each
@@ -1046,9 +1046,7 @@ fn comparable_base(base: &str) -> String {
 fn base_url_to_write(provider: Provider, base: &str) -> Option<String> {
     let default = provider.runtime_default_base_url()?;
     let base = normalize_server_base(base);
-    // Jan's built-in default carries a `/v1` the provider doubles (see
-    // DEFAULT_JAN_BASE_URL), so never rely on it: write the working root.
-    if provider != Provider::Jan && comparable_base(&base) == comparable_base(default) {
+    if comparable_base(&base) == comparable_base(default) {
         return None;
     }
     Some(base)
@@ -4866,12 +4864,12 @@ mod tests {
             base_url_to_write(Provider::Broker, "http://127.0.0.1:9900"),
             Some("http://127.0.0.1:9900".to_string())
         );
-        // Jan: the runtime's built-in default (`.../1337/v1`) gains a second
-        // `/v1` in the OpenAI provider, so init always writes the working
-        // server root.
+        // Jan: its default (with or without the `/v1` Jan's docs show) is
+        // not written; the runtime strips a trailing `/v1` itself.
+        assert_eq!(base_url_to_write(Provider::Jan, "http://localhost:1337/v1"), None);
         assert_eq!(
-            base_url_to_write(Provider::Jan, "http://localhost:1337/v1"),
-            Some("http://localhost:1337".to_string())
+            base_url_to_write(Provider::Jan, "http://10.0.0.9:1337"),
+            Some("http://10.0.0.9:1337".to_string())
         );
         // Providers with no base-URL key never write one.
         assert_eq!(base_url_to_write(Provider::Ollama, "http://x"), None);

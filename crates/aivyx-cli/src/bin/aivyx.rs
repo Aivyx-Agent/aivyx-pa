@@ -234,6 +234,17 @@ use aivyx_telegram::{TelegramSessionConfig, run_telegram_multi_session};
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 const PROMPT: &str = "> ";
 
+/// Jan's server root for the OpenAI-compatible provider, which appends
+/// `/v1/chat/completions` itself: the configured `[openai] base_url` or the
+/// default `http://localhost:1337`, with a trailing `/v1` dropped. Jan's own
+/// docs (and earlier Aivyx docs) give the API base as `…/1337/v1`, which
+/// used to produce `/v1/v1/chat/completions`.
+fn jan_base_url(configured: Option<String>) -> String {
+    let base = configured.unwrap_or_else(|| "http://localhost:1337".to_string());
+    let base = base.trim_end_matches('/');
+    base.strip_suffix("/v1").unwrap_or(base).to_string()
+}
+
 /// `aivyx-broker`'s own documented default bind address, used when
 /// `[broker] base_url` is unset. Shared by the `ProviderKind::Broker`
 /// provider-construction arm and the config startup banner so the two
@@ -1304,7 +1315,10 @@ fn run() -> Result<(), String> {
         let running = rt.block_on(aivyx_channel::daemon_client::daemon_is_running(&sp));
         let non_interactive =
             !matches!(passphrase_source, PassphraseSource::InteractivePrompt { .. });
-        match repl_daemon::decide(is_tty, no_daemon, running, non_interactive) {
+        let session_overrides = cli_provider.is_some()
+            || !cli_mcp_servers.is_empty()
+            || !cli_mcp_sse_servers.is_empty();
+        match repl_daemon::decide(is_tty, no_daemon, session_overrides, running, non_interactive) {
             decision @ (repl_daemon::Decision::Connect
             | repl_daemon::Decision::SpawnThenConnect) => {
                 let fs_root = std::fs::canonicalize(&config.fs_root.value)
@@ -1639,7 +1653,7 @@ fn print_config_banner(config: &AivyxConfig) {
             // Phase 133 — Jan default.
             eprintln!(
                 "  base_url          = {:?} (default)",
-                "http://localhost:1337/v1",
+                jan_base_url(None),
             );
         } else if config.provider.value == aivyx_config::ProviderKind::Lemonade {
             eprintln!(
@@ -6882,16 +6896,14 @@ async fn run_async(
         ProviderKind::Jan => {
             // Phase 133 — route through the OpenAI-compat provider
             // against Jan's default port. Defaults to
-            // `http://localhost:1337/v1`; operator overrides via
-            // `[llm] provider_base_url` in aivyx-pa.toml.
+            // `http://localhost:1337`; operator overrides via
+            // `[openai] base_url` (a trailing `/v1` is tolerated — see
+            // `jan_base_url`).
             //
             // Jan's API mirrors api.openai.com/v1 exactly — no
             // server-side adaptation needed. The API key is accepted
             // if present but never required (Jan ignores it).
-            const DEFAULT_JAN_BASE_URL: &str = "http://localhost:1337/v1";
-            let base_url = openai_base_url
-                .map(|s| s.value)
-                .unwrap_or_else(|| DEFAULT_JAN_BASE_URL.to_string());
+            let base_url = jan_base_url(openai_base_url.map(|s| s.value));
             let cfg = match openai_api_key {
                 Some(k) => OpenAiConfig::new(k.value).with_base_url(base_url),
                 None => OpenAiConfig::without_api_key().with_base_url(base_url),
@@ -13832,6 +13844,18 @@ mod tests {
     fn provider_flag_ollama() {
         let parsed = parse_cli_args_from(&argv(&["--provider", "ollama"])).expect("must parse");
         assert_eq!(parsed.provider, Some(ProviderKind::Ollama));
+    }
+
+    #[test]
+    fn jan_base_url_never_doubles_v1() {
+        // The OpenAI provider appends `/v1/chat/completions` itself.
+        assert_eq!(jan_base_url(None), "http://localhost:1337");
+        assert_eq!(
+            jan_base_url(Some("http://localhost:1337/v1".into())),
+            "http://localhost:1337"
+        );
+        assert_eq!(jan_base_url(Some("http://h:9/v1/".into())), "http://h:9");
+        assert_eq!(jan_base_url(Some("http://h:9".into())), "http://h:9");
     }
 
     #[test]
