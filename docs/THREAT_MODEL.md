@@ -409,10 +409,11 @@ Studio off, never silently replaced. The `/ws` control plane and every
 static route require the token (Chapter Postern: Bearer, HTTP Basic, or
 the `aivyx_web_token` cookie, all compared in constant time). The
 operator signs in with a one-time link, `http://127.0.0.1:7843/?token=…`,
-which `aivyx-pa daemon run` prints once the port is bound and
-`aivyx-pa doctor` shows: `GET /?token=<t>` compares in constant time,
+which `aivyx-pa daemon run` prints once the port is bound (the full
+link only when its stderr is a terminal) and `aivyx-pa doctor` shows: `GET /?token=<t>` compares in constant time,
 answers `302` to `/` and plants the `HttpOnly; SameSite=Strict` cookie,
-so the token leaves the address bar and history; a wrong token gets
+so the token leaves the address bar (browsers still record the
+pre-redirect URL in history); a wrong token gets
 `401`. Another local account can't read the `0600` file, and the
 operator's own agent can't either: the exact path is on Ward's
 extra-deny list (`aivyx-cli`, `ward_extra_deny`) and `studio-token` is a
@@ -423,11 +424,15 @@ a shell can obfuscate a path). An operator-set token always wins
 (no file is created), and `web_ui_insecure_no_auth = true` is the
 explicit, documented way back to no token at all.
 
-**Residual:** the link is printed to the daemon's stderr, which under a
-service manager lands in the operator's journal (readable by the
-operator, root, and on many distributions the `adm`/`systemd-journal`
-groups). Anyone who can read the operator's files or journal already
-sits inside the trust boundary this does not claim to defend. A second
+**Residual:** the token is never written to a persistent log. When the
+daemon's stderr is not a terminal (a service manager's journal —
+readable on many distributions by the `adm`/`systemd-journal` groups —
+or `docker logs`), the banner shows only the bare URL and points at
+`aivyx-pa doctor`, which reads the `0600` file as the operator. Only an
+interactive `aivyx-pa daemon run` prints the full link, to the
+operator's own terminal. The browser's history keeps the pre-redirect
+URL; anyone who can read the operator's browser profile already sits
+inside the trust boundary this does not claim to defend. A second
 account's own daemon can't bind the same default port while the first
 holds it.
 

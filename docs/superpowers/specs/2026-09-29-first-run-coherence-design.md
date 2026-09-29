@@ -40,7 +40,7 @@ The audit ran the 0.10.1 binary and found that a new user who follows the guide 
 
 ## A2 — the Studio is on by default and token-protected
 
-- **Default.** `[daemon] web_ui` defaults to `true`, so the daemon serves `127.0.0.1:7843`. `web_ui = false` turns it off, and `web_ui_port = N` behaves as before. The config resolution changes accordingly (`aivyx-config`), with tests.
+- **Default.** `[daemon] web_ui` defaults to `true`, so the daemon serves `127.0.0.1:7843`. `web_ui = false` turns it off — and wins over an explicit `web_ui_port` (operator decision 2026-09-29; previously an explicit port turned the Studio on regardless). `web_ui_port = N` alone enables it on that port, as before. The config resolution changes accordingly (`aivyx-config`), with tests.
 - **Token.** When the Studio is enabled, `web_ui_auth_token` is unset and `web_ui_insecure_no_auth` is not set, the daemon uses an automatic token:
   - **Location:** `studio-token`, next to the store: the parent directory of the effective `storage_path`.
   - **Format:** 256 bits, alphanumeric, 43 characters, the same shape the Harbor appliance entrypoint uses.
@@ -50,11 +50,11 @@ The audit ran the 0.10.1 binary and found that a new user who follows the guide 
 - **The off-host interlock (Gatehouse)** is unchanged. It still applies to a configured host beyond loopback.
 - **Sign-in link.** `GET /?token=<t>`:
   - compares the token in constant time, the same way `request_carries_token` does;
-  - when it matches, answers `302` to `/`, setting the existing `aivyx_web_token` cookie (`HttpOnly; SameSite=Strict; Path=/`), so the token leaves the address bar and history;
+  - when it matches, answers `302` to `/`, setting the existing `aivyx_web_token` cookie (`HttpOnly; SameSite=Strict; Path=/`), so the token leaves the address bar (browser history still records the pre-redirect URL);
   - when it doesn't match, gets the existing `401`.
   - Basic auth and Bearer keep working unchanged.
 - **Where the link is shown.** Only once the Studio has actually bound its port:
-  - the `aivyx-pa daemon run` banner: `Studio: http://127.0.0.1:7843/?token=…`;
+  - the `aivyx-pa daemon run` banner: `Studio: http://127.0.0.1:7843/?token=…` — **only when stderr is a terminal** (operator decision 2026-09-29, after review); otherwise `Studio: http://127.0.0.1:7843/ (sign-in link: run \`aivyx-pa doctor\`)`, so the token never lands in the journal or `docker logs`;
   - the REPL banner when connected to a daemon, fetched from the daemon over IPC, or from the token file when running as the same user;
   - `aivyx-pa doctor`'s Web UI section, which already reveals configured tokens;
   - `init`'s closing message.

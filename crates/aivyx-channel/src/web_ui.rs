@@ -1562,7 +1562,8 @@ mod tests {
     async fn sign_in_link_redirects_home_and_plants_the_cookie() {
         // First-run coherence A2 — `GET /?token=<t>` with the right token
         // answers 302 to `/` and sets the same cookie Basic auth plants, so
-        // the token leaves the address bar (and history) at once.
+        // the token leaves the address bar at once (the browser's history
+        // still records the pre-redirect URL).
         let tok = "SignInTok0123456789abcdefghijklmnopqrstuvw";
         let (port, shutdown, handle) = spawn_authed(tok).await;
 

@@ -130,13 +130,42 @@ pub fn load_or_create(path: &Path) -> Result<String, String> {
             }
         }
         // A filesystem without hard links: fall back to a rename, still
-        // atomic (the file appears whole or not at all).
-        Err(_) => std::fs::rename(&tmp, path)
+        // atomic (the file appears whole or not at all). Only for "links
+        // aren't supported" errors — a rename replaces, so running it on any
+        // other failure could clobber a token another process just published.
+        Err(e) if hard_links_unsupported(&e) => std::fs::rename(&tmp, path)
             .map(|()| token)
             .map_err(|e| format!("failed to write {}: {e}", path.display())),
+        Err(e) => Err(format!("failed to write {}: {e}", path.display())),
     };
     let _ = std::fs::remove_file(&tmp);
+    if result.is_ok() {
+        // Make the new directory entry durable, so a crash right after
+        // start doesn't lose the token the banner or doctor just showed.
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
     result
+}
+
+/// Does `e` mean this filesystem can't make hard links (as opposed to a
+/// real failure such as permissions or a full disk)?
+fn hard_links_unsupported(e: &std::io::Error) -> bool {
+    if e.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        // EPERM: some filesystems (FAT, certain FUSE mounts) refuse links
+        // this way. EOPNOTSUPP/ENOTSUP: links not supported. EXDEV can't
+        // happen (same directory).
+        matches!(e.raw_os_error(), Some(1) | Some(95))
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 /// Create `path` (which must not exist) with mode `0600` from the start,
@@ -205,13 +234,20 @@ pub fn sign_in_url(host: IpAddr, port: u16, token: &str) -> String {
     format!("{}?token={token}", studio_url(host, port))
 }
 
-/// The `daemon run` banner line for a Studio bound at `addr`: the sign-in
-/// link when it has a token, the bare URL when it has none
-/// (`web_ui_insecure_no_auth`).
-pub fn banner_line(addr: std::net::SocketAddr, token: Option<&str>) -> String {
+/// The `daemon run` banner line for a Studio bound at `addr`. The full
+/// sign-in link (token included) only when `interactive` — stderr is a
+/// terminal the operator is looking at. Otherwise the output is going to a
+/// persistent log (the systemd journal, `docker logs`) that other accounts
+/// can sometimes read and that outlives the token's secrecy, so the line
+/// shows the bare URL and points at `aivyx-pa doctor`, which reads the
+/// 0600 token file as the operator. No token (`web_ui_insecure_no_auth`)
+/// shows the bare URL either way.
+pub fn banner_line(addr: std::net::SocketAddr, token: Option<&str>, interactive: bool) -> String {
+    let url = studio_url(addr.ip(), addr.port());
     match token {
-        Some(t) => format!("Studio: {}", sign_in_url(addr.ip(), addr.port(), t)),
-        None => format!("Studio: {}", studio_url(addr.ip(), addr.port())),
+        Some(t) if interactive => format!("Studio: {}", sign_in_url(addr.ip(), addr.port(), t)),
+        Some(_) => format!("Studio: {url} (sign-in link: run `aivyx-pa doctor`)"),
+        None => format!("Studio: {url}"),
     }
 }
 
@@ -394,13 +430,38 @@ mod tests {
     }
 
     #[test]
-    fn banner_line_shows_the_sign_in_link() {
+    fn banner_line_shows_the_sign_in_link_on_a_terminal() {
         let addr = std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843);
         assert_eq!(
-            banner_line(addr, Some("abc")),
+            banner_line(addr, Some("abc"), true),
             "Studio: http://127.0.0.1:7843/?token=abc"
         );
-        assert_eq!(banner_line(addr, None), "Studio: http://127.0.0.1:7843/");
+        assert_eq!(banner_line(addr, None, true), "Studio: http://127.0.0.1:7843/");
+    }
+
+    #[test]
+    fn only_unsupported_link_errors_fall_back_to_rename() {
+        use std::io::{Error, ErrorKind};
+        assert!(hard_links_unsupported(&Error::from(ErrorKind::Unsupported)));
+        assert!(!hard_links_unsupported(&Error::from(ErrorKind::PermissionDenied)));
+        assert!(!hard_links_unsupported(&Error::from(ErrorKind::NotFound)));
+        #[cfg(target_os = "linux")]
+        {
+            assert!(hard_links_unsupported(&Error::from_raw_os_error(95)));
+            assert!(!hard_links_unsupported(&Error::from_raw_os_error(28)));
+        }
+    }
+
+    #[test]
+    fn banner_line_keeps_the_token_out_of_non_terminal_logs() {
+        let addr = std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843);
+        let line = banner_line(addr, Some("abc"), false);
+        assert_eq!(
+            line,
+            "Studio: http://127.0.0.1:7843/ (sign-in link: run `aivyx-pa doctor`)"
+        );
+        assert!(!line.contains("abc"));
+        assert_eq!(banner_line(addr, None, false), "Studio: http://127.0.0.1:7843/");
     }
 
     #[test]

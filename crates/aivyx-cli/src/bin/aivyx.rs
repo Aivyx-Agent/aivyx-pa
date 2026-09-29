@@ -8750,7 +8750,30 @@ async fn run_async(
     // Telegram as default keeps that behavior unchanged, and can
     // still see Studio notifications by naming "studio" explicitly
     // on a schedule.
-    let web_ui_enabled = cli_web_ui_port.or(config_web_ui_port).is_some();
+    // First-run coherence A2 — the Studio's effective token: the
+    // operator's `web_ui_auth_token`, else none under
+    // `web_ui_insecure_no_auth`, else the automatic `studio-token`
+    // file. A damaged token file keeps the Studio off (with the
+    // reason) rather than serving it unauthenticated or replacing the
+    // file; the rest of the daemon runs on.
+    let (studio_port, studio_token) = match cli_web_ui_port.or(config_web_ui_port) {
+        None => (None, None),
+        Some(port) => match aivyx_channel::studio_token::effective_token(
+            config_web_ui_auth_token,
+            config_web_ui_insecure_no_auth,
+            &studio_token_path,
+        ) {
+            Ok(token) => (Some(port), token),
+            Err(e) => {
+                eprintln!("aivyx-pa daemon: the Studio is off — {e}");
+                (None, None)
+            }
+        },
+    };
+
+    // Only a Studio that will really run gets the "studio" notify target:
+    // a damaged token file keeps it off (above).
+    let web_ui_enabled = studio_port.is_some();
     if web_ui_enabled {
         if let Some(synthesized) = synthesize_default_webui_target(&config_notify_targets) {
             config_notify_targets.push(synthesized);
@@ -10268,27 +10291,6 @@ async fn run_async(
                 },
             )
         });
-
-        // First-run coherence A2 — the Studio's effective token: the
-        // operator's `web_ui_auth_token`, else none under
-        // `web_ui_insecure_no_auth`, else the automatic `studio-token`
-        // file. A damaged token file keeps the Studio off (with the
-        // reason) rather than serving it unauthenticated or replacing the
-        // file; the rest of the daemon runs on.
-        let (studio_port, studio_token) = match cli_web_ui_port.or(config_web_ui_port) {
-            None => (None, None),
-            Some(port) => match aivyx_channel::studio_token::effective_token(
-                config_web_ui_auth_token,
-                config_web_ui_insecure_no_auth,
-                &studio_token_path,
-            ) {
-                Ok(token) => (Some(port), token),
-                Err(e) => {
-                    eprintln!("aivyx-pa daemon: the Studio is off — {e}");
-                    (None, None)
-                }
-            },
-        };
 
         let result = run_daemon(DaemonConfig {
             socket_path,

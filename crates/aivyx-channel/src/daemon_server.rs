@@ -1505,7 +1505,11 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         let on_listening: crate::web_ui::OnListening = Box::new(move |addr| {
             eprintln!(
                 "{}",
-                crate::studio_token::banner_line(addr, banner_token.as_deref())
+                crate::studio_token::banner_line(
+                    addr,
+                    banner_token.as_deref(),
+                    std::io::IsTerminal::is_terminal(&std::io::stderr()),
+                )
             );
         });
         tokio::spawn(async move {
