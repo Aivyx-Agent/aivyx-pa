@@ -760,6 +760,15 @@ fn spawn_drain_task(
             };
 
             if let Err(e) = handle.put(&key, &value).await {
+                // The runtime is shutting down (process exit — e.g. a
+                // config error returned from `run`): not a storage
+                // failure, and no later write can land either. Stop
+                // quietly. Safe for the chain: the anchor only ever
+                // advances after a durable put (invariant 6), so an entry
+                // lost here leaves disk and anchor consistent.
+                if e.is_cancelled() {
+                    break;
+                }
                 let msg = format!("storage.put seq={}: {e}", entry.seq);
                 mark_unhealthy(&health, &first_error, &msg);
                 (on_error)(AuditError::Storage(msg));
@@ -775,6 +784,9 @@ fn spawn_drain_task(
             // positive. Still surfaced through the error handler so
             // it isn't silently swallowed.
             if let Err(e) = write_anchor(&handle, entry.seq, entry.mac).await {
+                if e.is_cancelled() {
+                    break;
+                }
                 (on_error)(AuditError::Storage(format!(
                     "chain anchor put seq={}: {e}",
                     entry.seq

@@ -456,6 +456,29 @@ pub enum StorageError {
     /// other runtime failure.
     #[error("blocking task join failed: {0}")]
     JoinFailed(String),
+
+    /// The blocking task was cancelled because the async runtime is
+    /// shutting down (process exit), not because storage failed.
+    #[error("storage task cancelled: the runtime is shutting down")]
+    Cancelled,
+}
+
+impl StorageError {
+    /// Did this fail only because the runtime is shutting down?
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, StorageError::Cancelled)
+    }
+}
+
+/// Map a `spawn_blocking` join error: a cancelled task (runtime shutdown)
+/// is [`StorageError::Cancelled`]; anything else (a panic) stays a
+/// [`StorageError::JoinFailed`].
+pub fn join_error(e: tokio::task::JoinError) -> StorageError {
+    if e.is_cancelled() {
+        StorageError::Cancelled
+    } else {
+        StorageError::JoinFailed(e.to_string())
+    }
 }
 
 // Small adapters to lift upstream error kinds into `StorageError::Redb`.
@@ -623,7 +646,7 @@ impl RedbStorage {
             Ok(db)
         })
         .await
-        .map_err(|e| StorageError::JoinFailed(e.to_string()))??;
+        .map_err(join_error)??;
 
         Ok(Arc::new(Self {
             db: Arc::new(db),
@@ -826,7 +849,7 @@ impl DomainHandle {
             Ok(Some(plaintext))
         })
         .await
-        .map_err(|e| StorageError::JoinFailed(e.to_string()))?
+        .map_err(join_error)?
     }
 
     /// Write `value` under `key`, sealing with the domain subkey and
@@ -869,7 +892,7 @@ impl DomainHandle {
             Ok(())
         })
         .await
-        .map_err(|e| StorageError::JoinFailed(e.to_string()))?
+        .map_err(join_error)?
     }
 
     /// Scan every key in this domain whose byte representation begins
@@ -973,7 +996,7 @@ impl DomainHandle {
             },
         )
         .await
-        .map_err(|e| StorageError::JoinFailed(e.to_string()))?
+        .map_err(join_error)?
     }
 
     /// Delete `key`. Returns `Ok(())` whether or not the key was
@@ -995,7 +1018,7 @@ impl DomainHandle {
             Ok(())
         })
         .await
-        .map_err(|e| StorageError::JoinFailed(e.to_string()))?
+        .map_err(join_error)?
     }
 
     /// Build the AEAD associated-data for a `(domain, user_key)`
@@ -1035,6 +1058,21 @@ impl DomainHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_cancelled_blocking_task_is_reported_as_cancelled() {
+        // The runtime shutting down cancels in-flight blocking tasks; that
+        // is not a storage failure, and callers (the audit drain) must be
+        // able to tell the difference.
+        let task = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        task.abort();
+        let join_err = task.await.unwrap_err();
+        let err = join_error(join_err);
+        assert!(err.is_cancelled(), "{err}");
+        assert!(!StorageError::JoinFailed("boom".into()).is_cancelled());
+    }
     use std::fs;
 
     /// RAII temp directory — creates `$TMPDIR/aivyx-storage-test-<uuid>`
