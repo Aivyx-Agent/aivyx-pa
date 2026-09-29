@@ -1268,7 +1268,7 @@ fn App() -> Element {
         View::MissionControl => "Mission Control",
         View::Schedules => "Schedules",
         View::Notifications => "Notifications",
-        View::Chat => "Terminal",
+        View::Chat => "Chat",
         View::Memory => "Memory",
         View::Wiki => "Knowledge Wiki",
         View::Lattice => "Knowledge Graph",
@@ -3230,9 +3230,9 @@ fn ProactiveConfigCard(config: ProactiveConfigView, targets: Vec<NotifyTargetCon
                 label { "Target" }
                 select {
                     class: "input",
-                    value: "{target}",
-                    onchange: move |e| target.set(e.value()),
-                    option { value: "", "— choose a notify target —" }
+                    value: select_value(&target()),
+                    onchange: move |e| target.set(stored_value(e.value())),
+                    option { value: UNSET_OPTION, "— choose a notify target —" }
                     for t in targets.iter().filter(|t| t.enabled || t.name == target()) {
                         option {
                             value: "{t.name}",
@@ -6771,7 +6771,7 @@ fn SettingsPanel() -> Element {
             div { class: "glass-card settings-section",
                 div { class: "panel-head",
                     h3 { "Access level" }
-                    span { class: "chip", "{snap.access_level}" }
+                    span { class: level_chip_class(&snap.access_level), "{snap.access_level}" }
                 }
                 p { class: "label-tech",
                     "How far the agent can reach on disk. Expanding beyond the sandbox is confirmed first."
@@ -6820,7 +6820,7 @@ fn SettingsPanel() -> Element {
             div { class: "glass-card settings-section",
                 div { class: "panel-head",
                     h3 { "Autonomy" }
-                    span { class: "chip", "{snap.autonomy_level}" }
+                    span { class: level_chip_class(&snap.autonomy_level), "{snap.autonomy_level}" }
                 }
                 p { class: "label-tech",
                     "How autonomous the agent is. One dial that composes the safety \
@@ -7217,8 +7217,9 @@ fn VoicePanel() -> Element {
                 div { class: "panel-head", h3 { "Models & engines" } }
                 div { class: "field-row",
                     label { class: "label-tech", "ASR engine" }
-                    select { class: "input", value: "{asr_engine}", onchange: move |e| asr_engine.set(e.value()),
-                        option { value: "", "default (whisper-rs)" }
+                    select { class: "input", value: select_value(&asr_engine()),
+                        onchange: move |e| asr_engine.set(stored_value(e.value())),
+                        option { value: UNSET_OPTION, "default (whisper-rs)" }
                         option { value: "whisper-rs", "whisper-rs" }
                         option { value: "whisper-cpp-plus", "whisper-cpp-plus" }
                     }
@@ -7230,8 +7231,9 @@ fn VoicePanel() -> Element {
                 }
                 div { class: "field-row",
                     label { class: "label-tech", "TTS engine" }
-                    select { class: "input", value: "{tts_engine}", onchange: move |e| tts_engine.set(e.value()),
-                        option { value: "", "default (kokoro)" }
+                    select { class: "input", value: select_value(&tts_engine()),
+                        onchange: move |e| tts_engine.set(stored_value(e.value())),
+                        option { value: UNSET_OPTION, "default (kokoro)" }
                         option { value: "kokoro", "kokoro" }
                     }
                 }
@@ -11279,4 +11281,56 @@ fn ws_url() -> String {
     };
     let host = location.host().unwrap_or_else(|_| "127.0.0.1".to_string());
     format!("{scheme}://{host}/ws")
+}
+
+/// The `<option>` value standing for "unset" (no notify target, the
+/// engine's default). Dioxus drops a `value: ""` attribute, and an option
+/// without one reads back as its label — so an empty value can't be used.
+/// `-` is never a target name or an engine id.
+const UNSET_OPTION: &str = "-";
+
+/// A stored setting as a `<select>` value: empty becomes [`UNSET_OPTION`].
+fn select_value(stored: &str) -> String {
+    if stored.is_empty() { UNSET_OPTION.to_string() } else { stored.to_string() }
+}
+
+/// A `<select>` value back as a stored setting: [`UNSET_OPTION`] is empty.
+fn stored_value(selected: String) -> String {
+    if selected == UNSET_OPTION { String::new() } else { selected }
+}
+
+/// The chip class for an access or autonomy level: plain (neutral) for the
+/// everyday levels, the warning tint for the ones that widen the agent's
+/// reach — `full` access, `autonomous` / `unleashed` autonomy.
+fn level_chip_class(level: &str) -> &'static str {
+    match level {
+        "full" | "autonomous" | "unleashed" => "chip warning",
+        _ => "chip",
+    }
+}
+
+#[cfg(test)]
+mod level_chip_tests {
+    use super::{level_chip_class, select_value, stored_value, UNSET_OPTION};
+
+    #[test]
+    fn an_unset_select_round_trips_through_the_sentinel() {
+        // Dioxus drops `value: ""`, so an option's empty value reads back
+        // as its label — "default (whisper-rs)" would be saved as the
+        // engine name. The sentinel keeps "unset" unset.
+        assert_eq!(select_value(""), UNSET_OPTION);
+        assert_eq!(select_value("whisper-rs"), "whisper-rs");
+        assert_eq!(stored_value(UNSET_OPTION.to_string()), "");
+        assert_eq!(stored_value("kokoro".to_string()), "kokoro");
+    }
+
+    #[test]
+    fn only_the_high_levels_are_tinted_as_a_warning() {
+        for safe in ["sandbox", "workspace", "home", "manual", "assisted", "supervised"] {
+            assert_eq!(level_chip_class(safe), "chip", "{safe}");
+        }
+        for high in ["full", "autonomous", "unleashed"] {
+            assert_eq!(level_chip_class(high), "chip warning", "{high}");
+        }
+    }
 }

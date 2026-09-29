@@ -3,7 +3,7 @@
 Two screens cover the day-to-day work: **Chat** for a conversation, **Missions**
 for larger multi-step jobs.
 
-## Chat (the Terminal screen)
+## Chat
 
 The **Chat** screen is a direct conversation with your assistant — type a
 message, get a reply. As it works it may use *tools* (reading a file, searching
