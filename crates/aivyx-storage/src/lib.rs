@@ -1073,6 +1073,7 @@ mod tests {
         assert!(err.is_cancelled(), "{err}");
         assert!(!StorageError::JoinFailed("boom".into()).is_cancelled());
     }
+
     use std::fs;
 
     /// RAII temp directory — creates `$TMPDIR/aivyx-storage-test-<uuid>`
