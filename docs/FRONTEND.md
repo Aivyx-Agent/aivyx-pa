@@ -16,20 +16,23 @@
 
 ## 0. The brand in one paragraph
 
-**The Neon Cartographer.** Intelligence that maps unseen territory with warmth
-and precision. Deep **midnight** surfaces layered into hierarchy (void → base →
-surface → raised → elevated → float), grounded by **warm amber** CTAs and a
-**cyber-purple** interactive core, with a **warm-tan** tertiary. No hard 1px
-section lines — boundaries come from surface-tier shifts and **ghost borders**
-(5–10% opacity). Type is a dialogue between human and machine: **Space Grotesk**
-(display), **Inter** (body), **JetBrains Mono** (logic/labels). The mark is a
-single **candle** — warmth, light, privacy: *a flame in your own kitchen, not a
-searchlight in the cloud.* Voice: authoritative, precise, dry. **Tagline: "Your
-AI. Your Machine. Your Rules."**
+**Wick & Compass** (since 2026-09-12; it replaced the earlier Neon
+Cartographer look this document first described). Precision and
+instrument-grade trust: intelligence you read like a well-built gauge.
+Layered surfaces on a deep-navy (dark) or vellum (light) base, **brass**
+accents (`#c9a24b`) with a **rust** secondary (`#b5432b`), real 1px ruled
+borders rather than ghost edges, and shadows that read as cast light.
+Status colours (success / warning / error) stay separate from the brand
+accents, so a plain label is neutral and colour always means something.
+Type: **Fraunces** for headlines, **IBM Plex Sans** for body and titles,
+**IBM Plex Mono** for labels and data. The mark is **Wick**, a flame in a
+calibrated brass dial. Voice: warm, precise, direct; humour extremely dry.
 
-The single source of truth for every value is `aivyx-brand/design-tokens.md` and
-`aivyx-brand/brand-guidelines.md`. The frontend transcribes them — it never
-invents colors.
+The single source of truth for every value is `aivyx-brand/design-tokens.md`
+and `aivyx-brand/brand-guidelines.md`; `crates/aivyx-web/assets/stitch.css`
+transcribes them and never invents colours. (Sections below that name the
+older palette or fonts describe the Chapter R structure, which still
+holds; the values are Wick & Compass's.)
 
 ---
 

@@ -8,6 +8,11 @@ page in this guide; this is the map.
 | **Create** | The guided setup that gives your assistant its identity (see [Create your agent](03-create-your-agent.md)). |
 | **Command** | Your home dashboard — at-a-glance status, active missions, a live activity feed, and whether the assistant is busy. |
 | **Missions** | Hand off larger multi-step jobs and watch them run; approve gates (see [Chat & missions](04-chat-and-missions.md)). |
+| **Mission Control** | A live view of one running mission: its lead and specialists, drill-in, and controls to approve, reject, pause, resume or abort. |
+| **Schedules** | Routines that run on a timer — yours, your config's, and ones the assistant proposes for your approval. |
+| **Notifications** | Where your assistant can reach you outside the Studio, and what it has sent. |
+| **Loop** | The autonomous backlog: stories the assistant works through on its own, and each run's progress. |
+| **Reminders** | Reminders you or the assistant have set. |
 | **Chat** | A direct conversation with your assistant. |
 | **Memory** | Browse and search everything your assistant has learned. |
 | **Wiki** | Your assistant's knowledge as readable per-topic pages. |
@@ -18,9 +23,13 @@ page in this guide; this is the map.
 | **Teams** | View and edit your team of specialists (see [Teams](07-teams.md)). |
 | **Documents** | A file browser over the folders your assistant can access. |
 | **MCP** | The status of any external tool servers you've connected. |
+| **Tools** | A searchable catalog of every tool your assistant has, with the permission each one needs. |
+| **Audit** | The tamper-evident log of everything the assistant did. |
+| **Sessions** | Every open conversation — which channel, its trust level, when it was last active. |
 | **Gallery** | Browse images your assistant has generated through a connected ComfyUI server. |
 | **Models** | Which models routing can choose from, what's loaded, and which one this conversation uses — with a pin control (see [Models & routing](12-models-and-routing.md)). |
 | **Voice** | Set up talking to your assistant out loud. |
+| **Guide** | This guide. |
 
 ## Command Center
 
