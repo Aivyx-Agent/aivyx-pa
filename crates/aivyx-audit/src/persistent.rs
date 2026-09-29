@@ -967,6 +967,46 @@ mod tests {
         panic!("chain anchor never reached seq {expected_seq}");
     }
 
+    /// A runtime shutting down under in-flight writes cancels their
+    /// blocking tasks. That is process exit, not a storage failure: the
+    /// drain must stop quietly rather than report (by default, panic).
+    #[test]
+    fn a_runtime_shutting_down_mid_drain_reports_no_error() {
+        let errors = Arc::new(StdMutex::new(Vec::<String>::new()));
+        for round in 0..20u8 {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .max_blocking_threads(1)
+                .enable_all()
+                .build()
+                .unwrap();
+            let (dir, storage) = rt.block_on(async {
+                let (dir, storage, chain_key) = fresh_storage(100 + round).await;
+                let seen = Arc::clone(&errors);
+                let log = PersistentAuditLog::with_error_handler(
+                    Arc::clone(&storage),
+                    chain_key,
+                    move |e| seen.lock().unwrap().push(e.to_string()),
+                )
+                .await
+                .unwrap();
+                for _ in 0..200 {
+                    log.append(sample_tool_call()).unwrap();
+                }
+                (dir, storage)
+            });
+            rt.shutdown_timeout(Duration::ZERO);
+            drop((storage, dir));
+        }
+        let errors = errors.lock().unwrap();
+        assert!(
+            errors.is_empty(),
+            "{} errors, first: {:?}",
+            errors.len(),
+            errors.first()
+        );
+    }
+
     #[tokio::test]
     async fn open_on_empty_domain_yields_empty_chain() {
         let (_dir, storage, chain_key) = fresh_storage(1).await;
