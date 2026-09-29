@@ -1,8 +1,9 @@
 //! `aivyx-pa init` — interactive first-run setup wizard (Phase 44).
 //!
-//! Detects whether Ollama is running locally and defaults to it,
-//! walks the user through provider and model selection, and writes
-//! a ready-to-use `aivyx-pa.toml` config file.
+//! Detects every local model runtime (Ollama, Lemonade Server, llama.cpp,
+//! Jan, aivyx-broker), lists every provider with the detected ones first,
+//! never pre-selects a cloud provider, walks the user through model
+//! selection, and writes a ready-to-use `aivyx-pa.toml` config file.
 
 use std::io::{self, BufRead, IsTerminal, Write as IoWrite};
 use std::path::Path;
@@ -257,6 +258,20 @@ async fn decide_embedding(
             .map_err(|e| format!("write error: {e}"))?;
             Ok(None)
         }
+        Provider::Lemonade
+        | Provider::LlamaCpp
+        | Provider::Jan
+        | Provider::Broker
+        | Provider::MistralRs => {
+            writeln!(
+                writer,
+                "\nNote: semantic memory needs an embedding model, so it stays off for \
+                 now. Add an [embedding] provider (e.g. a local Ollama running \
+                 {RECOMMENDED_EMBED_MODEL}) to enable it."
+            )
+            .map_err(|e| format!("write error: {e}"))?;
+            Ok(None)
+        }
     }
 }
 
@@ -299,14 +314,41 @@ fn prompt_line(
     Ok(buf.trim().to_string())
 }
 
+/// Like [`prompt_line`], but an answer is required: an empty answer prints
+/// `required` and asks again, and end of input is an error rather than an
+/// endless loop of empty answers.
+fn prompt_line_required(
+    prompt: &str,
+    required: &str,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<String, String> {
+    loop {
+        write!(writer, "{prompt}").map_err(|e| format!("write error: {e}"))?;
+        writer.flush().map_err(|e| format!("flush error: {e}"))?;
+        let mut buf = String::new();
+        let n = reader
+            .read_line(&mut buf)
+            .map_err(|e| format!("read error: {e}"))?;
+        if n == 0 {
+            return Err("no answer given (end of input)".into());
+        }
+        let answer = buf.trim();
+        if !answer.is_empty() {
+            return Ok(answer.to_string());
+        }
+        writeln!(writer, "{required}").map_err(|e| format!("write error: {e}"))?;
+    }
+}
+
 /// Present a numbered menu and return the chosen option (0-indexed).
 /// `default` is returned when the user presses Enter without typing.
 ///
 /// Example output:
 /// ```text
-///   1) Ollama (local)
-///   2) Anthropic
-///   3) OpenAI
+///   1) Ollama
+///   2) Lemonade Server
+///   3) Anthropic (cloud)
 /// Choose [1]:
 /// ```
 fn prompt_choice(
@@ -316,13 +358,42 @@ fn prompt_choice(
     reader: &mut dyn BufRead,
     writer: &mut dyn IoWrite,
 ) -> Result<usize, String> {
+    prompt_choice_opt(prompt, options, Some(default), reader, writer)
+}
+
+/// [`prompt_choice`] with an optional default. With `None` nothing is
+/// pre-selected: the prompt shows no `[n]` hint and an empty answer
+/// re-prompts, so the operator must pick (first-run coherence A4 — `init`
+/// never pre-selects a cloud provider).
+fn prompt_choice_opt(
+    prompt: &str,
+    options: &[&str],
+    default: Option<usize>,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<usize, String> {
     for (i, opt) in options.iter().enumerate() {
         writeln!(writer, "  {}) {opt}", i + 1).map_err(|e| format!("write error: {e}"))?;
     }
+    let question = match default {
+        Some(d) => format!("{prompt} [{}]: ", d + 1),
+        None => format!("{prompt}: "),
+    };
     loop {
-        let input = prompt_line(&format!("{prompt} [{}]: ", default + 1), reader, writer)?;
+        write!(writer, "{question}").map_err(|e| format!("write error: {e}"))?;
+        writer.flush().map_err(|e| format!("flush error: {e}"))?;
+        let mut buf = String::new();
+        let n = reader
+            .read_line(&mut buf)
+            .map_err(|e| format!("read error: {e}"))?;
+        let input = buf.trim();
         if input.is_empty() {
-            return Ok(default);
+            match default {
+                Some(d) => return Ok(d),
+                // No default and no more input: an error, not an endless loop.
+                None if n == 0 => return Err("no choice made (end of input)".into()),
+                None => {}
+            }
         }
         match input.parse::<usize>() {
             Ok(n) if n >= 1 && n <= options.len() => return Ok(n - 1),
@@ -517,8 +588,9 @@ enum ServiceInstallDecision {
     AlreadyInstalled { active: Option<bool> },
     /// Operator declined -- fall back to the existing passive hint.
     Declined,
-    /// Operator wants it installed, with or without the Studio.
-    Install { web_ui: bool },
+    /// Operator wants it installed. There's no Studio question: the daemon
+    /// serves the Studio by default, behind its automatic token (A2).
+    Install,
 }
 
 fn decide_service_install(
@@ -539,8 +611,7 @@ fn decide_service_install(
     if !install_now {
         return Ok(ServiceInstallDecision::Declined);
     }
-    let web_ui = prompt_yes_no("Also serve the Studio web UI?", false, reader, writer)?;
-    Ok(ServiceInstallDecision::Install { web_ui })
+    Ok(ServiceInstallDecision::Install)
 }
 
 /// Whether to proceed writing a config that points at a storage path
@@ -639,14 +710,16 @@ fn offer_service_install(
             )
             .map_err(|write_err| format!("write error: {write_err}"))?;
         }
-        ServiceInstallDecision::Install { web_ui } => {
+        ServiceInstallDecision::Install => {
             writeln!(
                 writer,
                 "  (next: the store passphrase the service will use — set \
                  AIVYX_PA_PASSPHRASE beforehand to skip the prompt)"
             )
             .map_err(|write_err| format!("write error: {write_err}"))?;
-            match run_install(web_ui, true) {
+            // `web_ui = false` only means "no `--web-ui` flag on the unit";
+            // the daemon serves the Studio by default, so none is needed.
+            match run_install(false, true) {
                 Ok(()) => {
                     writeln!(
                         writer,
@@ -673,12 +746,425 @@ fn offer_service_install(
 // TOML generation
 // ---------------------------------------------------------------------------
 
-/// The provider the user selected in the wizard.
+/// The provider the user selected in the wizard — every `[agent] provider`
+/// the config accepts (first-run coherence A4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Provider {
     Ollama,
+    /// Lemonade Server — OpenAI-compatible under `/api`.
+    Lemonade,
+    /// A raw llama.cpp `llama-server`.
+    LlamaCpp,
+    Jan,
+    /// `aivyx-broker`, fronting a shared `llama-server`.
+    Broker,
+    /// Embedded mistral.rs — offered only when built with
+    /// `provider-mistral-rs`.
+    MistralRs,
     Anthropic,
     OpenAi,
+}
+
+impl Provider {
+    /// The `[agent] provider` value.
+    fn config_name(self) -> &'static str {
+        match self {
+            Provider::Ollama => "ollama",
+            Provider::Lemonade => "lemonade",
+            Provider::LlamaCpp => "llamacpp",
+            Provider::Jan => "jan",
+            Provider::Broker => "broker",
+            Provider::MistralRs => "mistralrs",
+            Provider::Anthropic => "anthropic",
+            Provider::OpenAi => "openai",
+        }
+    }
+
+    /// Parse an `[agent] provider` value (a template's), accepting the same
+    /// aliases the config loader does.
+    fn from_config_name(name: &str) -> Option<Self> {
+        Some(match name.to_ascii_lowercase().as_str() {
+            "ollama" => Provider::Ollama,
+            "lemonade" => Provider::Lemonade,
+            "llamacpp" | "llama-cpp" | "llama_cpp" => Provider::LlamaCpp,
+            "jan" => Provider::Jan,
+            "broker" | "aivyx-broker" | "aivyx_broker" => Provider::Broker,
+            "mistralrs" | "mistral-rs" | "mistral_rs" => Provider::MistralRs,
+            "anthropic" => Provider::Anthropic,
+            "openai" => Provider::OpenAi,
+            _ => return None,
+        })
+    }
+
+    /// The menu label.
+    fn label(self) -> &'static str {
+        match self {
+            Provider::Ollama => "Ollama",
+            Provider::Lemonade => "Lemonade Server",
+            Provider::LlamaCpp => "llama.cpp server",
+            Provider::Jan => "Jan",
+            Provider::Broker => "aivyx-broker",
+            Provider::MistralRs => "mistral.rs (embedded)",
+            Provider::Anthropic => "Anthropic (cloud)",
+            Provider::OpenAi => "OpenAI (cloud)",
+        }
+    }
+
+    /// Runs on this machine — no API key, no per-token cost.
+    fn is_local(self) -> bool {
+        !matches!(self, Provider::Anthropic | Provider::OpenAi)
+    }
+
+    /// An OpenAI-compatible local server `init` probes, lists models from,
+    /// and may write a base URL for.
+    fn is_local_server(self) -> bool {
+        matches!(
+            self,
+            Provider::Lemonade | Provider::LlamaCpp | Provider::Jan | Provider::Broker
+        )
+    }
+
+    /// The base URL the runtime falls back to when none is configured —
+    /// mirrors the provider-construction arms in `aivyx.rs`.
+    fn runtime_default_base_url(self) -> Option<&'static str> {
+        match self {
+            Provider::Lemonade => Some(crate::DEFAULT_LEMONADE_BASE_URL),
+            Provider::LlamaCpp => Some(DEFAULT_LLAMACPP_BASE_URL),
+            Provider::Jan => Some(DEFAULT_JAN_BASE_URL),
+            Provider::Broker => Some(crate::DEFAULT_BROKER_BASE_URL),
+            _ => None,
+        }
+    }
+}
+
+/// Every provider in menu order when nothing is detected: local first, then
+/// cloud. mistral.rs is appended to the local group only when built in.
+fn all_providers(include_mistralrs: bool) -> Vec<Provider> {
+    let mut v = vec![
+        Provider::Ollama,
+        Provider::Lemonade,
+        Provider::LlamaCpp,
+        Provider::Jan,
+        Provider::Broker,
+    ];
+    if include_mistralrs {
+        v.push(Provider::MistralRs);
+    }
+    v.extend([Provider::Anthropic, Provider::OpenAi]);
+    v
+}
+
+/// The provider menu `init` shows.
+struct ProviderMenu {
+    /// `(provider, label)` in display order.
+    entries: Vec<(Provider, String)>,
+    /// The pre-selected entry — never a cloud provider, and `None` when
+    /// nothing local was detected (and no template named a local provider).
+    default: Option<usize>,
+    /// No local runtime answered its probe.
+    nothing_detected: bool,
+}
+
+impl ProviderMenu {
+    #[cfg(test)]
+    fn providers(&self) -> Vec<Provider> {
+        self.entries.iter().map(|(p, _)| *p).collect()
+    }
+}
+
+/// Build the menu: detected runtimes first (marked "(detected)"), then the
+/// rest in [`all_providers`] order. The first detected runtime is
+/// pre-selected; failing that, a template's provider if it's local; failing
+/// that, nothing.
+fn build_provider_menu(
+    detected: &[Provider],
+    template: Option<Provider>,
+    include_mistralrs: bool,
+) -> ProviderMenu {
+    let all = all_providers(include_mistralrs);
+    let mut entries: Vec<(Provider, String)> = all
+        .iter()
+        .filter(|p| detected.contains(p))
+        .map(|p| (*p, format!("{} (detected)", p.label())))
+        .collect();
+    entries.extend(
+        all.iter()
+            .filter(|p| !detected.contains(p))
+            .map(|p| (*p, p.label().to_string())),
+    );
+    let nothing_detected = !entries.iter().any(|(p, _)| detected.contains(p));
+    let default = if !nothing_detected {
+        Some(0)
+    } else {
+        template
+            .filter(|t| t.is_local())
+            .and_then(|t| entries.iter().position(|(p, _)| *p == t))
+    };
+    ProviderMenu {
+        entries,
+        default,
+        nothing_detected,
+    }
+}
+
+/// [`build_provider_menu`] for this binary: mistral.rs only when built with
+/// `provider-mistral-rs`.
+fn provider_menu_for_this_build(
+    detected: &[Provider],
+    template: Option<Provider>,
+) -> ProviderMenu {
+    build_provider_menu(detected, template, cfg!(feature = "provider-mistral-rs"))
+}
+
+/// Printed before the menu when no local runtime answered.
+const NOTHING_DETECTED_HINT: &str = "No local model server found. Install Ollama \
+     (https://ollama.com) or Lemonade Server for a free, private local model — or \
+     choose a cloud provider.";
+
+/// Show the menu and return the operator's pick.
+fn choose_provider(
+    menu: &ProviderMenu,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<Provider, String> {
+    if menu.nothing_detected {
+        writeln!(writer, "\n{NOTHING_DETECTED_HINT}").map_err(|e| format!("write error: {e}"))?;
+    }
+    writeln!(writer, "\nSelect a provider:").map_err(|e| format!("write error: {e}"))?;
+    let labels: Vec<&str> = menu.entries.iter().map(|(_, l)| l.as_str()).collect();
+    let idx = prompt_choice_opt("Provider", &labels, menu.default, reader, writer)?;
+    Ok(menu.entries[idx].0)
+}
+
+// ---------------------------------------------------------------------------
+// Local runtime detection + model listing (first-run coherence A4)
+// ---------------------------------------------------------------------------
+
+/// Per-probe timeout. Loopback answers in milliseconds; a runtime that
+/// takes longer than this to say hello is treated as absent.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// llama-server's default, as the `LlamaCpp` arm in `aivyx.rs` resolves it.
+const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
+
+/// Jan's default, as the `Jan` arm in `aivyx.rs` resolves it. Note the
+/// OpenAI provider appends `/v1/chat/completions` itself, so this default
+/// yields `.../v1/v1/...`; `init` therefore always writes Jan's server root
+/// (see [`base_url_to_write`]).
+const DEFAULT_JAN_BASE_URL: &str = "http://localhost:1337/v1";
+
+/// Where `init` looks for each local runtime. The base URL is the one the
+/// provider would use (so it is what gets written when non-default); each
+/// probe appends its runtime's own health path. Injectable for tests.
+struct ProbeBases {
+    /// Probed with `GET {base}` (Ollama answers "Ollama is running").
+    ollama: String,
+    /// Probed with `GET {base}/v1/health`; `base` is the `/api` form.
+    lemonade: String,
+    /// Probed with `GET {base}/health`.
+    llamacpp: String,
+    /// Probed with `GET {base}/v1/models`; `base` is the server root.
+    jan: String,
+    /// Probed with `GET {base}/status`.
+    broker: String,
+}
+
+impl ProbeBases {
+    fn standard() -> Self {
+        Self {
+            ollama: DEFAULT_OLLAMA_BASE_URL.to_string(),
+            lemonade: crate::DEFAULT_LEMONADE_BASE_URL.to_string(),
+            llamacpp: "http://127.0.0.1:8080".to_string(),
+            jan: "http://127.0.0.1:1337".to_string(),
+            broker: crate::DEFAULT_BROKER_BASE_URL.to_string(),
+        }
+    }
+
+    fn base_for(&self, provider: Provider) -> Option<&str> {
+        Some(match provider {
+            Provider::Ollama => &self.ollama,
+            Provider::Lemonade => &self.lemonade,
+            Provider::LlamaCpp => &self.llamacpp,
+            Provider::Jan => &self.jan,
+            Provider::Broker => &self.broker,
+            _ => return None,
+        })
+    }
+}
+
+/// Probe every local runtime concurrently and return the ones that answered
+/// `2xx`, in menu order.
+async fn detect_local_runtimes(bases: &ProbeBases) -> Vec<Provider> {
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(PROBE_TIMEOUT)
+        .timeout(PROBE_TIMEOUT)
+        .build()
+    else {
+        return Vec::new();
+    };
+    let trim = |s: &str| s.trim_end_matches('/').to_string();
+    let probes = [
+        (Provider::Ollama, trim(&bases.ollama)),
+        (Provider::Lemonade, format!("{}/v1/health", trim(&bases.lemonade))),
+        (Provider::LlamaCpp, format!("{}/health", trim(&bases.llamacpp))),
+        (Provider::Jan, format!("{}/v1/models", trim(&bases.jan))),
+        (Provider::Broker, format!("{}/status", trim(&bases.broker))),
+    ];
+    let answered = futures_util::future::join_all(probes.iter().map(|(_, url)| {
+        let client = &client;
+        async move {
+            client
+                .get(url)
+                .send()
+                .await
+                .is_ok_and(|r| r.status().is_success())
+        }
+    }))
+    .await;
+    probes
+        .iter()
+        .zip(answered)
+        .filter_map(|((p, _), ok)| ok.then_some(*p))
+        .collect()
+}
+
+/// The base URL an OpenAI-compatible provider should get: no trailing `/`,
+/// and no trailing `/v1` — the provider appends `/v1/chat/completions`
+/// itself (Lemonade's `/api` prefix stays).
+fn normalize_server_base(base: &str) -> String {
+    let base = base.trim().trim_end_matches('/');
+    base.strip_suffix("/v1").unwrap_or(base).to_string()
+}
+
+/// For comparing base URLs: normalized, with `localhost` spelled `127.0.0.1`.
+fn comparable_base(base: &str) -> String {
+    normalize_server_base(base).replacen("://localhost", "://127.0.0.1", 1)
+}
+
+/// The base URL to write for `provider`, or `None` to leave the key out
+/// because the runtime's own default already points there.
+fn base_url_to_write(provider: Provider, base: &str) -> Option<String> {
+    let default = provider.runtime_default_base_url()?;
+    let base = normalize_server_base(base);
+    // Jan's built-in default carries a `/v1` the provider doubles (see
+    // DEFAULT_JAN_BASE_URL), so never rely on it: write the working root.
+    if provider != Provider::Jan && comparable_base(&base) == comparable_base(default) {
+        return None;
+    }
+    Some(base)
+}
+
+/// Ask where a local server that didn't answer its probe is running.
+fn prompt_server_base_url(
+    provider: Provider,
+    bases: &ProbeBases,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<String, String> {
+    let default = bases.base_for(provider).unwrap_or_default();
+    let answer = prompt_line(
+        &format!("{} URL [{default}]: ", provider.label()),
+        reader,
+        writer,
+    )?;
+    let chosen = if answer.is_empty() { default } else { &answer };
+    Ok(normalize_server_base(chosen))
+}
+
+/// Model ids a local server offers, through aivyx-route's discovery (the
+/// same view routing gets): Lemonade via its own catalogue (downloaded
+/// models only), Jan and llama.cpp via OpenAI-compatible `/v1/models` (a
+/// llama.cpp router-mode server via `/models`), and the broker via
+/// OpenAI-compatible against `{base}/v1`.
+async fn list_server_models(provider: Provider, base: &str) -> Result<Vec<String>, String> {
+    use aivyx_route::{DiscoveryOutcome, EndpointConfig, EndpointKind, EndpointRef};
+    let client = aivyx_route::discovery::reqwest::Client::new();
+    let endpoint = EndpointRef::new("default");
+    let attempts: Vec<(EndpointKind, String)> = match provider {
+        Provider::Lemonade => vec![(EndpointKind::Lemonade, base.to_string())],
+        Provider::Jan => vec![(EndpointKind::OpenaiCompat, base.to_string())],
+        Provider::LlamaCpp => vec![
+            (EndpointKind::OpenaiCompat, base.to_string()),
+            (EndpointKind::LlamaRouter, base.to_string()),
+        ],
+        Provider::Broker => vec![(EndpointKind::OpenaiCompat, format!("{base}/v1"))],
+        _ => return Ok(Vec::new()),
+    };
+    let mut why = String::new();
+    for (kind, base_url) in attempts {
+        let config = EndpointConfig {
+            kind,
+            base_url: Some(base_url),
+        };
+        let report = aivyx_route::discovery::discover(&endpoint, &config, &client).await;
+        match report.outcome {
+            DiscoveryOutcome::Reached(models) if !models.is_empty() => {
+                return Ok(models.into_iter().map(|m| m.id).collect());
+            }
+            DiscoveryOutcome::Reached(_) => return Ok(Vec::new()),
+            DiscoveryOutcome::Unreachable(e) => why = e,
+            DiscoveryOutcome::NotProbed => {}
+        }
+    }
+    Err(why)
+}
+
+/// Pick a model from a local server's list, or type an id when it lists
+/// none (or can't be reached).
+async fn select_server_model(
+    provider: Provider,
+    base: &str,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<String, String> {
+    let name = provider.label();
+    match list_server_models(provider, base).await {
+        Ok(models) if !models.is_empty() => {
+            writeln!(writer, "\nModels on {name}:").map_err(|e| format!("write error: {e}"))?;
+            let opts: Vec<&str> = models.iter().map(String::as_str).collect();
+            let idx = prompt_choice("Model", &opts, 0, reader, writer)?;
+            return Ok(models[idx].clone());
+        }
+        Ok(_) => writeln!(writer, "\nNo models found on {name} at {base}.")
+            .map_err(|e| format!("write error: {e}"))?,
+        Err(why) => writeln!(writer, "\nCouldn't list models on {name} at {base} ({why}).")
+            .map_err(|e| format!("write error: {e}"))?,
+    }
+    prompt_line_required("Model id: ", "A model id is required.", reader, writer)
+}
+
+/// Ask for the GGUF mistral.rs should load, validated with the same check
+/// `aivyx-pa doctor` runs.
+fn prompt_mistralrs_model_path(
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<String, String> {
+    loop {
+        let path = prompt_line_required(
+            "Path to a GGUF model (a file, or a directory containing one): ",
+            "A model path is required.",
+            reader,
+            writer,
+        )?;
+        let opts = aivyx_config::MistralRsOptions {
+            model_path: Some(std::path::PathBuf::from(&path)),
+            ..Default::default()
+        };
+        match crate::doctor::mistralrs_model_check(&opts) {
+            Ok(_) => return Ok(path),
+            Err(e) => writeln!(writer, "{e}").map_err(|e| format!("write error: {e}"))?,
+        }
+    }
+}
+
+/// The closing message's Studio line: the daemon serves it by default, and
+/// `aivyx-pa studio` prints the sign-in link once the daemon has made its
+/// token.
+fn studio_next_step_line(port: u16) -> String {
+    format!(
+        "  aivyx-pa studio            — your Studio sign-in link (the daemon serves \
+         the Studio at http://127.0.0.1:{port})"
+    )
 }
 
 /// Chapter W — the optional onboarding Persona/Skills seed collected by the
@@ -717,6 +1203,11 @@ struct InitConfig {
     provider: Provider,
     model: String,
     api_key: Option<String>,
+    /// A local server's base URL, written only when it differs from the
+    /// runtime default (`[openai] base_url`, or `[broker] base_url`).
+    server_base_url: Option<String>,
+    /// mistral.rs's GGUF (`[mistralrs] model_path`).
+    mistralrs_model_path: Option<String>,
     storage_path: String,
     fs_root: String,
     /// Chapter N — the operator-chosen access level. `Sandbox` (default)
@@ -770,14 +1261,10 @@ fn render_toml(cfg: &InitConfig) -> String {
     let mut out = String::from("# Generated by `aivyx-pa init`\n\n");
 
     // [agent] section
-    let provider_str = match cfg.provider {
-        Provider::Ollama => "ollama",
-        Provider::Anthropic => "anthropic",
-        Provider::OpenAi => "openai",
-    };
+    let provider_str = cfg.provider.config_name();
     out.push_str(&format!(
         "[agent]\nprovider = \"{provider_str}\"\nmodel = \"{}\"\n",
-        cfg.model,
+        escape_toml_string(&cfg.model),
     ));
 
     // Provider-specific section (API key)
@@ -790,6 +1277,30 @@ fn render_toml(cfg: &InitConfig) -> String {
         Provider::OpenAi => {
             if let Some(key) = &cfg.api_key {
                 out.push_str(&format!("\n[openai]\napi_key = \"{key}\"\n"));
+            }
+        }
+        Provider::Lemonade | Provider::LlamaCpp | Provider::Jan => {
+            if let Some(url) = &cfg.server_base_url {
+                out.push_str(&format!(
+                    "\n[openai]\nbase_url = \"{}\"\n",
+                    escape_toml_string(url)
+                ));
+            }
+        }
+        Provider::Broker => {
+            if let Some(url) = &cfg.server_base_url {
+                out.push_str(&format!(
+                    "\n[broker]\nbase_url = \"{}\"\n",
+                    escape_toml_string(url)
+                ));
+            }
+        }
+        Provider::MistralRs => {
+            if let Some(path) = &cfg.mistralrs_model_path {
+                out.push_str(&format!(
+                    "\n[mistralrs]\nmodel_path = \"{}\"\n",
+                    escape_toml_string(path)
+                ));
             }
         }
         Provider::Ollama => {
@@ -1033,7 +1544,7 @@ const ROUTINE_TREND_SCAN: &str = "Run a trend-scan across the operator's interes
 /// web search (its tool comes from the bundled web-search MCP server, which is
 /// only configured when the operator enabled web search).
 fn render_default_schedules(cfg: &InitConfig) -> String {
-    let local = matches!(cfg.provider, Provider::Ollama);
+    let local = cfg.provider.is_local();
     let core_enabled = local;
     let trend_enabled = local && cfg.enable_web_search;
     let b = |on: bool| if on { "true" } else { "false" };
@@ -1533,6 +2044,7 @@ async fn confirm_identity(
 fn build_wizard_provider(
     provider: Provider,
     api_key: Option<&str>,
+    server_base: Option<&str>,
 ) -> Option<Arc<dyn LlmProvider>> {
     match provider {
         Provider::Anthropic => {
@@ -1555,6 +2067,19 @@ fn build_wizard_provider(
                 .ok()
                 .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
         }
+        // The local OpenAI-compatible servers: keyless, at the base the
+        // operator just chose (already `/v1`-free, see
+        // `normalize_server_base`).
+        Provider::Lemonade | Provider::LlamaCpp | Provider::Jan | Provider::Broker => {
+            use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
+            let base = server_base?;
+            OpenAiProvider::new(OpenAiConfig::without_api_key().with_base_url(base))
+                .ok()
+                .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
+        }
+        // Loading a GGUF in-process can take minutes — use the manual
+        // identity prompts instead.
+        Provider::MistralRs => None,
     }
 }
 
@@ -1709,12 +2234,7 @@ fn render_with_template(
     use toml_edit::value;
 
     // [agent] provider + model
-    let provider_str = match cfg.provider {
-        Provider::Ollama => "ollama",
-        Provider::Anthropic => "anthropic",
-        Provider::OpenAi => "openai",
-    };
-    doc["agent"]["provider"] = value(provider_str);
+    doc["agent"]["provider"] = value(cfg.provider.config_name());
     doc["agent"]["model"] = value(cfg.model.as_str());
 
     // Provider-specific API key. Wipe the inactive provider's
@@ -1729,6 +2249,21 @@ fn render_with_template(
         Provider::OpenAi => {
             if let Some(key) = &cfg.api_key {
                 doc["openai"]["api_key"] = value(key.as_str());
+            }
+        }
+        Provider::Lemonade | Provider::LlamaCpp | Provider::Jan => {
+            if let Some(url) = &cfg.server_base_url {
+                doc["openai"]["base_url"] = value(url.as_str());
+            }
+        }
+        Provider::Broker => {
+            if let Some(url) = &cfg.server_base_url {
+                doc["broker"]["base_url"] = value(url.as_str());
+            }
+        }
+        Provider::MistralRs => {
+            if let Some(path) = &cfg.mistralrs_model_path {
+                doc["mistralrs"]["model_path"] = value(path.as_str());
             }
         }
         Provider::Ollama => {} // no key needed
@@ -2054,47 +2589,39 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         eprintln!();
     }
 
-    // 3. Detect Ollama + build provider menu.
+    // 3. Detect every local runtime (concurrently, short timeouts) and
+    // build the provider menu: detected runtimes first, the first one
+    // pre-selected; nothing detected → nothing pre-selected (first-run
+    // coherence A4 — `init` never defaults to a cloud provider). A
+    // template's provider is the default only when it's local and nothing
+    // was detected.
+    let probes = ProbeBases::standard();
     let base_url = DEFAULT_OLLAMA_BASE_URL;
-    let has_ollama = detect_ollama(base_url).await;
-
-    // Phase 66 — when a template declares a provider, that
-    // becomes the default; otherwise fall back to the Phase 44
-    // ollama-or-anthropic heuristic.
+    let detected = detect_local_runtimes(&probes).await;
+    for p in &detected {
+        if let Some(at) = probes.base_for(*p) {
+            eprintln!("{} detected at {at}", p.label());
+        }
+    }
     let template_provider = template_defaults
         .provider
         .as_deref()
-        .map(str::to_ascii_lowercase);
-    let (provider_options, default_idx) = match template_provider.as_deref() {
-        Some("ollama") => (vec!["Ollama (local)", "Anthropic", "OpenAI"], 0usize),
-        Some("anthropic") => (vec!["Anthropic", "OpenAI", "Ollama (local)"], 0usize),
-        Some("openai") => (vec!["OpenAI", "Anthropic", "Ollama (local)"], 0usize),
-        _ => {
-            if has_ollama {
-                eprintln!("Ollama detected at {base_url}");
-                (vec!["Ollama (local)", "Anthropic", "OpenAI"], 0usize)
-            } else {
-                eprintln!("Ollama not detected — defaulting to Anthropic");
-                (vec!["Anthropic", "OpenAI", "Ollama (local)"], 0usize)
-            }
-        }
-    };
+        .and_then(Provider::from_config_name);
+    let menu = provider_menu_for_this_build(&detected, template_provider);
+    let provider = choose_provider(&menu, &mut reader, &mut writer)?;
 
-    writeln!(writer, "\nSelect a provider:").map_err(|e| format!("write error: {e}"))?;
-    let choice = prompt_choice(
-        "Provider",
-        &provider_options,
-        default_idx,
-        &mut reader,
-        &mut writer,
-    )?;
-
-    let provider = match provider_options[choice] {
-        "Ollama (local)" => Provider::Ollama,
-        "Anthropic" => Provider::Anthropic,
-        "OpenAI" => Provider::OpenAi,
-        _ => unreachable!(),
+    // 3b. Where a local server lives: the probed address when it answered,
+    // otherwise ask (it may run elsewhere, or not be started yet).
+    let server_base = if provider.is_local_server() {
+        Some(if detected.contains(&provider) {
+            normalize_server_base(probes.base_for(provider).unwrap_or_default())
+        } else {
+            prompt_server_base_url(provider, &probes, &mut reader, &mut writer)?
+        })
+    } else {
+        None
     };
+    let mut mistralrs_model_path = None;
 
     // 4. Provider-specific: model or API key.
     let (model, api_key) = match provider {
@@ -2137,6 +2664,22 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
                 let idx = prompt_choice("Model", &opts, default_idx, &mut reader, &mut writer)?;
                 models[idx].clone()
             };
+            (model, None)
+        }
+        Provider::Lemonade | Provider::LlamaCpp | Provider::Jan | Provider::Broker => {
+            let base = server_base.as_deref().unwrap_or_default();
+            let model = select_server_model(provider, base, &mut reader, &mut writer).await?;
+            (model, None)
+        }
+        Provider::MistralRs => {
+            let path = prompt_mistralrs_model_path(&mut reader, &mut writer)?;
+            // `[agent] model` names the model for display and cost
+            // accounting; the GGUF's file stem is the natural name.
+            let model = Path::new(&path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "mistralrs".to_string());
+            mistralrs_model_path = Some(path);
             (model, None)
         }
         Provider::Anthropic => {
@@ -2296,7 +2839,8 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // constructed for the optional LLM-assisted draft; `None`
     // falls back to the guided manual prompts (local-first — the
     // builder never requires an LLM).
-    let draft_provider = build_wizard_provider(provider, api_key.as_deref());
+    let draft_provider =
+        build_wizard_provider(provider, api_key.as_deref(), server_base.as_deref());
     let identity = confirm_identity(
         &mut reader,
         &mut writer,
@@ -2327,6 +2871,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         provider,
         model,
         api_key,
+        server_base_url: server_base
+            .as_deref()
+            .and_then(|base| base_url_to_write(provider, base)),
+        mistralrs_model_path,
         storage_path,
         fs_root,
         access_level,
@@ -2358,10 +2906,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     write_config(config_path, &toml)?;
 
     // 6b. Chapter P — for the local path, confirm the setup actually works
-    // (Ollama reachable, model present, a non-empty test reply) before the
-    // user's first real turn. Best-effort: the config is already written, so a
-    // failed check is informational, not fatal.
-    if cfg.provider == Provider::Ollama {
+    // (the local server reachable, model present) before the user's first
+    // real turn. Best-effort: the config is already written, so a failed
+    // check is informational, not fatal.
+    if cfg.provider.is_local() {
         eprintln!("\nRunning a quick health check…");
         if let Err(e) = crate::doctor::run_doctor().await {
             eprintln!("{e}");
@@ -2374,7 +2922,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // new user won't otherwise discover), `doctor`, and, for the local path, the
     // capable-hardware guide.
     eprintln!("\nWrote {CONFIG_FILE}");
-    if cfg.provider != Provider::Ollama {
+    if cfg.api_key.is_some() {
         eprintln!(
             "Warning: {CONFIG_FILE} contains your API key. \
              Permissions set to 0600 (owner-only)."
@@ -2383,7 +2931,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     eprintln!("You'll be prompted for a passphrase on first launch (or set AIVYX_PA_PASSPHRASE).");
     // Be transparent about the unattended routines we just wrote — surprise
     // autonomous activity erodes trust.
-    if cfg.provider == Provider::Ollama {
+    if cfg.provider.is_local() {
         eprintln!(
             "\nSet up background routines (in {CONFIG_FILE} under [[schedule]]): a daily \
              environment review, nightly reflection, a health check, and a weekly digest \
@@ -2405,10 +2953,9 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     let web_ui_port = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
     eprintln!("\nNext steps:");
     eprintln!("  aivyx-pa                   — chat with your agent in the terminal");
-    eprintln!(
-        "  aivyx-pa daemon run --web-ui  — run the daemon + open the Studio at \
-         http://127.0.0.1:{web_ui_port}"
-    );
+    // First-run coherence A2 — the Studio is on by default, behind a token
+    // the daemon creates; `aivyx-pa studio` prints the sign-in link.
+    eprintln!("{}", studio_next_step_line(web_ui_port));
     // Chapter Anchor — the runs-for-days path: a real service so the agent keeps
     // running (and its scheduled routines keep firing) across logout + reboot.
     // Phase 187 — offer to install it right here instead of just printing the
@@ -2432,7 +2979,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         )?;
     }
     eprintln!("  aivyx-pa doctor            — re-check your setup any time");
-    if cfg.provider == Provider::Ollama {
+    if cfg.provider.is_local() && cfg.provider != Provider::MistralRs {
         eprintln!(
             "\nOn a capable GPU (e.g. a 24GB card) you can run a bigger model with more \
              context — see docs/LOCAL_HOSTING.md."
@@ -2909,40 +3456,31 @@ mod tests {
         assert!(matches!(decision, ServiceInstallDecision::Declined));
     }
 
+    /// First-run coherence (A2): the Studio is on by default and
+    /// token-protected, so the install offer no longer asks whether to serve
+    /// it -- a yes installs straight away, after one question.
     #[test]
-    fn decide_service_install_yes_then_no_web_ui() {
-        let mut input = Cursor::new(b"y\nn\n" as &[u8]);
+    fn decide_service_install_yes_installs_without_asking_about_the_web_ui() {
+        let mut input = Cursor::new(b"y\n" as &[u8]);
         let mut output = Vec::new();
         let decision = decide_service_install(false, None, &mut input, &mut output).unwrap();
-        assert!(matches!(
-            decision,
-            ServiceInstallDecision::Install { web_ui: false }
-        ));
-    }
-
-    #[test]
-    fn decide_service_install_yes_then_yes_web_ui() {
-        let mut input = Cursor::new(b"y\ny\n" as &[u8]);
-        let mut output = Vec::new();
-        let decision = decide_service_install(false, None, &mut input, &mut output).unwrap();
-        assert!(matches!(
-            decision,
-            ServiceInstallDecision::Install { web_ui: true }
-        ));
+        assert!(matches!(decision, ServiceInstallDecision::Install));
+        let out = String::from_utf8(output).unwrap();
+        assert!(
+            !out.contains("web UI") && !out.contains("Studio"),
+            "the web-UI question is gone: {out:?}"
+        );
     }
 
     #[test]
     fn decide_service_install_defaults_to_yes_on_bare_enter() {
-        // Confirms the "install now?" prompt defaults true (bare Enter =
-        // yes) -- the second bare Enter then hits the web-ui follow-up,
-        // which defaults false.
-        let mut input = Cursor::new(b"\n\n" as &[u8]);
+        // Confirms the "install now?" prompt defaults true (bare Enter = yes).
+        let mut input = Cursor::new(b"\n" as &[u8]);
         let mut output = Vec::new();
         let decision = decide_service_install(false, None, &mut input, &mut output).unwrap();
-        assert!(matches!(
-            decision,
-            ServiceInstallDecision::Install { web_ui: false }
-        ));
+        assert!(matches!(decision, ServiceInstallDecision::Install));
+        let out = String::from_utf8(output).unwrap();
+        assert!(!out.contains("web UI"), "only one question is asked: {out:?}");
     }
 
     #[test]
@@ -3062,7 +3600,7 @@ mod tests {
 
     #[test]
     fn offer_service_install_calls_run_install_with_the_right_args_on_yes() {
-        let mut input = Cursor::new(b"y\ny\n" as &[u8]);
+        let mut input = Cursor::new(b"y\n" as &[u8]);
         let mut output = Vec::new();
         let mut captured: Option<(bool, bool)> = None;
         offer_service_install(false, None, &mut input, &mut output, |web_ui, start| {
@@ -3070,14 +3608,16 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(captured, Some((true, true)));
+        // No `--web-ui` on the unit: the daemon serves the Studio by default.
+        assert_eq!(captured, Some((false, true)));
         let out = String::from_utf8(output).unwrap();
         assert!(out.contains("Installed as a background service"));
+        assert!(!out.contains("Also serve the Studio web UI?"), "{out:?}");
     }
 
     #[test]
     fn offer_service_install_prints_the_error_and_does_not_fail_on_install_failure() {
-        let mut input = Cursor::new(b"y\nn\n" as &[u8]);
+        let mut input = Cursor::new(b"y\n" as &[u8]);
         let mut output = Vec::new();
         let result = offer_service_install(false, None, &mut input, &mut output, |_, _| {
             Err("no supported service manager on this platform".to_string())
@@ -3106,6 +3646,8 @@ mod tests {
             provider,
             model: model.into(),
             api_key: api_key.map(String::from),
+            server_base_url: None,
+            mistralrs_model_path: None,
             storage_path: storage_path.into(),
             fs_root: fs_root.into(),
             access_level: AccessLevel::Sandbox,
@@ -4053,5 +4595,507 @@ mod tests {
         // round-trips to two backslashes when parsed.
         assert!(toml.contains("primary_use_cases = [\"Path C:\\\\\\\\Users\\\\code\"]"));
         assert!(toml.contains("communication_style = \"with \\\"emphasis\\\" sometimes\""));
+    }
+
+    // ---- First-run coherence (A4): every provider, local first ----------
+
+    /// A tiny HTTP server for probe/discovery tests: answers `200` with the
+    /// matching body for each listed path and `404` for anything else, for as
+    /// many connections as the test makes. Returns its `http://host:port`.
+    async fn serve_routes(routes: Vec<(&'static str, String)>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.split_whitespace().nth(1).unwrap_or("").to_string();
+                let (status, body) = match routes.iter().find(|(p, _)| *p == path) {
+                    Some((_, body)) => ("200 OK", body.clone()),
+                    None => ("404 Not Found", String::from("{}")),
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// A server that accepts connections and never answers -- a hung runtime.
+    async fn serve_silence() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// A base URL nothing listens on.
+    fn closed_base() -> String {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        drop(l);
+        format!("http://{addr}")
+    }
+
+    fn all_closed() -> ProbeBases {
+        ProbeBases {
+            ollama: closed_base(),
+            lemonade: format!("{}/api", closed_base()),
+            llamacpp: closed_base(),
+            jan: closed_base(),
+            broker: closed_base(),
+        }
+    }
+
+    #[tokio::test]
+    async fn detect_local_runtimes_finds_each_runtime_by_its_own_probe_path() {
+        let ok = || String::from("{}");
+        let lemonade = serve_routes(vec![("/api/v1/health", ok())]).await;
+        let jan = serve_routes(vec![("/v1/models", ok())]).await;
+        let broker = serve_routes(vec![("/status", ok())]).await;
+        // Something is listening on the llama.cpp port, but it isn't
+        // llama-server: `/health` is a 404, so it isn't detected.
+        let not_llama = serve_routes(vec![("/other", ok())]).await;
+        let probes = ProbeBases {
+            lemonade: format!("{lemonade}/api"),
+            jan,
+            broker,
+            llamacpp: not_llama,
+            ..all_closed()
+        };
+        assert_eq!(
+            detect_local_runtimes(&probes).await,
+            vec![Provider::Lemonade, Provider::Jan, Provider::Broker]
+        );
+    }
+
+    #[tokio::test]
+    async fn detect_local_runtimes_probes_ollama_and_llamacpp_too() {
+        let ollama = serve_routes(vec![("/", String::from("Ollama is running"))]).await;
+        let llama = serve_routes(vec![("/health", String::from("{\"status\":\"ok\"}"))]).await;
+        let probes = ProbeBases {
+            ollama,
+            llamacpp: llama,
+            ..all_closed()
+        };
+        assert_eq!(
+            detect_local_runtimes(&probes).await,
+            vec![Provider::Ollama, Provider::LlamaCpp]
+        );
+    }
+
+    #[tokio::test]
+    async fn detect_local_runtimes_is_concurrent_and_short_timed() {
+        // Five hung runtimes: each probe must give up after ~500 ms, and
+        // they run concurrently, so the whole detection stays well under
+        // the 2.5 s a sequential pass would take.
+        let probes = ProbeBases {
+            ollama: serve_silence().await,
+            lemonade: format!("{}/api", serve_silence().await),
+            llamacpp: serve_silence().await,
+            jan: serve_silence().await,
+            broker: serve_silence().await,
+        };
+        let started = std::time::Instant::now();
+        let found = detect_local_runtimes(&probes).await;
+        let took = started.elapsed();
+        assert!(found.is_empty());
+        assert!(took < Duration::from_millis(1500), "detection took {took:?}");
+    }
+
+    #[test]
+    fn provider_menu_with_nothing_detected_has_no_default_and_lists_every_provider() {
+        let menu = build_provider_menu(&[], None, false);
+        assert_eq!(menu.default, None, "nothing may be pre-selected");
+        assert!(menu.nothing_detected);
+        assert_eq!(
+            menu.providers(),
+            vec![
+                Provider::Ollama,
+                Provider::Lemonade,
+                Provider::LlamaCpp,
+                Provider::Jan,
+                Provider::Broker,
+                Provider::Anthropic,
+                Provider::OpenAi,
+            ]
+        );
+        assert!(menu.entries.iter().all(|(_, label)| !label.contains("(detected)")));
+    }
+
+    #[test]
+    fn provider_menu_lists_detected_runtimes_first_marked_and_preselects_the_first() {
+        let menu = build_provider_menu(&[Provider::Lemonade, Provider::Jan], None, false);
+        assert_eq!(
+            menu.providers(),
+            vec![
+                Provider::Lemonade,
+                Provider::Jan,
+                Provider::Ollama,
+                Provider::LlamaCpp,
+                Provider::Broker,
+                Provider::Anthropic,
+                Provider::OpenAi,
+            ]
+        );
+        assert_eq!(menu.default, Some(0));
+        assert!(!menu.nothing_detected);
+        assert_eq!(menu.entries[0].1, "Lemonade Server (detected)");
+        assert_eq!(menu.entries[1].1, "Jan (detected)");
+        assert_eq!(menu.entries[2].1, "Ollama");
+    }
+
+    #[test]
+    fn provider_menu_lists_mistralrs_only_when_built_with_the_feature() {
+        assert!(build_provider_menu(&[], None, true).providers().contains(&Provider::MistralRs));
+        assert!(!build_provider_menu(&[], None, false).providers().contains(&Provider::MistralRs));
+        assert_eq!(
+            provider_menu_for_this_build(&[], None)
+                .providers()
+                .contains(&Provider::MistralRs),
+            cfg!(feature = "provider-mistral-rs"),
+        );
+    }
+
+    #[test]
+    fn provider_menu_template_provider_is_preselected_only_when_local() {
+        // Nothing detected: a template's local provider is the default...
+        let menu = build_provider_menu(&[], Some(Provider::Ollama), false);
+        assert_eq!(menu.default.map(|i| menu.entries[i].0), Some(Provider::Ollama));
+        // ...but a detected runtime still wins over it...
+        let menu = build_provider_menu(&[Provider::Lemonade], Some(Provider::Ollama), false);
+        assert_eq!(menu.default.map(|i| menu.entries[i].0), Some(Provider::Lemonade));
+        // ...and a cloud provider is never pre-selected, template or not.
+        let menu = build_provider_menu(&[], Some(Provider::Anthropic), false);
+        assert_eq!(menu.default, None);
+        let menu = build_provider_menu(&[], Some(Provider::OpenAi), false);
+        assert_eq!(menu.default, None);
+    }
+
+    #[test]
+    fn provider_from_config_name_covers_every_kind() {
+        for p in [
+            Provider::Ollama,
+            Provider::Lemonade,
+            Provider::LlamaCpp,
+            Provider::Jan,
+            Provider::Broker,
+            Provider::Anthropic,
+            Provider::OpenAi,
+            Provider::MistralRs,
+        ] {
+            assert_eq!(Provider::from_config_name(p.config_name()), Some(p));
+        }
+        assert_eq!(Provider::from_config_name("llama-cpp"), Some(Provider::LlamaCpp));
+        assert_eq!(Provider::from_config_name("nope"), None);
+    }
+
+    #[test]
+    fn prompt_choice_without_a_default_reprompts_on_empty_input() {
+        let mut input = Cursor::new(b"\n\n2\n" as &[u8]);
+        let mut output = Vec::new();
+        let opts = &["A", "B", "C"];
+        let got = prompt_choice_opt("Provider", opts, None, &mut input, &mut output).unwrap();
+        assert_eq!(got, 1);
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("Provider: "), "no [n] default hint: {out:?}");
+        assert!(!out.contains("Provider ["), "no default is shown: {out:?}");
+        assert_eq!(out.matches("Please enter a number between 1 and 3.").count(), 2);
+    }
+
+    #[test]
+    fn choose_provider_with_nothing_detected_prints_the_hint_and_needs_a_pick() {
+        let menu = build_provider_menu(&[], None, false);
+        let mut input = Cursor::new(b"\n2\n" as &[u8]);
+        let mut output = Vec::new();
+        let got = choose_provider(&menu, &mut input, &mut output).unwrap();
+        assert_eq!(got, Provider::Lemonade);
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains(
+            "No local model server found. Install Ollama (https://ollama.com) or Lemonade \
+             Server for a free, private local model — or choose a cloud provider."
+        ));
+        assert!(out.contains("Please enter a number"), "the empty answer re-prompted");
+    }
+
+    #[test]
+    fn choose_provider_with_a_detected_runtime_accepts_enter() {
+        let menu = build_provider_menu(&[Provider::LlamaCpp], None, false);
+        let mut input = Cursor::new(b"\n" as &[u8]);
+        let mut output = Vec::new();
+        assert_eq!(
+            choose_provider(&menu, &mut input, &mut output).unwrap(),
+            Provider::LlamaCpp
+        );
+        let out = String::from_utf8(output).unwrap();
+        assert!(!out.contains("No local model server found"));
+    }
+
+    #[test]
+    fn base_url_is_written_only_when_it_differs_from_the_runtime_default() {
+        // Defaults (in either the localhost or the 127.0.0.1 spelling, with
+        // or without a trailing `/v1` or `/`) are not written.
+        assert_eq!(base_url_to_write(Provider::Lemonade, "http://127.0.0.1:13305/api"), None);
+        assert_eq!(base_url_to_write(Provider::Lemonade, "http://localhost:13305/api/v1/"), None);
+        assert_eq!(base_url_to_write(Provider::LlamaCpp, "http://127.0.0.1:8080"), None);
+        assert_eq!(base_url_to_write(Provider::LlamaCpp, "http://localhost:8080/v1"), None);
+        assert_eq!(base_url_to_write(Provider::Broker, "http://127.0.0.1:8899/"), None);
+        // Anything else is.
+        assert_eq!(
+            base_url_to_write(Provider::Lemonade, "http://10.0.0.5:13305/api/v1"),
+            Some("http://10.0.0.5:13305/api".to_string())
+        );
+        assert_eq!(
+            base_url_to_write(Provider::LlamaCpp, "http://127.0.0.1:8081"),
+            Some("http://127.0.0.1:8081".to_string())
+        );
+        assert_eq!(
+            base_url_to_write(Provider::Broker, "http://127.0.0.1:9900"),
+            Some("http://127.0.0.1:9900".to_string())
+        );
+        // Jan: the runtime's built-in default (`.../1337/v1`) gains a second
+        // `/v1` in the OpenAI provider, so init always writes the working
+        // server root.
+        assert_eq!(
+            base_url_to_write(Provider::Jan, "http://localhost:1337/v1"),
+            Some("http://localhost:1337".to_string())
+        );
+        // Providers with no base-URL key never write one.
+        assert_eq!(base_url_to_write(Provider::Ollama, "http://x"), None);
+        assert_eq!(base_url_to_write(Provider::Anthropic, "http://x"), None);
+    }
+
+    /// Load `toml` through the real config loader.
+    fn load_generated(toml: &str, tag: &str) -> aivyx_config::AivyxConfig {
+        aivyx_config::AivyxConfig::load_from_env_and_toml(&aivyx_config::LoadOptions {
+            toml_path: Some(write_temp_toml(toml, tag)),
+            require_api_key: false,
+            require_telegram_token: false,
+            require_discord_token: false,
+            require_slack_tokens: false,
+            role_override: None,
+        })
+        .expect("generated toml loads")
+    }
+
+    fn local_cfg(provider: Provider, model: &str) -> InitConfig {
+        init_config_no_profile(provider, model, None, "s.redb", ".", false)
+    }
+
+    #[test]
+    fn render_toml_writes_provider_model_and_base_url_for_openai_compat_servers() {
+        use aivyx_config::ProviderKind;
+        for (provider, kind) in [
+            (Provider::Lemonade, ProviderKind::Lemonade),
+            (Provider::LlamaCpp, ProviderKind::LlamaCpp),
+            (Provider::Jan, ProviderKind::Jan),
+        ] {
+            // At the default: provider + model, no base URL.
+            let toml = render_toml(&local_cfg(provider, "m-1"));
+            assert!(!toml.contains("[openai]"), "{provider:?}: {toml}");
+            assert!(!toml.contains("base_url = \"http"), "{provider:?}: {toml}");
+            let loaded = load_generated(&toml, "fr5-default");
+            assert_eq!(loaded.provider.value, kind);
+            assert_eq!(loaded.model.value, "m-1");
+            assert!(loaded.openai_base_url.is_none());
+
+            // Elsewhere: `[openai] base_url`.
+            let mut cfg = local_cfg(provider, "m-2");
+            cfg.server_base_url = Some("http://10.1.2.3:9000".into());
+            let toml = render_toml(&cfg);
+            let loaded = load_generated(&toml, "fr5-custom");
+            assert_eq!(loaded.provider.value, kind);
+            assert_eq!(
+                loaded.openai_base_url.map(|s| s.value).as_deref(),
+                Some("http://10.1.2.3:9000")
+            );
+        }
+    }
+
+    #[test]
+    fn render_toml_writes_broker_base_url_under_broker() {
+        let toml = render_toml(&local_cfg(Provider::Broker, "qwen"));
+        assert!(!toml.contains("[broker]"), "{toml}");
+        let loaded = load_generated(&toml, "fr5-broker-default");
+        assert_eq!(loaded.provider.value, aivyx_config::ProviderKind::Broker);
+        assert_eq!(loaded.broker_base_url, None);
+
+        let mut cfg = local_cfg(Provider::Broker, "qwen");
+        cfg.server_base_url = Some("http://127.0.0.1:9900".into());
+        let toml = render_toml(&cfg);
+        assert!(!toml.contains("[openai]"), "{toml}");
+        let loaded = load_generated(&toml, "fr5-broker");
+        assert_eq!(loaded.broker_base_url.as_deref(), Some("http://127.0.0.1:9900"));
+        assert!(loaded.openai_base_url.is_none());
+    }
+
+    #[test]
+    fn render_toml_writes_mistralrs_model_path() {
+        let mut cfg = local_cfg(Provider::MistralRs, "tiny");
+        cfg.mistralrs_model_path = Some("/models/tiny.gguf".into());
+        let toml = render_toml(&cfg);
+        let loaded = load_generated(&toml, "fr5-mistralrs");
+        assert_eq!(loaded.provider.value, aivyx_config::ProviderKind::MistralRs);
+        assert_eq!(loaded.model.value, "tiny");
+        assert_eq!(
+            loaded.mistralrs_options.model_path.as_deref(),
+            Some(std::path::Path::new("/models/tiny.gguf"))
+        );
+    }
+
+    #[test]
+    fn template_render_writes_the_new_provider_kinds_too() {
+        let mut cfg = local_cfg(Provider::Lemonade, "Qwen3-4B");
+        cfg.server_base_url = Some("http://10.0.0.5:13305/api".into());
+        let out = render_with_template(&cfg, "t", minimal_template_doc());
+        let loaded = load_generated(&out, "fr5-template");
+        assert_eq!(loaded.provider.value, aivyx_config::ProviderKind::Lemonade);
+        assert_eq!(
+            loaded.openai_base_url.map(|s| s.value).as_deref(),
+            Some("http://10.0.0.5:13305/api")
+        );
+
+        let mut cfg = local_cfg(Provider::Broker, "qwen");
+        cfg.server_base_url = Some("http://127.0.0.1:9900".into());
+        let out = render_with_template(&cfg, "t", minimal_template_doc());
+        let loaded = load_generated(&out, "fr5-template-broker");
+        assert_eq!(loaded.broker_base_url.as_deref(), Some("http://127.0.0.1:9900"));
+    }
+
+    #[test]
+    fn local_providers_get_enabled_routines_cloud_ones_do_not() {
+        for p in [Provider::Lemonade, Provider::LlamaCpp, Provider::Jan, Provider::Broker] {
+            assert!(p.is_local());
+            let s = render_default_schedules(&local_cfg(p, "m"));
+            assert!(s.contains("enabled = true"), "{p:?}");
+        }
+        assert!(!Provider::Anthropic.is_local() && !Provider::OpenAi.is_local());
+    }
+
+    #[tokio::test]
+    async fn select_server_model_lists_lemonade_models_and_picks_one() {
+        let models = r#"{"data":[
+            {"id":"Qwen3-4B-Instruct-2507-GGUF","downloaded":true,"labels":["chat","tool-calling"]},
+            {"id":"Gemma-3-1B-GGUF","downloaded":false,"labels":["chat"]},
+            {"id":"Qwen3.5-9B-GGUF","downloaded":true,"labels":["chat","tool-calling","vision"]}
+        ]}"#;
+        let base = serve_routes(vec![("/api/v1/models", models.to_string())]).await;
+        let mut input = Cursor::new(b"2\n" as &[u8]);
+        let mut output = Vec::new();
+        let got = select_server_model(
+            Provider::Lemonade,
+            &format!("{base}/api"),
+            &mut input,
+            &mut output,
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, "Qwen3.5-9B-GGUF");
+        let out = String::from_utf8(output).unwrap();
+        assert!(!out.contains("Gemma-3-1B-GGUF"), "undownloaded models are not offered");
+    }
+
+    #[tokio::test]
+    async fn select_server_model_uses_openai_compat_for_jan_llamacpp_and_the_broker() {
+        let models = r#"{"data":[{"id":"alpha"},{"id":"beta"}]}"#.to_string();
+        for p in [Provider::Jan, Provider::LlamaCpp, Provider::Broker] {
+            let base = serve_routes(vec![("/v1/models", models.clone())]).await;
+            let mut input = Cursor::new(b"\n" as &[u8]);
+            let mut output = Vec::new();
+            let got = select_server_model(p, &base, &mut input, &mut output).await.unwrap();
+            assert_eq!(got, "alpha", "{p:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn select_server_model_falls_back_to_llama_router_listing() {
+        let models = r#"{"data":[{"id":"router-model","architecture":{"input_modalities":["text"]}}]}"#;
+        let base = serve_routes(vec![("/models", models.to_string())]).await;
+        let mut input = Cursor::new(b"\n" as &[u8]);
+        let mut output = Vec::new();
+        let got = select_server_model(Provider::LlamaCpp, &base, &mut input, &mut output)
+            .await
+            .unwrap();
+        assert_eq!(got, "router-model");
+    }
+
+    #[tokio::test]
+    async fn select_server_model_with_no_models_asks_for_an_id() {
+        let base = serve_routes(vec![("/v1/models", r#"{"data":[]}"#.to_string())]).await;
+        let mut input = Cursor::new(b"\n  my-model \n" as &[u8]);
+        let mut output = Vec::new();
+        let got = select_server_model(Provider::Jan, &base, &mut input, &mut output)
+            .await
+            .unwrap();
+        assert_eq!(got, "my-model");
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("No models found"), "{out:?}");
+        assert!(out.contains("A model id is required."), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn select_server_model_unreachable_says_why_and_asks_for_an_id() {
+        let mut input = Cursor::new(b"typed\n" as &[u8]);
+        let mut output = Vec::new();
+        let got = select_server_model(Provider::Broker, &closed_base(), &mut input, &mut output)
+            .await
+            .unwrap();
+        assert_eq!(got, "typed");
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("Couldn't list models"), "{out:?}");
+    }
+
+    #[test]
+    fn prompt_server_base_url_defaults_to_the_standard_address() {
+        let probes = ProbeBases::standard();
+        let mut input = Cursor::new(b"\nhttp://10.0.0.9:1337/v1\n" as &[u8]);
+        let mut output = Vec::new();
+        assert_eq!(
+            prompt_server_base_url(Provider::Lemonade, &probes, &mut input, &mut output).unwrap(),
+            "http://127.0.0.1:13305/api"
+        );
+        assert_eq!(
+            prompt_server_base_url(Provider::Jan, &probes, &mut input, &mut output).unwrap(),
+            "http://10.0.0.9:1337",
+            "a trailing /v1 is dropped -- the provider appends it"
+        );
+    }
+
+    #[test]
+    fn prompt_mistralrs_model_path_validates_with_the_doctor_check() {
+        let dir = std::env::temp_dir().join(format!("aivyx-init-mr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let gguf = dir.join("tiny.gguf");
+        std::fs::write(&gguf, b"x").unwrap();
+        let script = format!("\n{}\n{}\n", dir.join("missing.gguf").display(), gguf.display());
+        let mut input = Cursor::new(script.into_bytes());
+        let mut output = Vec::new();
+        let got = prompt_mistralrs_model_path(&mut input, &mut output).unwrap();
+        assert_eq!(got, gguf.display().to_string());
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("A model path is required."), "{out:?}");
+        assert!(out.contains("does not exist"), "doctor's message is shown: {out:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn next_steps_point_at_aivyx_pa_studio_not_web_ui_flag() {
+        let line = studio_next_step_line(7843);
+        assert!(line.contains("aivyx-pa studio"), "{line}");
+        assert!(line.contains("http://127.0.0.1:7843"), "{line}");
+        assert!(!line.contains("--web-ui"), "{line}");
     }
 }

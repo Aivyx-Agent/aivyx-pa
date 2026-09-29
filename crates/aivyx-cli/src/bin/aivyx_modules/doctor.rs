@@ -573,7 +573,9 @@ async fn check_broker_at(base_url: &str) -> bool {
 /// The model file mistral.rs would load, or why it can't: `model_path`
 /// must be set and exist; a directory needs `model_file` inside it, or
 /// else at least one `.gguf`.
-fn mistralrs_model_check(opts: &aivyx_config::MistralRsOptions) -> Result<PathBuf, String> {
+pub(crate) fn mistralrs_model_check(
+    opts: &aivyx_config::MistralRsOptions,
+) -> Result<PathBuf, String> {
     let path = opts
         .model_path
         .as_ref()
