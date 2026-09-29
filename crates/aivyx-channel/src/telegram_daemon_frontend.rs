@@ -688,11 +688,24 @@ fn render_events_for_telegram(events: &[StreamEventPayload]) -> String {
 /// or a non-completed outcome's reason). Skips the correction only
 /// when it would exactly duplicate `render_events_for_telegram`'s own
 /// empty-events "(no reply)" fallback.
+///
+/// Routing visibility B3 — a cloud-consent stop is also a text-less
+/// turn (the model never answered), but its outcome *is* the whole
+/// reply — the daemon worded it for this channel. Showing the generic
+/// "(no reply)" filler ahead of it would read as "(no reply)\nThis
+/// needs a cloud model: …", so this turn shows only the outcome. Other
+/// text-less turns (a genuine empty reply, an unrelated non-completed
+/// outcome) are untouched.
 fn build_telegram_reply(events: &[StreamEventPayload], outcome: &str) -> String {
     let displayed = crate::daemon_ipc::concat_text_events(events);
     let mut buf = render_events_for_telegram(events);
     if let Some(note) = crate::daemon_ipc::turn_outcome_correction(&displayed, outcome) {
-        if !(note == "(no reply)" && buf.trim() == "(no reply)") {
+        let is_consent_stop = events
+            .iter()
+            .any(|e| matches!(e, StreamEventPayload::CloudConsentRequested { .. }));
+        if buf.trim() == "(no reply)" && is_consent_stop {
+            buf = note;
+        } else if !(note == "(no reply)" && buf.trim() == "(no reply)") {
             if !buf.is_empty() && !buf.ends_with('\n') {
                 buf.push('\n');
             }
@@ -1324,13 +1337,28 @@ mod tests {
             },
         ];
         let reply = build_telegram_reply(&events, outcome);
-        // The consent text arrives as the outcome's correction line (after
-        // the adapter's existing "(no reply)" marker for a text-less turn).
-        assert!(
-            reply.trim_end().ends_with(outcome.strip_prefix("completed: ").unwrap()),
-            "{reply}"
+        // The consent text is the whole reply — no "(no reply)" filler
+        // ahead of it (Routing visibility B3).
+        assert_eq!(
+            reply,
+            outcome.strip_prefix("completed: ").unwrap(),
+            "must show only the outcome text on a consent stop: {reply}"
         );
+        assert!(!reply.contains("(no reply)"), "{reply}");
         assert!(!reply.contains("routing →"), "{reply}");
         assert!(!reply.contains("small@default"), "{reply}");
+    }
+
+    #[test]
+    fn build_telegram_reply_keeps_no_reply_prefix_for_a_non_consent_text_less_turn() {
+        // A genuinely empty answer with a real correction (not a consent
+        // stop) keeps the existing "(no reply)\n<note>" shape — the B3 fix
+        // is scoped to `CloudConsentRequested` only.
+        let out = build_telegram_reply(
+            &[],
+            "completed: I wasn't able to produce a usable reply this turn — please try again.",
+        );
+        assert!(out.starts_with("(no reply)\n"), "{out}");
+        assert!(out.contains("wasn't able to produce"), "{out}");
     }
 }

@@ -3202,6 +3202,38 @@ pub fn turn_outcome_correction(displayed: &str, outcome: &str) -> Option<String>
     }
 }
 
+/// Routing visibility B3 — the terminal REPL's (daemon-backed and
+/// in-process) "only on change" line for the conversation's routed
+/// model. `render_for_cli` deliberately renders nothing for
+/// [`StreamEventPayload::ModelRouted`] (see its own doc comment) — the
+/// daemon resends the conversation's *latest* decision after every
+/// routed turn, so a plain renderer would repeat the line every turn.
+/// This is the shared "did it actually change" seam both REPLs call.
+///
+/// Looks for the last `ModelRouted` event among `events` (there is at
+/// most one per turn in practice, but the search takes the last just in
+/// case), and compares its `model` against `last_model` (what the
+/// conversation last printed). Returns `None` when the turn carried no
+/// `ModelRouted` event, or one that repeats `last_model` — including a
+/// turn with a routed side call whose decision didn't change anything the
+/// operator need see again. Otherwise returns `(new_model, line)`: the
+/// model to remember as the new `last_model`, and the line to print
+/// (already `\n`-terminated), worded exactly as the spec gives it:
+/// `"routing → {model} ({reason})"`.
+pub fn routing_change_line(
+    events: &[StreamEventPayload],
+    last_model: Option<&str>,
+) -> Option<(String, String)> {
+    let (model, reason) = events.iter().rev().find_map(|e| match e {
+        StreamEventPayload::ModelRouted { model, reason, .. } => Some((model, reason)),
+        _ => None,
+    })?;
+    if last_model == Some(model.as_str()) {
+        return None;
+    }
+    Some((model.clone(), format!("routing → {model} ({reason})\n")))
+}
+
 // ---------------------------------------------------------------------------
 // Framing: encode / decode
 // ---------------------------------------------------------------------------
@@ -5817,6 +5849,59 @@ mod tests {
             turn_outcome_correction(displayed, outcome),
             Some("⚠ I said I would check the calendar but never called calendar.list.".to_string())
         );
+    }
+
+    // ---- routing_change_line (Routing visibility B3) ----
+
+    fn routed(model: &str, reason: &str) -> StreamEventPayload {
+        StreamEventPayload::ModelRouted {
+            model: model.into(),
+            task: "chat".into(),
+            reason: reason.into(),
+        }
+    }
+
+    #[test]
+    fn routing_change_line_fires_on_the_first_decision() {
+        let events = vec![routed("small@default", "smallest model that fits")];
+        let got = routing_change_line(&events, None).expect("first decision must print");
+        assert_eq!(got.0, "small@default");
+        assert_eq!(got.1, "routing → small@default (smallest model that fits)\n");
+    }
+
+    #[test]
+    fn routing_change_line_silent_when_the_model_repeats() {
+        let events = vec![routed("small@default", "smallest model that fits")];
+        assert_eq!(routing_change_line(&events, Some("small@default")), None);
+    }
+
+    #[test]
+    fn routing_change_line_fires_when_the_model_changes() {
+        let events = vec![routed("big@gpu", "escalated for tools")];
+        let got = routing_change_line(&events, Some("small@default")).expect("change must print");
+        assert_eq!(got.0, "big@gpu");
+        assert_eq!(got.1, "routing → big@gpu (escalated for tools)\n");
+    }
+
+    #[test]
+    fn routing_change_line_none_when_the_turn_had_no_routed_call() {
+        let events = vec![StreamEventPayload::Text { text: "hi".into() }];
+        assert_eq!(routing_change_line(&events, Some("small@default")), None);
+        assert_eq!(routing_change_line(&events, None), None);
+    }
+
+    #[test]
+    fn routing_change_line_uses_the_last_model_routed_event() {
+        // Defensive: not something the daemon actually sends (at most one
+        // per turn), but the seam should still pick the latest, not the
+        // first, if it ever did.
+        let events = vec![
+            routed("small@default", "first"),
+            routed("big@gpu", "second"),
+        ];
+        let got = routing_change_line(&events, None).expect("must print");
+        assert_eq!(got.0, "big@gpu");
+        assert_eq!(got.1, "routing → big@gpu (second)\n");
     }
 
     // ---- Phase 45 — IpcAttachment ----

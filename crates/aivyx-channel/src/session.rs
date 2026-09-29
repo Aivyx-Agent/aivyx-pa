@@ -530,6 +530,10 @@ where
     let mut turns_run: usize = 0;
     let mut last_outcome: Option<TurnOutcome> = None;
     let mut line = String::new();
+    // Routing visibility B3 — the conversation's last-printed routed
+    // model (in-process counterpart of `daemon_session.rs`'s own
+    // tracking). `None` until the first routed turn.
+    let mut last_routed_model: Option<String> = None;
 
     loop {
         // Prompt is written directly to the channel's writer so the
@@ -644,6 +648,36 @@ where
             Message::text(channel.session_id(), input)
         };
         let outcome = agent.turn(message, &channel).await;
+
+        // Routing visibility B3 — the in-process path has no
+        // `StreamEventPayload` events of its own to scan (that's a
+        // daemon-only wire type), but it holds the same `RoutedProvider`
+        // the turn's routed calls just used, so it asks the router
+        // directly for this conversation's latest decision and reuses
+        // the shared "did it actually change" seam by wrapping it in a
+        // one-element `ModelRouted` slice, exactly the shape a daemon
+        // turn would have sent.
+        if let Some(record) = routed
+            .as_deref()
+            .and_then(|r| r.router().last_decision(&routing_session_id))
+        {
+            let synth = [crate::daemon_ipc::StreamEventPayload::ModelRouted {
+                model: record.model.to_string(),
+                task: record.task.name().to_string(),
+                reason: record.reason,
+            }];
+            if let Some((new_model, routing_line)) =
+                crate::daemon_ipc::routing_change_line(&synth, last_routed_model.as_deref())
+            {
+                let writer = channel.writer_handle();
+                if let Ok(mut guard) = writer.lock() {
+                    let _ = write!(&mut *guard, "{routing_line}");
+                    let _ = guard.flush();
+                }
+                last_routed_model = Some(new_model);
+            }
+        }
+
         turns_run += 1;
         last_outcome = Some(outcome);
 

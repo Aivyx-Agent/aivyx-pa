@@ -103,6 +103,10 @@ where
     let mut turns_run: usize = 0;
     let mut last_outcome_str: Option<String> = None;
     let mut line = String::new();
+    // Routing visibility B3 — the conversation's last-printed routed
+    // model, so `routing → …` only prints on a real change (including
+    // the first time). `None` until the first routed turn.
+    let mut last_routed_model: Option<String> = None;
 
     loop {
         // Prompt.
@@ -136,6 +140,18 @@ where
             write!(writer, "{rendered}").map_err(|e| format!("render write: {e}"))?;
         }
         writer.flush().map_err(|e| format!("render flush: {e}"))?;
+
+        // Routing visibility B3 — `render_for_cli` renders nothing for
+        // `ModelRouted` (a plain renderer must never gain a routing
+        // line — see its own doc comment); the REPL prints its own
+        // "on change" line here instead.
+        if let Some((new_model, routing_line)) =
+            crate::daemon_ipc::routing_change_line(&events, last_routed_model.as_deref())
+        {
+            write!(writer, "{routing_line}").map_err(|e| format!("routing-line write: {e}"))?;
+            writer.flush().map_err(|e| format!("routing-line flush: {e}"))?;
+            last_routed_model = Some(new_model);
+        }
 
         // Turn-outcome-correction follow-up (POLISH_WAVES.md
         // sub-project 4) — show the turn's own authoritative outcome

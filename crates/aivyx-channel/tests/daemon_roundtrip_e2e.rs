@@ -4504,4 +4504,71 @@ mod routing_visibility {
         conn.close().await;
         handle.await.unwrap();
     }
+
+    // ---- Routing visibility B3 — the daemon-backed REPL's own line ----
+
+    /// The daemon resends the conversation's latest routed decision on
+    /// every routed turn (see `routing_turn_events`'s own doc comment),
+    /// so a REPL that just piped `render_for_cli` through would repeat
+    /// `routing → …` every turn. `run_daemon_session` must instead print
+    /// it only when the model actually changes — including the first
+    /// time. Two turns through `RoutingAgent` (which routes every call
+    /// the same way, so the model never changes turn-to-turn) must
+    /// therefore print the line exactly once.
+    #[tokio::test]
+    async fn daemon_repl_prints_routing_line_once_while_the_model_is_unchanged() {
+        let scratch = ScratchDir::new();
+        let routed = Arc::new(routed_provider(false));
+        let socket_path = scratch.socket_path();
+        let daemon_socket = socket_path.clone();
+        let agent = routing_agent(&routed);
+        let channel = local_channel();
+        let daemon_routed = Arc::clone(&routed);
+        let handle = tokio::spawn(async move {
+            aivyx_channel::daemon_server::run_poc_daemon_with_routing(
+                &daemon_socket,
+                agent,
+                channel,
+                None,
+                Some(daemon_routed),
+            )
+            .await
+            .expect("daemon must complete successfully");
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let config = DaemonSessionConfig {
+            socket_path: socket_path.clone(),
+            role: None,
+            prompt: "".into(),
+            banner: None,
+            cancel_flag: None,
+            frontend_type: None,
+        };
+        let input = std::io::Cursor::new(b"first\nsecond\n".to_vec());
+        let mut output = Vec::<u8>::new();
+
+        let report = run_daemon_session(config, input, &mut output)
+            .await
+            .expect("run_daemon_session must succeed");
+        assert_eq!(report.turns_run, 2);
+
+        let output_str = String::from_utf8(output).expect("output must be valid UTF-8");
+        assert_eq!(
+            output_str.matches("routing → ").count(),
+            1,
+            "prints once on the first turn, then stays silent while the \
+             routed model doesn't change: {output_str:?}"
+        );
+        // `RoutingAgent` always estimates 12,578 prompt tokens (see its own
+        // `route` hint above), which `small`'s unknown context window can't
+        // be confirmed to fit — the router falls back to `big@gpu` both
+        // turns, so the model never changes.
+        assert!(output_str.contains("routing → big@gpu ("), "{output_str:?}");
+
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("daemon must finish within 5s")
+            .expect("daemon task must not panic");
+    }
 }

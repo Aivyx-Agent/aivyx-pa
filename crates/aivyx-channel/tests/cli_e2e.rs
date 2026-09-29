@@ -46,9 +46,11 @@ use aivyx_core::{
 use aivyx_crypto::MasterKey;
 use aivyx_llm::{
     LlmError, LlmMessage, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
-    ProviderFactory, RoutedProvider,
+    ProviderFactory, RouteHint, RoutedProvider,
 };
-use aivyx_route::{Capability, EndpointRef, ModelKey, ModelProfile, Router, TaskOverrides, Tier};
+use aivyx_route::{
+    Capability, EndpointRef, ModelKey, ModelProfile, Router, TaskKind, TaskOverrides, Tier,
+};
 use aivyx_storage::{RedbStorage, Storage, StorageConfig};
 
 // ---------------------------------------------------------------------------
@@ -647,4 +649,132 @@ async fn in_process_models_please_is_a_normal_turn() {
         report.turns_run, 1,
         "an unrecognized /models argument is not a command"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Routing visibility B3 — the in-process REPL's own "routing → …" line.
+// ---------------------------------------------------------------------------
+
+/// Answers every call with an empty successful stream. Distinct from
+/// `PanicProvider` above: this test seeds a real routed decision by
+/// issuing one routed call directly, so the backing provider must
+/// actually succeed.
+struct SeedOkProvider;
+
+#[async_trait]
+impl LlmProvider for SeedOkProvider {
+    async fn chat_stream(
+        &self,
+        _request: LlmRequest<'_>,
+        _cancellation: &CancellationToken,
+    ) -> Result<Box<dyn LlmStream>, LlmError> {
+        Ok(Box::new(SeedOkStream))
+    }
+}
+
+struct SeedOkStream;
+
+#[async_trait]
+impl LlmStream for SeedOkStream {
+    async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+        Ok(None)
+    }
+    async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+        Ok(LlmStepEnd::FinalMessage {
+            text: String::new(),
+            usage: usage(),
+        })
+    }
+}
+
+/// `small@default` only — a single candidate, so a routed call always
+/// picks it (deterministic, nothing to disambiguate).
+fn seedable_routed_provider() -> Arc<RoutedProvider> {
+    let factory: ProviderFactory =
+        Box::new(|_: &EndpointRef| Ok(Arc::new(SeedOkProvider) as Arc<dyn LlmProvider>));
+    let mut small = ModelProfile::new("small", EndpointRef::new("default"));
+    small.tier = Tier::Small;
+    small.capabilities.insert(Capability::Completion);
+    Arc::new(RoutedProvider::new(
+        ModelKey {
+            endpoint: EndpointRef::new("default"),
+            id: "small".into(),
+        },
+        Arc::new(SeedOkProvider),
+        Router::new(vec![small], TaskOverrides::default()),
+        factory,
+    ))
+}
+
+/// `run_session`'s own plain agent stack never attaches a `RouteHint` to
+/// its calls (`build_agent_stack` doesn't call `LlmPlanner::with_routing`
+/// — that wiring lives in the daemon-mode binary, not this reusable
+/// loop), so the REPL can't rely on its OWN turns to populate a routed
+/// decision. What it can do is notice one recorded for its conversation
+/// by anything else sharing the same session id (a routed side call, a
+/// role-switch child) and print `routing → …` for it — once, the first
+/// turn that sees it, then stay silent while it doesn't change. This
+/// test seeds exactly that: one routed call made directly against the
+/// same `RoutedProvider` and session id before the REPL loop starts.
+#[tokio::test]
+async fn in_process_repl_prints_routing_line_once_while_unchanged() {
+    let routed = seedable_routed_provider();
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let session_id = channel.session_id().to_string();
+
+    let seed_messages = [LlmMessage::user_text("hi")];
+    let seed_request = LlmRequest {
+        model: "small",
+        system: None,
+        messages: &seed_messages,
+        tools: &[],
+        max_tokens: 8,
+        temperature: None,
+        id_slot: None,
+        slot_hint: None,
+        route: Some(RouteHint {
+            task: TaskKind::Chat,
+            session: Some(session_id.clone()),
+            estimated_prompt_tokens: 10,
+        }),
+    };
+    routed
+        .chat_stream(seed_request, &CancellationToken::new())
+        .await
+        .expect("seed call succeeds")
+        .finish()
+        .await
+        .expect("seed stream finishes");
+
+    let provider = ScriptedProvider::new(vec![final_step(&["hi"], "hi"), final_step(&["again"], "again")]);
+    let audit_log = HmacChainLog::new([42u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+    let reader = Cursor::new(&b"one\ntwo\n"[..]);
+    let sink = channel.writer_handle();
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+    let config = empty_session_config(storage);
+
+    let report = run_session(
+        provider,
+        audit_hook,
+        None,
+        Some(Arc::clone(&routed)),
+        config,
+        channel,
+        reader,
+    )
+    .await
+    .expect("run_session completes on EOF");
+
+    assert_eq!(report.turns_run, 2);
+    let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
+    assert_eq!(
+        output.matches("routing → ").count(),
+        1,
+        "prints once, on the first turn to see the seeded decision, then \
+         stays silent while it's unchanged: {output:?}"
+    );
+    assert!(output.contains("routing → small@default ("), "{output:?}");
 }

@@ -33,6 +33,11 @@ pub enum LineKind {
     Status,
     /// An approval-gate announcement.
     Gate,
+    /// Routing visibility B3 — a cloud-consent notice, styled like
+    /// [`LineKind::Gate`] (both are "something needs the operator's
+    /// attention" flags) but tagged separately so it never gets grouped
+    /// with, or mistaken for, an actual approval gate.
+    Consent,
     /// A locally-generated note (errors, cancellation, connection).
     System,
 }
@@ -75,6 +80,11 @@ pub struct Status {
     /// A turn was submitted and we're awaiting its result — the
     /// "working…" state. Input submission is suppressed while true.
     pub working: bool,
+    /// Routing visibility B3 — `id@endpoint` from the latest
+    /// `ModelRouted` event this conversation has seen. `None` before any
+    /// routed decision, and cleared on `Msg::Connected` (a fresh
+    /// conversation starts with no routed model to show).
+    pub routed_model: Option<String>,
 }
 
 /// A top-level view in the TUI. `Chat` is the shipped interactive
@@ -669,6 +679,16 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
                         scope: scope.clone(),
                     });
                 }
+                // Routing visibility B3 — the status bar's model, not a
+                // chat line (`lines_from_event` deliberately produces
+                // none for this event — see its own doc comment). The
+                // daemon resends the conversation's latest decision
+                // every routed turn, so this always reflects the most
+                // recent one, whether or not this particular turn itself
+                // routed anything new.
+                if let StreamEventPayload::ModelRouted { model, .. } = event {
+                    state.status.routed_model = Some(model.clone());
+                }
             }
             if let Some(note) = turn_outcome_correction(&displayed, &outcome) {
                 state.push_line(ChatLine::new(LineKind::System, note));
@@ -698,6 +718,10 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
         Msg::Connected { role } => {
             state.status.daemon_connected = true;
             state.status.role = role;
+            // Routing visibility B3 — a (re)connect starts a fresh
+            // conversation; any routed model shown belonged to whatever
+            // conversation came before.
+            state.status.routed_model = None;
         }
 
         Msg::Quit => state.should_quit = true,
@@ -813,11 +837,22 @@ pub fn lines_from_event(event: &StreamEventPayload) -> Vec<ChatLine> {
         | StreamEventPayload::ToolCallFinished { .. }
         | StreamEventPayload::ToolOutput { .. } => LineKind::Tool,
         StreamEventPayload::ApprovalGate { .. } => LineKind::Gate,
-        // Routing visibility B1 — not chat lines: the routed model belongs
-        // in the status bar, and the consent request reaches the chat as
-        // the turn's outcome text (the daemon words it for this channel).
-        StreamEventPayload::ModelRouted { .. }
-        | StreamEventPayload::CloudConsentRequested { .. } => return Vec::new(),
+        // Routing visibility B3 — not a chat line: the routed model
+        // belongs in the status bar (`update`'s `TurnFinished` arm reads
+        // it straight off the event, next to this function).
+        StreamEventPayload::ModelRouted { .. } => return Vec::new(),
+        // Routing visibility B3 — a highlighted notice, styled like
+        // `LineKind::Gate` (see `LineKind::Consent`'s own doc comment).
+        // Deliberately short: the turn's own outcome text already
+        // carries the full request (why, estimated tokens, how to allow
+        // it — worded per channel by the daemon), so this just flags
+        // that a stop happened without repeating that text.
+        StreamEventPayload::CloudConsentRequested { model, endpoint, .. } => {
+            return vec![ChatLine::new(
+                LineKind::Consent,
+                format!("cloud consent needed — `{model}` (your `{endpoint}` endpoint)"),
+            )];
+        }
     };
 
     let rendered = event.render_for_cli();
@@ -848,20 +883,74 @@ mod tests {
 
     #[test]
     fn routing_events_add_no_chat_lines() {
+        // `ModelRouted` never becomes a chat line — it belongs in the
+        // status bar (see the dedicated `Msg::TurnFinished` tests below).
         let routed = StreamEventPayload::ModelRouted {
             model: "small@default".into(),
             task: "chat".into(),
             reason: "r".into(),
         };
+        assert!(lines_from_event(&routed).is_empty());
+    }
+
+    #[test]
+    fn cloud_consent_requested_gives_one_highlighted_notice_line() {
         let consent = StreamEventPayload::CloudConsentRequested {
-            model: "m".into(),
-            endpoint: "e".into(),
-            why: "w".into(),
-            estimated_tokens: 1,
+            model: "claude-sonnet-4-5".into(),
+            endpoint: "anthropic".into(),
+            why: "no local model can handle this request".into(),
+            estimated_tokens: 12_578,
             can_allow_here: true,
         };
-        assert!(lines_from_event(&routed).is_empty());
-        assert!(lines_from_event(&consent).is_empty());
+        let lines = lines_from_event(&consent);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].kind, LineKind::Consent);
+        assert!(lines[0].text.contains("claude-sonnet-4-5"), "{lines:?}");
+        assert!(lines[0].text.contains("anthropic"), "{lines:?}");
+        // The full request (why, estimated tokens, how to allow it) is
+        // the outcome's job, not this notice's — never duplicate it here.
+        assert!(!lines[0].text.contains("no local model"), "{lines:?}");
+        assert!(!lines[0].text.contains("12578"), "{lines:?}");
+        assert!(!lines[0].text.contains("12,578"), "{lines:?}");
+    }
+
+    #[test]
+    fn turn_finished_sets_the_status_bars_routed_model() {
+        let mut s = AppState::new();
+        s = update(
+            s,
+            Msg::TurnFinished {
+                events: vec![StreamEventPayload::ModelRouted {
+                    model: "small@default".into(),
+                    task: "chat".into(),
+                    reason: "smallest model that fits".into(),
+                }],
+                outcome: "completed: hi".into(),
+            },
+        );
+        assert_eq!(s.status.routed_model.as_deref(), Some("small@default"));
+    }
+
+    #[test]
+    fn connected_clears_the_status_bars_routed_model() {
+        let mut s = AppState::new();
+        s = update(
+            s,
+            Msg::TurnFinished {
+                events: vec![StreamEventPayload::ModelRouted {
+                    model: "small@default".into(),
+                    task: "chat".into(),
+                    reason: "r".into(),
+                }],
+                outcome: "completed: hi".into(),
+            },
+        );
+        assert_eq!(s.status.routed_model.as_deref(), Some("small@default"));
+        s = update(s, Msg::Connected { role: None });
+        assert_eq!(
+            s.status.routed_model, None,
+            "a fresh conversation starts with no routed model to show"
+        );
     }
 
     // ---- input editing ----

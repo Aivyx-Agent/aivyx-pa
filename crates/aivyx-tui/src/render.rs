@@ -61,6 +61,11 @@ fn kind_style(kind: LineKind) -> (&'static str, Style) {
             fg(palette::DIM).add_modifier(Modifier::ITALIC),
         ),
         LineKind::Gate => ("⚑ ", bold(palette::AMBER)),
+        // Routing visibility B3 — same highlighted treatment as Gate
+        // (both flag something needing the operator's attention), with
+        // its own glyph so a consent notice is never mistaken for an
+        // actual approval gate.
+        LineKind::Consent => ("☁ ", bold(palette::AMBER)),
         LineKind::System => ("· ", fg(palette::LAV)),
     }
 }
@@ -594,6 +599,14 @@ fn render_status(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::styled("daemon ✗", fg(palette::ERR))
         },
     ];
+    // Routing visibility B3 — the conversation's routed model, when one
+    // has been chosen. Sits between the daemon indicator and the
+    // gate/working indicator, which is a rarer, more urgent state and
+    // so stays last (closest to the visual "attention" edge).
+    if let Some(model) = state.status.routed_model.as_deref() {
+        left.push(sep());
+        left.push(Span::styled(format!("model {model}"), fg(palette::LAV)));
+    }
     if state.gate.is_some() {
         left.push(sep());
         left.push(Span::styled("⚑ approval needed", bold(palette::AMBER)));
@@ -794,6 +807,66 @@ mod tests {
         // The tab bar is present on every view.
         assert!(text.contains("Chat"), "tab bar lists Chat");
         assert!(text.contains("Dashboard"), "tab bar lists Dashboard");
+    }
+
+    // ---- Routing visibility B3 ----
+
+    #[test]
+    fn status_bar_shows_the_routed_model() {
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut state = AppState::new();
+        state.status.daemon_connected = true;
+        state.status.role = Some("assistant".into());
+        state.status.routed_model = Some("small@default".into());
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("model small@default"), "got: {text}");
+    }
+
+    #[test]
+    fn status_bar_shows_no_model_segment_before_any_routed_decision() {
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let state = AppState::new();
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(!text.contains("model "), "got: {text}");
+    }
+
+    #[test]
+    fn cloud_consent_notice_is_styled_like_gate() {
+        assert_eq!(
+            kind_style(LineKind::Consent).1,
+            kind_style(LineKind::Gate).1,
+            "a consent notice must get the same highlighted treatment as \
+             an approval gate"
+        );
+    }
+
+    #[test]
+    fn cloud_consent_notice_renders_in_the_chat_pane() {
+        let backend = TestBackend::new(72, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut state = AppState::new();
+        state.history.push(ChatLine {
+            kind: LineKind::Consent,
+            text: "cloud consent needed — `claude-sonnet-4-5` (your `anthropic` \
+                   endpoint)"
+                .into(),
+        });
+
+        terminal.draw(|f| render(f, &state)).unwrap();
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("cloud consent needed"), "got: {text}");
+        assert!(text.contains("☁"), "got: {text}");
     }
 
     #[test]
