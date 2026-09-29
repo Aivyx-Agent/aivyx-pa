@@ -190,7 +190,12 @@ fn studio_command_output(
         ));
     }
     if token_only {
-        return Ok(configured_token.or(auto_token).unwrap_or("").to_string());
+        let token = match configured_token {
+            Some(t) => t,
+            None if insecure_no_auth => "",
+            None => auto_token.unwrap_or(""),
+        };
+        return Ok(token.to_string());
     }
     Ok(studio_sign_in_link(Some(addr), configured_token, insecure_no_auth, auto_token)
         .unwrap_or_else(|| aivyx_channel::studio_token::studio_url(addr.ip(), addr.port())))
@@ -979,6 +984,16 @@ mod tests {
             "http://127.0.0.1:7843/"
         );
         assert_eq!(studio_command_output(addr, None, true, None, p, true).unwrap(), "");
+        // `web_ui_insecure_no_auth` means no token even when a stale token
+        // file is still on disk — the same choice the daemon makes.
+        assert_eq!(
+            studio_command_output(addr, None, true, Some("stale"), p, true).unwrap(),
+            ""
+        );
+        assert_eq!(
+            studio_command_output(addr, None, true, Some("stale"), p, false).unwrap(),
+            "http://127.0.0.1:7843/"
+        );
     }
 
     #[test]

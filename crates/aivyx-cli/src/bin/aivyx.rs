@@ -11869,6 +11869,18 @@ mod tests {
     }
 
     #[test]
+    fn studio_subcommand_parses_its_token_flag_and_rejects_others() {
+        let plain = parse_cli_args_from(&argv(&["studio"])).expect("`studio` must parse");
+        assert_eq!(plain.mode, CliMode::Studio { token_only: false });
+        let token = parse_cli_args_from(&argv(&["studio", "--token"]))
+            .expect("`studio --token` must parse");
+        assert_eq!(token.mode, CliMode::Studio { token_only: true });
+        let err = parse_cli_args_from(&argv(&["studio", "--bogus"]))
+            .expect_err("an unknown flag must error");
+        assert!(err.contains("aivyx-pa studio") && err.contains("--bogus"), "{err}");
+    }
+
+    #[test]
     fn tui_subcommand_parses_to_tui_mode() {
         let parsed = parse_cli_args_from(&argv(&["tui"])).expect("`tui` must parse");
         assert_eq!(parsed.mode, CliMode::Tui);
