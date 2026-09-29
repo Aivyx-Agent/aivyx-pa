@@ -6869,7 +6869,7 @@ async fn run_async(
             // Phase 133 — route through the OpenAI-compat provider
             // against `llama-server`'s default port. Defaults to
             // `http://localhost:8080`; operator overrides via
-            // `[llm] provider_base_url` in aivyx-pa.toml.
+            // `[openai] base_url` in aivyx-pa.toml.
             //
             // No native /api/chat equivalent — llama-server speaks
             // OpenAI-compat exclusively. The API key is accepted if
