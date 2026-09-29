@@ -16,14 +16,37 @@
 //!
 //! - `0` — the turn **completed**.
 //! - `3` — the turn was **refused at a gate** (the headless posture: an
-//!   escalation the daemon would normally hand to a human).
+//!   escalation the daemon would normally hand to a human), or it
+//!   **stopped to ask for cloud consent** (routing's cloud escalation in
+//!   `ask` mode) — nothing ran, so a caller must not read it as success.
 //! - `1` — any other non-completion (failed / timed out / step cap /
 //!   cycle breaker / cancelled).
 
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{DaemonSession, daemon_is_running};
-use aivyx_channel::daemon_ipc::{FrontendType, default_socket_path};
+use aivyx_channel::daemon_ipc::{FrontendType, StreamEventPayload, default_socket_path};
+
+/// Shown after a one-shot run stops for cloud consent: the stop's own text
+/// says to send /allow-cloud and resend, which a one-shot run (a fresh
+/// conversation each time) can't do.
+const ONE_SHOT_CONSENT_HINT: &str = "aivyx-pa --headless: a one-shot run can't give cloud consent \
+     (each run is a new conversation). Allow it in `aivyx-pa` chat or the Studio, or pipe both \
+     lines into one conversation: printf '/allow-cloud\\n<task>\\n' | aivyx-pa --headless";
+
+/// The process exit code for one headless turn: a cloud-consent stop is
+/// the refusal code (3) even though its outcome reads `completed:`;
+/// otherwise [`headless_exit_code`].
+fn turn_exit_code(outcome: &str, events: &[StreamEventPayload]) -> i32 {
+    if events
+        .iter()
+        .any(|e| matches!(e, StreamEventPayload::CloudConsentRequested { .. }))
+    {
+        3
+    } else {
+        headless_exit_code(outcome)
+    }
+}
 
 /// Entry point for `aivyx-pa --headless "<task>"`.
 ///
@@ -58,7 +81,13 @@ pub async fn run_headless(task: &str) -> Result<(), String> {
         print!("{}", event.render_for_cli());
     }
 
-    let code = headless_exit_code(&outcome);
+    let code = turn_exit_code(&outcome, &events);
+    if code == 3 && outcome.starts_with("completed:") {
+        // A cloud-consent stop: the request text is the outcome.
+        eprintln!("aivyx-pa --headless: {outcome}");
+        eprintln!("{ONE_SHOT_CONSENT_HINT}");
+        std::process::exit(code);
+    }
     if code == 0 {
         // `completed: <final_message>` — the final message already
         // streamed as Text events; print the terminal line to stderr so
@@ -122,7 +151,7 @@ pub async fn run_headless_stdin() -> Result<(), String> {
             print!("{}", event.render_for_cli());
         }
         eprintln!("aivyx-pa --headless: {outcome}");
-        let code = headless_exit_code(&outcome);
+        let code = turn_exit_code(&outcome, &events);
         if code != 0 {
             let _ = session.disconnect().await;
             std::process::exit(code);
@@ -164,7 +193,24 @@ fn headless_exit_code(outcome: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::headless_exit_code;
+    use super::{headless_exit_code, turn_exit_code};
+    use aivyx_channel::daemon_ipc::StreamEventPayload;
+
+    #[test]
+    fn a_cloud_consent_stop_is_the_refusal_code_not_success() {
+        // The outcome reads "completed: …" (the consent request is the
+        // turn's reply), but nothing ran — a cron caller must not see 0.
+        let events = vec![StreamEventPayload::CloudConsentRequested {
+            model: "claude-sonnet-5".into(),
+            endpoint: "claude".into(),
+            why: "this kind of request is set to use the cloud".into(),
+            estimated_tokens: 12_578,
+            can_allow_here: true,
+        }];
+        assert_eq!(turn_exit_code("completed: This needs a cloud model: …", &events), 3);
+        assert_eq!(turn_exit_code("completed: 4", &[]), 0);
+        assert_eq!(turn_exit_code("failed: provider error", &[]), 1);
+    }
 
     #[test]
     fn completed_outcome_is_zero() {

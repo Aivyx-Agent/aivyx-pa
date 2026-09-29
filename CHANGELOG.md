@@ -83,6 +83,11 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
+- **`aivyx-pa --headless` treated a cloud-consent stop as success (exit
+  0)** — nothing had run, but a cron or batch caller saw a completed
+  turn. It now exits 3, the "refused" code, and a one-shot run explains
+  how to give consent (in chat or the Studio, or by piping `/allow-cloud`
+  and the task into one `--headless` conversation).
 - **An interactive `aivyx-pa` could never use a running daemon** — it
   opened the store first and hit the daemon's lock. The daemon decision
   now comes before the store is opened.
