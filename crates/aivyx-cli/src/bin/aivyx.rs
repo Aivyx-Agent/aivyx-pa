@@ -10230,11 +10230,10 @@ async fn run_async(
             shutdown_for_signal.cancel();
         });
 
-        eprintln!(
-            "aivyx-pa daemon {} — listening on {}",
-            env!("CARGO_PKG_VERSION"),
-            socket_path.display(),
-        );
+        // The "listening on <socket>" line is printed by `run_daemon`
+        // once the socket is actually bound — printing it here, before
+        // the bind, claimed success for a bind that could still fail
+        // (e.g. a socket path longer than the OS allows).
 
         // Sync TOML [[schedule]] entries into the schedule store.
         let schedule_domain = storage.domain(KeyDomain::Schedules);

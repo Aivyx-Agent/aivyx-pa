@@ -878,6 +878,11 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         path: socket_path.display().to_string(),
         source: e,
     })?;
+    eprintln!(
+        "aivyx-pa daemon {} — listening on {}",
+        env!("CARGO_PKG_VERSION"),
+        socket_path.display(),
+    );
 
     let pid_path = socket_path.with_extension("pid");
     let _pid_guard = PidGuard::write(&pid_path)?;
