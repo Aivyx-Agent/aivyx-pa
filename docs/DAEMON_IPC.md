@@ -426,6 +426,7 @@ Errors (`QueryError`):
 | `routing_disabled` | "Model routing commands are not available here — they need `[routing] enabled = true`." |
 | `unknown_model` | "No model `<arg>` — see /models." or "`<id>` is served by several endpoints (a@x, b@y) — use id@endpoint." |
 | `invalid_session` | "`<id>` is not a session id" |
+| `unknown_session` | "no session `<id>` is active on this daemon" |
 
 Trust: the same as the other Studio settings queries — the socket's
 `0600` mode is the auth boundary. A pin changes which local model a

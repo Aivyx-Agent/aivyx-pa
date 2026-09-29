@@ -1818,10 +1818,12 @@ parent_role = "researcher"
 #   * A trigger fires when no local model meets the call's needs
 #     (no_local_candidate) or its task kind is listed in `tiers`.
 #   * mode "ask": the turn stops with a message naming the cloud model,
-#     the trigger and about how many tokens would be sent. Send
-#     /allow-cloud in that conversation (the whole message), or run
-#     `aivyx-pa routing allow-cloud <session-id>`, then resend. The
-#     grant lasts for that conversation until the daemon restarts.
+#     why (in plain words) and about how many tokens would be sent.
+#     Allow it with /allow-cloud in that conversation (the whole
+#     message), the Studio's "Allow cloud" button, or
+#     `aivyx-pa routing allow-cloud <session-id>`, then resend. Chat apps
+#     (Telegram, Discord, Slack) can't grant it. The grant lasts for that
+#     conversation until the daemon restarts.
 #     mode "auto": no asking. mode "never": no escalation at all.
 #   * A conversation is TAINTED — permanently, persisted across restarts
 #     and compaction — the first time it touches sensitive data: output

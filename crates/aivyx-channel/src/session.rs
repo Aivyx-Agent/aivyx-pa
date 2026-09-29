@@ -654,14 +654,15 @@ where
         };
         let outcome = agent.turn(message, &channel).await;
 
-        // Routing visibility B3 — the in-process path has no
-        // `StreamEventPayload` events of its own to scan (that's a
-        // daemon-only wire type), but it holds the same `RoutedProvider`
-        // the turn's routed calls just used, so it asks the router
-        // directly for this conversation's latest decision and reuses
-        // the shared "did it actually change" seam by wrapping it in a
-        // one-element `ModelRouted` slice, exactly the shape a daemon
-        // turn would have sent.
+        // Routing visibility B3 — future-proofing: this session's own
+        // turns are not routed today (the in-process planner attaches no
+        // route hint — see `routing_commands::IN_PROCESS_REPLY`), so the
+        // router normally has no decision for it and nothing prints. If
+        // a routed call ever carries this session's id (or in-process
+        // routing is added), the operator sees the same on-change line
+        // the daemon REPL prints: ask the router for the conversation's
+        // latest decision and reuse the shared seam by wrapping it in a
+        // one-element `ModelRouted` slice.
         if let Some(record) = routed
             .as_deref()
             .and_then(|r| r.router().last_decision(&routing_session_id))

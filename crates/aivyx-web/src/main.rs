@@ -4354,7 +4354,7 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
                             button { class: "btn btn-primary btn-xs", disabled: true, "Allowing…" }
                         },
                         ConsentState::Allowed => rsx! {
-                            span { class: "notice ok", "Allowed until the daemon restarts." }
+                            span { class: "notice ok", "Allowed for this conversation until the page reloads or the daemon restarts." }
                             button {
                                 class: "btn btn-glass btn-xs",
                                 onclick: move |_| {
@@ -11165,7 +11165,7 @@ async fn read_task(
                         why,
                         estimated_tokens,
                         can_allow_here,
-                    } => {
+                    } if session.peek().as_deref() == Some(event_session.as_str()) => {
                         let line = ChatLine::consent_card(ConsentInfo {
                             model,
                             endpoint,

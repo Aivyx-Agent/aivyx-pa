@@ -87,7 +87,7 @@ Both are additive. Adapters skip unknown kinds, per the channel SDK contract.
   - "No routed call yet in this conversation.";
   - and so on.
 - **The one difference:** the routing-off message names `aivyx-pa`'s config, "Model routing commands are not available here — they need `[routing] enabled = true`."
-- **Where they're handled:** the daemon intercepts them like `/allow-cloud`: a whole message is a command, never reaching the model or the history, and audited only if pinning. They're available from any channel, since reading and pinning aren't escalation. The in-process REPL handles them too, when routing is on.
+- **Where they're handled:** the daemon intercepts them like `/allow-cloud`: a whole message is a command, never reaching the model or the history. Pins are not audited: no audit tag fits a manual pin, and A15/A16 scope audit to escalation (decided in Task 3). They're available from any channel, since reading and pinning aren't escalation. In-process chat is never routed (its planner attaches no route hint), so there the commands reply that routing applies to daemon conversations and how to start the daemon (decided after the Task 4 review).
 - **Shared code:** one module in `aivyx-channel` produces the replies for both paths.
 
 ## B3 — the terminal front ends
@@ -104,7 +104,7 @@ Both are additive. Adapters skip unknown kinds, per the channel SDK contract.
 - **Consent card:** in Chat, a `CloudConsentRequested` renders as a card:
   - it states the model, why, and the token estimate;
   - it has an **"Allow cloud for this conversation"** button, which sends `AllowCloudEscalation { session_id }`;
-  - on success it shows "Allowed until the daemon restarts." and a **"Resend"** button that resubmits the last message.
+  - on success it shows "Allowed for this conversation until the page reloads or the daemon restarts." (matching the Models screen, since a reload starts a new conversation) and a **"Resend"** button that resubmits the last message.
   - When a card is shown, the duplicate outcome text line is suppressed.
 - **Models screen:** a new `View::Models` (slug `models`), in the sidebar's System group with its own icon. It shows:
   - whether routing is enabled, and if not, how to enable it;

@@ -697,22 +697,7 @@ fn render_events_for_telegram(events: &[StreamEventPayload]) -> String {
 /// text-less turns (a genuine empty reply, an unrelated non-completed
 /// outcome) are untouched.
 fn build_telegram_reply(events: &[StreamEventPayload], outcome: &str) -> String {
-    let displayed = crate::daemon_ipc::concat_text_events(events);
-    let mut buf = render_events_for_telegram(events);
-    if let Some(note) = crate::daemon_ipc::turn_outcome_correction(&displayed, outcome) {
-        let is_consent_stop = events
-            .iter()
-            .any(|e| matches!(e, StreamEventPayload::CloudConsentRequested { .. }));
-        if buf.trim() == "(no reply)" && is_consent_stop {
-            buf = note;
-        } else if !(note == "(no reply)" && buf.trim() == "(no reply)") {
-            if !buf.is_empty() && !buf.ends_with('\n') {
-                buf.push('\n');
-            }
-            buf.push_str(&note);
-        }
-    }
-    buf
+    crate::daemon_ipc::chat_reply(render_events_for_telegram(events), events, outcome)
 }
 
 // `parse_gate_command` lived here through Phases 19–110. Phase 111
@@ -1350,15 +1335,15 @@ mod tests {
     }
 
     #[test]
-    fn build_telegram_reply_keeps_no_reply_prefix_for_a_non_consent_text_less_turn() {
-        // A genuinely empty answer with a real correction (not a consent
-        // stop) keeps the existing "(no reply)\n<note>" shape — the B3 fix
-        // is scoped to `CloudConsentRequested` only.
+    fn build_telegram_reply_shows_the_note_alone_for_a_text_less_turn() {
+        // A text-less turn with an outcome message (a reply floor here; a
+        // routing/allow-cloud command reply or a consent stop alike) shows
+        // that message alone — no "(no reply)" prefix.
         let out = build_telegram_reply(
             &[],
             "completed: I wasn't able to produce a usable reply this turn — please try again.",
         );
-        assert!(out.starts_with("(no reply)\n"), "{out}");
+        assert!(!out.contains("(no reply)"), "{out}");
         assert!(out.contains("wasn't able to produce"), "{out}");
     }
 }
