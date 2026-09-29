@@ -3104,9 +3104,10 @@ impl StreamEventPayload {
                      {reason}{scope_str}\n"
                 )
             }
-            StreamEventPayload::ModelRouted { model, reason, .. } => {
-                format!("  routing → {model} ({reason})\n")
-            }
+            // Each front end decides how to show the routed model (the REPL
+            // prints a line only when it changes); a plain renderer adds
+            // nothing, so `--headless` stdout never gains a routing line.
+            StreamEventPayload::ModelRouted { .. } => String::new(),
             // The turn's outcome text carries the request, worded for the
             // channel; rendering it here too would print it twice.
             StreamEventPayload::CloudConsentRequested { .. } => String::new(),
@@ -5587,16 +5588,15 @@ mod tests {
     // ---- render_for_cli ----
 
     #[test]
-    fn render_for_cli_model_routed_names_the_model_and_reason() {
+    fn render_for_cli_prints_nothing_for_model_routed() {
+        // Front ends decide how to show it (the REPL: only when the model
+        // changes); `--headless` stdout must never gain a routing line.
         let payload = StreamEventPayload::ModelRouted {
             model: "qwen3:8b@default".into(),
             task: "chat".into(),
             reason: "the best local fit".into(),
         };
-        assert_eq!(
-            payload.render_for_cli(),
-            "  routing → qwen3:8b@default (the best local fit)\n"
-        );
+        assert_eq!(payload.render_for_cli(), "");
     }
 
     #[test]

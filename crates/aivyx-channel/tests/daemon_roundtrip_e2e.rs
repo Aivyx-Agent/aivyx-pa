@@ -4135,7 +4135,8 @@ mod routing_visibility {
         });
         let (mut conn, handle) = start(&scratch, agent, local_channel(), None, None).await;
         let sid = conn.sid.clone();
-        for session_id in [None, Some(sid)] {
+        // Routing off is never an error — not even for a malformed id.
+        for session_id in [None, Some(sid), Some("not-a-session".to_string())] {
             assert_eq!(
                 conn.query(QueryPayload::GetRoutingStatus { session_id }).await,
                 QueryResponsePayload::RoutingStatus(

@@ -4637,6 +4637,10 @@ async fn handle_query(
             }
         }
         QueryPayload::GetRoutingStatus { session_id } => {
+            // Routing off is never an error, whatever the session id.
+            let Some(routed) = routed else {
+                return QueryResponsePayload::RoutingStatus(RoutingStatusView::disabled());
+            };
             let session = match session_id {
                 None => None,
                 Some(id) => match id.parse::<uuid::Uuid>() {
@@ -4649,13 +4653,9 @@ async fn handle_query(
                     }
                 },
             };
-            let view = match routed {
-                None => RoutingStatusView::disabled(),
-                Some(routed) => routing_status_view(
-                    aivyx_core::routing_status(routed, session.as_deref()).await,
-                ),
-            };
-            QueryResponsePayload::RoutingStatus(view)
+            QueryResponsePayload::RoutingStatus(routing_status_view(
+                aivyx_core::routing_status(routed, session.as_deref()).await,
+            ))
         }
         QueryPayload::SetRoutingPin { session_id, model } => {
             let Some(routed) = routed else {

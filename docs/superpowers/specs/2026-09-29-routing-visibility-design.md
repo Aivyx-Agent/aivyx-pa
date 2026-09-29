@@ -29,7 +29,7 @@ The locked turn-outcome types (D3) are not changed. The daemon picks up a consen
 Both are additive. Adapters skip unknown kinds, per the channel SDK contract.
 
 **`ModelRouted { model: String, task: String, reason: String }`**
-- The daemon sends it after each turn whose calls were routed, just before `TurnComplete`, from `routed.router().last_decision(session)`.
+- The daemon sends it after each turn once the conversation has had a routed call, just before `TurnComplete`, from `routed.router().last_decision(session)`. It carries the latest decision, so a turn with no routed call of its own repeats the previous one: front ends show the model and react only when it changes. A plain `render_for_cli` prints nothing for it, so `--headless` output is unchanged (decided after the Task 2 review).
 - `model` is the `id@endpoint` key and `reason` is the router's human sentence.
 - It is not sent when routing is off, or when the conversation had no routed call.
 
