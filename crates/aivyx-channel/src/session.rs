@@ -555,6 +555,22 @@ where
             continue;
         }
 
+        // First-run coherence A1 (F14) — in-process there is no daemon to
+        // hold escalation consent, so a whole-message `/allow-cloud` gets a
+        // local reply and is never sent to the model (nor counted as a turn).
+        if crate::routing_guard::is_allow_cloud_command(input) {
+            let writer = channel.writer_handle();
+            if let Ok(mut guard) = writer.lock() {
+                let _ = writeln!(
+                    &mut *guard,
+                    "{}",
+                    crate::routing_guard::IN_PROCESS_ALLOW_CLOUD_REPLY
+                );
+                let _ = guard.flush();
+            }
+            continue;
+        }
+
         // Rotate the channel's cancellation token so a turn-N cancel
         // does not pre-cancel turn N+1. Same reasoning as the binary:
         // `tokio_util::CancellationToken` is monotonic, so we swap in

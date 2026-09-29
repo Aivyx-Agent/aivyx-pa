@@ -388,3 +388,59 @@ async fn scripted_session_drives_two_turns_end_to_end() {
         assert_eq!(entry.seq, i as u64);
     }
 }
+
+/// First-run coherence A1 (F14) — in-process, a whole-message `/allow-cloud`
+/// gets a local reply and never reaches the model: escalation consent lives
+/// in the daemon. The provider has no scripted steps, so any model call
+/// would fail the turn; no turn runs and no audit entry is written.
+#[tokio::test]
+async fn in_process_allow_cloud_gets_a_local_reply_and_never_calls_the_model() {
+    let provider = ScriptedProvider::new(Vec::new());
+    let audit_log = HmacChainLog::new([42u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+    let reader = Cursor::new(&b"  /allow-cloud  \n"[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let sink = channel.writer_handle();
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+    let config = SessionConfig {
+        model: "claude-haiku-4-5-20251001".to_string(),
+        system_prompt: "test".to_string(),
+        max_tokens: 256,
+        capabilities: CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+        tools: Arc::new(ToolRegistry::new(Vec::new())),
+        storage,
+        prompt: String::new(),
+        banner: None,
+        tool_allowlist: None,
+        memory_topic_prefix: None,
+        role_overrides: None,
+        context_window_tokens: None,
+        prune_sink: None,
+        context_provider: None,
+        system_prompt_refiner: None,
+        prompt_refresher: None,
+        turn_safety: Default::default(),
+        confirm_destructive: false,
+    };
+
+    let report = run_session(provider, audit_hook, None, config, channel, reader)
+        .await
+        .expect("run_session completes on EOF");
+
+    assert_eq!(report.turns_run, 0, "/allow-cloud is not a turn");
+    assert!(report.last_outcome.is_none());
+    assert!(
+        audit_bridge.writer().entries().expect("entries").is_empty(),
+        "no turn started, so the model was never called"
+    );
+    let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
+    assert!(
+        output.contains(
+            "Cloud escalation needs the daemon — start it with `aivyx-pa daemon run` (or store \
+             your passphrase so aivyx-pa starts it), then allow it there."
+        ),
+        "{output:?}"
+    );
+}

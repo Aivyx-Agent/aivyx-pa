@@ -154,6 +154,8 @@ mod persona;
 mod profile;
 #[path = "aivyx_modules/role.rs"]
 mod role;
+#[path = "aivyx_modules/repl_daemon.rs"]
+mod repl_daemon;
 #[path = "aivyx_modules/routing.rs"]
 mod routing;
 #[path = "aivyx_modules/skills.rs"]
@@ -203,8 +205,8 @@ use aivyx_channel::telegram_daemon_frontend::{
 use aivyx_channel::turn_history_tool::TurnHistoryTool;
 use aivyx_channel::webhook_tool::{WebhookCreateTool, WebhookDeleteTool, WebhookListTool};
 use aivyx_channel::{
-    ChannelKind, DaemonSessionConfig, LocalChannel, SessionConfig, assemble_role_envelope,
-    render_role_envelope, run_daemon_session_connected, run_session,
+    ChannelKind, LocalChannel, SessionConfig, assemble_role_envelope, render_role_envelope,
+    run_session,
 };
 use aivyx_config::ProviderKind;
 use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, ToolAllowlist};
@@ -1278,6 +1280,66 @@ fn run() -> Result<(), String> {
     //    never comes, or crash with an opaque Argon2 error.
     let new_store = !storage_path.exists();
     let passphrase_source = select_passphrase_source(config.passphrase.as_ref(), new_store)?;
+
+    // ---- First-run coherence A1: the interactive REPL and the daemon ---
+    // Decided here, before the master key is derived and the store is
+    // opened: a daemon (already running, or started just below) holds the
+    // store lock, so the REPL must not have taken it first. On a terminal
+    // without `--no-daemon`: connect to a running daemon; else start one
+    // when the passphrase comes from a source it inherits (env, TOML, OS
+    // keyring); else run in-process with a notice saying why. Piped input
+    // and `--no-daemon` skip this block and keep the old path unchanged.
+    let mut repl_in_process_notice: Option<String> = None;
+    let is_tty = io::stdin().is_terminal();
+    if matches!(mode, CliMode::Session)
+        && matches!(channel_kind, ChannelKind::Local)
+        && is_tty
+        && !no_daemon
+        && let Ok(sp) = default_socket_path()
+    {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        let running = rt.block_on(aivyx_channel::daemon_client::daemon_is_running(&sp));
+        let non_interactive =
+            !matches!(passphrase_source, PassphraseSource::InteractivePrompt { .. });
+        match repl_daemon::decide(is_tty, no_daemon, running, non_interactive) {
+            decision @ (repl_daemon::Decision::Connect
+            | repl_daemon::Decision::SpawnThenConnect) => {
+                let fs_root = std::fs::canonicalize(&config.fs_root.value)
+                    .unwrap_or_else(|_| config.fs_root.value.clone());
+                let studio_line = || {
+                    let token_path = aivyx_channel::studio_token::token_path(&storage_path);
+                    let auto_token = aivyx_channel::studio_token::read_existing(&token_path);
+                    doctor::repl_studio_line(
+                        config.studio_addr(),
+                        config.web_ui_auth_token.as_deref(),
+                        config.web_ui_insecure_no_auth,
+                        auto_token.as_deref(),
+                    )
+                };
+                let reached = rt.block_on(repl_daemon::start_and_connect(
+                    &sp,
+                    decision == repl_daemon::Decision::SpawnThenConnect,
+                    &config.active_role.value,
+                    PROMPT,
+                    fs_root,
+                    studio_line,
+                ))?;
+                match reached {
+                    repl_daemon::Reached::Done => return Ok(()),
+                    repl_daemon::Reached::InProcess(notice) => {
+                        repl_in_process_notice = Some(notice);
+                    }
+                }
+            }
+            repl_daemon::Decision::InProcess { reason } => {
+                repl_in_process_notice = repl_daemon::in_process_notice(&reason);
+            }
+        }
+    }
+
     let master_key = derive_master_key(passphrase_source, &salt_path, Argon2Params::d7_default())
         .map_err(|e| format!("failed to derive master key: {e}"))?;
 
@@ -1452,6 +1514,7 @@ fn run() -> Result<(), String> {
             cli_mcp_sse_servers,
             cli_web_ui_port,
             load_opts.role_override.clone(),
+            repl_in_process_notice,
         )
         .await
     })
@@ -6103,7 +6166,14 @@ async fn run_async(
     // the same value (`load_opts.role_override`, which outlives that move)
     // through instead.
     role_override: Option<String>,
+    // First-run coherence A1 — `Some(notice)` when `run()` already decided
+    // this interactive REPL runs in-process (and why): skip the connect
+    // attempt and print the notice instead.
+    repl_in_process_notice: Option<String>,
 ) -> Result<(), String> {
+    // First-run coherence A1 (F14) — computed before the destructure below
+    // moves `config.routing`; printed when the REPL runs in-process.
+    let in_process_cloud_warning = repl_daemon::in_process_cloud_warning(config.routing.as_ref());
     // Destructure the config at the top so each downstream block
     // reaches for the local binding rather than the nested path
     // `config.field.value`. The `SourcedSecret` fields are already
@@ -10631,7 +10701,12 @@ async fn run_async(
             // Phase 18 Task 3: try daemon-backed REPL first, fall back
             // to in-process if the daemon path fails.
             // Phase 20 Task 4: `--no-daemon` skips daemon dispatch entirely.
-            if !no_daemon && let Ok(sp) = default_socket_path() {
+            // First-run coherence A1: an interactive REPL already decided
+            // in `run()` (before the store was opened); when it lands here
+            // it runs in-process, with `repl_in_process_notice` saying why.
+            if let Some(notice) = repl_in_process_notice {
+                eprintln!("{notice}");
+            } else if !no_daemon && let Ok(sp) = default_socket_path() {
                 let session = DaemonSession::connect(
                     &sp,
                     Some(active_role_name.clone()),
@@ -10640,58 +10715,24 @@ async fn run_async(
                 .await;
 
                 if let Ok(session) = session {
-                    let cancel_handle = session.cancel_handle();
-                    let cancelled_once =
-                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    let flag_for_signal = std::sync::Arc::clone(&cancelled_once);
-
-                    // Signal task (daemon mode): first ctrl-C sends
-                    // CancelTurn; second ctrl-C exits. The REPL loop
-                    // resets `cancelled_once` to false before each turn
-                    // via `DaemonSessionConfig::cancel_flag`.
-                    tokio::spawn(async move {
-                        loop {
-                            if tokio::signal::ctrl_c().await.is_err() {
-                                std::process::exit(130);
-                            }
-                            if flag_for_signal.load(std::sync::atomic::Ordering::Relaxed) {
-                                eprintln!("\naivyx: interrupted, exiting.");
-                                std::process::exit(130);
-                            }
-                            eprintln!("\naivyx: cancelling in-flight turn (ctrl-C again to exit).");
-                            cancel_handle.cancel().await;
-                            flag_for_signal.store(true, std::sync::atomic::Ordering::Relaxed);
-                        }
-                    });
-
-                    let daemon_config = DaemonSessionConfig {
-                        socket_path: sp.clone(),
-                        role: Some(active_role_name.clone()),
-                        prompt: PROMPT.to_string(),
-                        banner: Some(format!(
-                            "aivyx-pa {} (daemon) — type a message, ctrl-C to cancel, \
-                             ctrl-D to exit.\n\
-                             daemon: {}\n\
-                             fs sandbox: {}\n\
-                             memory: live (recall persists across restarts)\n\
-                             audit: persistent ({} events verified from disk)\n\
-                             active role: {}",
-                            env!("CARGO_PKG_VERSION"),
-                            sp.display(),
-                            canonical_root.display(),
-                            verified_event_count,
-                            active_role_name,
-                        )),
-                        cancel_flag: Some(cancelled_once),
-                        frontend_type: Some(aivyx_channel::daemon_ipc::FrontendType::Local),
-                    };
-
-                    let stdin = io::stdin();
-                    let reader = stdin.lock();
-                    match run_daemon_session_connected(session, daemon_config, reader, io::stdout())
+                    let banner = format!(
+                        "aivyx-pa {} (daemon) — type a message, ctrl-C to cancel, \
+                         ctrl-D to exit.\n\
+                         daemon: {}\n\
+                         fs sandbox: {}\n\
+                         memory: live (recall persists across restarts)\n\
+                         audit: persistent ({} events verified from disk)\n\
+                         active role: {}",
+                        env!("CARGO_PKG_VERSION"),
+                        sp.display(),
+                        canonical_root.display(),
+                        verified_event_count,
+                        active_role_name,
+                    );
+                    match repl_daemon::run_connected(session, &sp, &active_role_name, PROMPT, banner)
                         .await
                     {
-                        Ok(_report) => return Ok(()),
+                        Ok(()) => return Ok(()),
                         Err(e) => {
                             eprintln!(
                                 "aivyx-pa: daemon session failed ({e}), \
@@ -10707,6 +10748,10 @@ async fn run_async(
                 }
             } else {
                 eprintln!("aivyx-pa: no socket path available, using in-process mode.");
+            }
+            // First-run coherence A1 (F14) — escalation needs the daemon.
+            if let Some(warning) = &in_process_cloud_warning {
+                eprintln!("{warning}");
             }
 
             // In-process fallback (original Phase 3 path).

@@ -14,11 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::daemon_client::{spawn_daemon_and_wait, DaemonSession};
+use crate::daemon_client::{spawn_daemon_and_wait, DaemonSession, AUTO_SPAWN_TIMEOUT};
 use crate::daemon_ipc::{concat_text_events, turn_outcome_correction, FrontendType, StreamEventPayload};
 use crate::session::SessionReport;
-
-const AUTO_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Configuration for a daemon-backed REPL session.
 pub struct DaemonSessionConfig {

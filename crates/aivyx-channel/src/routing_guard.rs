@@ -214,6 +214,13 @@ impl RoutingGuard {
 /// for the conversation it's sent in. Only the whole message counts.
 pub const ALLOW_CLOUD_COMMAND: &str = "/allow-cloud";
 
+/// First-run coherence A1 (F14) — the reply an in-process session (no
+/// daemon) gives a whole-message `/allow-cloud` instead of sending it to the
+/// model: escalation consent lives in the daemon.
+pub const IN_PROCESS_ALLOW_CLOUD_REPLY: &str =
+    "Cloud escalation needs the daemon — start it with `aivyx-pa daemon run` (or store your \
+     passphrase so aivyx-pa starts it), then allow it there.";
+
 /// Is `text` exactly the `/allow-cloud` command (surrounding whitespace
 /// aside)? Anything else is a normal turn.
 pub fn is_allow_cloud_command(text: &str) -> bool {

@@ -150,6 +150,25 @@ fn studio_sign_in_link(
     ))
 }
 
+/// First-run coherence A1 — the REPL banner's `Studio: <link>` line when
+/// connected to a daemon: the sign-in link (the REPL is interactive, so the
+/// token may show), the bare URL under `web_ui_insecure_no_auth`, and
+/// nothing when the Studio is off or its token file doesn't exist yet.
+pub fn repl_studio_line(
+    addr: Option<std::net::SocketAddr>,
+    configured_token: Option<&str>,
+    insecure_no_auth: bool,
+    auto_token: Option<&str>,
+) -> Option<String> {
+    let addr = addr?;
+    if configured_token.is_none() && insecure_no_auth {
+        let url = aivyx_channel::studio_token::studio_url(addr.ip(), addr.port());
+        return Some(format!("Studio: {url}"));
+    }
+    studio_sign_in_link(Some(addr), configured_token, insecure_no_auth, auto_token)
+        .map(|link| format!("Studio: {link}"))
+}
+
 /// `aivyx-pa studio [--token]` — what to print. With `token_only`, the bare
 /// token (empty when the Studio runs with no token at all), for scripts and
 /// the desktop app; otherwise the sign-in link (or the bare URL with no
@@ -960,6 +979,28 @@ mod tests {
             "http://127.0.0.1:7843/"
         );
         assert_eq!(studio_command_output(addr, None, true, None, p, true).unwrap(), "");
+    }
+
+    #[test]
+    fn repl_studio_line_mirrors_the_sign_in_link_choice() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let addr = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843));
+        assert_eq!(
+            repl_studio_line(addr, None, false, Some("auto")).as_deref(),
+            Some("Studio: http://127.0.0.1:7843/?token=auto")
+        );
+        assert_eq!(
+            repl_studio_line(addr, Some("mine"), false, Some("auto")).as_deref(),
+            Some("Studio: http://127.0.0.1:7843/?token=mine"),
+            "a configured token wins"
+        );
+        assert_eq!(
+            repl_studio_line(addr, None, true, None).as_deref(),
+            Some("Studio: http://127.0.0.1:7843/"),
+            "insecure_no_auth: the bare URL"
+        );
+        assert_eq!(repl_studio_line(addr, None, false, None), None, "no token file yet");
+        assert_eq!(repl_studio_line(None, Some("mine"), false, Some("auto")), None, "Studio off");
     }
 
     #[test]

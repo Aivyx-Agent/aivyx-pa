@@ -22,7 +22,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 
 use aivyx_channel::daemon_client::{
     list_audit_entries, resolve_team_gate, spawn_daemon_and_wait, team_mission_list,
-    team_run_goal, DaemonCancelHandle, DaemonSession,
+    team_run_goal, DaemonCancelHandle, DaemonSession, AUTO_SPAWN_TIMEOUT,
 };
 use aivyx_channel::daemon_ipc::{FrontendType, StreamEventPayload};
 
@@ -32,10 +32,6 @@ use crate::model::{
     AppState, Msg, View,
 };
 use crate::terminal::Tui;
-
-/// How long to wait for an auto-spawned daemon to come up. Matches the
-/// REPL's `daemon_session` budget.
-const AUTO_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Poll cadence for terminal key events. Short enough that an
 /// in-flight turn cancels promptly; long enough to idle near-zero CPU.

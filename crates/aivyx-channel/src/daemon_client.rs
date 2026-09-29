@@ -2149,10 +2149,14 @@ async fn send_query(
     }
 }
 
+/// How long a front end waits for a daemon it auto-spawned to come up.
+/// Shared by the REPL (both its connect paths) and the TUI, so they agree.
+pub const AUTO_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The auto-spawned daemon's log file: a sibling `daemon.log` next to
 /// the socket (and the `daemon.pid`), so the three live together in
 /// the runtime dir.
-fn daemon_log_path(socket_path: &Path) -> PathBuf {
+pub fn daemon_log_path(socket_path: &Path) -> PathBuf {
     socket_path.with_extension("log")
 }
 
@@ -2199,11 +2203,19 @@ pub async fn spawn_daemon_and_wait(
     let exe = std::env::current_exe()?;
 
     let (stdout, stderr) = daemon_log_stdio(socket_path);
-    let _child = tokio::process::Command::new(&exe)
+    let mut command = tokio::process::Command::new(&exe);
+    command
         .args(["daemon", "run"])
         .stdin(std::process::Stdio::null())
         .stdout(stdout)
-        .stderr(stderr)
+        .stderr(stderr);
+    // First-run coherence A1 — its own process group, so the daemon
+    // outlives the front end that started it: a REPL's ctrl-C (SIGINT to
+    // the terminal's foreground group) and closing the terminal (SIGHUP to
+    // that group) must not take the background daemon down with it.
+    #[cfg(unix)]
+    command.process_group(0);
+    let _child = command
         .spawn()
         .map_err(|e| DaemonError::Internal(format!("failed to spawn daemon: {e}")))?;
 
