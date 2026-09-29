@@ -24,10 +24,9 @@ use aivyx_ipc::protocol::{
     NotificationHistoryEntry, NotifyTargetConfigView, NotifyTargetView, PersonaDeltaSummary,
     PersonaProposalResolution,
     PersonaProposalSummary, PersonaSeedWire, ProactiveConfigView, ProfileDraftWire, ProfileSummary, QueryPayload,
-    QueryResponsePayload, ReflectionScheduleConfigView, ReminderView, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
+    QueryResponsePayload, ReflectionScheduleConfigView, ReminderView, RoutingStatusView, ScheduleView, SeedSkillWire, SessionSummary, SettingsSnapshot,
     SkillAuthorOp, SkillView, SlackConfigView, StreamEventPayload, TelegramConfigView,
     ToolCatalogEntry, VoiceSettingsSnapshot,
-    turn_outcome_correction,
 };
 use aivyx_ipc::{
     LoopRunState, PairScore, ProposedPersonaDelta, TeamConfig, TeamMember, TeamMissionPhase, TeamMissionView,
@@ -39,6 +38,9 @@ use std::collections::{HashMap, HashSet};
 
 /// End-user guide content + markdown rendering for the Guide screen.
 mod guide;
+/// Routing visibility B4 — pure helpers for the Models screen, the status
+/// bar's model segment and the cloud-consent card.
+mod routing;
 
 /// How many recent audit entries the Command Center feed shows.
 const AUDIT_FEED_N: u32 = 8;
@@ -87,6 +89,9 @@ const ICON_LOOP: Asset = asset!("/assets/icons/schedules.svg");
 const ICON_NOTIFICATIONS: Asset = asset!("/assets/icons/notifications.svg");
 const ICON_TOOLS: Asset = asset!("/assets/icons/tools.svg");
 const ICON_GALLERY: Asset = asset!("/assets/icons/gallery.svg");
+// Routing visibility B4 — the Models screen (a router fork, authored to match
+// the set).
+const ICON_MODELS: Asset = asset!("/assets/icons/models.svg");
 // POLISH_WAVES.md sub-project 6, item D — vendored, not referenced from
 // the base app shell (see FileViewer's mermaid loader below): loading it
 // eagerly on every Studio boot would cost every operator a few hundred
@@ -144,6 +149,9 @@ enum View {
     /// catalog of every registered tool (name, capability base, minimum
     /// trust tier, description).
     Tools,
+    /// Routing visibility B4 — the model router's state: candidates,
+    /// residency, VRAM, escalation, and this conversation's model + pin.
+    Models,
     Voice,
     /// The in-app end-user guide — the `docs/guide/*.md` pages rendered in the
     /// Studio (see `guide.rs`). Pure static content, no daemon IPC.
@@ -168,7 +176,7 @@ impl View {
     /// `groups`) — reordering this array is a bigger, riskier change than
     /// this comment fix, since other code (e.g. Tab-cycling) may depend on
     /// this exact order.
-    const ALL: [View; 24] = [
+    const ALL: [View; 25] = [
         View::Command,
         View::Chat,
         View::Missions,
@@ -193,6 +201,7 @@ impl View {
         View::Sessions,
         View::Loop,
         View::Reminders,
+        View::Models,
     ];
 
     /// The URL-hash slug for this view (deep-linking: `…/#memory`).
@@ -215,6 +224,7 @@ impl View {
             View::Gallery => "gallery",
             View::Mcp => "mcp",
             View::Tools => "tools",
+            View::Models => "models",
             View::Voice => "voice",
             View::Guide => "guide",
             View::Onboarding => "create",
@@ -250,6 +260,7 @@ impl View {
             View::Gallery => "Gallery",
             View::Mcp => "MCP",
             View::Tools => "Tools",
+            View::Models => "Models",
             View::Voice => "Voice",
             View::Guide => "Guide",
             View::Onboarding => "Create",
@@ -324,6 +335,55 @@ struct McpState {
     /// (`GetMcpStatus`'s boot-time snapshot). Joined against `servers`
     /// by `server_name == name` when rendering `McpServerCard`.
     call_stats: Vec<McpServerCallStats>,
+}
+
+/// Routing visibility B4 — the model router as the Studio sees it: the
+/// latest `GetRoutingStatus` answer (the Models screen + whether the status
+/// bar says "routing off"), the latest `ModelRouted` for the Studio's own
+/// conversation (the status bar), the pin selector's last outcome, and the
+/// Chat screen's cloud-consent card. A dedicated struct so its context
+/// can't collide by type with any other signal.
+#[derive(Clone, Default, PartialEq)]
+struct RoutingUi {
+    /// `None` until the first `RoutingStatus` answer arrives.
+    status: Option<RoutingStatusView>,
+    /// The latest `ModelRouted` for this conversation: (`id@endpoint`,
+    /// the router's reason). Cleared when a new session starts.
+    routed: Option<(String, String)>,
+    /// The pin selector's last outcome: (ok, message).
+    pin_notice: Option<(bool, String)>,
+    /// The transcript index of the live consent card; `None` once the
+    /// operator sends another message (older cards stay as plain text).
+    consent_line: Option<usize>,
+    consent: ConsentState,
+    /// Set when a `CloudConsentRequested` arrives; the next `TurnComplete`
+    /// reads (and clears) it to drop the duplicate outcome line.
+    consent_this_turn: bool,
+}
+
+/// The live consent card's "Allow cloud for this conversation" state.
+#[derive(Clone, Default, PartialEq)]
+enum ConsentState {
+    #[default]
+    Asking,
+    /// `AllowCloudEscalation` sent, no answer yet.
+    Allowing,
+    /// `CloudEscalationAllowed` — shows "Allowed until the daemon
+    /// restarts." and the Resend button.
+    Allowed,
+    /// `CloudEscalationNotEnabled`, or a `QueryError`.
+    Failed(String),
+}
+
+/// One cloud-consent request, as the Chat card shows it.
+#[derive(Clone, PartialEq)]
+struct ConsentInfo {
+    model: String,
+    endpoint: String,
+    /// Plain words (`no local model can handle this request`, …).
+    why: String,
+    estimated_tokens: u32,
+    can_allow_here: bool,
 }
 
 /// Chapter I Phase 188 — the Loop screen's state: the daemon's
@@ -754,6 +814,9 @@ mod server_info_tests {
 struct ChatLine {
     role: Role,
     text: String,
+    /// Routing visibility B4 — set on a cloud-consent card line (`text`
+    /// then holds the card's sentence).
+    consent: Option<ConsentInfo>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -766,16 +829,21 @@ enum Role {
 
 impl ChatLine {
     fn operator(text: String) -> Self {
-        Self { role: Role::Operator, text }
+        Self { role: Role::Operator, text, consent: None }
     }
     fn assistant(text: String) -> Self {
-        Self { role: Role::Assistant, text }
+        Self { role: Role::Assistant, text, consent: None }
     }
     fn system(text: String) -> Self {
-        Self { role: Role::System, text }
+        Self { role: Role::System, text, consent: None }
     }
     fn error(text: String) -> Self {
-        Self { role: Role::Error, text }
+        Self { role: Role::Error, text, consent: None }
+    }
+    /// A cloud-consent card (rendered by `ConsentCard`, not as text).
+    fn consent_card(info: ConsentInfo) -> Self {
+        let text = routing::consent_lead(&info.model, &info.endpoint, &info.why, info.estimated_tokens);
+        Self { role: Role::System, text, consent: Some(info) }
     }
     fn class(&self) -> &'static str {
         match self.role {
@@ -784,6 +852,56 @@ impl ChatLine {
             Role::System => "line sys",
             Role::Error => "line err",
         }
+    }
+}
+
+/// The operator's most recent message — what the consent card's Resend
+/// button submits again.
+fn last_operator_message(lines: &[ChatLine]) -> Option<String> {
+    lines
+        .iter()
+        .rev()
+        .find(|l| l.role == Role::Operator)
+        .map(|l| l.text.clone())
+}
+
+#[cfg(test)]
+mod chat_line_tests {
+    use super::*;
+
+    #[test]
+    fn resend_takes_the_latest_operator_message() {
+        let lines = vec![
+            ChatLine::operator("first".into()),
+            ChatLine::assistant("reply".into()),
+            ChatLine::operator("second".into()),
+            ChatLine::consent_card(
+                ConsentInfo {
+                    model: "m".into(),
+                    endpoint: "e".into(),
+                    why: "why".into(),
+                    estimated_tokens: 1,
+                    can_allow_here: true,
+                },
+            ),
+        ];
+        assert_eq!(last_operator_message(&lines).as_deref(), Some("second"));
+        assert_eq!(last_operator_message(&[ChatLine::system("x".into())]), None);
+    }
+
+    #[test]
+    fn a_consent_card_line_carries_the_daemons_sentence() {
+        let line = ChatLine::consent_card(
+            ConsentInfo {
+                model: "claude-sonnet-5".into(),
+                endpoint: "claude".into(),
+                why: "this kind of request is set to use the cloud".into(),
+                estimated_tokens: 12578,
+                can_allow_here: true,
+            },
+        );
+        assert!(line.consent.is_some());
+        assert!(line.text.contains("About 12,578 tokens"), "{}", line.text);
     }
 }
 
@@ -951,13 +1069,16 @@ fn App() -> Element {
     // collide with any other context the way a bare `Signal<Option<(bool,
     // String)>>` could.
     let mission_ui = use_signal(MissionControlUi::default);
+    // Routing visibility B4 — the router's state for the status bar, the
+    // Models screen and the Chat screen's consent card.
+    let routing = use_signal(RoutingUi::default);
 
     let ws: Sender = use_coroutine(move |rx| {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
             notifications, loop_ui, reminders_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
-            gate, mission_ui, server_info,
+            gate, mission_ui, server_info, routing,
         )
     });
     use_context_provider(|| ws);
@@ -1001,6 +1122,7 @@ fn App() -> Element {
     use_context_provider(|| streaming);
     use_context_provider(|| gate);
     use_context_provider(|| mission_ui);
+    use_context_provider(|| routing);
 
     // Reflect the theme signal onto `<html data-theme>`.
     use_effect(move || apply_theme(light()));
@@ -1130,6 +1252,8 @@ fn App() -> Element {
             id: "mc-learning".to_string(),
             payload: QueryPayload::GetLearningInsights { window_secs: None },
         });
+        // Routing visibility B4 — whether routing is on, for the status bar.
+        ws.send(routing_status_query(None));
     });
 
     let title = match view() {
@@ -1150,6 +1274,7 @@ fn App() -> Element {
         View::Gallery => "Gallery",
         View::Mcp => "MCP Servers",
         View::Tools => "Tools",
+        View::Models => "Models",
         View::Voice => "Voice",
         View::Guide => "Guide",
         View::Onboarding => "Create your agent",
@@ -1243,6 +1368,7 @@ fn App() -> Element {
                         View::Gallery => rsx! { GalleryPanel {} },
                         View::Mcp => rsx! { McpPanel {} },
                         View::Tools => rsx! { ToolsPanel {} },
+                        View::Models => rsx! { ModelsPanel {} },
                         View::Voice => rsx! { VoicePanel {} },
                         View::Guide => rsx! { GuidePanel { page: guide_page } },
                         View::Onboarding => rsx! { OnboardingPanel { view } },
@@ -1251,7 +1377,14 @@ fn App() -> Element {
                     }
                 }
             }
-            StatusBar { connected: connected(), agent_name: dashboard().assistant_name.clone().unwrap_or_default() }
+            StatusBar {
+                connected: connected(),
+                agent_name: dashboard().assistant_name.clone().unwrap_or_default(),
+                model: routing::StatusModel::from_state(
+                    routing().routed.as_ref(),
+                    routing().status.as_ref().map(|s| s.enabled),
+                ),
+            }
             if palette_open() {
                 CommandPalette { view, open: palette_open }
             }
@@ -1401,6 +1534,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                 (ICON_NOTIFICATIONS, "Reminders", View::Reminders),
                 (ICON_PLUGINS, "MCP", View::Mcp),
                 (ICON_TOOLS, "Tools", View::Tools),
+                (ICON_MODELS, "Models", View::Models),
                 (ICON_VOICE, "Voice", View::Voice),
                 (ICON_SETTINGS, "Settings", View::Settings),
                 (ICON_GUIDE, "Guide", View::Guide),
@@ -1593,7 +1727,7 @@ fn guide_page_for(v: View) -> usize {
 }
 
 #[component]
-fn StatusBar(connected: bool, agent_name: String) -> Element {
+fn StatusBar(connected: bool, agent_name: String, model: routing::StatusModel) -> Element {
     // Vitrine final sweep (2026-07-05): this segment was a hardcoded
     // "AGENT · NONAGON" literal — the one static datum in the shell.
     // It now shows the RUNNING agent's name from the dashboard profile
@@ -1610,6 +1744,18 @@ fn StatusBar(connected: bool, agent_name: String) -> Element {
                 if connected { "DAEMON · CONNECTED" } else { "DAEMON · OFFLINE" }
             }
             div { class: "seg seg-mid", "{agent}" }
+            // Routing visibility B4 — the model the router last chose for
+            // this conversation, its reason in the tooltip.
+            div { class: "seg seg-model", title: "{model.tooltip()}",
+                match &model {
+                    routing::StatusModel::Routed { model: id, .. } => rsx! {
+                        "MODEL · "
+                        span { class: "model-id", "{id}" }
+                    },
+                    routing::StatusModel::NoneYet => rsx! { "MODEL · —" },
+                    routing::StatusModel::Off => rsx! { "ROUTING OFF" },
+                }
+            }
             div { class: "seg seg-ver", {format!("AIVYX PA · v{}", env!("CARGO_PKG_VERSION"))} }
         }
     }
@@ -4072,14 +4218,20 @@ fn ChatPanel() -> Element {
     let mut transcript = use_context::<Signal<Vec<ChatLine>>>();
     let streaming = use_context::<Signal<String>>();
     let gate = use_context::<Signal<Option<GateInfo>>>();
+    let mut routing = use_context::<Signal<RoutingUi>>();
     let mut input = use_signal(String::new);
     let ready = session().is_some();
+    let live_card = routing().consent_line;
 
     rsx! {
         div { class: "chat",
             div { class: "transcript",
-                for line in transcript().iter() {
-                    div { class: "{line.class()}", "{line.text}" }
+                for (i, line) in transcript().iter().enumerate() {
+                    if let Some(info) = line.consent.clone() {
+                        ConsentCard { info, live: live_card == Some(i) }
+                    } else {
+                        div { class: "{line.class()}", "{line.text}" }
+                    }
                 }
                 if !streaming().is_empty() {
                     div { class: "line asst streaming", "{streaming}" }
@@ -4105,6 +4257,8 @@ fn ChatPanel() -> Element {
                                 let text = input().trim().to_string();
                                 if !text.is_empty() {
                                     transcript.write().push(ChatLine::operator(text.clone()));
+                                    // A new message retires the live consent card.
+                                    routing.write().consent_line = None;
                                     ws.send(submit_query(sid, text));
                                     input.set(String::new());
                                 }
@@ -4119,12 +4273,87 @@ fn ChatPanel() -> Element {
                                 let text = input().trim().to_string();
                                 if !text.is_empty() {
                                     transcript.write().push(ChatLine::operator(text.clone()));
+                                    // A new message retires the live consent card.
+                                    routing.write().consent_line = None;
                                     ws.send(submit_query(sid, text));
                                     input.set(String::new());
                                 }
                             }
                         },
                         "Send"
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Routing visibility B4 — a cloud-consent request in the Chat transcript:
+/// the model, why, and the token estimate, with "Allow cloud for this
+/// conversation" (`AllowCloudEscalation`) and, once allowed, "Resend" (the
+/// last message again). Only the latest card (`live`) has buttons; an
+/// older one stays as a record.
+#[component]
+fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
+    let ws = use_context::<Sender>();
+    let session = use_context::<Signal<Option<String>>>();
+    let mut transcript = use_context::<Signal<Vec<ChatLine>>>();
+    let mut routing = use_context::<Signal<RoutingUi>>();
+    let state = routing().consent.clone();
+    let tokens = routing::with_thousands(u64::from(info.estimated_tokens));
+    let allow = move |_| {
+        if let Some(sid) = session() {
+            routing.write().consent = ConsentState::Allowing;
+            ws.send(allow_cloud_query(sid));
+        }
+    };
+    rsx! {
+        div { class: "glass-card consent-card", role: "status",
+            span { class: "gate-label", "☁ cloud consent needed" }
+            p { class: "consent-text",
+                "This needs a cloud model: "
+                code { "{info.model}" }
+                " (your "
+                code { "{info.endpoint}" }
+                " endpoint), because {info.why}. About {tokens} tokens — this conversation \
+                 plus the assistant's instructions — would be sent."
+            }
+            if !info.can_allow_here {
+                p { class: "label-tech",
+                    "Cloud use can only be allowed by the operator — from the terminal \
+                     (/allow-cloud) or the Studio."
+                }
+            } else if live {
+                div { class: "actions",
+                    match state {
+                        ConsentState::Asking => rsx! {
+                            button { class: "btn btn-primary btn-xs", onclick: allow,
+                                "Allow cloud for this conversation"
+                            }
+                        },
+                        ConsentState::Allowing => rsx! {
+                            button { class: "btn btn-primary btn-xs", disabled: true, "Allowing…" }
+                        },
+                        ConsentState::Allowed => rsx! {
+                            span { class: "notice ok", "Allowed until the daemon restarts." }
+                            button {
+                                class: "btn btn-glass btn-xs",
+                                onclick: move |_| {
+                                    let Some(sid) = session() else { return };
+                                    let Some(text) = last_operator_message(&transcript()) else { return };
+                                    transcript.write().push(ChatLine::operator(text.clone()));
+                                    routing.write().consent_line = None;
+                                    ws.send(submit_query(sid, text));
+                                },
+                                "Resend"
+                            }
+                        },
+                        ConsentState::Failed(msg) => rsx! {
+                            span { class: "notice err", "{msg}" }
+                            button { class: "btn btn-primary btn-xs", onclick: allow,
+                                "Allow cloud for this conversation"
+                            }
+                        },
                     }
                 }
             }
@@ -5572,6 +5801,167 @@ fn GalleryPanel() -> Element {
 // (audit-derived call counts) — this is a pure registry browse, grouped by
 // domain (the tool name's leading segment: `fs.read` → `fs`).
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Models — the model router's state (routing visibility B4)
+// ---------------------------------------------------------------------------
+
+/// Routing visibility B4 — the Models screen: whether routing is on (and
+/// how to turn it on), the candidates with plain-word capabilities and
+/// residency, VRAM, the escalation mode and classifier, and this
+/// conversation's model, why, and a pin selector (`SetRoutingPin`). Polls
+/// `GetRoutingStatus` like the Loop screen polls its status.
+#[component]
+fn ModelsPanel() -> Element {
+    let ws = use_context::<Sender>();
+    let session = use_context::<Signal<Option<String>>>();
+    let routing = use_context::<Signal<RoutingUi>>();
+
+    use_future(move || async move {
+        loop {
+            ws.send(routing_status_query(session.peek().clone()));
+            TimeoutFuture::new(POLL_INTERVAL_MS).await;
+        }
+    });
+
+    let r = routing();
+    let Some(st) = r.status.clone() else {
+        return rsx! {
+            div { class: "settings models",
+                SkeletonCards { cards: 2 }
+            }
+        };
+    };
+
+    if !st.enabled {
+        return rsx! {
+            div { class: "settings models",
+                div { class: "glass-card settings-section",
+                    h3 { "Model routing is off" }
+                    p {
+                        "Every turn uses your one configured model. To let Aivyx PA pick a model \
+                         per call — by tools, vision, context size and task — add "
+                        code { "[routing] enabled = true" }
+                        " to your config, list the other models as "
+                        code { "[[routing.models]]" }
+                        " entries, and restart the daemon."
+                    }
+                    p { class: "label-tech sub",
+                        "See the example config's [routing] section for every option."
+                    }
+                }
+            }
+        };
+    }
+
+    let pin_opts = routing::pin_options(&st);
+    let selected = routing::pin_selected(&st);
+    let conv = st.session.clone();
+    let has_session = session().is_some();
+    let default_model = st.default_model.clone().unwrap_or_else(|| "—".to_string());
+    let vram = routing::vram_label(st.vram_total_bytes, st.vram_available_bytes);
+    let escalation = routing::escalation_label(&st.escalation_mode);
+    let classifier = if st.classifier_enabled { "on" } else { "off" };
+
+    rsx! {
+        div { class: "settings models",
+            div { class: "glass-card settings-section",
+                h3 { "Routing" }
+                div { class: "kv-grid",
+                    div { span { class: "label-tech", "Default model" } div { "{default_model}" } }
+                    div { span { class: "label-tech", "VRAM" } div { "{vram}" } }
+                    div { span { class: "label-tech", "Cloud escalation" } div { "{escalation}" } }
+                    div { span { class: "label-tech", "Task classifier" } div { "{classifier}" } }
+                }
+            }
+            div { class: "glass-card settings-section",
+                h3 { "Candidates" }
+                if st.candidates.is_empty() {
+                    p { class: "label-tech", "No candidate models." }
+                } else {
+                    div { class: "models-table-wrap",
+                        table { class: "models-table",
+                            thead {
+                                tr {
+                                    th { "Model" }
+                                    th { "Tier" }
+                                    th { "Can do" }
+                                    th { "Context" }
+                                    th { "Availability" }
+                                    th { "Memory" }
+                                }
+                            }
+                            tbody {
+                                for c in st.candidates.iter() {
+                                    tr {
+                                        td { class: "mono", "{c.model}" }
+                                        td { "{c.tier}" }
+                                        td { {routing::plain_capabilities(&c.capabilities, &c.unknown_capabilities)} }
+                                        td { class: "mono", {routing::context_label(c.context_window)} }
+                                        td {
+                                            span { class: routing::availability_chip(&c.availability), "{c.availability}" }
+                                        }
+                                        td {
+                                            span { class: routing::residency_chip(c.residency.as_deref()),
+                                                {routing::residency_label(c.residency.as_deref())}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "glass-card settings-section",
+                h3 { "This conversation" }
+                div { class: "kv-grid",
+                    div {
+                        span { class: "label-tech", "Model" }
+                        div {
+                            {conv.as_ref().and_then(|c| c.current_model.clone()).unwrap_or_else(|| "not fixed — routing picks per call".to_string())}
+                        }
+                    }
+                    div {
+                        span { class: "label-tech", "Last routed" }
+                        div { {conv.as_ref().and_then(|c| c.last_model.clone()).unwrap_or_else(|| "—".to_string())} }
+                    }
+                }
+                if let Some(reason) = conv.as_ref().and_then(|c| c.last_reason.clone()) {
+                    p { span { class: "label-tech", "Why · " } "{reason}" }
+                }
+                if let Some(taint) = conv.as_ref().and_then(|c| c.tainted.clone()) {
+                    p { class: "label-tech sub", "Never escalates to the cloud: {taint}" }
+                } else if conv.as_ref().is_some_and(|c| c.cloud_allowed) {
+                    p { class: "label-tech sub", "Cloud use allowed for this conversation until the daemon restarts." }
+                }
+                div { class: "field-row",
+                    label { "Pin" }
+                    select {
+                        class: "input",
+                        "aria-label": "Pin this conversation to a model",
+                        disabled: !has_session,
+                        value: "{selected}",
+                        onchange: move |e| {
+                            if let Some(sid) = session() {
+                                ws.send(set_routing_pin_query(sid, routing::pin_request(&e.value())));
+                            }
+                        },
+                        for (value, label) in pin_opts {
+                            option { value: "{value}", selected: value == selected, "{label}" }
+                        }
+                    }
+                }
+                if let Some((ok, text)) = r.pin_notice.clone() {
+                    div { class: if ok { "notice ok" } else { "notice err" }, "{text}" }
+                }
+                p { class: "label-tech sub",
+                    "The pin applies to this Studio chat conversation only; a daemon restart clears it."
+                }
+            }
+        }
+    }
+}
 
 fn tool_catalog_query() -> FrontendMessage {
     FrontendMessage::Query {
@@ -8105,6 +8495,32 @@ fn submit_query(session_id: String, text: String) -> FrontendMessage {
     }
 }
 
+/// Routing visibility B4 — the router's state, with this conversation's
+/// model and pin when `session_id` is given.
+fn routing_status_query(session_id: Option<String>) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "routing-status".to_string(),
+        payload: QueryPayload::GetRoutingStatus { session_id },
+    }
+}
+
+/// Routing visibility B4 — pin this conversation (`None` = Auto).
+fn set_routing_pin_query(session_id: String, model: Option<String>) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "routing-pin".to_string(),
+        payload: QueryPayload::SetRoutingPin { session_id, model },
+    }
+}
+
+/// Routing visibility B4 — the consent card's "Allow cloud for this
+/// conversation".
+fn allow_cloud_query(session_id: String) -> FrontendMessage {
+    FrontendMessage::Query {
+        id: "routing-allow-cloud".to_string(),
+        payload: QueryPayload::AllowCloudEscalation { session_id },
+    }
+}
+
 fn phase_label(p: TeamMissionPhase) -> &'static str {
     match p {
         TeamMissionPhase::Planning => "planning",
@@ -9683,6 +10099,7 @@ async fn ws_task(
     gate: Signal<Option<GateInfo>>,
     mission_ui: Signal<MissionControlUi>,
     server_info: Signal<ServerInfoUi>,
+    routing: Signal<RoutingUi>,
 ) {
     // Vitrine walkthrough fix (2026-07-05, third operator casualty): a
     // daemon restart used to END this task — the socket died, `connected`
@@ -9717,7 +10134,7 @@ async fn ws_task(
             read, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
             notifications, loop_ui, reminders_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
-            gate, mission_ui, server_info,
+            gate, mission_ui, server_info, routing,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -9790,6 +10207,9 @@ fn reconnect_boot_queries() -> Vec<FrontendMessage> {
         q("mc-schedules", QueryPayload::GetSchedules),
         q("mc-teams-roster", QueryPayload::GetTeamRoster),
         q("mc-learning", QueryPayload::GetLearningInsights { window_secs: None }),
+        // Routing visibility B4 — whether routing is on, for the status
+        // bar's model segment (the Models screen polls it further).
+        q("routing-status", QueryPayload::GetRoutingStatus { session_id: None }),
     ]
 }
 
@@ -9828,6 +10248,7 @@ async fn read_task(
     mut gate: Signal<Option<GateInfo>>,
     mut mission_ui: Signal<MissionControlUi>,
     mut server_info: Signal<ServerInfoUi>,
+    mut routing: Signal<RoutingUi>,
 ) {
     // POLISH_WAVES.md sub-project 5, item E — the conflict resolve/dismiss
     // acks below need to re-issue `mem_conflicts_query()` after a
@@ -9847,7 +10268,16 @@ async fn read_task(
                 continue;
             };
             match env {
-                DaemonEnvelope::SessionStarted { session_id } => session.set(Some(session_id)),
+                DaemonEnvelope::SessionStarted { session_id } => {
+                    session.set(Some(session_id));
+                    // Routing visibility B4 — a new conversation: no routed
+                    // model yet, and an old consent card can't be allowed
+                    // for it.
+                    let mut r = routing.write();
+                    r.routed = None;
+                    r.consent_line = None;
+                    r.consent_this_turn = false;
+                }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::TeamMissionList { missions: records },
                     ..
@@ -10652,7 +11082,7 @@ async fn read_task(
                 } => {
                     mission_ui.write().notice = Some((true, format!("Resumed — now {}.", phase_label(phase))));
                 }
-                DaemonEnvelope::StreamEvent { event, .. } => match event {
+                DaemonEnvelope::StreamEvent { session_id: event_session, event } => match event {
                     StreamEventPayload::Text { text } => streaming.write().push_str(&text),
                     StreamEventPayload::Status { status } => {
                         transcript.write().push(ChatLine::system(format!("· {status}")));
@@ -10670,6 +11100,41 @@ async fn read_task(
                     StreamEventPayload::ApprovalGate { mission_id, gate_id, reason, .. } => {
                         gate.set(Some(GateInfo { mission_id, gate_id, reason }));
                     }
+                    // Routing visibility B4 — the status bar shows the
+                    // latest routed model for the Studio's own conversation.
+                    StreamEventPayload::ModelRouted { model, reason, .. } => {
+                        if session.peek().as_deref() == Some(event_session.as_str()) {
+                            routing.write().routed = Some((model, reason));
+                        }
+                    }
+                    // Routing visibility B4 — the turn stopped to ask for
+                    // cloud consent: a card in the transcript (the turn's
+                    // outcome line, the same request in words, is dropped at
+                    // `TurnComplete`).
+                    StreamEventPayload::CloudConsentRequested {
+                        model,
+                        endpoint,
+                        why,
+                        estimated_tokens,
+                        can_allow_here,
+                    } => {
+                        let line = ChatLine::consent_card(ConsentInfo {
+                            model,
+                            endpoint,
+                            why,
+                            estimated_tokens,
+                            can_allow_here,
+                        });
+                        let idx = {
+                            let mut t = transcript.write();
+                            t.push(line);
+                            t.len() - 1
+                        };
+                        let mut r = routing.write();
+                        r.consent_line = Some(idx);
+                        r.consent = ConsentState::Asking;
+                        r.consent_this_turn = true;
+                    }
                     _ => {}
                 },
                 DaemonEnvelope::TurnComplete { outcome, .. } => {
@@ -10677,10 +11142,59 @@ async fn read_task(
                     if !text.is_empty() {
                         transcript.write().push(ChatLine::assistant(text.clone()));
                     }
-                    if let Some(note) = turn_outcome_correction(&text, &outcome) {
+                    let consent_shown = std::mem::take(&mut routing.write().consent_this_turn);
+                    if let Some(note) = routing::outcome_note(&text, &outcome, consent_shown) {
                         transcript.write().push(ChatLine::system(note));
                     }
                     streaming.set(String::new());
+                }
+                // Routing visibility B4 — the router's state (the status
+                // bar's "routing off", and the Models screen).
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::RoutingStatus(view),
+                    ..
+                } => {
+                    routing.write().status = Some(view);
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::RoutingPinned { model },
+                    ..
+                } => {
+                    routing.write().pin_notice = Some((
+                        true,
+                        match model {
+                            Some(m) => format!("This conversation is pinned to {m}."),
+                            None => "Routing picks the model again (Auto).".to_string(),
+                        },
+                    ));
+                    ws.send(routing_status_query(session.peek().clone()));
+                }
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id == "routing-pin" => {
+                    routing.write().pin_notice = Some((false, message));
+                }
+                // The consent card's "Allow cloud for this conversation".
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::CloudEscalationAllowed { .. },
+                    ..
+                } => {
+                    routing.write().consent = ConsentState::Allowed;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::CloudEscalationNotEnabled,
+                    ..
+                } => {
+                    routing.write().consent = ConsentState::Failed(
+                        "Cloud escalation isn't configured on this daemon.".to_string(),
+                    );
+                }
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id == "routing-allow-cloud" => {
+                    routing.write().consent = ConsentState::Failed(message);
                 }
                 DaemonEnvelope::Error { message, .. } => {
                     transcript.write().push(ChatLine::error(message));

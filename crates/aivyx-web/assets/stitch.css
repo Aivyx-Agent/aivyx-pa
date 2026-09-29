@@ -1116,3 +1116,30 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .routine-row .row1 .cron { margin-left: auto; font-family: var(--font-mono); font-size: 0.6rem; opacity: 0.7; }
 .routine-row .row2 { display: flex; gap: 18px; }
 .routine-row .row2 .v { color: var(--color-text-primary); }
+
+/* ── Routing visibility B4 — status-bar model, consent card, Models screen ──
+   Existing tokens only; the table mirrors .guide-content's table rules. */
+.statusbar .seg-model .model-id { text-transform: none; letter-spacing: 0.02em; color: var(--color-text-secondary); }
+.consent-card { display: flex; flex-direction: column; gap: 8px; border-left: 3px solid var(--color-warning); margin: 4px 0; }
+.consent-card .gate-label { color: var(--color-warning); }
+.consent-card p { margin: 0; color: var(--color-text-primary); font-size: 13px; }
+.consent-card code, .models code {
+  font-family: var(--font-mono); font-size: 12.5px;
+  background: var(--color-bg-void); padding: 1px 6px; border-radius: 4px;
+  color: var(--color-text-primary);
+}
+.consent-card .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.consent-card .actions .notice { padding: 4px 10px; }
+.settings.models { max-width: 1040px; }
+.models-table-wrap { overflow-x: auto; }
+.models-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.models-table th, .models-table td {
+  text-align: left; padding: 8px 10px; vertical-align: middle;
+  border-bottom: 1px solid var(--color-secondary-dim);
+}
+.models-table th { color: var(--color-text-secondary); font-weight: 600; white-space: nowrap; }
+.models-table td { color: var(--color-text-primary); }
+.models-table td.mono { font-family: var(--font-mono); font-size: 12.5px; white-space: nowrap; }
+@media (max-width: 860px) {
+  .statusbar .seg-model { display: none; }
+}
