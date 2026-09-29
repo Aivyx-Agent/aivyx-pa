@@ -135,9 +135,11 @@ where
             .await
             .map_err(|e| e.to_string())?;
 
+        let mut shown = String::new();
         for event in &events {
             let rendered = event.render_for_cli();
             write!(writer, "{rendered}").map_err(|e| format!("render write: {e}"))?;
+            shown.push_str(&rendered);
         }
         writer.flush().map_err(|e| format!("render flush: {e}"))?;
 
@@ -148,6 +150,7 @@ where
         if let Some((new_model, routing_line)) =
             crate::daemon_ipc::routing_change_line(&events, last_routed_model.as_deref())
         {
+            let routing_line = crate::daemon_ipc::at_line_start(&shown, &routing_line);
             write!(writer, "{routing_line}").map_err(|e| format!("routing-line write: {e}"))?;
             writer.flush().map_err(|e| format!("routing-line flush: {e}"))?;
             last_routed_model = Some(new_model);

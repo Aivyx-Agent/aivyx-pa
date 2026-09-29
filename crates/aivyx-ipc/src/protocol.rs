@@ -3220,6 +3220,17 @@ pub fn turn_outcome_correction(displayed: &str, outcome: &str) -> Option<String>
 /// model to remember as the new `last_model`, and the line to print
 /// (already `\n`-terminated), worded exactly as the spec gives it:
 /// `"routing → {model} ({reason})"`.
+/// `line`, starting on a fresh line after `written` (the text already shown
+/// for the turn): a newline is added first only when `written` doesn't end
+/// in one, so a streamed answer like `4` never has a status line glued to it.
+pub fn at_line_start(written: &str, line: &str) -> String {
+    if written.is_empty() || written.ends_with('\n') {
+        line.to_string()
+    } else {
+        format!("\n{line}")
+    }
+}
+
 pub fn routing_change_line(
     events: &[StreamEventPayload],
     last_model: Option<&str>,
@@ -5618,6 +5629,15 @@ mod tests {
     }
 
     // ---- render_for_cli ----
+
+    #[test]
+    fn at_line_start_only_adds_a_newline_when_needed() {
+        // A streamed answer with no trailing newline ("4") must not have
+        // the routing line glued to it ("4routing → …").
+        assert_eq!(at_line_start("4", "routing → m (r)\n"), "\nrouting → m (r)\n");
+        assert_eq!(at_line_start("4\n", "routing → m (r)\n"), "routing → m (r)\n");
+        assert_eq!(at_line_start("", "routing → m (r)\n"), "routing → m (r)\n");
+    }
 
     #[test]
     fn render_for_cli_prints_nothing_for_model_routed() {
