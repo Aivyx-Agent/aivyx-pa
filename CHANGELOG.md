@@ -88,6 +88,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
   turn. It now exits 3, the "refused" code, and a one-shot run explains
   how to give consent (in chat or the Studio, or by piping `/allow-cloud`
   and the task into one `--headless` conversation).
+- **The Studio's access-level menu always said the sandbox is
+  `~/aivyx-pa-sandbox`**, even when `[fs] root` or `AIVYX_PA_FS_ROOT`
+  moved it. It now shows the real folder while sandbox is the current
+  level, and plain words otherwise.
 - **An interactive `aivyx-pa` could never use a running daemon** — it
   opened the store first and hit the daemon's lock. The daemon decision
   now comes before the store is opened.

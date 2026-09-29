@@ -6746,6 +6746,7 @@ fn SettingsPanel() -> Element {
 
     let needs_root = level() == "workspace" || level() == "custom";
     let expanded = level() != "sandbox";
+    let sandbox_label = sandbox_option_label(&snap.access_level, &snap.fs_root);
     let cycle_on = snap.cycle_detection;
     // Chapter Reins — the autonomy-granting levels confirm first (server-side too).
     let auto_grants = auto_level() == "autonomous" || auto_level() == "unleashed";
@@ -6782,7 +6783,7 @@ fn SettingsPanel() -> Element {
                         class: "input",
                         value: "{level}",
                         onchange: move |e| level.set(e.value()),
-                        option { value: "sandbox", "sandbox — ~/aivyx-pa-sandbox" }
+                        option { value: "sandbox", "{sandbox_label}" }
                         option { value: "workspace", "workspace — a chosen directory" }
                         option { value: "home", "home — your home directory" }
                         option { value: "full", "full — the whole machine" }
@@ -7878,7 +7879,7 @@ fn OnboardingAccessStep(step: Signal<u8>, view: Signal<View>) -> Element {
                 class: "input",
                 value: "{level}",
                 onchange: move |e| level.set(e.value()),
-                option { value: "sandbox", "sandbox — ~/aivyx-pa-sandbox" }
+                option { value: "sandbox", {sandbox_option_label("", "")} }
                 option { value: "home", "home — your home directory" }
                 option { value: "full", "full — the whole machine" }
             }
@@ -11309,9 +11310,38 @@ fn level_chip_class(level: &str) -> &'static str {
     }
 }
 
+/// The access-level `<select>`'s sandbox label. The folder can be moved
+/// (`[fs] root`, `AIVYX_PA_FS_ROOT`), so name it only when it is known — the
+/// resolved root while sandbox is the current level — never the default path.
+fn sandbox_option_label(access_level: &str, fs_root: &str) -> String {
+    if access_level == "sandbox" && !fs_root.is_empty() {
+        format!("sandbox — {fs_root}")
+    } else {
+        "sandbox — the assistant's own folder".to_string()
+    }
+}
+
 #[cfg(test)]
 mod level_chip_tests {
-    use super::{level_chip_class, select_value, stored_value, UNSET_OPTION};
+    use super::{
+        level_chip_class, sandbox_option_label, select_value, stored_value, UNSET_OPTION,
+    };
+
+    #[test]
+    fn the_sandbox_option_names_the_real_folder_only_when_it_is_known() {
+        // The sandbox folder can be moved (`[fs] root`, `AIVYX_PA_FS_ROOT`), so
+        // the label never claims the default path: it shows the resolved
+        // root while sandbox is the current level, and plain words otherwise.
+        assert_eq!(
+            sandbox_option_label("sandbox", "/srv/agent-box"),
+            "sandbox — /srv/agent-box"
+        );
+        assert_eq!(
+            sandbox_option_label("home", "/home/me"),
+            "sandbox — the assistant's own folder"
+        );
+        assert_eq!(sandbox_option_label("sandbox", ""), "sandbox — the assistant's own folder");
+    }
 
     #[test]
     fn an_unset_select_round_trips_through_the_sentinel() {
