@@ -704,6 +704,12 @@ fn run() -> Result<(), String> {
     // ---- Chapter P: first-run health check -----------------------------
     // Async (it runs a live test generation), but no daemon/passphrase —
     // a minimal current-thread runtime, like the persona/profile commands.
+    // First-run coherence A2 — `aivyx-pa studio [--token]`: the Studio
+    // sign-in link for this config. Sync, no daemon / passphrase.
+    if let CliMode::Studio { token_only } = mode {
+        return doctor::run_studio(token_only);
+    }
+
     if let CliMode::Doctor = mode {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2107,6 +2113,9 @@ enum CliMode {
     /// configured provider works (for local: Ollama reachable, model present,
     /// a real non-empty test reply) and prints actionable fixes. No daemon.
     Doctor,
+    /// `aivyx-pa studio [--token]`: print the Studio sign-in link (or just the
+    /// token) for this config. First-run coherence A2. No daemon.
+    Studio { token_only: bool },
     /// Chapter Keyring — `aivyx-pa keyring <set|clear|status>`: manage the master
     /// passphrase in the OS credential store. No daemon / storage.
     Keyring(KeyringSubcommand),
@@ -4950,6 +4959,30 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Doctor,
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // First-run coherence A2 — `aivyx-pa studio [--token]`.
+    if !args.is_empty() && args[0] == "studio" {
+        let token_only = match &args[1..] {
+            [] => false,
+            [flag] if flag == "--token" => true,
+            rest => {
+                return Err(format!(
+                    "unrecognized argument to `aivyx-pa studio`: `{}`",
+                    rest.join(" ")
+                ));
+            }
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Studio { token_only },
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,

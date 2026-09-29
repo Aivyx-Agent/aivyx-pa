@@ -103,6 +103,12 @@ pub const COMMANDS: &[CommandHelp] = &[
         usage: &["aivyx-pa doctor"],
     },
     CommandHelp {
+        name: "studio",
+        group: Group::Setup,
+        summary: "Print the Studio sign-in link (or its token)",
+        usage: &["aivyx-pa studio", "aivyx-pa studio --token"],
+    },
+    CommandHelp {
         name: "keyring",
         group: Group::Setup,
         summary: "Manage the OS-keyring-stored passphrase",

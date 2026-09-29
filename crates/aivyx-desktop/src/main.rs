@@ -91,6 +91,36 @@ fn aivyx_bin() -> String {
     std::env::var("AIVYX_PA_BIN").unwrap_or_else(|_| "aivyx-pa".to_string())
 }
 
+/// The Studio sign-in token: `AIVYX_PA_STUDIO_TOKEN` when set, else — for a
+/// localhost Studio — whatever `aivyx-pa studio --token` reports (it reads the
+/// daemon's `0600` token file as this user, resolving the store path exactly
+/// as the daemon does). `None`: no token needed, or none could be found.
+fn studio_token() -> Option<String> {
+    if let Ok(t) = std::env::var("AIVYX_PA_STUDIO_TOKEN") {
+        if !t.trim().is_empty() {
+            return Some(t.trim().to_string());
+        }
+    }
+    if !studio_is_local() {
+        return None;
+    }
+    let out = Command::new(aivyx_bin()).args(["studio", "--token"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let token = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!token.is_empty()).then_some(token)
+}
+
+/// Where the webview opens: the one-time sign-in link when there's a token
+/// (it plants the auth cookie and redirects to `/`), else the Studio itself.
+fn studio_entry_url(token: Option<&str>) -> String {
+    match token {
+        Some(t) => format!("{}/?token={t}", studio_url().trim_end_matches('/')),
+        None => studio_url(),
+    }
+}
+
 /// Is the daemon's Studio reachable right now?
 fn daemon_reachable() -> bool {
     let Ok(addr) = studio_addr().parse() else {
@@ -163,6 +193,9 @@ fn tray_icon_image() -> tray_icon::Icon {
 
 fn main() -> wry::Result<()> {
     let mut daemon_child = ensure_daemon();
+    // After `ensure_daemon`, so a daemon that just started has created its
+    // automatic token file.
+    let token = studio_token();
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
 
@@ -208,12 +241,13 @@ fn main() -> wry::Result<()> {
     // the daemon for missions awaiting approval and firing OS notifications.
     {
         let watcher_proxy = proxy.clone();
+        let watcher_token = token.clone();
         std::thread::spawn(move || {
             match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
             {
-                Ok(rt) => rt.block_on(gate_watch::run(watcher_proxy)),
+                Ok(rt) => rt.block_on(gate_watch::run(watcher_proxy, watcher_token)),
                 Err(e) => eprintln!("aivyx-desktop: gate watcher runtime failed: {e}"),
             }
         });
@@ -226,7 +260,7 @@ fn main() -> wry::Result<()> {
         .build(&event_loop)
         .expect("failed to create the window");
 
-    let webview = build_webview(&window)?;
+    let webview = build_webview(&window, &studio_entry_url(token.as_deref()))?;
 
     // Tray menu: Open Studio · Restart daemon · Quit. Built after the event loop
     // (GTK is initialized by then on Linux).
@@ -289,7 +323,7 @@ fn main() -> wry::Result<()> {
                 } else if e.id == restart_id {
                     stop_owned_daemon(&mut daemon_child);
                     daemon_child = ensure_daemon();
-                    let _ = webview.load_url(&studio_url());
+                    let _ = webview.load_url(&studio_entry_url(token.as_deref()));
                 } else if e.id == autostart_id {
                     // The CheckMenuItem flipped its own checkmark; sync the
                     // platform autostart entry to the new state.
@@ -329,16 +363,16 @@ fn main() -> wry::Result<()> {
 /// window's GTK vbox (the documented wry+tao pattern); elsewhere it builds from
 /// the raw window handle.
 #[cfg(not(target_os = "linux"))]
-fn build_webview(window: &Window) -> wry::Result<wry::WebView> {
-    WebViewBuilder::new().with_url(studio_url()).build(window)
+fn build_webview(window: &Window, url: &str) -> wry::Result<wry::WebView> {
+    WebViewBuilder::new().with_url(url).build(window)
 }
 
 #[cfg(target_os = "linux")]
-fn build_webview(window: &Window) -> wry::Result<wry::WebView> {
+fn build_webview(window: &Window, url: &str) -> wry::Result<wry::WebView> {
     use tao::platform::unix::WindowExtUnix;
     use wry::WebViewBuilderExtUnix;
     let vbox = window
         .default_vbox()
         .expect("tao window should expose a default GTK vbox on Linux");
-    WebViewBuilder::new().with_url(studio_url()).build_gtk(vbox)
+    WebViewBuilder::new().with_url(url).build_gtk(vbox)
 }

@@ -52,18 +52,22 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 /// A 401 is permanent (the Gatehouse wants a token we don't have or
 /// ours is wrong) — retrying can't fix it, so say why once and stop
 /// instead of hot-looping (Vitrine §13).
-pub async fn run(proxy: EventLoopProxy<UserEvent>) {
+pub async fn run(proxy: EventLoopProxy<UserEvent>, token: Option<String>) {
     loop {
-        if let Err(e) = watch_once(&proxy).await {
+        if let Err(e) = watch_once(&proxy, token.as_deref()).await {
             let msg = e.to_string();
             if msg.contains("401") {
-                if std::env::var("AIVYX_PA_STUDIO_TOKEN").is_ok() {
+                if token.is_some() {
                     eprintln!(
-                        "aivyx-desktop: gate watcher: the Studio rejected                          AIVYX_PA_STUDIO_TOKEN (401) — check the token.                          Notifications disabled for this run."
+                        "aivyx-desktop: gate watcher: the Studio rejected the token (401) \
+                         — check AIVYX_PA_STUDIO_TOKEN or `aivyx-pa studio --token`. \
+                         Notifications disabled for this run."
                     );
                 } else {
                     eprintln!(
-                        "aivyx-desktop: gate watcher: the Studio requires a                          token (401) — set AIVYX_PA_STUDIO_TOKEN to enable gate                          notifications. Disabled for this run."
+                        "aivyx-desktop: gate watcher: the Studio requires a token (401) \
+                         and none was found — set AIVYX_PA_STUDIO_TOKEN, or check \
+                         `aivyx-pa studio --token`. Notifications disabled for this run."
                     );
                 }
                 return;
@@ -76,11 +80,15 @@ pub async fn run(proxy: EventLoopProxy<UserEvent>) {
 
 /// One connection's lifetime: handshake, then poll missions and notify on each
 /// newly-seen gate until the socket drops.
-async fn watch_once(proxy: &EventLoopProxy<UserEvent>) -> Result<(), Box<dyn std::error::Error>> {
-    // `AIVYX_PA_STUDIO_TOKEN` authenticates against a Gatehouse-protected
+async fn watch_once(
+    proxy: &EventLoopProxy<UserEvent>,
+    token: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // The Studio token (`AIVYX_PA_STUDIO_TOKEN`, or the automatic one via
+    // `aivyx-pa studio --token` — see `main.rs`) authenticates against the
     // Studio (the daemon accepts `Authorization: Bearer <token>`).
     let mut request = ws_url().into_client_request()?;
-    if let Ok(token) = std::env::var("AIVYX_PA_STUDIO_TOKEN") {
+    if let Some(token) = token {
         request.headers_mut().insert(
             "Authorization",
             format!("Bearer {token}").parse()?,

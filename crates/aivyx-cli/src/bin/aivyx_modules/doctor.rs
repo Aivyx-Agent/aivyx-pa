@@ -150,6 +150,52 @@ fn studio_sign_in_link(
     ))
 }
 
+/// `aivyx-pa studio [--token]` — what to print. With `token_only`, the bare
+/// token (empty when the Studio runs with no token at all), for scripts and
+/// the desktop app; otherwise the sign-in link (or the bare URL with no
+/// token). The same token choice as the daemon and doctor.
+fn studio_command_output(
+    addr: Option<std::net::SocketAddr>,
+    configured_token: Option<&str>,
+    insecure_no_auth: bool,
+    auto_token: Option<&str>,
+    token_path: &Path,
+    token_only: bool,
+) -> Result<String, String> {
+    let addr = addr.ok_or_else(|| "the Studio is off (`[daemon] web_ui = false`).".to_string())?;
+    if configured_token.is_none() && !insecure_no_auth && auto_token.is_none() {
+        return Err(format!(
+            "no Studio sign-in token yet — start the daemon (`aivyx-pa daemon run`), \
+             which creates {}.",
+            token_path.display()
+        ));
+    }
+    if token_only {
+        return Ok(configured_token.or(auto_token).unwrap_or("").to_string());
+    }
+    Ok(studio_sign_in_link(Some(addr), configured_token, insecure_no_auth, auto_token)
+        .unwrap_or_else(|| aivyx_channel::studio_token::studio_url(addr.ip(), addr.port())))
+}
+
+/// `aivyx-pa studio [--token]`: print the Studio sign-in link (or, with
+/// `--token`, just the token) for this config. Reads the `0600` token file
+/// as the operator; never creates it (the daemon does). No daemon needed.
+pub fn run_studio(token_only: bool) -> Result<(), String> {
+    let cfg = load_config_for_inspection()?;
+    let token_path = aivyx_channel::studio_token::token_path(&cfg.storage_path.value);
+    let auto_token = aivyx_channel::studio_token::read_existing(&token_path);
+    let out = studio_command_output(
+        cfg.studio_addr(),
+        cfg.web_ui_auth_token.as_deref(),
+        cfg.web_ui_insecure_no_auth,
+        auto_token.as_deref(),
+        &token_path,
+        token_only,
+    )?;
+    println!("{out}");
+    Ok(())
+}
+
 fn check_gatehouse(cfg: &AivyxConfig) {
     println!("\nWeb UI (Gatehouse):");
     let Some(addr) = cfg.studio_addr() else {
@@ -888,6 +934,43 @@ mod tests {
             gatehouse_status(None, Some(lan)),
             GatehouseStatus::NoTokenOffHost { host: lan }
         );
+    }
+
+    #[test]
+    fn studio_command_prints_the_link_or_the_token() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let addr = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843));
+        let p = Path::new("/s/studio-token");
+        assert_eq!(
+            studio_command_output(addr, None, false, Some("auto"), p, false).unwrap(),
+            "http://127.0.0.1:7843/?token=auto"
+        );
+        assert_eq!(
+            studio_command_output(addr, None, false, Some("auto"), p, true).unwrap(),
+            "auto"
+        );
+        // An operator-set token wins, as in the daemon.
+        assert_eq!(
+            studio_command_output(addr, Some("mine"), false, Some("auto"), p, true).unwrap(),
+            "mine"
+        );
+        // No token at all: the bare URL, and an empty token.
+        assert_eq!(
+            studio_command_output(addr, None, true, None, p, false).unwrap(),
+            "http://127.0.0.1:7843/"
+        );
+        assert_eq!(studio_command_output(addr, None, true, None, p, true).unwrap(), "");
+    }
+
+    #[test]
+    fn studio_command_explains_an_off_studio_and_a_missing_token() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let p = Path::new("/s/studio-token");
+        let off = studio_command_output(None, None, false, Some("auto"), p, false).unwrap_err();
+        assert!(off.contains("web_ui = false"), "{off}");
+        let addr = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843));
+        let missing = studio_command_output(addr, None, false, None, p, false).unwrap_err();
+        assert!(missing.contains("aivyx-pa daemon run") && missing.contains("/s/studio-token"), "{missing}");
     }
 
     #[test]
