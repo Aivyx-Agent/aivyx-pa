@@ -19,6 +19,7 @@ page in this guide; this is the map.
 | **Documents** | A file browser over the folders your assistant can access. |
 | **MCP** | The status of any external tool servers you've connected. |
 | **Gallery** | Browse images your assistant has generated through a connected ComfyUI server. |
+| **Models** | Which models routing can choose from, what's loaded, and which one this conversation uses — with a pin control (see [Models & routing](12-models-and-routing.md)). |
 | **Voice** | Set up talking to your assistant out loud. |
 
 ## Command Center

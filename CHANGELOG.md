@@ -7,6 +7,15 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Changed
 
+- **Cloud-consent requests read as a request, not an error.** Instead of
+  "LLM error: model routing: this needs a cloud model: `m@e` (tier)…",
+  the assistant says which model, why, and roughly how many tokens would
+  be sent, worded for where you are: send `/allow-cloud` in the terminal,
+  press **Allow cloud for this conversation** on the Studio's new consent
+  card, or — in Telegram, Discord and Slack, which can't grant it — allow
+  it from the terminal or the Studio. Those chat apps no longer show
+  "(no reply)" in front of it.
+
 - **The Studio is on by default, behind a sign-in token.** The daemon now
   serves the Studio at `http://127.0.0.1:7843` without any `[daemon]`
   setting. Loopback is reachable by every account on the machine, so
@@ -40,6 +49,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
   question is gone.
 
 ### Added
+
+- **Model routing is visible everywhere, not just in the CLI.**
+  - The Studio's status bar shows the model that answered the last
+    message (hover for why), and a new **Models** screen lists the
+    candidates, what's loaded, VRAM, and this conversation's model with a
+    pin control.
+  - `/models`, `/models why`, `/models refresh`, `/model <id>` and
+    `/model auto` work in chat — the REPL, terminal UI, Studio and chat
+    apps — with the same wording as aivyx-coder. (Chat without the daemon
+    isn't routed, so there they say so.)
+  - The terminal UI shows the routed model in its status bar; the REPL
+    prints `routing → <model> (<why>)` when it changes.
+  - New IPC: `ModelRouted` and `CloudConsentRequested` stream events,
+    `GetRoutingStatus` and `SetRoutingPin` queries (see
+    `docs/DAEMON_IPC.md`). Adapters that skip unknown event kinds are
+    unaffected.
+  - A new guide page, "Models & routing".
 
 - **Real help.** `aivyx-pa --help` (or `-h`, `help`) lists every command;
   `aivyx-pa <command> --help` shows that command's usage; and an
