@@ -947,10 +947,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 /// llama-server's default, as the `LlamaCpp` arm in `aivyx.rs` resolves it.
 const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
 
-/// Jan's default, as the `Jan` arm in `aivyx.rs` resolves it. Note the
-/// OpenAI provider appends `/v1/chat/completions` itself, so this default
-/// yields `.../v1/v1/...`; `init` therefore always writes Jan's server root
-/// (see [`base_url_to_write`]).
+/// Jan's default, as the `Jan` arm in `aivyx.rs` resolves it (its server
+/// root: the OpenAI provider appends `/v1/chat/completions` itself, and a
+/// trailing `/v1` in a configured address is dropped).
 const DEFAULT_JAN_BASE_URL: &str = "http://localhost:1337";
 
 /// Where `init` looks for each local runtime. The base URL is the one the
@@ -2927,6 +2926,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         );
     }
     eprintln!("You'll be prompted for a passphrase on first launch (or set AIVYX_PA_PASSPHRASE).");
+    eprintln!(
+        "Store it with `aivyx-pa keyring set` and aivyx-pa starts its background daemon \
+         (and the Studio) for you."
+    );
     // Be transparent about the unattended routines we just wrote — surprise
     // autonomous activity erodes trust.
     if cfg.provider.is_local() {

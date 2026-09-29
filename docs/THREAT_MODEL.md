@@ -428,9 +428,14 @@ explicit, documented way back to no token at all.
 daemon's stderr is not a terminal (a service manager's journal —
 readable on many distributions by the `adm`/`systemd-journal` groups —
 or `docker logs`), the banner shows only the bare URL and points at
-`aivyx-pa doctor`, which reads the `0600` file as the operator. Only an
-interactive `aivyx-pa daemon run` prints the full link, to the
-operator's own terminal. The browser's history keeps the pre-redirect
+`aivyx-pa doctor`, which reads the `0600` file as the operator. The full
+link is printed only to the operator's own terminal: by an interactive
+`aivyx-pa daemon run`, by the chat REPL's banner (only when its stdout
+is a terminal, so `aivyx-pa | tee` can't store it), and on request by
+`aivyx-pa doctor` and `aivyx-pa studio`. Ward keeps the agent's file
+tools away from the token, but an agent allowed `shell.exec` could run
+`aivyx-pa studio --token`; such an agent can already reach the `0600`
+daemon socket, so this grants it nothing new. The browser's history keeps the pre-redirect
 URL; anyone who can read the operator's browser profile already sits
 inside the trust boundary this does not claim to defend. A second
 account's own daemon can't bind the same default port while the first

@@ -151,22 +151,29 @@ fn studio_sign_in_link(
 }
 
 /// First-run coherence A1 — the REPL banner's `Studio: <link>` line when
-/// connected to a daemon: the sign-in link (the REPL is interactive, so the
-/// token may show), the bare URL under `web_ui_insecure_no_auth`, and
-/// nothing when the Studio is off or its token file doesn't exist yet.
+/// connected to a daemon: the sign-in link when `interactive` (stdout is a
+/// terminal), otherwise the bare URL and a pointer to `aivyx-pa studio`, so
+/// a redirected banner (`| tee chat.log`, `script`) never stores the token;
+/// the bare URL under `web_ui_insecure_no_auth`; nothing when the Studio is
+/// off or its token file doesn't exist yet.
 pub fn repl_studio_line(
     addr: Option<std::net::SocketAddr>,
     configured_token: Option<&str>,
     insecure_no_auth: bool,
     auto_token: Option<&str>,
+    interactive: bool,
 ) -> Option<String> {
     let addr = addr?;
+    let url = aivyx_channel::studio_token::studio_url(addr.ip(), addr.port());
     if configured_token.is_none() && insecure_no_auth {
-        let url = aivyx_channel::studio_token::studio_url(addr.ip(), addr.port());
         return Some(format!("Studio: {url}"));
     }
-    studio_sign_in_link(Some(addr), configured_token, insecure_no_auth, auto_token)
-        .map(|link| format!("Studio: {link}"))
+    let link = studio_sign_in_link(Some(addr), configured_token, insecure_no_auth, auto_token)?;
+    Some(if interactive {
+        format!("Studio: {link}")
+    } else {
+        format!("Studio: {url} (sign-in link: run `aivyx-pa studio`)")
+    })
 }
 
 /// `aivyx-pa studio [--token]` — what to print. With `token_only`, the bare
@@ -1003,21 +1010,25 @@ mod tests {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let addr = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843));
         assert_eq!(
-            repl_studio_line(addr, None, false, Some("auto")).as_deref(),
+            repl_studio_line(addr, None, false, Some("auto"), true).as_deref(),
             Some("Studio: http://127.0.0.1:7843/?token=auto")
         );
         assert_eq!(
-            repl_studio_line(addr, Some("mine"), false, Some("auto")).as_deref(),
+            repl_studio_line(addr, Some("mine"), false, Some("auto"), true).as_deref(),
             Some("Studio: http://127.0.0.1:7843/?token=mine"),
             "a configured token wins"
         );
         assert_eq!(
-            repl_studio_line(addr, None, true, None).as_deref(),
+            repl_studio_line(addr, None, true, None, true).as_deref(),
             Some("Studio: http://127.0.0.1:7843/"),
             "insecure_no_auth: the bare URL"
         );
-        assert_eq!(repl_studio_line(addr, None, false, None), None, "no token file yet");
-        assert_eq!(repl_studio_line(None, Some("mine"), false, Some("auto")), None, "Studio off");
+        assert_eq!(repl_studio_line(addr, None, false, None, true), None, "no token file yet");
+        assert_eq!(repl_studio_line(None, Some("mine"), false, Some("auto"), true), None, "Studio off");
+        // stdout redirected (`| tee chat.log`, `script`): never the token.
+        let piped = repl_studio_line(addr, None, false, Some("auto"), false).unwrap();
+        assert_eq!(piped, "Studio: http://127.0.0.1:7843/ (sign-in link: run `aivyx-pa studio`)");
+        assert!(!piped.contains("auto"));
     }
 
     #[test]

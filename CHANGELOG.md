@@ -34,7 +34,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 - **`aivyx-pa init` detects every local runtime and never defaults to a
   cloud provider.** It probes Ollama, Lemonade, llama.cpp, Jan and the
   broker, lists the ones running first, and offers their models; with
-  nothing found it asks you to choose (no pre-selected answer). Every
+  nothing found it asks you to choose (no pre-selected answer, unless
+  `--template` names a local provider). Every
   provider is listed, and the separate "Also serve the Studio web UI?"
   question is gone.
 

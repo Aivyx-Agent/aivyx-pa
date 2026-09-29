@@ -438,8 +438,8 @@ pub fn render_top_level_help() -> String {
     out.push_str("  --channel <kind>       local | telegram | discord | slack | voice.\n");
     out.push_str("  --role <name>          Use a named role for this session.\n");
     out.push_str("  --print-role <name>    Print a role's rendered envelope and exit.\n");
-    out.push_str("  --no-daemon            Force in-process mode, even if a daemon is\n");
-    out.push_str("                         reachable.\n");
+    out.push_str("  --no-daemon            Chat in-process: don't connect to a running\n");
+    out.push_str("                         daemon or start one.\n");
     out.push_str("  --provider <kind>      anthropic | openai | ollama | llamacpp | jan |\n");
     out.push_str("                         mistralrs | broker | lemonade.\n");
     out.push_str("  --mcp-server <name:command[:arg1,arg2,...]>\n");

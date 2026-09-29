@@ -1331,6 +1331,7 @@ fn run() -> Result<(), String> {
                         config.web_ui_auth_token.as_deref(),
                         config.web_ui_insecure_no_auth,
                         auto_token.as_deref(),
+                        io::stdout().is_terminal(),
                     )
                 };
                 let reached = rt.block_on(repl_daemon::start_and_connect(
@@ -8871,7 +8872,14 @@ async fn run_async(
     // file. A damaged token file keeps the Studio off (with the
     // reason) rather than serving it unauthenticated or replacing the
     // file; the rest of the daemon runs on.
-    let (studio_port, studio_token) = match cli_web_ui_port.or(config_web_ui_port) {
+    // Only `daemon run` serves the Studio: an in-process session must not
+    // create the token file or report on a Studio it doesn't run.
+    let studio_port_wanted = if mode == CliMode::DaemonRun {
+        cli_web_ui_port.or(config_web_ui_port)
+    } else {
+        None
+    };
+    let (studio_port, studio_token) = match studio_port_wanted {
         None => (None, None),
         Some(port) => match aivyx_channel::studio_token::effective_token(
             config_web_ui_auth_token,
