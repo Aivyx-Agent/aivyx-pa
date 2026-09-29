@@ -646,6 +646,9 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
             // value, so it can be compared against the turn's own
             // authoritative outcome.
             let displayed = concat_text_events(&events);
+            let consent_stop = events
+                .iter()
+                .any(|e| matches!(e, StreamEventPayload::CloudConsentRequested { .. }));
 
             // Coalesce consecutive Text events first: the daemon
             // streams token-level chunks ("Hi", " there", "!"), and
@@ -691,7 +694,10 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
                 }
             }
             if let Some(note) = turn_outcome_correction(&displayed, &outcome) {
-                state.push_line(ChatLine::new(LineKind::System, note));
+                // A consent stop's outcome is the per-channel request text:
+                // show it as the highlighted consent notice, not a plain line.
+                let kind = if consent_stop { LineKind::Consent } else { LineKind::System };
+                state.push_line(ChatLine::new(kind, note));
             }
             state.status.working = false;
         }
@@ -841,18 +847,11 @@ pub fn lines_from_event(event: &StreamEventPayload) -> Vec<ChatLine> {
         // belongs in the status bar (`update`'s `TurnFinished` arm reads
         // it straight off the event, next to this function).
         StreamEventPayload::ModelRouted { .. } => return Vec::new(),
-        // Routing visibility B3 — a highlighted notice, styled like
-        // `LineKind::Gate` (see `LineKind::Consent`'s own doc comment).
-        // Deliberately short: the turn's own outcome text already
-        // carries the full request (why, estimated tokens, how to allow
-        // it — worded per channel by the daemon), so this just flags
-        // that a stop happened without repeating that text.
-        StreamEventPayload::CloudConsentRequested { model, endpoint, .. } => {
-            return vec![ChatLine::new(
-                LineKind::Consent,
-                format!("cloud consent needed — `{model}` (your `{endpoint}` endpoint)"),
-            )];
-        }
+        // Routing visibility B3 — no line of its own: the turn's outcome
+        // carries the full per-channel request text, and `update`'s
+        // `TurnFinished` arm shows that once, highlighted as
+        // `LineKind::Consent`, when this event is present.
+        StreamEventPayload::CloudConsentRequested { .. } => return Vec::new(),
     };
 
     let rendered = event.render_for_cli();
@@ -894,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn cloud_consent_requested_gives_one_highlighted_notice_line() {
+    fn a_consent_stop_shows_its_full_text_once_highlighted() {
         let consent = StreamEventPayload::CloudConsentRequested {
             model: "claude-sonnet-4-5".into(),
             endpoint: "anthropic".into(),
@@ -902,16 +901,27 @@ mod tests {
             estimated_tokens: 12_578,
             can_allow_here: true,
         };
-        let lines = lines_from_event(&consent);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].kind, LineKind::Consent);
-        assert!(lines[0].text.contains("claude-sonnet-4-5"), "{lines:?}");
-        assert!(lines[0].text.contains("anthropic"), "{lines:?}");
-        // The full request (why, estimated tokens, how to allow it) is
-        // the outcome's job, not this notice's — never duplicate it here.
-        assert!(!lines[0].text.contains("no local model"), "{lines:?}");
-        assert!(!lines[0].text.contains("12578"), "{lines:?}");
-        assert!(!lines[0].text.contains("12,578"), "{lines:?}");
+        // The event alone adds no line: the outcome carries the text.
+        assert!(lines_from_event(&consent).is_empty());
+        let text = "This needs a cloud model: `claude-sonnet-4-5` (your `anthropic` endpoint), \
+                    because no local model can handle this request. About 12,578 tokens — \
+                    this conversation plus the assistant's instructions — would be sent. \
+                    Send /allow-cloud to allow it for this conversation, then resend your message.";
+        let s = update(
+            AppState::new(),
+            Msg::TurnFinished {
+                events: vec![consent],
+                outcome: format!("completed: {text}"),
+            },
+        );
+        let consent_lines: Vec<_> = s.history.iter().filter(|l| l.kind == LineKind::Consent).collect();
+        assert_eq!(consent_lines.len(), 1, "{:?}", s.history);
+        assert_eq!(consent_lines[0].text, text);
+        assert!(
+            !s.history.iter().any(|l| l.kind == LineKind::System && l.text.contains("cloud model")),
+            "no unhighlighted duplicate: {:?}",
+            s.history
+        );
     }
 
     #[test]

@@ -33,6 +33,24 @@ use aivyx_route::{Availability, ModelKey, ModelProfile, ResidencyNote, Residency
 pub const ROUTING_OFF_REPLY: &str =
     "Model routing commands are not available here — they need `[routing] enabled = true`.";
 
+/// The in-process REPL's reply to every routing command when routing is
+/// on: its own turns are never routed (only daemon conversations are — the
+/// in-process planner attaches no route hint), so listing or pinning here
+/// would describe, or change, a router this session doesn't use.
+pub const IN_PROCESS_REPLY: &str = "Model routing applies to conversations through the daemon, and \
+     this session is running without it. Start it with `aivyx-pa daemon run` (or store your \
+     passphrase with `aivyx-pa keyring set` so aivyx-pa starts it), then use /models and /model there.";
+
+/// Is `input` a routing command (whatever the router)? `/models`,
+/// `/models refresh`, `/models why`, and `/model` with anything after it.
+/// Any other `/models <arg>` is a normal turn.
+pub fn is_command(input: &str) -> bool {
+    match parse_slash_command(input, "/models") {
+        Some(arg) => matches!(arg, "" | "refresh" | "why"),
+        None => parse_slash_command(input, "/model").is_some(),
+    }
+}
+
 /// `None` when `input` is not a routing command — a normal turn, passed
 /// through to the model as usual. An unrecognized `/models <arg>` is
 /// likewise not a command (`/models please` is a normal turn, unlike
@@ -41,6 +59,9 @@ pub const ROUTING_OFF_REPLY: &str =
 /// string may be a model id, so it's always an attempt to resolve one,
 /// same as `aivyx-coder`.
 pub async fn run(routed: Option<&RoutedProvider>, session: &str, input: &str) -> Option<String> {
+    if !is_command(input) {
+        return None;
+    }
     if let Some(arg) = parse_slash_command(input, "/models") {
         let Some(routed) = routed else {
             return Some(ROUTING_OFF_REPLY.to_string());
@@ -192,6 +213,16 @@ fn render_residency(snapshot: &ResidencySnapshot, profiles: &[ModelProfile]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_command_matches_only_the_real_commands() {
+        for cmd in ["/models", "/models refresh", "/models why", "/model", "/model big", "/model auto"] {
+            assert!(is_command(cmd), "{cmd}");
+        }
+        for not in ["/models please", "/modelsx", "hello /models", "/allow-cloud"] {
+            assert!(!is_command(not), "{not}");
+        }
+    }
     use std::sync::Arc;
 
     use aivyx_llm::{

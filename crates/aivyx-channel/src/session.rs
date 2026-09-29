@@ -587,13 +587,18 @@ where
 
         // Routing visibility B2 — `/models`/`/model` are whole-message
         // commands here too: never reach the model (nor count as a
-        // turn). `routed` is `Some` only when `[routing] enabled = true`
-        // gave this session a router to introspect; without one the
-        // reply says so, same wording the daemon gives.
+        // turn). This session's own turns are never routed (the
+        // in-process planner attaches no route hint; routing covers
+        // daemon conversations), so with routing on the reply says that
+        // rather than listing or pinning a router these turns don't use;
+        // with routing off, the same "turn it on" reply the daemon gives.
         let routing_session_id = channel.session_id().to_string();
-        if let Some(reply) =
-            crate::routing_commands::run(routed.as_deref(), &routing_session_id, input).await
-        {
+        if crate::routing_commands::is_command(input) {
+            let reply = if routed.is_some() {
+                crate::routing_commands::IN_PROCESS_REPLY
+            } else {
+                crate::routing_commands::ROUTING_OFF_REPLY
+            };
             let writer = channel.writer_handle();
             if let Ok(mut guard) = writer.lock() {
                 let _ = writeln!(&mut *guard, "{reply}");

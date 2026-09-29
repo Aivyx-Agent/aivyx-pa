@@ -514,10 +514,11 @@ fn empty_session_config(storage: Arc<dyn Storage>) -> SessionConfig {
     }
 }
 
-/// `/models` is a whole-message command in-process too: never reaches the
-/// model, never counts as a turn.
+/// In-process chat is never routed (only daemon conversations are), so
+/// `/models` explains that instead of listing a router this session doesn't
+/// use — still a whole-message command: never reaches the model or a turn.
 #[tokio::test]
-async fn in_process_models_lists_candidates_without_running_a_turn() {
+async fn in_process_models_explains_that_routing_needs_the_daemon() {
     let provider = ScriptedProvider::new(Vec::new());
     let audit_log = HmacChainLog::new([42u8; 32].to_vec());
     let audit_bridge = Arc::new(AuditBridge::new(audit_log));
@@ -543,15 +544,16 @@ async fn in_process_models_lists_candidates_without_running_a_turn() {
 
     assert_eq!(report.turns_run, 0, "/models is not a turn");
     let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
-    assert!(output.contains("Routing candidates"), "{output:?}");
-    assert!(output.contains("small@default"), "{output:?}");
-    assert!(output.contains("big@gpu"), "{output:?}");
+    assert!(
+        output.contains(aivyx_channel::routing_commands::IN_PROCESS_REPLY),
+        "{output:?}"
+    );
 }
 
-/// `/model <id>` pins the conversation and `/model auto` clears it —
-/// changing the very `Router` the daemon would introspect, in-process.
+/// `/model <id>` in-process never claims a pin: this session's turns aren't
+/// routed, so a pin would have no effect. The router is left untouched.
 #[tokio::test]
-async fn in_process_model_pin_and_auto_change_the_router() {
+async fn in_process_model_never_claims_a_pin_that_would_do_nothing() {
     let provider = ScriptedProvider::new(Vec::new());
     let audit_log = HmacChainLog::new([42u8; 32].to_vec());
     let audit_bridge = Arc::new(AuditBridge::new(audit_log));
@@ -579,14 +581,13 @@ async fn in_process_model_pin_and_auto_change_the_router() {
 
     assert_eq!(report.turns_run, 0);
     let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
-    assert!(output.contains("Pinned this conversation to `big@gpu`."), "{output:?}");
-    assert!(
-        output.contains(
-            "Pin cleared; routing chooses this conversation's model again on the next call."
-        ),
+    assert!(!output.contains("Pinned"), "{output:?}");
+    assert_eq!(
+        output.matches(aivyx_channel::routing_commands::IN_PROCESS_REPLY).count(),
+        2,
         "{output:?}"
     );
-    assert_eq!(routed.router().pinned(&session_id), None, "auto cleared it");
+    assert_eq!(routed.router().pinned(&session_id), None, "nothing was pinned");
 }
 
 /// Without a router (routing off, or none threaded through), the reply
