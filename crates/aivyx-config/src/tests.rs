@@ -11308,6 +11308,19 @@ fn phase_122_detect_returns_none_for_bare_family_without_digits() {
 #[test]
 fn phase_122_detect_returns_none_for_empty_input() {
     assert!(crate::detect_model_family("").is_none());
+    // Hugging Face pulls through Ollama: last path segment, any case.
+    assert_eq!(
+        crate::detect_model_family("hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M").as_deref(),
+        Some("qwen3")
+    );
+    assert_eq!(
+        crate::detect_model_family("hf.co/unsloth/gemma-3-12b-it-GGUF").as_deref(),
+        Some("gemma3")
+    );
+    assert_eq!(
+        crate::detect_model_family("hf.co/ggml-org/gpt-oss-20b-GGUF").as_deref(),
+        Some("gpt-oss")
+    );
     assert!(crate::detect_model_family(":tag-only").is_none());
 }
 

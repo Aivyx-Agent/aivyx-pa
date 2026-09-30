@@ -3855,8 +3855,12 @@ impl OllamaFamilyStrategy {
 /// model surface.
 pub fn detect_model_family(model: &str) -> Option<String> {
     // Ollama models are `<family>:<tag>`. Split on `:` and
-    // take the family part.
-    let family_part = model.split(':').next()?;
+    // take the family part. Ollama also pulls straight from Hugging
+    // Face (`hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M`): the family is the last
+    // path segment, and HF names are capitalized.
+    let base = model.rsplit('/').next()?;
+    let family_part = base.split(':').next()?.to_ascii_lowercase();
+    let family_part = family_part.as_str();
     if family_part.is_empty() {
         return None;
     }
@@ -3911,7 +3915,7 @@ pub fn detect_model_family(model: &str) -> Option<String> {
     // gpt-oss:20b, gpt-oss:120b — no numbered generations to date
     // (unlike qwen/gemma/llama), so match the literal family-part
     // string directly rather than extracting a digit.
-    if family_part == "gpt-oss" {
+    if family_part == "gpt-oss" || family_part.starts_with("gpt-oss-") {
         return Some("gpt-oss".to_string());
     }
 

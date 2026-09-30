@@ -96,7 +96,7 @@ impl ScheduleCreateTool {
                 "properties": {
                     "cron": {
                         "type": "string",
-                        "description": "Cron expression (7-field: sec min hour dom month dow year). Example: \"0 0 9 * * * *\" for daily at 09:00 UTC."
+                        "description": "Cron expression (7-field: sec min hour dom month dow year), in the operator's LOCAL time — don't convert to UTC. Examples: \"0 0 9 * * * *\" daily at 09:00; \"0 30 8 * * Mon *\" Mondays at 08:30; \"0 0 18 * * Mon-Fri *\" weekdays at 18:00. Write days as names (Mon…Sun): numbered days count from Sunday = 1, so 1 is NOT Monday."
                     },
                     "role": {
                         "type": "string",
@@ -146,7 +146,8 @@ impl Tool for ScheduleCreateTool {
          durable team mission (the Nonagon, always the daemon's default \
          team) when the schedule fires, instead of a single-agent turn -- \
          the two are mutually exclusive. The cron expression uses 7 \
-         fields: sec min hour dom month dow year. Returns the \
+         fields (sec min hour dom month dow year) in the operator's local \
+         time, with days written as names (Mon…Sun). Returns the \
          schedule_id for future reference."
     }
 
@@ -627,7 +628,7 @@ impl ScheduleUpdateTool {
                     },
                     "cron": {
                         "type": "string",
-                        "description": "New cron expression (7-field: sec min hour dom month dow year)."
+                        "description": "New cron expression (7-field: sec min hour dom month dow year), in the operator's LOCAL time; write days as names (Mon…Sun) — numbered days count from Sunday = 1."
                     },
                     "prompt": {
                         "type": "string",
