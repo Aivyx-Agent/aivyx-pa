@@ -37,6 +37,7 @@ use aivyx_ipc::graph::{GraphEntity, GraphTriple};
 use std::collections::{HashMap, HashSet};
 
 /// End-user guide content + markdown rendering for the Guide screen.
+mod cron_text;
 mod guide;
 /// Routing visibility B4 — pure helpers for the Models screen, the status
 /// bar's model segment and the cloud-consent card.
@@ -1352,7 +1353,7 @@ fn App() -> Element {
                 main { class: "view fade-in", id: "main-content", tabindex: "-1",
                     match view() {
                         View::Command => rsx! {
-                            CommandPanel { missions: missions(), dashboard: dashboard(), connected: connected() }
+                            CommandPanel { missions: missions(), dashboard: dashboard(), connected: connected(), view }
                         },
                         View::Missions => rsx! { MissionsPanel { missions: missions() } },
                         View::MissionControl => rsx! {
@@ -1772,7 +1773,12 @@ fn StatusBar(connected: bool, agent_name: String, model: routing::StatusModel) -
 // ---------------------------------------------------------------------------
 
 #[component]
-fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected: bool) -> Element {
+fn CommandPanel(
+    missions: Vec<TeamMissionView>,
+    dashboard: Dashboard,
+    connected: bool,
+    view: Signal<View>,
+) -> Element {
     // Until the first dashboard snapshot arrives, show a skeleton instead of
     // flashing placeholder zeros (which then pop to real values on load).
     if !dashboard.loaded {
@@ -1786,7 +1792,26 @@ fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected:
     let routines = dashboard.schedules.clone();
     let routines_total = routines.len();
     let routines_on = routines.iter().filter(|r| r.enabled).count();
+    let first_visit = missions.is_empty() && nothing_has_happened_yet(&dashboard);
+    let name = dashboard
+        .assistant_name
+        .clone()
+        .unwrap_or_else(|| "your assistant".to_string());
     rsx! {
+        if first_visit {
+            div { class: "glass-card welcome-card",
+                h3 { "Start here: say hi to {name}" }
+                p { class: "muted",
+                    "Chat is where you ask for things — try “What can you help me with?” "
+                    "This page fills in as it works: missions, background routines and "
+                    "an audit trail of everything it does."
+                }
+                div { class: "welcome-actions",
+                    button { class: "btn", onclick: move |_| { let mut v = view; v.set(View::Chat); }, "Open Chat" }
+                    button { class: "btn ghost", onclick: move |_| { let mut v = view; v.set(View::Guide); }, "Read the guide" }
+                }
+            }
+        }
         div { class: "stat-row stat-row-5",
             StatCard { icon: ICON_MISSIONS, label: "Missions", value: "{missions.len()}", tone: None }
             StatCard { icon: ICON_AGENTS, label: "Active", value: "{active}", tone: None }
@@ -1866,6 +1891,58 @@ fn CommandPanel(missions: Vec<TeamMissionView>, dashboard: Dashboard, connected:
                 }
             }
         }
+    }
+}
+
+/// No conversation or task has run yet: the audit feed holds the whole
+/// chain (so nothing older is hiding) and none of it is a turn. Setup
+/// writes a few entries of its own (persona, settings), which don't count.
+fn nothing_has_happened_yet(dashboard: &Dashboard) -> bool {
+    dashboard.audit_total <= u64::from(AUDIT_FEED_N)
+        && !dashboard
+            .audit_entries
+            .iter()
+            .any(|e| e.event_type == "TurnStarted" || e.event_type == "TurnEnded")
+}
+
+#[cfg(test)]
+mod first_visit_tests {
+    use super::*;
+
+    fn entry(event_type: &str) -> AuditEntrySummary {
+        AuditEntrySummary {
+            seq: 0,
+            appended_at_unix_ms: 0,
+            event_type: event_type.into(),
+            event: serde_json::Value::Null,
+            mac_hex: String::new(),
+        }
+    }
+
+    #[test]
+    fn setup_entries_alone_still_count_as_a_first_visit() {
+        let d = Dashboard {
+            audit_entries: vec![entry("PersonaSeeded"), entry("ConfigChanged")],
+            audit_total: 2,
+            ..Default::default()
+        };
+        assert!(nothing_has_happened_yet(&d));
+    }
+
+    #[test]
+    fn a_turn_or_a_longer_chain_means_it_has_been_used() {
+        let d = Dashboard {
+            audit_entries: vec![entry("PersonaSeeded"), entry("TurnStarted")],
+            audit_total: 2,
+            ..Default::default()
+        };
+        assert!(!nothing_has_happened_yet(&d));
+        let d = Dashboard {
+            audit_entries: vec![entry("ConfigChanged")],
+            audit_total: u64::from(AUDIT_FEED_N) + 1,
+            ..Default::default()
+        };
+        assert!(!nothing_has_happened_yet(&d));
     }
 }
 
@@ -1997,7 +2074,7 @@ fn RoutineRow(routine: ScheduleView) -> Element {
             div { class: "row1",
                 span { class: if routine.enabled { "dot live" } else { "dot off" } }
                 span { class: "name", "{routine.name}" }
-                span { class: "label-tech cron", "{routine.cron}" }
+                span { class: "label-tech cron", title: "{routine.cron}", {cron_text::describe_cron(&routine.cron).unwrap_or_else(|| routine.cron.clone())} }
             }
             div { class: "row2 label-tech",
                 span { "next " span { class: "v", "{next}" } }
@@ -2217,7 +2294,7 @@ fn SchedulesPanel() -> Element {
                                             div { class: "row1",
                                                 span { class: "dot live" }
                                                 span { class: "name", "{r.name}" }
-                                                span { class: "label-tech", style: "opacity:0.7;", "{r.cron}" }
+                                                span { class: "label-tech", style: "opacity:0.7;", title: "{r.cron}", {cron_text::describe_cron(&r.cron).unwrap_or_else(|| r.cron.clone())} }
                                                 span { class: if r.enabled { "chip success" } else { "chip" }, if r.enabled { "enabled" } else { "disabled" } }
                                             }
                                             div { style: "display:flex; gap:8px; margin-top:8px;",
@@ -2376,7 +2453,7 @@ fn ScheduleAdminRow(schedule: ScheduleView) -> Element {
                 if awaiting {
                     span { class: "label-tech", style: "color: var(--warn, #d97706);", "awaiting approval" }
                 }
-                span { class: "label-tech cron", "{schedule.cron}" }
+                span { class: "label-tech cron", title: "{schedule.cron}", {cron_text::describe_cron(&schedule.cron).unwrap_or_else(|| schedule.cron.clone())} }
             }
             if !schedule.prompt.is_empty() {
                 div { class: "row2 label-tech", style: "opacity:0.8;",
@@ -2429,6 +2506,61 @@ fn ScheduleAdminRow(schedule: ScheduleView) -> Element {
     }
 }
 
+/// A reader's name for an `AuditEvent` variant label (the feed showed
+/// "LlmCost", "ConversationTainted"). Unknown labels pass through, so a
+/// new variant still shows up — just by its code name.
+fn audit_event_label(event_type: &str) -> &str {
+    match event_type {
+        "ToolCall" => "Tool used",
+        "ScopeDenied" => "Permission denied",
+        "RateLimited" => "Rate limited",
+        "TurnStarted" => "Reply started",
+        "TurnEnded" => "Reply finished",
+        "LlmCost" => "Model usage",
+        "ModelRouted" => "Model chosen",
+        "ConversationTainted" => "Kept local (sensitive data)",
+        "CloudEscalation" => "Cloud model decision",
+        "CloudConsentGranted" => "Cloud use allowed",
+        "EscalationArmed" => "Cloud fallback armed",
+        "MemoryAccess" => "Memory used",
+        "SkillInvocation" => "Skill used",
+        "AutoNotifyDispatched" => "Notification sent",
+        "SkillAutoProposal" => "Skill suggested",
+        "ProfileHintApplied" => "Profile updated",
+        "RoleDraftImported" => "Role imported",
+        "HeadlessRefusal" => "Declined while unattended",
+        "ConfigChanged" => "Settings changed",
+        "PersonaSeeded" => "Persona set up",
+        "DocumentMutated" => "Document changed",
+        "ScheduleMutated" => "Routine changed",
+        "TeamMissionChannelTriggered" => "Mission started from chat",
+        "TeamMissionChannelDenied" => "Mission from chat refused",
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod audit_event_label_tests {
+    use super::audit_event_label;
+
+    #[test]
+    fn every_audit_event_variant_has_a_readable_name() {
+        // Keep in step with `aivyx_audit::AuditEvent`.
+        for v in [
+            "ToolCall", "ScopeDenied", "RateLimited", "TurnStarted", "TurnEnded",
+            "LlmCost", "ModelRouted", "ConversationTainted", "CloudEscalation",
+            "CloudConsentGranted", "EscalationArmed", "MemoryAccess", "SkillInvocation",
+            "AutoNotifyDispatched", "SkillAutoProposal", "ProfileHintApplied",
+            "RoleDraftImported", "HeadlessRefusal", "ConfigChanged", "PersonaSeeded",
+            "DocumentMutated", "ScheduleMutated", "TeamMissionChannelTriggered",
+            "TeamMissionChannelDenied",
+        ] {
+            assert_ne!(audit_event_label(v), v, "{v} has no readable name");
+        }
+        assert_eq!(audit_event_label("SomethingNew"), "SomethingNew");
+    }
+}
+
 #[component]
 fn AuditFeed(entries: Vec<AuditEntrySummary>) -> Element {
     rsx! {
@@ -2439,7 +2571,7 @@ fn AuditFeed(entries: Vec<AuditEntrySummary>) -> Element {
                 // entries arrive oldest→newest; show newest first.
                 for e in entries.iter().rev() {
                     div { class: "audit-row",
-                        span { class: "ev", "{e.event_type}" }
+                        span { class: "ev", title: "{e.event_type}", "{audit_event_label(&e.event_type)}" }
                         span { class: "when label-tech", "{rel_time(e.appended_at_unix_ms)}" }
                         span { class: "seq label-tech", "#{e.seq}" }
                     }
