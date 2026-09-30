@@ -69,7 +69,8 @@ relationship they want. Write in the assistant's own framing \
 (warm, specific, never generic). Output EXACTLY these six \
 labels, one per line, nothing else — no preamble, no commentary:\n\
 ASSISTANT_NAME: <a short, friendly name>\n\
-OPERATOR_PROFILE: <one sentence describing who the operator is>\n\
+OPERATOR_PROFILE: <one sentence about the PERSON being helped (not the assistant) — their \
+work or needs, only from what they said; 'none' if they said nothing about themselves>\n\
 COMMUNICATION_STYLE: <a short phrase: tone, verbosity, warmth>\n\
 PRIMARY_USE_CASES: <1-3 comma-separated archetypes>\n\
 BEHAVIORAL_PREFERENCES: <comma-separated voice/judgment defaults, or 'none'>\n\
@@ -192,6 +193,15 @@ pub async fn draft_identity(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_operator_field_is_about_the_person_not_the_assistant() {
+        // A draft once described the assistant itself here ("A calm,
+        // reliable partner…"), from a prompt asking for the assistant's
+        // framing. The field is the person, from what they said, or none.
+        assert!(DRAFT_SYSTEM_PROMPT.contains("OPERATOR_PROFILE: <one sentence about the PERSON"));
+        assert!(DRAFT_SYSTEM_PROMPT.contains("'none' if they said nothing about themselves"));
+    }
+
     use super::*;
 
     #[test]

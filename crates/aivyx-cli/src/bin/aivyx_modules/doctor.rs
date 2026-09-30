@@ -711,9 +711,10 @@ async fn check_memory(cfg: &AivyxConfig) -> bool {
             );
         } else {
             println!(
-                "  semantic memory is off (no [embedding] provider)\n     → run \
-                 `aivyx-pa init`, or add an [embedding] section (a local Ollama running \
-                 {model}, or OpenAI) to enable recall.",
+                "  memory recall is off (no [embedding] provider, no [memory] profile)\n     → \
+                 set `profile = \"lite\"` under [memory] for keyword recall with no setup, \
+                 or add an [embedding] section (a local Ollama running {model}, or OpenAI) \
+                 for recall by meaning.",
                 model = crate::init::RECOMMENDED_EMBED_MODEL
             );
         }

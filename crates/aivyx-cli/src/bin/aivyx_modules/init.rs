@@ -268,9 +268,9 @@ async fn decide_embedding(
         | Provider::MistralRs => {
             writeln!(
                 writer,
-                "\nNote: semantic memory needs an embedding model, so it stays off for \
-                 now. Add an [embedding] provider (e.g. a local Ollama running \
-                 {RECOMMENDED_EMBED_MODEL}) to enable it."
+                "\nMemory: your assistant recalls by keywords for now (no extra model \
+                 needed). For recall by meaning, add an [embedding] section later — a \
+                 local Ollama running {RECOMMENDED_EMBED_MODEL}, or OpenAI."
             )
             .map_err(|e| format!("write error: {e}"))?;
             Ok(None)
@@ -1236,7 +1236,12 @@ async fn select_server_model(
     let name = provider.label();
     match list_server_models(provider, base).await {
         Ok(models) if !models.is_empty() => {
-            writeln!(writer, "\nModels on {name}:").map_err(|e| format!("write error: {e}"))?;
+            writeln!(
+                writer,
+                "\nModels on {name} (smaller ones answer faster; bigger ones plan and use \
+                 tools better — you can change it later):"
+            )
+            .map_err(|e| format!("write error: {e}"))?;
             let opts: Vec<&str> = models.iter().map(String::as_str).collect();
             let idx = prompt_choice("Model", &opts, 0, reader, writer)?;
             return Ok(models[idx].clone());
@@ -1521,9 +1526,8 @@ fn render_toml(cfg: &InitConfig) -> String {
     out
 }
 
-/// Chapter Engram — render `[embedding]` + `[memory] profile = smart`. Empty
-/// string when the wizard resolved no embedding provider (semantic memory stays
-/// off — the profile would be inert anyway).
+/// Chapter Engram — render `[embedding]` + `[memory] profile = smart`; with no
+/// embedding provider, just `[memory] profile = lite` (First-run G).
 ///
 /// Shared by `render_toml` and the `--template` path (backlog #3): a
 /// `--template` init used to skip semantic memory entirely. Without
@@ -1534,7 +1538,10 @@ fn render_toml(cfg: &InitConfig) -> String {
 /// sweeps spend tokens — flipping the default would surprise-bill upgrades).
 fn render_embedding_section(cfg: &InitConfig) -> String {
     let Some(emb) = &cfg.embedding else {
-        return String::new();
+        // No embedding model: Chapter Ember's lite recall (keyword +
+        // co-occurrence over existing memory — no model calls, no cost), so a
+        // new agent still recalls. `smart` needs `[embedding]`.
+        return "\n[memory]\nprofile = \"lite\"\n".to_string();
     };
     let mut out = format!(
         "\n[embedding]\nbase_url = \"{}\"\nmodel = \"{}\"\ndimensions = {}\n",
@@ -1939,29 +1946,29 @@ fn review_draft(
 ) -> Result<IdentityFields, String> {
     Ok(IdentityFields {
         assistant_name: review_scalar(reader, writer, "Name", draft.assistant_name)?,
-        operator_profile: review_scalar(reader, writer, "Who you are", draft.operator_profile)?,
+        operator_profile: review_scalar(reader, writer, "About you", draft.operator_profile)?,
         communication_style: review_scalar(
             reader,
             writer,
-            "How I'll talk",
+            "How it talks",
             draft.communication_style,
         )?,
         primary_use_cases: review_list(
             reader,
             writer,
-            "What I'm here for",
+            "Here for",
             draft.primary_use_cases,
         )?,
         behavioral_preferences: review_list(
             reader,
             writer,
-            "What I'll tend to do",
+            "Tends to",
             draft.behavioral_preferences,
         )?,
         behavioral_constraints: review_list(
             reader,
             writer,
-            "What I'll never do",
+            "Never",
             draft.behavioral_constraints,
         )?,
     })
@@ -2104,30 +2111,26 @@ impl IdentityFields {
 fn render_identity_summary(f: &IdentityFields) -> String {
     let name = f.assistant_name.as_deref().unwrap_or("Aivyx PA");
     let mut s = String::from("\n— Meet your assistant —\n\n");
-    s.push_str(&format!("  I'm {name}.\n"));
+    // Labelled lines, not sentences: a draft's own grammar ("A calm,
+    // reliable partner…") can't be spliced into "You're {who}." cleanly.
+    let mut line = |label: &str, value: &str| {
+        s.push_str(&format!("  {label:<14} {value}\n"));
+    };
+    line("Name", name);
     if let Some(who) = &f.operator_profile {
-        s.push_str(&format!("  You're {who}.\n"));
+        line("About you", who);
     }
     if let Some(style) = &f.communication_style {
-        s.push_str(&format!("  I'll talk {style}.\n"));
+        line("How it talks", style);
     }
-    if !f.primary_use_cases.is_empty() {
-        s.push_str(&format!(
-            "  I'm here for {}.\n",
-            f.primary_use_cases.join(", ")
-        ));
-    }
-    if !f.behavioral_preferences.is_empty() {
-        s.push_str(&format!(
-            "  I'll tend to {}.\n",
-            f.behavioral_preferences.join(", ")
-        ));
-    }
-    if !f.behavioral_constraints.is_empty() {
-        s.push_str(&format!(
-            "  I'll never {}.\n",
-            f.behavioral_constraints.join(", ")
-        ));
+    for (label, list) in [
+        ("Here for", &f.primary_use_cases),
+        ("Tends to", &f.behavioral_preferences),
+        ("Never", &f.behavioral_constraints),
+    ] {
+        if !list.is_empty() {
+            line(label, &list.join(", "));
+        }
     }
     s
 }
@@ -2882,8 +2885,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // choice picks the fs_root boundary + the confirm-first posture; the
     // capability/audit/trust-tier machinery is unchanged, and remote
     // channels stay tier-attenuated regardless.
+    writeln!(writer, "\nHow much of your machine should your assistant be able to reach?")
+        .map_err(|e| format!("write error: {e}"))?;
     let level_idx = prompt_choice(
-        "Access level — how much of your machine can the agent reach?",
+        "Access level",
         &[
             "sandbox   — a dedicated sandbox directory (safest; default)",
             "workspace — a single project directory you choose",
@@ -2957,7 +2962,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     };
 
     let storage_path = prompt_line(
-        &format!("Storage path [{default_storage}]: "),
+        &format!("Where to keep its encrypted data [{default_storage}]: "),
         &mut reader,
         &mut writer,
     )?;
@@ -3317,19 +3322,21 @@ mod tests {
         };
         let s = render_identity_summary(&f);
         assert!(s.contains("Meet your assistant"));
-        assert!(s.contains("I'm Sage."));
-        assert!(s.contains("You're a Rust engineer."));
-        assert!(s.contains("I'll talk warm but concise."));
-        assert!(s.contains("I'm here for coding, review."));
-        assert!(s.contains("I'll never never force push."));
-        // Empty preferences line is omitted.
-        assert!(!s.contains("I'll tend to"));
+        // Labelled lines read right whatever the draft's grammar — the old
+        // sentences gave "You're A calm…" and "I'll never never force push".
+        assert!(s.contains("  Name           Sage\n"), "{s}");
+        assert!(s.contains("  About you      a Rust engineer\n"), "{s}");
+        assert!(s.contains("  How it talks   warm but concise\n"), "{s}");
+        assert!(s.contains("  Here for       coding, review\n"), "{s}");
+        assert!(s.contains("  Never          never force push\n"), "{s}");
+        // Empty lines are omitted.
+        assert!(!s.contains("Tends to"), "{s}");
     }
 
     #[test]
     fn identity_summary_falls_back_to_default_name() {
         let s = render_identity_summary(&IdentityFields::default());
-        assert!(s.contains("I'm Aivyx PA."));
+        assert!(s.contains("  Name           Aivyx PA\n"), "{s}");
     }
 
     #[tokio::test]
@@ -3930,11 +3937,12 @@ mod tests {
         assert!(toml.contains("profile = \"smart\""), "{toml}");
     }
 
-    /// Regression guard: no embedding provider ⇒ neither `[embedding]` nor
-    /// `[memory]` is rendered — byte-for-byte the pre-Engram behavior, so
-    /// existing-style configs are untouched.
+    /// No embedding provider ⇒ no `[embedding]`, but `[memory] profile =
+    /// "lite"` (Chapter Ember: keyword + co-occurrence recall, no model calls,
+    /// no cost) so a new agent recalls from day one instead of doctor saying
+    /// "semantic memory is off → run `aivyx-pa init`" right after init.
     #[test]
-    fn render_without_embedding_omits_embedding_and_memory() {
+    fn render_without_embedding_writes_lite_memory() {
         let cfg = init_config_no_profile(
             Provider::Anthropic,
             "claude-sonnet-4-6",
@@ -3945,7 +3953,9 @@ mod tests {
         );
         let toml = render_toml(&cfg);
         assert!(!toml.contains("[embedding]"), "{toml}");
-        assert!(!toml.contains("[memory]"), "{toml}");
+        assert!(toml.contains("[memory]\nprofile = \"lite\""), "{toml}");
+        let loaded: toml_edit::DocumentMut = toml.parse().unwrap();
+        assert_eq!(loaded["memory"]["profile"].as_str(), Some("lite"));
     }
 
     /// The generated local config round-trips through the loader: `[embedding]`

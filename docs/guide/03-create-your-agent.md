@@ -11,7 +11,7 @@ It has three steps: **Profile → Persona seed → Access**.
 The Profile is the identity *you declare*. It has six parts:
 
 1. **Name** — what you'll call your assistant.
-2. **Who you are** — a little about you, so it can tailor how it helps.
+2. **About you** — a little about you, so it can tailor how it helps.
 3. **How it talks** — tone and style (warm and chatty, terse and technical, …).
 4. **What it's for** — the kinds of tasks you want help with.
 5. **What it tends to do** — default behaviors and habits you want.
