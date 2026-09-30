@@ -250,7 +250,8 @@ pub fn collect_credentials(
     w(writer, &format!("\n— Connect {} —\n", svc.display))?;
     w(
         writer,
-        "You'll need an OAuth app from Google Cloud Console:",
+        "You'll need an OAuth client from Google Cloud Console (one-time, \
+         about five minutes):",
     )?;
     w(
         writer,
@@ -267,33 +268,49 @@ pub fn collect_credentials(
     )?;
     w(
         writer,
-        "  3. APIs & Services → Credentials → Create credentials → \
-         OAuth client ID.",
+        "  3. Set up the OAuth consent screen (APIs & Services → OAuth \
+         consent screen): any app name, your email, audience External.",
     )?;
-    w(writer, "  4. Application type: Desktop app.")?;
     w(
         writer,
-        &format!(
-            "  5. Add this Authorized redirect URI: {}",
-            svc.redirect_uri()
-        ),
+        "  4. Under Audience → Test users, add your own Google account as a \
+         test user — until then Google refuses the sign-in.",
     )?;
-    w(writer, "  6. Copy the Client ID and Client secret below.\n")?;
+    w(
+        writer,
+        "  5. APIs & Services → Credentials → Create credentials → \
+         OAuth client ID, Application type: Desktop app.",
+    )?;
+    w(
+        writer,
+        "  6. Copy the Client ID and Client secret below (Enter on a \
+         blank Client ID cancels).\n",
+    )?;
 
-    let client_id = loop {
-        let v = prompt_line("Client ID: ", reader, writer)?;
-        if !v.is_empty() {
-            break v;
-        }
-        w(writer, "  (Client ID can't be empty.)")?;
-    };
-    let client_secret = loop {
-        let v = prompt_line("Client secret: ", reader, writer)?;
-        if !v.is_empty() {
-            break v;
+    let client_id = prompt_line("Client ID: ", reader, writer)?;
+    if client_id.is_empty() {
+        return Err(format!(
+            "No Client ID given, so nothing was changed. Run `aivyx-pa connect {}` \
+             again once you have one.",
+            svc.key
+        ));
+    }
+    // Bounded: at end of input `prompt_line` returns "" forever.
+    let mut client_secret = String::new();
+    for _ in 0..3 {
+        client_secret = prompt_line("Client secret: ", reader, writer)?;
+        if !client_secret.is_empty() {
+            break;
         }
         w(writer, "  (Client secret can't be empty.)")?;
-    };
+    }
+    if client_secret.is_empty() {
+        return Err(format!(
+            "No Client secret given, so nothing was changed. Run `aivyx-pa connect {}` \
+             again once you have one.",
+            svc.key
+        ));
+    }
     Ok((client_id, client_secret))
 }
 
@@ -623,21 +640,34 @@ mod tests {
     }
 
     #[test]
-    fn collect_credentials_guides_and_requires_nonempty() {
+    fn collect_credentials_guides_through_the_steps_google_requires() {
         let svc = find_service("gmail").unwrap();
-        // First Client ID is blank (re-prompted), then real values.
-        let input = b"\nthe-client-id\nthe-secret\n".to_vec();
+        // A blank Client Secret is re-asked; the values come back.
+        let input = b"the-client-id\n\nthe-secret\n".to_vec();
         let mut reader = std::io::Cursor::new(input);
         let mut writer: Vec<u8> = Vec::new();
         let (id, secret) = collect_credentials(&mut reader, &mut writer, svc).unwrap();
         assert_eq!(id, "the-client-id");
         assert_eq!(secret, "the-secret");
         let shown = String::from_utf8_lossy(&writer);
-        // The guidance names the API + the exact redirect URI.
-        assert!(shown.contains("Gmail API"));
-        assert!(shown.contains("http://127.0.0.1:8765/callback"));
-        assert!(shown.contains("Desktop app"));
-        assert!(shown.contains("can't be empty"));
+        assert!(shown.contains("Gmail API"), "{shown}");
+        // Google refuses to create the client, or to sign in, without these.
+        assert!(shown.contains("OAuth consent screen"), "{shown}");
+        assert!(shown.contains("test user"), "{shown}");
+        assert!(shown.contains("Desktop app"), "{shown}");
+        // A Desktop app client has no redirect-URI field to fill in.
+        assert!(!shown.contains("Authorized redirect URI"), "{shown}");
+        assert!(shown.contains("can't be empty"), "{shown}");
+    }
+
+    #[test]
+    fn a_blank_client_id_cancels_instead_of_asking_forever() {
+        let svc = find_service("gmail").unwrap();
+        let mut reader = std::io::Cursor::new(b"\n".to_vec());
+        let mut writer: Vec<u8> = Vec::new();
+        let err = collect_credentials(&mut reader, &mut writer, svc).unwrap_err();
+        assert!(err.contains("nothing was changed"), "{err}");
+        assert!(err.contains("aivyx-pa connect gmail"), "{err}");
     }
 
     #[test]

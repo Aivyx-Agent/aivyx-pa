@@ -3229,10 +3229,12 @@ aivyx-pa connect gmail      # guided OAuth onboarding for Gmail
 `aivyx-pa connect <service>` walks you through the whole thing:
 
 1. **Google Cloud app setup** — it prints the exact steps (enable
-   the API, create an OAuth client ID of type *Desktop app*, and
-   the precise `http://127.0.0.1:<port>/callback` redirect URI to
-   register), then prompts you to paste the **Client ID** and
-   **Client secret** from the console.
+   the API, set up the OAuth consent screen, add your own account
+   as a test user, create an OAuth client ID of type *Desktop
+   app*), then prompts you to paste the **Client ID** and
+   **Client secret** from the console. A blank Client ID cancels
+   without changing anything. Desktop-app clients accept any
+   loopback redirect, so there's no redirect URI to register.
 2. **Writes `config.toml`** to
    `~/.aivyx-pa/tool-processes/<service>/config.toml` (`0600`) — you
    never hand-edit it. Scopes are filled by the service's own
@@ -3564,9 +3566,9 @@ in your GCP project (recommended):**
 
    Note the different `redirect_uri` port from Gmail's
    `8765` — each tool process binds its own loopback
-   port for the auth-code callback. Add `8766` to your
-   OAuth client's Authorized redirect URIs in the GCP
-   Console.
+   port for the auth-code callback. A *Desktop app*
+   client accepts any loopback port, so there's nothing
+   to register in the GCP Console.
 
 4. **Run `aivyx-calendar auth init`** to grant the
    Calendar scope. The browser will show the existing
@@ -3729,9 +3731,10 @@ configured (recommended):**
 2. **Add the Drive scope** to your OAuth consent
    screen: `https://www.googleapis.com/auth/drive`
    (broad read+write; narrower options below).
-3. **Add a new redirect URI** to your OAuth client in
-   the GCP Console: `http://127.0.0.1:8767/callback`
-   (gmail uses 8765, calendar 8766; drive uses 8767).
+3. **Pick the redirect port** `http://127.0.0.1:8767/callback`
+   (gmail uses 8765, calendar 8766; drive uses 8767). A
+   *Desktop app* client accepts any loopback port, so
+   there's nothing to add in the GCP Console.
 4. **Write
    `~/.aivyx-pa/tool-processes/drive/config.toml`** with
    the SAME `client_id` + `client_secret` as your
