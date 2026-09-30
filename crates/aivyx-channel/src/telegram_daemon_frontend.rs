@@ -656,6 +656,9 @@ fn render_events_for_telegram(events: &[StreamEventPayload]) -> String {
             // this channel (which the correction line below surfaces).
             StreamEventPayload::ModelRouted { .. }
             | StreamEventPayload::CloudConsentRequested { .. } => {}
+            // Chat-app connections never send `SetApprovals`, so the daemon
+            // never asks them; their approvals are "reply to approve".
+            StreamEventPayload::ApprovalRequest { .. } => {}
             StreamEventPayload::ApprovalGate {
                 mission_id,
                 gate_id,

@@ -2903,6 +2903,9 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 ch.cancel_inflight();
                             }
                         }
+                        // Chat approvals — wired to running turns in Task 5.
+                        FrontendMessage::SetApprovals { .. }
+                        | FrontendMessage::ResolveApproval { .. } => {}
                         FrontendMessage::ResolveGate {
                             mission_id,
                             gate_id,

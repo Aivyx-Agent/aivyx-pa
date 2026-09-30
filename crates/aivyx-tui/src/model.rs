@@ -843,6 +843,8 @@ pub fn lines_from_event(event: &StreamEventPayload) -> Vec<ChatLine> {
         | StreamEventPayload::ToolCallFinished { .. }
         | StreamEventPayload::ToolOutput { .. } => LineKind::Tool,
         StreamEventPayload::ApprovalGate { .. } => LineKind::Gate,
+        // The TUI doesn't send `SetApprovals`, so the daemon never asks it.
+        StreamEventPayload::ApprovalRequest { .. } => LineKind::Gate,
         // Routing visibility B3 — not a chat line: the routed model
         // belongs in the status bar (`update`'s `TurnFinished` arm reads
         // it straight off the event, next to this function).

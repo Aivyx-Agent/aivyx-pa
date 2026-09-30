@@ -431,3 +431,24 @@ Errors (`QueryError`):
 Trust: the same as the other Studio settings queries — the socket's
 `0600` mode is the auth boundary. A pin changes which local model a
 conversation uses; it never grants cloud escalation (A15 unchanged).
+
+## Chat approvals addendum — pause, ask, continue
+
+A chat tool call that needs the operator's approval (a delete or overwrite, a
+`git.commit`, a confirm-first tool such as `kitchen.order.send`, or a withheld
+integration write) can pause the turn and ask, instead of ending it
+`Escalated`. A connection opts in; nothing changes for one that doesn't.
+
+| Direction | Message | Fields | Meaning |
+|---|---|---|---|
+| frontend → daemon | `SetApprovals` | `enabled: bool` | This connection can show approval prompts. Off unless sent. The terminal chat and the Studio's web server send it; the TUI and the chat-app frontends don't. |
+| daemon → frontend | `StreamEvent` › `ApprovalRequest` | `request_id`, `tool`, `summary`, `input`, `reason`, `expires_in_secs` | A call is paused. `summary` is one line (`fs.delete todo.md`), `input` the exact arguments that will run. |
+| frontend → daemon | `ResolveApproval` | `request_id: String`, `approved: bool` | The answer. An unknown or already-expired `request_id` is ignored. |
+
+While a turn runs, the daemon keeps reading the connection: `CancelTurn` and
+`ResolveApproval` take effect immediately; any other frame is handled after the
+turn, in order. No answer within `expires_in_secs` (600) denies the call; a
+cancelled turn or a closed connection denies it at once. On approval the exact
+paused call runs and the turn continues; on denial the model is told the
+operator declined and the turn continues. Both are recorded on the audit chain
+(`ApprovalRequested`, `ApprovalResolved`).

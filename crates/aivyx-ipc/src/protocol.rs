@@ -2292,6 +2292,12 @@ pub enum FrontendMessage {
         gate_id: String,
         approved: bool,
     },
+    /// This connection can show approval prompts: tool calls that need the
+    /// operator's approval pause and send `ApprovalRequest` instead of ending
+    /// the turn. Off unless sent.
+    SetApprovals { enabled: bool },
+    /// The operator's answer to a `StreamEventPayload::ApprovalRequest`.
+    ResolveApproval { request_id: String, approved: bool },
     Disconnect,
     Shutdown,
     /// Protocol version negotiation (Phase 41 Task 5).
@@ -3042,6 +3048,16 @@ pub enum StreamEventPayload {
         reason: String,
         scope: Option<String>,
     },
+    /// A chat tool call is paused for the operator's approval; answer with
+    /// `FrontendMessage::ResolveApproval`. Denied after `expires_in_secs`.
+    ApprovalRequest {
+        request_id: String,
+        tool: String,
+        summary: String,
+        input: serde_json::Value,
+        reason: String,
+        expires_in_secs: u64,
+    },
     /// Routing visibility B1 — daemon-only (no core `StreamEvent`
     /// counterpart): the model the router last chose for this
     /// conversation. Sent after a turn whose calls were routed, just before
@@ -3089,6 +3105,9 @@ impl StreamEventPayload {
                 ..
             } => format!("  ← {tool_name} {outcome_summary}\n"),
             StreamEventPayload::ToolOutput { chunk, .. } => chunk.clone(),
+            StreamEventPayload::ApprovalRequest { summary, reason, .. } => {
+                format!("\n  ⚑ Approval needed — {summary}\n    why: {reason}\n")
+            }
             StreamEventPayload::ApprovalGate {
                 mission_id,
                 gate_id,
@@ -3534,6 +3553,28 @@ pub enum DaemonEnvelope {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn approval_messages_round_trip() {
+        for msg in [
+            FrontendMessage::SetApprovals { enabled: true },
+            FrontendMessage::ResolveApproval { request_id: "a-1".into(), approved: false },
+        ] {
+            let json = serde_json::to_string(&msg).unwrap();
+            assert_eq!(serde_json::from_str::<FrontendMessage>(&json).unwrap(), msg);
+        }
+        let ev = StreamEventPayload::ApprovalRequest {
+            request_id: "a-1".into(),
+            tool: "fs.delete".into(),
+            summary: "fs.delete todo.md".into(),
+            input: serde_json::json!({"path": "todo.md"}),
+            reason: "deleting can't be undone".into(),
+            expires_in_secs: 600,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert_eq!(serde_json::from_str::<StreamEventPayload>(&json).unwrap(), ev);
+        assert!(ev.render_for_cli().contains("Approval needed — fs.delete todo.md"));
+    }
     use super::*;
 
     // ---- FrontendMessage round-trip ----
