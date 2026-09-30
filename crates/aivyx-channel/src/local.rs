@@ -167,6 +167,20 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
     fn cancellation_token(&self) -> CancellationToken {
         self.token.lock().expect("token mutex poisoned").clone()
     }
+
+    /// The daemon cancels a terminal client's turn (`CancelTurn`) through
+    /// the trait; without this override it was the default no-op.
+    fn cancel_inflight(&self) {
+        if let Ok(token) = self.token.lock() {
+            token.cancel();
+        }
+    }
+
+    /// The daemon rotates the token before each turn through the trait, so
+    /// a cancelled turn doesn't leave the next one pre-cancelled.
+    fn reset_cancellation(&self) {
+        LocalChannel::reset_cancellation(self);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +345,20 @@ mod tests {
             channel.cancellation_token().is_cancelled(),
             "cancelling via cancel_handle should be visible through cancellation_token()"
         );
+    }
+
+    /// Through the trait, as the daemon drives it: `cancel_inflight`
+    /// cancels the running turn's token and `reset_cancellation` gives the
+    /// next turn a fresh one.
+    #[tokio::test]
+    async fn the_daemon_can_cancel_and_rotate_through_the_trait() {
+        let channel = LocalChannel::new("t", Vec::<u8>::new());
+        let as_trait: &dyn ChannelContext = &channel;
+        let running = as_trait.cancellation_token();
+        as_trait.cancel_inflight();
+        assert!(running.is_cancelled());
+        as_trait.reset_cancellation();
+        assert!(!as_trait.cancellation_token().is_cancelled());
     }
 
     #[tokio::test]

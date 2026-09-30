@@ -31,6 +31,7 @@ pub use aivyx_core::{
 pub mod daemon_client;
 pub mod daemon_ipc;
 pub mod daemon_scheduler;
+pub mod approval_desk;
 pub mod daemon_server;
 pub mod document_browse;
 pub mod mcp_status;

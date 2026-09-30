@@ -2223,35 +2223,63 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         let _ = writer.write_all(&frame).await;
     }
 
-    let mut buf = Vec::with_capacity(4096);
     let mut session_id: Option<String> = None;
     let mut channel: Option<Arc<dyn ChannelContext + Send + Sync>> = None;
 
-    loop {
-        if shutdown.is_cancelled() {
-            send_shutting_down(&mut writer, "shutdown requested").await;
-            return Ok(());
-        }
-
+    // Chat approvals — frames are decoded by a reader task, so a running
+    // turn can still see `CancelTurn` / `ResolveApproval` (`drive_turn`);
+    // every other frame that arrives mid-turn waits in `deferred`, in order.
+    let (frame_tx, mut frames) =
+        tokio::sync::mpsc::unbounded_channel::<Result<FrontendMessage, FrameError>>();
+    let reader_task = tokio::spawn(async move {
+        let mut buf = Vec::with_capacity(4096);
         let mut tmp = [0u8; 4096];
-        let n = tokio::select! {
-            result = reader.read(&mut tmp) => {
-                result?
-            }
-            _ = shutdown.cancelled() => {
-                send_shutting_down(&mut writer, "shutdown requested").await;
-                return Ok(());
-            }
-        };
-        if n == 0 {
-            break; // Frontend disconnected.
-        }
-        buf.extend_from_slice(&tmp[..n]);
-
         loop {
-            match decode_frame::<FrontendMessage>(&buf) {
-                Ok((msg, consumed)) => {
-                    buf.drain(..consumed);
+            match reader.read(&mut tmp).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            }
+            loop {
+                match decode_frame::<FrontendMessage>(&buf) {
+                    Ok((msg, consumed)) => {
+                        buf.drain(..consumed);
+                        if frame_tx.send(Ok(msg)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(FrameError::IncompleteBuf) => break,
+                    Err(e) => {
+                        let _ = frame_tx.send(Err(e));
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    let mut deferred: std::collections::VecDeque<FrontendMessage> = Default::default();
+    let mut approvals_enabled = false;
+
+    loop {
+        let next = match deferred.pop_front() {
+            Some(msg) => Ok(msg),
+            None => tokio::select! {
+                f = frames.recv() => match f {
+                    Some(f) => f,
+                    None => break, // Frontend disconnected.
+                },
+                _ = shutdown.cancelled() => {
+                    send_shutting_down(&mut writer, "shutdown requested").await;
+                    reader_task.abort();
+                    return Ok(());
+                }
+            },
+        };
+
+        // One frame per pass (this block was the frame-decode loop; a
+        // `continue` below moves on to the next frame, as it did).
+        {
+            match next {
+                Ok(msg) => {
                     match msg {
                         FrontendMessage::StartSession {
                             role: _,
@@ -2456,6 +2484,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 inner: ch,
                                 writer: Arc::new(tokio::sync::Mutex::new(writer)),
                                 session_id: sid.clone(),
+                                approvals: (approvals_enabled && !headless)
+                                    .then(crate::approval_desk::ApprovalDesk::new),
                             };
 
                             // Audit H1 fix — rotate the channel stub's
@@ -2475,7 +2505,15 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // pre_len)`) without locking.
                             let audit_pre_turn_len = audit_log.as_ref().map(|l| l.len());
 
-                            let outcome = agent.turn(msg, &bridge).await;
+                            let desk = bridge.approvals.clone();
+                            let outcome = drive_turn(
+                                agent.turn(msg, &bridge),
+                                &mut frames,
+                                &mut deferred,
+                                channel.as_ref(),
+                                desk.as_deref(),
+                            )
+                            .await;
 
                             // Turn completed — remove from in-flight.
                             if let Ok(mut st) = daemon_state.lock() {
@@ -2903,9 +2941,13 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 ch.cancel_inflight();
                             }
                         }
-                        // Chat approvals — wired to running turns in Task 5.
-                        FrontendMessage::SetApprovals { .. }
-                        | FrontendMessage::ResolveApproval { .. } => {}
+                        FrontendMessage::SetApprovals { enabled } => {
+                            approvals_enabled = enabled;
+                        }
+                        // Only meaningful while a turn runs (`drive_turn`
+                        // routes it); a late answer to an expired prompt is
+                        // ignored.
+                        FrontendMessage::ResolveApproval { .. } => {}
                         FrontendMessage::ResolveGate {
                             mission_id,
                             gate_id,
@@ -2972,6 +3014,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                                 inner: ch,
                                                 writer: Arc::new(tokio::sync::Mutex::new(writer)),
                                                 session_id: sid.clone(),
+                                                approvals: approvals_enabled
+                                                    .then(crate::approval_desk::ApprovalDesk::new),
                                             };
 
                                             // Audit H1 fix — rotate before
@@ -2979,7 +3023,15 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                             // not pre-cancel the resume turn.
                                             bridge.reset_cancellation();
 
-                                            let resume_outcome = agent.turn(msg, &bridge).await;
+                                            let desk = bridge.approvals.clone();
+                                            let resume_outcome = drive_turn(
+                                                agent.turn(msg, &bridge),
+                                                &mut frames,
+                                                &mut deferred,
+                                                channel.as_ref(),
+                                                desk.as_deref(),
+                                            )
+                                            .await;
 
                                             writer = Arc::try_unwrap(bridge.writer)
                                                 .map_err(|_| {
@@ -3849,7 +3901,6 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                         }
                     }
                 }
-                Err(FrameError::IncompleteBuf) => break,
                 Err(e) => {
                     let err_resp = DaemonMessage::Error {
                         code: "invalid_message".into(),
@@ -3857,11 +3908,13 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                     };
                     let frame = encode_frame(&err_resp).unwrap_or_default();
                     let _ = writer.write_all(&frame).await;
+                    reader_task.abort();
                     return Err(e.into());
                 }
             }
         }
     }
+    reader_task.abort();
 
     // Deregister session from daemon state on disconnect.
     if let Some(ref sid) = session_id {
@@ -8619,14 +8672,77 @@ fn mission_detail_from_record(record: mission::MissionRecord) -> MissionDetail {
 // IpcChannelBridge — forwards StreamEvents over IPC
 // ---------------------------------------------------------------------------
 
+/// Run a turn while still serving the connection: `CancelTurn` cancels it,
+/// `ResolveApproval` answers its prompt, a closed connection denies any open
+/// prompt (and cancels the turn); every other frame is kept, in order, for
+/// after the turn.
+async fn drive_turn<F: std::future::Future<Output = TurnOutcome>>(
+    turn: F,
+    frames: &mut tokio::sync::mpsc::UnboundedReceiver<Result<FrontendMessage, FrameError>>,
+    deferred: &mut std::collections::VecDeque<FrontendMessage>,
+    channel: Option<&Arc<dyn ChannelContext + Send + Sync>>,
+    desk: Option<&crate::approval_desk::ApprovalDesk>,
+) -> TurnOutcome {
+    tokio::pin!(turn);
+    let mut open = true;
+    loop {
+        tokio::select! {
+            outcome = &mut turn => return outcome,
+            f = frames.recv(), if open => match f {
+                Some(Ok(FrontendMessage::CancelTurn { .. })) => {
+                    if let Some(ch) = channel {
+                        ch.cancel_inflight();
+                    }
+                }
+                Some(Ok(FrontendMessage::ResolveApproval { request_id, approved })) => {
+                    if let Some(d) = desk {
+                        d.resolve(&request_id, approved);
+                    }
+                }
+                Some(Ok(other)) => deferred.push_back(other),
+                Some(Err(_)) | None => {
+                    open = false;
+                    if let Some(d) = desk {
+                        d.deny_all();
+                    }
+                    if let Some(ch) = channel {
+                        ch.cancel_inflight();
+                    }
+                }
+            },
+        }
+    }
+}
+
 struct IpcChannelBridge {
     inner: Arc<dyn ChannelContext + Send + Sync>,
     writer: Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
     session_id: String,
+    /// Chat approvals: `Some` only when the connection sent
+    /// `SetApprovals { enabled: true }` and the turn isn't headless.
+    approvals: Option<Arc<crate::approval_desk::ApprovalDesk>>,
 }
 
 #[async_trait::async_trait]
 impl ChannelContext for IpcChannelBridge {
+    async fn request_approval(
+        &self,
+        request: &aivyx_core::ApprovalRequest,
+    ) -> aivyx_core::Approval {
+        match &self.approvals {
+            Some(desk) => {
+                desk.ask(
+                    &self.writer,
+                    &self.session_id,
+                    request,
+                    &self.inner.cancellation_token(),
+                )
+                .await
+            }
+            None => aivyx_core::Approval::Unavailable,
+        }
+    }
+
     fn channel_name(&self) -> &str {
         self.inner.channel_name()
     }
@@ -8821,6 +8937,7 @@ mod tests {
             inner: Arc::new(StubInner(inner_sid)),
             writer: Arc::new(tokio::sync::Mutex::new(write)),
             session_id: real_sid.to_string(),
+            approvals: None,
         };
 
         assert_eq!(
