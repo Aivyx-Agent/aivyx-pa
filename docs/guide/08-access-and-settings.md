@@ -18,13 +18,27 @@ confirmed before it's applied — you can't bump access by accident.
 
 > **The confirmation safety net.** Regardless of access level, anything
 > irreversible — deleting or overwriting a file, sending a message, dispatching
-> an order — **always stops and asks you first**. Access sets the boundary of
-> what's reachable; the confirmation step protects the consequential actions
-> inside that boundary.
+> an order — **always stops and asks you first**, and only your reply counts as
+> the yes. Access sets the boundary of what's reachable; the confirmation step
+> protects the consequential actions inside that boundary. (The one exception
+> is the `unleashed` autonomy level below, meant for a dedicated machine.)
 
-When you connect remote channels (chat apps), they're automatically held to a
-lower trust level than you sitting at your own machine — a message from a chat
-app can't quietly exercise your full access.
+## Autonomy
+
+Autonomy is how much your assistant does on its own. Set it in **Settings →
+Autonomy** or with `aivyx-pa autonomy`. Today the level changes two things:
+
+- **Whether it may work through its backlog on its own** (the autonomous loop):
+  off at `manual` and `assisted` *(the default)*, available from `supervised`
+  up.
+- **Whether irreversible steps ask you first:** yes at every level except
+  `unleashed`, which is only for an isolated machine you're prepared to let it
+  change.
+
+Finer differences between the levels (such as `manual` asking before every
+step) are still being built. Whatever the level, a scheduled or unattended run
+never waits for an answer — an irreversible step there is refused, not taken —
+and the assistant can never raise its own autonomy or access; only you can.
 
 ## Budgets
 

@@ -6994,11 +6994,11 @@ fn SettingsPanel() -> Element {
                         class: "input",
                         value: "{auto_level}",
                         onchange: move |e| auto_level.set(e.value()),
-                        option { value: "manual", "manual — confirm everything" }
-                        option { value: "assisted", "assisted — reversible free, irreversible confirmed (default)" }
-                        option { value: "supervised", "supervised — armed loop, a human nearby" }
-                        option { value: "autonomous", "autonomous — pursues goals unattended (capped)" }
-                        option { value: "unleashed", "unleashed — isolated host, eyes-open" }
+                        option { value: "manual", "manual — like assisted for now (asking before every step is coming)" }
+                        option { value: "assisted", "assisted — irreversible steps ask you first (default)" }
+                        option { value: "supervised", "supervised — may work its backlog on its own; irreversible steps still ask" }
+                        option { value: "autonomous", "autonomous — works its backlog on its own, within caps; irreversible steps still ask" }
+                        option { value: "unleashed", "unleashed — acts without asking, even irreversibly (isolated machines only)" }
                     }
                 }
                 p { class: "label-tech sub",

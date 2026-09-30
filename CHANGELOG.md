@@ -5,6 +5,27 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Integrations couldn't act from chat once confirm-first was on** (the
+  default since 0.12.1): every email send, calendar or Drive write escalated,
+  and plain chat has no approve-and-continue step. Your reply is now the
+  approval — the first call asks, and in your next message that tool may run
+  once. Unattended runs never get it.
+- **The in-process chat ignored `[budget]` and `[rate_limit]` caps**, as did the
+  in-process Telegram, Discord and Slack fallbacks; they apply everywhere now.
+- **The spreadsheet and PDF writers replaced files unasked** on the model's own
+  `overwrite: true`; with confirm-first on, replacing asks you first.
+- **The schedule tool told the model crons run in UTC** — they run in your
+  local time — and gave no weekday guidance (numbered days count from
+  Sunday = 1). It says both now.
+- **Hugging Face models pulled through Ollama** (`hf.co/Qwen/…`) lost their
+  prompt strategy; family detection reads them now.
+- **A failed macOS service install left the passphrase plist behind**; it's
+  removed, like the Linux path.
+- **The autonomy options overstated what they do.** The Studio's labels and a
+  new *Autonomy* section in the guide describe what each level changes today.
+
 ### Changed
 
 - **`git.commit` and out-of-process confirm-first tools (like
