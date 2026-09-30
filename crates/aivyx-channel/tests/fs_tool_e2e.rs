@@ -281,6 +281,7 @@ fn base_session_config(harness: &Harness, storage: Arc<dyn Storage>) -> SessionC
         prompt_refresher: None,
         turn_safety: Default::default(),
         confirm_destructive: false,
+        conversation_history_turns: 0,
     }
 }
 
@@ -822,6 +823,7 @@ async fn scripted_withheld_scope_escalates_when_confirm_destructive_threads_from
         turn_safety: Default::default(),
         // The field under test.
         confirm_destructive: true,
+        conversation_history_turns: 0,
     };
 
     let report = run_session(

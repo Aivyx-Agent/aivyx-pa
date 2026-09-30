@@ -10922,6 +10922,7 @@ async fn run_async(
                 // gate wired above from this same `confirm_destructive`
                 // local.
                 confirm_destructive,
+                conversation_history_turns,
             };
 
             let stdin = io::stdin();
@@ -11476,6 +11477,7 @@ async fn run_async(
                     // posture as the Local arm and the tool-level
                     // fs.write/fs.delete/git.commit gate.
                     confirm_destructive,
+                    conversation_seeder: None,
                 };
                 let agent = aivyx_channel::build_agent_stack(
                     Arc::clone(&provider),

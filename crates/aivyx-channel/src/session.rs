@@ -188,6 +188,10 @@ pub struct SessionConfig {
     /// `git.commit` configs at the binary's construction sites. `false`
     /// keeps the loop byte-identical to pre-Task-4 behavior.
     pub confirm_destructive: bool,
+    /// `[agent] conversation_history_turns` — how many of this session's
+    /// most recent messages are replayed into each turn, as the daemon
+    /// does. `0` keeps turns fresh-context (no replay).
+    pub conversation_history_turns: usize,
 }
 
 /// Phase 137 — agent-stack construction inputs.
@@ -247,6 +251,10 @@ pub struct AgentStackSpec {
     /// same pattern as `turn_safety`. `false` leaves the loop
     /// byte-identical to pre-Task-4 behavior.
     pub confirm_destructive: bool,
+    /// Replays the session's earlier messages into each turn. `None`
+    /// keeps turns fresh-context; `run_session` sets it from
+    /// `SessionConfig::conversation_history_turns`.
+    pub conversation_seeder: Option<Arc<dyn aivyx_core::llm_planner::ConversationSeeder>>,
 }
 
 impl AgentStackSpec {
@@ -276,6 +284,7 @@ impl AgentStackSpec {
             turn_safety: c.turn_safety.clone(),
             checkpointer: None,
             confirm_destructive: c.confirm_destructive,
+            conversation_seeder: None,
         }
     }
 }
@@ -322,6 +331,7 @@ pub fn build_agent_stack(
         turn_safety,
         checkpointer,
         confirm_destructive,
+        conversation_seeder,
     } = spec;
 
     let provider_for_factory = Arc::clone(&provider);
@@ -341,6 +351,9 @@ pub fn build_agent_stack(
     }
     if let Some(refiner) = system_prompt_refiner {
         planner_config = planner_config.with_system_prompt_refiner(refiner);
+    }
+    if let Some(seeder) = conversation_seeder {
+        planner_config = planner_config.with_conversation_seeder(seeder);
     }
     let role_overrides_for_factory = role_overrides;
     let prompt_refresher_for_factory = prompt_refresher;
@@ -451,7 +464,22 @@ where
     // string) stay below.
     let storage = Arc::clone(&config.storage);
     let agent_spec = AgentStackSpec::from_session_config(&config);
-    let agent_spec = AgentStackSpec { checkpointer, ..agent_spec };
+    // The conversation so far, replayed into each turn exactly as the
+    // daemon does (same window + seeder); in-process chat used to start
+    // every turn from scratch, so "where is that file?" had no "that".
+    let conversation_windows = (config.conversation_history_turns > 0)
+        .then(crate::conversation_window::shared_conversation_windows);
+    let conversation_seeder = conversation_windows.as_ref().map(|w| {
+        Arc::new(crate::conversation_window::WindowConversationSeeder::new(
+            w.clone(),
+            config.conversation_history_turns,
+        )) as Arc<dyn aivyx_core::llm_planner::ConversationSeeder>
+    });
+    let agent_spec = AgentStackSpec {
+        checkpointer,
+        conversation_seeder,
+        ..agent_spec
+    };
     let agent = build_agent_stack(provider, Arc::clone(&audit), agent_spec);
 
     // ---- Session marker (Phase 5 task 4) -----------------------------
@@ -653,6 +681,16 @@ where
             Message::text(channel.session_id(), input)
         };
         let outcome = agent.turn(message, &channel).await;
+        if let (Some(windows), TurnOutcome::Completed { final_message, .. }) =
+            (&conversation_windows, &outcome)
+        {
+            crate::conversation_window::record_turn(
+                windows,
+                channel.session_id(),
+                input,
+                final_message,
+            );
+        }
 
         // Routing visibility B3 — future-proofing: this session's own
         // turns are not routed today (the in-process planner attaches no

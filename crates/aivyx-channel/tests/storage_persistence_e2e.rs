@@ -272,6 +272,7 @@ async fn run_one_turn(storage: Arc<dyn Storage>, audit_key_byte: u8, user_line: 
         prompt_refresher: None,
         turn_safety: Default::default(),
         confirm_destructive: false,
+        conversation_history_turns: 0,
     };
 
     let report = run_session(provider, audit, None, None, config, channel, reader)

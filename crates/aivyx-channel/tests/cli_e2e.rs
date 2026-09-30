@@ -266,6 +266,7 @@ async fn scripted_session_drives_two_turns_end_to_end() {
         prompt_refresher: None,
         turn_safety: Default::default(),
         confirm_destructive: false,
+        conversation_history_turns: 0,
     };
 
     // -- Drive the session.
@@ -429,6 +430,7 @@ async fn in_process_allow_cloud_gets_a_local_reply_and_never_calls_the_model() {
         prompt_refresher: None,
         turn_safety: Default::default(),
         confirm_destructive: false,
+        conversation_history_turns: 0,
     };
 
     let report = run_session(provider, audit_hook, None, None, config, channel, reader)
@@ -511,7 +513,86 @@ fn empty_session_config(storage: Arc<dyn Storage>) -> SessionConfig {
         prompt_refresher: None,
         turn_safety: Default::default(),
         confirm_destructive: false,
+        conversation_history_turns: 0,
     }
+}
+
+/// Records every request's messages (as their debug text) and answers each
+/// with the next scripted reply.
+struct RecordingProvider {
+    replies: Mutex<std::collections::VecDeque<String>>,
+    seen: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl LlmProvider for RecordingProvider {
+    async fn chat_stream(
+        &self,
+        request: LlmRequest<'_>,
+        _cancellation: &CancellationToken,
+    ) -> Result<Box<dyn LlmStream>, LlmError> {
+        self.seen
+            .lock()
+            .unwrap()
+            .push(format!("{:?}", request.messages));
+        let text = self
+            .replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| LlmError::Config("RecordingProvider exhausted".into()))?;
+        let step = final_step(&[&text], &text);
+        Ok(Box::new(ScriptedStream {
+            events: step.events.into_iter(),
+            terminal: Some(step.terminal),
+        }))
+    }
+}
+
+/// The in-process chat (no daemon — e.g. a first run without an OS
+/// keyring) replays the conversation so far, like the daemon does: a
+/// follow-up can refer to what was said a turn ago.
+#[tokio::test]
+async fn in_process_chat_remembers_the_conversation_so_far() {
+    let provider = Arc::new(RecordingProvider {
+        replies: Mutex::new(
+            vec![
+                "Nice to meet you, Sam.".to_string(),
+                "Your name is Sam.".to_string(),
+            ]
+            .into(),
+        ),
+        seen: Mutex::new(Vec::new()),
+    });
+    let audit_log = HmacChainLog::new([42u8; 32].to_vec());
+    let audit_hook: Arc<dyn AuditHook> = Arc::new(AuditBridge::new(audit_log));
+    let reader = Cursor::new(&b"My name is Sam.\nWhat is my name?\n"[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+    let config = SessionConfig {
+        conversation_history_turns: 8,
+        ..empty_session_config(storage)
+    };
+
+    let report = run_session(
+        provider.clone(),
+        audit_hook,
+        None,
+        None,
+        config,
+        channel,
+        reader,
+    )
+    .await
+    .expect("run_session completes on EOF");
+
+    assert_eq!(report.turns_run, 2);
+    let seen = provider.seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(!seen[0].contains("Nice to meet you"), "{}", seen[0]);
+    assert!(seen[1].contains("My name is Sam."), "{}", seen[1]);
+    assert!(seen[1].contains("Nice to meet you, Sam."), "{}", seen[1]);
 }
 
 /// In-process chat is never routed (only daemon conversations are), so
