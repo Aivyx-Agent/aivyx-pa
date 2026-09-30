@@ -109,8 +109,8 @@ fn install(file: &Path) -> Result<(), String> {
     println!("unpacked to {}", install_dir.display());
 
     // Wire the config the Mise way.
-    let toml_path = find_aivyx_toml(&home)
-        .ok_or_else(|| "no aivyx-pa.toml found (cwd or home) — run `aivyx-pa init` first".to_string())?;
+    let toml_path = find_aivyx_toml()
+        .ok_or_else(|| "no aivyx-pa.toml found — run `aivyx-pa init` first".to_string())?;
     let text = std::fs::read_to_string(&toml_path)
         .map_err(|e| format!("read {}: {e}", toml_path.display()))?;
     let mut doc: toml_edit::DocumentMut = text
@@ -213,9 +213,8 @@ fn set_last_tool_process_args(doc: &mut toml_edit::DocumentMut, args: &[String])
 }
 
 fn trusted_publishers() -> Result<Vec<String>, String> {
-    let home = dirs_home()?;
-    let toml_path = find_aivyx_toml(&home)
-        .ok_or_else(|| "no aivyx-pa.toml found (cwd or home) — run `aivyx-pa init` first".to_string())?;
+    let toml_path = find_aivyx_toml()
+        .ok_or_else(|| "no aivyx-pa.toml found — run `aivyx-pa init` first".to_string())?;
     let opts = LoadOptions {
         toml_path: Some(toml_path.clone()),
         require_api_key: false,

@@ -12374,3 +12374,53 @@ fn lite_profile_without_embedding_does_not_warn() {
     );
     drop(env);
 }
+
+/// First-run D1 — the config is found from any directory: an explicit
+/// `AIVYX_PA_CONFIG_PATH` wins, then a `./aivyx-pa.toml` that exists (so an
+/// existing setup keeps working unchanged), then the XDG config dir.
+#[test]
+fn the_config_path_resolves_env_then_an_existing_cwd_file_then_xdg() {
+    use crate::resolve_config_path_from;
+    use std::path::Path;
+
+    let dir = TempDir::new("resolve");
+    let cwd = dir.path().to_path_buf();
+
+    // No CWD file: the XDG dir ($XDG_CONFIG_HOME, else ~/.config).
+    assert_eq!(
+        resolve_config_path_from(None, Some(&cwd), Some("/x/cfg"), Some("/home/me")),
+        Path::new("/x/cfg/aivyx-pa/aivyx-pa.toml")
+    );
+    assert_eq!(
+        resolve_config_path_from(None, Some(&cwd), None, Some("/home/me")),
+        Path::new("/home/me/.config/aivyx-pa/aivyx-pa.toml")
+    );
+    // An empty XDG_CONFIG_HOME is unset, per the XDG spec.
+    assert_eq!(
+        resolve_config_path_from(None, Some(&cwd), Some(""), Some("/home/me")),
+        Path::new("/home/me/.config/aivyx-pa/aivyx-pa.toml")
+    );
+
+    // An existing CWD file wins over XDG.
+    std::fs::write(cwd.join("aivyx-pa.toml"), "").unwrap();
+    assert_eq!(
+        resolve_config_path_from(None, Some(&cwd), Some("/x/cfg"), Some("/home/me")),
+        cwd.join("aivyx-pa.toml")
+    );
+
+    // The env override wins over both; empty means unset.
+    assert_eq!(
+        resolve_config_path_from(Some("/etc/pa.toml"), Some(&cwd), Some("/x/cfg"), None),
+        Path::new("/etc/pa.toml")
+    );
+    assert_eq!(
+        resolve_config_path_from(Some(""), Some(&cwd), None, Some("/home/me")),
+        cwd.join("aivyx-pa.toml")
+    );
+
+    // Nothing to go on: the bare relative name, as before.
+    assert_eq!(
+        resolve_config_path_from(None, None, None, None),
+        Path::new("aivyx-pa.toml")
+    );
+}

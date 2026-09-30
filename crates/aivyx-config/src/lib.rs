@@ -5983,6 +5983,55 @@ const ENV_WORKSPACE: &str = "AIVYX_PA_WORKSPACE";
 const ENV_STORAGE_PATH: &str = "AIVYX_PA_STORAGE_PATH";
 const ENV_XDG_DATA_HOME: &str = "XDG_DATA_HOME";
 const ENV_HOME: &str = "HOME";
+
+/// The config file's name, wherever it lives.
+pub const CONFIG_FILE_NAME: &str = "aivyx-pa.toml";
+/// First-run D1 — an explicit config file path, overriding the lookup.
+pub const ENV_CONFIG_PATH: &str = "AIVYX_PA_CONFIG_PATH";
+const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
+
+/// Where `aivyx-pa.toml` is read from and written to, from any directory:
+/// `$AIVYX_PA_CONFIG_PATH`, else a `./aivyx-pa.toml` that exists (an
+/// existing per-directory setup keeps working unchanged), else
+/// `$XDG_CONFIG_HOME/aivyx-pa/aivyx-pa.toml` (default `~/.config`). The
+/// file may not exist yet — `init` creates it there.
+pub fn resolve_config_path() -> PathBuf {
+    let cwd = std::env::current_dir().ok();
+    resolve_config_path_from(
+        env_string(ENV_CONFIG_PATH).as_deref(),
+        cwd.as_deref(),
+        env_string(ENV_XDG_CONFIG_HOME).as_deref(),
+        env_string(ENV_HOME).as_deref(),
+    )
+}
+
+/// [`resolve_config_path`] over explicit inputs (empty strings count as
+/// unset). Only the CWD file's existence is checked on disk.
+pub fn resolve_config_path_from(
+    env_override: Option<&str>,
+    cwd: Option<&Path>,
+    xdg_config_home: Option<&str>,
+    home: Option<&str>,
+) -> PathBuf {
+    fn set(v: Option<&str>) -> Option<&str> {
+        v.filter(|s| !s.is_empty())
+    }
+    if let Some(explicit) = set(env_override) {
+        return PathBuf::from(explicit);
+    }
+    if let Some(local) = cwd.map(|d| d.join(CONFIG_FILE_NAME)) {
+        if local.exists() {
+            return local;
+        }
+    }
+    let config_home = set(xdg_config_home)
+        .map(PathBuf::from)
+        .or_else(|| set(home).map(|h| Path::new(h).join(".config")));
+    match config_home {
+        Some(dir) => dir.join("aivyx-pa").join(CONFIG_FILE_NAME),
+        None => PathBuf::from(CONFIG_FILE_NAME),
+    }
+}
 const ENV_MEMORY_MAX_PER_TOPIC: &str = "AIVYX_PA_MEMORY_MAX_PER_TOPIC";
 const ENV_MEMORY_TTL_SECS: &str = "AIVYX_PA_MEMORY_TTL_SECS";
 const ENV_PASSPHRASE: &str = "AIVYX_PA_PASSPHRASE";

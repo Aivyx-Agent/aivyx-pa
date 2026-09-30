@@ -7,7 +7,10 @@ use std::path::{Component, Path, PathBuf};
 
 use aivyx_config::{AivyxConfig, LoadOptions};
 
-const WORKSPACE_TOML_PATH: &str = "aivyx-pa.toml";
+/// The operator's `aivyx-pa.toml` — see `aivyx_config::resolve_config_path`.
+fn config_path() -> std::path::PathBuf {
+    aivyx_config::resolve_config_path()
+}
 
 /// `aivyx-pa workspace path` — print the resolved workspace directory.
 pub fn run_workspace_path() -> Result<(), String> {
@@ -107,7 +110,7 @@ fn display_rel(root: &Path, target: &Path) -> String {
 
 fn load_config_for_inspection() -> Result<AivyxConfig, String> {
     let opts = LoadOptions {
-        toml_path: Some(Path::new(WORKSPACE_TOML_PATH).to_path_buf()),
+        toml_path: Some(config_path()),
         require_api_key: false,
         require_telegram_token: false,
         require_discord_token: false,
@@ -115,7 +118,7 @@ fn load_config_for_inspection() -> Result<AivyxConfig, String> {
         role_override: None,
     };
     AivyxConfig::load_from_env_and_toml(&opts)
-        .map_err(|e| format!("failed to load {WORKSPACE_TOML_PATH}: {e}"))
+        .map_err(|e| format!("failed to load {}: {e}", config_path().display()))
 }
 
 #[cfg(test)]

@@ -12,10 +12,12 @@
 //! additively under the same [`RoleSubcommand`] enum without
 //! fragmenting `CliMode`.
 
-use std::path::Path;
 
 /// Default TOML path — mirrors the Phase 58 `profile.rs` constant.
-const ROLE_TOML_PATH: &str = "aivyx-pa.toml";
+/// The operator's `aivyx-pa.toml` — see `aivyx_config::resolve_config_path`.
+fn config_path() -> std::path::PathBuf {
+    aivyx_config::resolve_config_path()
+}
 
 /// Entry point for `aivyx-pa role import <proposal-id> [--yes] [--force]`.
 /// Phase 119 Task 5 — operator's act-on-approval gesture for a Phase
@@ -63,7 +65,7 @@ pub async fn run_role_import(proposal_id: &str, yes: bool, force: bool) -> Resul
         eprintln!(
             "Import role `{name}`{parent_label} into {path}?",
             name = draft.name,
-            path = ROLE_TOML_PATH,
+            path = config_path().display(),
         );
         if force {
             eprintln!(
@@ -83,8 +85,8 @@ pub async fn run_role_import(proposal_id: &str, yes: bool, force: bool) -> Resul
     }
 
     let applied =
-        crate::toml_edit_apply::apply_role_draft_to_path(Path::new(ROLE_TOML_PATH), &draft, force)
-            .map_err(|e| format!("failed to import role to {ROLE_TOML_PATH}: {e}"))?;
+        crate::toml_edit_apply::apply_role_draft_to_path(&config_path(), &draft, force)
+            .map_err(|e| format!("failed to import role to {}: {e}", config_path().display()))?;
 
     // Same posture as profile apply-hint: audit-event record is
     // forensic, not load-bearing. Soft-warn if it fails after the
@@ -101,7 +103,7 @@ pub async fn run_role_import(proposal_id: &str, yes: bool, force: bool) -> Resul
     eprintln!(
         "Imported role `{name}` into {path}.",
         name = applied.role_name,
-        path = ROLE_TOML_PATH,
+        path = config_path().display(),
     );
     match audit_result {
         Ok(()) => {

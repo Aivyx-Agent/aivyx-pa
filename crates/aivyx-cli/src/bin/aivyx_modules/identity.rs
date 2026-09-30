@@ -26,7 +26,10 @@ use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_channel::identity_export::{build, parse_and_validate};
 use aivyx_config::{AivyxConfig, LoadOptions};
 
-const PROFILE_TOML_PATH: &str = "aivyx-pa.toml";
+/// The operator's `aivyx-pa.toml` — see `aivyx_config::resolve_config_path`.
+fn config_path() -> std::path::PathBuf {
+    aivyx_config::resolve_config_path()
+}
 
 /// Entry point for `aivyx-pa identity export <path>`.
 pub async fn run_identity_export(path: &Path) -> Result<(), String> {
@@ -157,7 +160,7 @@ pub async fn run_identity_import(path: &Path, force: bool) -> Result<(), String>
 /// inlined here so the identity module doesn't depend on the
 /// profile module's private helper.
 fn load_profile_for_export() -> Result<aivyx_config::Profile, String> {
-    let toml_path = Path::new(PROFILE_TOML_PATH).to_path_buf();
+    let toml_path = config_path();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
         require_api_key: false,

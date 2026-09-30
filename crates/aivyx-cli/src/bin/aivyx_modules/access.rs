@@ -16,7 +16,10 @@ use toml_edit::DocumentMut;
 /// Module-local copy of the default config path (mirrors
 /// [`crate::DEFAULT_TOML_PATH`] without coupling to it, same as the other
 /// subcommand modules).
-const ACCESS_TOML_PATH: &str = "aivyx-pa.toml";
+/// The operator's `aivyx-pa.toml` — see `aivyx_config::resolve_config_path`.
+fn config_path() -> std::path::PathBuf {
+    aivyx_config::resolve_config_path()
+}
 
 /// `aivyx-pa access show` — print the current access level + resolved reach.
 pub fn run_access_show() -> Result<(), String> {
@@ -65,7 +68,7 @@ pub fn run_access_set(level: AccessLevel, root: Option<String>, yes: bool) -> Re
     // and this command write the section identically. The CLI keeps its
     // flag-phrased validation above and the stdin confirm; the helper performs
     // the structural rewrite at `0600`.
-    let path = Path::new(ACCESS_TOML_PATH);
+    let path = &config_path();
     write_access_section(path, level, root.as_deref()).map_err(|e| e.to_string())?;
 
     // A stray `[fs] root` would override the level-derived reach — warn so
@@ -145,7 +148,7 @@ fn confirm(question: &str) -> Result<bool, String> {
 
 fn load_config_for_inspection() -> Result<AivyxConfig, String> {
     let opts = LoadOptions {
-        toml_path: Some(Path::new(ACCESS_TOML_PATH).to_path_buf()),
+        toml_path: Some(config_path()),
         require_api_key: false,
         require_telegram_token: false,
         require_discord_token: false,
@@ -153,7 +156,7 @@ fn load_config_for_inspection() -> Result<AivyxConfig, String> {
         role_override: None,
     };
     AivyxConfig::load_from_env_and_toml(&opts)
-        .map_err(|e| format!("failed to load {ACCESS_TOML_PATH}: {e}"))
+        .map_err(|e| format!("failed to load {}: {e}", config_path().display()))
 }
 
 /// Whether the file at `path` carries an explicit `[fs] root` — which would

@@ -20,7 +20,10 @@ use aivyx_llm::ollama::{
 };
 use aivyx_llm::{LlmMessage, LlmProvider, LlmRequest, LlmStreamEvent, LlmToolDescriptor};
 
-const DOCTOR_TOML_PATH: &str = "aivyx-pa.toml";
+/// The operator's `aivyx-pa.toml` — see `aivyx_config::resolve_config_path`.
+fn config_path() -> std::path::PathBuf {
+    aivyx_config::resolve_config_path()
+}
 
 /// `aivyx-pa doctor` — run the health checks and report.
 pub async fn run_doctor() -> Result<(), String> {
@@ -807,7 +810,7 @@ async fn check_kitchen(home: &Path) -> bool {
     let mut ok = true;
 
     // 2. [[tool_process]] kitchen wired + 3. [team] config_path → a loadable pack.
-    match crate::connect::find_aivyx_toml(home) {
+    match crate::connect::find_aivyx_toml() {
         Some(toml_path) => match std::fs::read_to_string(&toml_path)
             .ok()
             .and_then(|b| b.parse::<toml_edit::DocumentMut>().ok())
@@ -909,7 +912,7 @@ fn truncate(s: &str, max: usize) -> String {
 
 fn load_config_for_inspection() -> Result<AivyxConfig, String> {
     let opts = LoadOptions {
-        toml_path: Some(Path::new(DOCTOR_TOML_PATH).to_path_buf()),
+        toml_path: Some(config_path()),
         require_api_key: false,
         require_telegram_token: false,
         require_discord_token: false,
@@ -917,7 +920,7 @@ fn load_config_for_inspection() -> Result<AivyxConfig, String> {
         role_override: None,
     };
     AivyxConfig::load_from_env_and_toml(&opts)
-        .map_err(|e| format!("failed to load {DOCTOR_TOML_PATH}: {e}"))
+        .map_err(|e| format!("failed to load {}: {e}", config_path().display()))
 }
 
 #[cfg(test)]

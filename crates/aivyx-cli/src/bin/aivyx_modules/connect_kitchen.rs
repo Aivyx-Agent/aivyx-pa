@@ -154,7 +154,7 @@ pub async fn run_connect_kitchen(
     writeln!(writer, "Wrote {} (0600).", cfg.display()).map_err(werr)?;
 
     // 2-3. tool_process + pack + team config_path into aivyx-pa.toml.
-    if let Some(toml_path) = find_aivyx_toml(home) {
+    if let Some(toml_path) = find_aivyx_toml() {
         wire_aivyx_toml(&toml_path, home, writer)?;
     } else {
         writeln!(

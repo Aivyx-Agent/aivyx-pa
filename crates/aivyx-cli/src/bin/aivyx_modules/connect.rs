@@ -430,17 +430,11 @@ async fn run_onboarding(
 // Part A — offer to wire [[tool_process]] into aivyx-pa.toml.
 // ---------------------------------------------------------------------------
 
-/// Find the operator's `aivyx-pa.toml`: CWD first (where the wizard
-/// writes), then `~/.config/aivyx-pa/aivyx-pa.toml`.
-pub fn find_aivyx_toml(home: &Path) -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok().map(|d| d.join("aivyx-pa.toml"));
-    if let Some(p) = &cwd {
-        if p.exists() {
-            return cwd;
-        }
-    }
-    let xdg = home.join(".config").join("aivyx-pa").join("aivyx-pa.toml");
-    if xdg.exists() { Some(xdg) } else { None }
+/// Find the operator's `aivyx-pa.toml` where every command looks for it
+/// (`aivyx_config::resolve_config_path`), if it exists.
+pub fn find_aivyx_toml() -> Option<PathBuf> {
+    let path = aivyx_config::resolve_config_path();
+    path.exists().then_some(path)
 }
 
 /// Is a `[[tool_process]]` with this `name` already present?
@@ -476,10 +470,7 @@ fn offer_tool_process_wiring(
     svc: &ConnectService,
     binary: &Path,
 ) -> Result<(), String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    let Some(toml_path) = find_aivyx_toml(&home) else {
+    let Some(toml_path) = find_aivyx_toml() else {
         writeln!(
             writer,
             "\nAdd this to your aivyx-pa.toml to enable the tool:\n\n\

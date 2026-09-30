@@ -28,7 +28,10 @@ use aivyx_config::{AivyxConfig, FieldSource, LoadOptions, Profile};
 /// [`crate::DEFAULT_TOML_PATH`] without depending on it (this module
 /// is included via `#[path = ...]` and re-exporting from the binary
 /// would create a cyclic-looking dependency).
-const PROFILE_TOML_PATH: &str = "aivyx-pa.toml";
+/// The operator's `aivyx-pa.toml` — see `aivyx_config::resolve_config_path`.
+fn config_path() -> std::path::PathBuf {
+    aivyx_config::resolve_config_path()
+}
 
 /// Entry point for `aivyx-pa profile show`. Loads `aivyx-pa.toml` via the
 /// same `aivyx-config` path the daemon uses at startup, then renders
@@ -62,7 +65,7 @@ pub fn run_profile_show() -> Result<(), String> {
 /// 7. Print a restart reminder per Q5(a) — Profile is load-time-only,
 ///    same as role configs.
 pub fn run_profile_edit() -> Result<(), String> {
-    let toml_path = Path::new(PROFILE_TOML_PATH);
+    let toml_path = &config_path();
 
     // Read the existing aivyx-pa.toml (or start with an empty document
     // if the operator has not run `aivyx-pa init` yet).
@@ -143,7 +146,7 @@ pub async fn run_profile_apply_hint(proposal_id: &str, yes: bool) -> Result<(), 
             "Apply `{field}` = {value:?} to {path}?",
             field = hint.field.label(),
             value = hint.suggested_value,
-            path = PROFILE_TOML_PATH,
+            path = config_path().display(),
         );
         eprintln!("[y/N] (re-run with --yes to skip this prompt)");
         let mut answer = String::new();
@@ -156,8 +159,8 @@ pub async fn run_profile_apply_hint(proposal_id: &str, yes: bool) -> Result<(), 
     }
 
     let applied =
-        crate::toml_edit_apply::apply_profile_hint_to_path(Path::new(PROFILE_TOML_PATH), &hint)
-            .map_err(|e| format!("failed to apply hint to {PROFILE_TOML_PATH}: {e}"))?;
+        crate::toml_edit_apply::apply_profile_hint_to_path(&config_path(), &hint)
+            .map_err(|e| format!("failed to apply hint to {}: {e}", config_path().display()))?;
 
     // Record the audit event via daemon IPC. If the audit-record
     // step fails AFTER the aivyx-pa.toml mutation landed, surface as
@@ -175,7 +178,7 @@ pub async fn run_profile_apply_hint(proposal_id: &str, yes: bool) -> Result<(), 
     eprintln!(
         "Applied `{field}` to {path}.",
         field = applied.field,
-        path = PROFILE_TOML_PATH,
+        path = config_path().display(),
     );
     match audit_result {
         Ok(()) => {
@@ -421,7 +424,7 @@ fn write_aivyx_toml(path: &Path, contents: &str) -> Result<(), String> {
 /// populate the `profile` field (or synthesize the default).
 fn load_config_for_inspection() -> Result<AivyxConfig, String> {
     let opts = LoadOptions {
-        toml_path: Some(Path::new(PROFILE_TOML_PATH).to_path_buf()),
+        toml_path: Some(config_path()),
         require_api_key: false,
         require_telegram_token: false,
         require_discord_token: false,
@@ -429,7 +432,7 @@ fn load_config_for_inspection() -> Result<AivyxConfig, String> {
         role_override: None,
     };
     AivyxConfig::load_from_env_and_toml(&opts)
-        .map_err(|e| format!("failed to load {PROFILE_TOML_PATH}: {e}"))
+        .map_err(|e| format!("failed to load {}: {e}", config_path().display()))
 }
 
 /// Render the Profile in the labeled format `show` writes to stdout.

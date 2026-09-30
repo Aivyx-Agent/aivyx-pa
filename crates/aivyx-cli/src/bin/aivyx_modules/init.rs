@@ -19,7 +19,10 @@ use aivyx_llm::verify::{VerifyError, VerifyProvider, verify_provider_credentials
 use aivyx_channel::profile_draft::{DraftedProfile, IdentityAnswers, draft_identity};
 
 /// Default config file name (matches `aivyx-config` convention).
-const CONFIG_FILE: &str = "aivyx-pa.toml";
+/// The operator's `aivyx-pa.toml` — see `aivyx_config::resolve_config_path`.
+fn config_path() -> std::path::PathBuf {
+    aivyx_config::resolve_config_path()
+}
 
 /// Default Anthropic model id presented to the operator on the
 /// model-name prompt. Phase 104 refresh: was
@@ -2103,9 +2106,29 @@ fn default_paths() -> (String, String) {
 
 /// Write `contents` to `path` with 0600 permissions on Unix.
 fn write_config(path: &Path, contents: &str) -> Result<(), String> {
-    std::fs::write(path, contents)
+    use std::io::Write as _;
+
+    // The default location (`~/.config/aivyx-pa/`) may not exist yet.
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+    }
+    // Created 0600, so an API key in it is never briefly readable under the
+    // umask's mode.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    file.write_all(contents.as_bytes())
         .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
 
+    // An existing file keeps its old mode through `open`: tighten it too.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -2561,10 +2584,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     let mut writer = io::stderr();
 
     // 2. Overwrite guard.
-    let config_path = Path::new(CONFIG_FILE);
-    if config_path.exists() {
+    let config_file = config_path();
+    if config_file.exists() {
         let overwrite = prompt_yes_no(
-            &format!("{CONFIG_FILE} already exists. Overwrite?"),
+            &format!("{} already exists. Overwrite?", config_file.display()),
             false,
             &mut reader,
             &mut writer,
@@ -2900,7 +2923,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // Default starter routines (cron-scheduled). Appended to both the plain and
     // template render paths so every new agent gets them.
     toml.push_str(&render_default_schedules(&cfg));
-    write_config(config_path, &toml)?;
+    write_config(&config_file, &toml)?;
 
     // 6b. Chapter P — for the local path, confirm the setup actually works
     // (the local server reachable, model present) before the user's first
@@ -2918,11 +2941,12 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // operator's first five minutes — so it surfaces the Studio (the web GUI a
     // new user won't otherwise discover), `doctor`, and, for the local path, the
     // capable-hardware guide.
-    eprintln!("\nWrote {CONFIG_FILE}");
+    eprintln!("\nWrote {}", config_file.display());
     if cfg.api_key.is_some() {
         eprintln!(
-            "Warning: {CONFIG_FILE} contains your API key. \
-             Permissions set to 0600 (owner-only)."
+            "Warning: {} contains your API key. \
+             Permissions set to 0600 (owner-only).",
+            config_file.display()
         );
     }
     eprintln!("You'll be prompted for a passphrase on first launch (or set AIVYX_PA_PASSPHRASE).");
@@ -2934,9 +2958,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // autonomous activity erodes trust.
     if cfg.provider.is_local() {
         eprintln!(
-            "\nSet up background routines (in {CONFIG_FILE} under [[schedule]]): a daily \
+            "\nSet up background routines (in {} under [[schedule]]): a daily \
              environment review, nightly reflection, a health check, and a weekly digest \
              run automatically{}. Edit or disable any of them there.",
+            config_file.display(),
             if cfg.enable_web_search {
                 ", plus a daily web trend-scan of your interests"
             } else {
@@ -2945,10 +2970,11 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         );
     } else {
         eprintln!(
-            "\nWrote background routines (in {CONFIG_FILE} under [[schedule]]) — disabled by \
+            "\nWrote background routines (in {} under [[schedule]]) — disabled by \
              default for cloud providers since each run spends tokens. Flip `enabled = true` \
              on any you want (a daily environment review, nightly reflection, health check, \
-             weekly digest, trend-scan)."
+             weekly digest, trend-scan).",
+            config_file.display()
         );
     }
     let web_ui_port = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;

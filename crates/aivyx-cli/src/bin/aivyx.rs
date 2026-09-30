@@ -257,12 +257,13 @@ const DEFAULT_BROKER_BASE_URL: &str = "http://127.0.0.1:8899";
 /// banner.
 const DEFAULT_LEMONADE_BASE_URL: &str = "http://127.0.0.1:13305/api";
 
-/// Default path the binary looks at for the TOML config file.
-/// `./aivyx-pa.toml` relative to the current working directory — present
-/// if the operator has written one, silently ignored if not. Absolute
-/// or elsewhere paths belong in `$AIVYX_PA_CONFIG_PATH` (future amendment)
-/// or just be driven via env vars.
-const DEFAULT_TOML_PATH: &str = "aivyx-pa.toml";
+/// The TOML config file the binary reads (and `init` writes): see
+/// [`aivyx_config::resolve_config_path`] — `$AIVYX_PA_CONFIG_PATH`, else an
+/// existing `./aivyx-pa.toml`, else `~/.config/aivyx-pa/aivyx-pa.toml`. A
+/// missing file is silently ignored (env-only launches still work).
+fn default_toml_path() -> PathBuf {
+    aivyx_config::resolve_config_path()
+}
 
 /// Optional `(tool, required capability scope)` pair returned by a
 /// registration-time trust gate — `build_shell_exec_for_channel`
@@ -1101,7 +1102,7 @@ fn run() -> Result<(), String> {
     // `--channel`.
     let print_role_mode = print_role.is_some();
     let load_opts = LoadOptions {
-        toml_path: Some(PathBuf::from(DEFAULT_TOML_PATH)),
+        toml_path: Some(default_toml_path()),
         // Phase 105 — `aivyx-pa audit export` shares `--verify-only`'s
         // posture: cold-start storage open via passphrase, no
         // session opened, no provider call made. No API key
@@ -10058,7 +10059,7 @@ async fn run_async(
             // beside `aivyx-pa.toml`), falling back to the built-in Nonagon when
             // neither is present. `base_dir` is the loaded `aivyx-pa.toml`'s
             // directory (cwd for the default relative path).
-            let team_base_dir = std::path::Path::new(DEFAULT_TOML_PATH)
+            let team_base_dir = default_toml_path()
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
                 .map(std::path::Path::to_path_buf)
@@ -10500,7 +10501,7 @@ async fn run_async(
             // threaded when the file actually exists: an env-only launch leaves
             // it `None`, and the write handlers refuse rather than fabricate one.
             config_toml_path: {
-                let p = PathBuf::from(DEFAULT_TOML_PATH);
+                let p = default_toml_path();
                 p.exists().then_some(p)
             },
             // Piece C follow-up — see `DaemonConfig::role_override`'s own doc
@@ -10516,7 +10517,7 @@ async fn run_async(
             // env-only launch leaves it `None` and the handler refuses, exactly
             // like the other Settings writes.
             team_config_write_path: {
-                let toml = PathBuf::from(DEFAULT_TOML_PATH);
+                let toml = default_toml_path();
                 toml.exists().then(|| {
                     let base = toml
                         .parent()

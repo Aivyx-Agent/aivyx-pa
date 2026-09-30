@@ -22,11 +22,14 @@ use aivyx_config::{
 
 /// Module-local copy of the default config path (mirrors the other subcommand
 /// modules — no coupling to `crate::DEFAULT_TOML_PATH`).
-const AUTONOMY_TOML_PATH: &str = "aivyx-pa.toml";
+/// The operator's `aivyx-pa.toml` — see `aivyx_config::resolve_config_path`.
+fn config_path() -> std::path::PathBuf {
+    aivyx_config::resolve_config_path()
+}
 
 /// `aivyx-pa autonomy show` — print the current level + the posture it resolves to.
 pub fn run_autonomy_show() -> Result<(), String> {
-    let cfg = load_config_for_inspection(Path::new(AUTONOMY_TOML_PATH))?;
+    let cfg = load_config_for_inspection(&config_path())?;
     print!("{}", render_autonomy_for_show(&cfg));
     Ok(())
 }
@@ -35,7 +38,7 @@ pub fn run_autonomy_show() -> Result<(), String> {
 /// autonomy-granting levels (`autonomous` / `unleashed`) require a confirmation
 /// unless `--yes`.
 pub fn run_autonomy_set(level: AutonomyLevel, yes: bool) -> Result<(), String> {
-    run_autonomy_set_at(Path::new(AUTONOMY_TOML_PATH), level, yes)
+    run_autonomy_set_at(&config_path(), level, yes)
 }
 
 /// Path-parametrized core of [`run_autonomy_set`] — lets tests drive an
