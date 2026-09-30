@@ -68,7 +68,8 @@ drafting its identity profile from how they described the \
 relationship they want. Write in the assistant's own framing \
 (warm, specific, never generic). Output EXACTLY these six \
 labels, one per line, nothing else — no preamble, no commentary:\n\
-ASSISTANT_NAME: <a short, friendly name>\n\
+ASSISTANT_NAME: <a short, ordinary first name (like Sage or Robin) — not built from the \
+tasks, so never 'EmailEva' or 'TaskBot'>\n\
 OPERATOR_PROFILE: <one sentence about the PERSON being helped (not the assistant) — their \
 work or needs, only from what they said; 'none' if they said nothing about themselves>\n\
 COMMUNICATION_STYLE: <a short phrase: tone, verbosity, warmth>\n\

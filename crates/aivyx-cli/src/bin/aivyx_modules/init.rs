@@ -261,11 +261,18 @@ async fn decide_embedding(
             .map_err(|e| format!("write error: {e}"))?;
             Ok(None)
         }
-        Provider::Lemonade
-        | Provider::LlamaCpp
-        | Provider::Jan
-        | Provider::Broker
-        | Provider::MistralRs => {
+        Provider::Lemonade => {
+            writeln!(
+                writer,
+                "\nMemory: your assistant recalls by keywords for now (no extra model \
+                 needed). For recall by meaning, add an embedding model later (the \
+                 Studio's Settings → Embedding) — Lemonade offers some, such as \
+                 nomic-embed-text-v1-GGUF."
+            )
+            .map_err(|e| format!("write error: {e}"))?;
+            Ok(None)
+        }
+        Provider::LlamaCpp | Provider::Jan | Provider::Broker | Provider::MistralRs => {
             writeln!(
                 writer,
                 "\nMemory: your assistant recalls by keywords for now (no extra model \
@@ -2005,7 +2012,7 @@ fn review_draft(
         behavioral_constraints: review_list(
             reader,
             writer,
-            "Never",
+            "Limits",
             draft.behavioral_constraints,
         )?,
     })
@@ -2163,7 +2170,9 @@ fn render_identity_summary(f: &IdentityFields) -> String {
     for (label, list) in [
         ("Here for", &f.primary_use_cases),
         ("Tends to", &f.behavioral_preferences),
-        ("Never", &f.behavioral_constraints),
+        // The constraints read as written ("never force push"), so the
+        // label can't be "Never" too.
+        ("Limits", &f.behavioral_constraints),
     ] {
         if !list.is_empty() {
             line(label, &list.join(", "));
@@ -3381,7 +3390,7 @@ mod tests {
         assert!(s.contains("  About you      a Rust engineer\n"), "{s}");
         assert!(s.contains("  How it talks   warm but concise\n"), "{s}");
         assert!(s.contains("  Here for       coding, review\n"), "{s}");
-        assert!(s.contains("  Never          never force push\n"), "{s}");
+        assert!(s.contains("  Limits         never force push\n"), "{s}");
         // Empty lines are omitted.
         assert!(!s.contains("Tends to"), "{s}");
     }

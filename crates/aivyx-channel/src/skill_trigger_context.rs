@@ -241,21 +241,25 @@ impl ContextProvider for SkillTriggerContext {
         // 0.60 over summarize-document at 0.56). Log the runner-up's own
         // name + score alongside the winner so a diagnosis session doesn't
         // have to guess which skill(s) were actually competing.
-        match scores
+        // A diagnostic for the daemon's log; an interactive chat (stderr
+        // is the person's terminal) shouldn't show it between replies.
+        let runner_up = scores
             .iter()
             .copied()
             .enumerate()
             .filter(|&(i, _)| i != best_idx)
-            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-        {
-            Some((idx, score)) => eprintln!(
-                "aivyx-pa skills: injected procedure {:?} (trigger match {:.2}, runner-up {:?} at {:.2})",
-                skill.name, best_score, skills[idx].name, score,
-            ),
-            None => eprintln!(
-                "aivyx-pa skills: injected procedure {:?} (trigger match {:.2})",
-                skill.name, best_score,
-            ),
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        if !std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+            match runner_up {
+                Some((idx, score)) => eprintln!(
+                    "aivyx-pa skills: injected procedure {:?} (trigger match {:.2}, runner-up {:?} at {:.2})",
+                    skill.name, best_score, skills[idx].name, score,
+                ),
+                None => eprintln!(
+                    "aivyx-pa skills: injected procedure {:?} (trigger match {:.2})",
+                    skill.name, best_score,
+                ),
+            }
         }
         // Record the injection as a turn-correlated SkillInvocation —
         // emitted during begin_turn, so it lands inside the turn's

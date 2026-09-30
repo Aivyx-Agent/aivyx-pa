@@ -6767,8 +6767,8 @@ async fn run_async(
             Ok(n) => {
                 if n > 0 {
                     eprintln!(
-                        "aivyx-pa: planted your assistant's starting personality \
-                         ({n} trait(s) from [persona_seed])"
+                        "aivyx-pa: gave your assistant its starting skills and \
+                         personality ({n} to begin with)"
                     );
                 }
                 n
@@ -7316,7 +7316,10 @@ async fn run_async(
         let root = workspace_path.value;
         match aivyx_core::tools::workspace::provision_workspace(&root) {
             Ok(()) => {
-                eprintln!("aivyx-pa workspace: {}", root.display());
+                // Startup detail for the daemon's log, not a chat session.
+                if !io::stderr().is_terminal() {
+                    eprintln!("aivyx-pa workspace: {}", root.display());
+                }
                 Some(root)
             }
             Err(e) => {
@@ -8625,10 +8628,12 @@ async fn run_async(
                             mcp_tools.iter().map(|t| t.id()).collect(),
                         );
                         tool_list.extend(mcp_tools);
-                        eprintln!(
-                            "aivyx-pa: MCP server {:?} ({transport_label}) — {} tool(s) registered",
-                            mcp_cfg.name, count,
-                        );
+                        if !io::stderr().is_terminal() {
+                            eprintln!(
+                                "aivyx-pa: MCP server {:?} ({transport_label}) — {} tool(s) registered",
+                                mcp_cfg.name, count,
+                            );
+                        }
                         mcp_status_entries.push(
                             aivyx_channel::mcp_status::McpServerStatusView::connected(
                                 &mcp_cfg.name,
@@ -8882,10 +8887,12 @@ async fn run_async(
             tool_list.push(std::sync::Arc::new(proxy) as std::sync::Arc<dyn Tool>);
             registered += 1;
         }
-        eprintln!(
-            "aivyx-pa: tool process {:?} — {} tool(s) registered",
-            tp_cfg.name, registered,
-        );
+        if !io::stderr().is_terminal() {
+            eprintln!(
+                "aivyx-pa: tool process {:?} — {} tool(s) registered",
+                tp_cfg.name, registered,
+            );
+        }
         tool_bridges.push(bridge);
     }
 
