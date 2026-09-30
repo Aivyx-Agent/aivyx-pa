@@ -61,8 +61,9 @@ aivyx-pa init
 `init` finds the model server you have running (or asks for a key),
 lets you pick a model, asks a few questions about you and your
 assistant, sets a passphrase for the encrypted store (kept in your OS
-keyring when there is one), offers the default background routines,
-and finishes with a real health check. The config lands in
+keyring, or — with no keyring — in a file only you can read), offers
+the default background routines, and finishes by checking that your
+model answers. The config lands in
 `~/.config/aivyx-pa/aivyx-pa.toml`, so `aivyx-pa` works from any
 directory. (A `./aivyx-pa.toml` in the current directory, or
 `AIVYX_PA_CONFIG_PATH`, takes precedence.) Want a head start?

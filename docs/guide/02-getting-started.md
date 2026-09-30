@@ -47,8 +47,9 @@ machine. That flow is covered in detail on the next page.
 
 It also asks you to choose a **passphrase**: your assistant's memory and audit
 log are encrypted with it. If your computer has a keyring (most desktops do), the
-passphrase is kept there, so the assistant can start its background service and
-the Studio without asking you each time.
+passphrase is kept there. If it doesn't, the wizard offers to save it in a file
+only you can read (`~/.config/aivyx-pa/daemon.env`). Either way the assistant
+can start its background service and the Studio without asking you each time.
 
 When the wizard finishes it writes a small config file,
 `~/.config/aivyx-pa/aivyx-pa.toml`, and you're ready. Launch the assistant from
@@ -59,8 +60,8 @@ aivyx-pa
 ```
 
 This drops you into a chat session. With your passphrase stored — in your OS
-keyring, or the `AIVYX_PA_PASSPHRASE` environment variable on a machine without
-one — `aivyx-pa` also starts the **daemon** in the background: the
+keyring, the saved file, or the `AIVYX_PA_PASSPHRASE` environment variable —
+`aivyx-pa` also starts the **daemon** in the background: the
 long-running part that serves the Studio, runs scheduled routines and keeps
 going after you close the terminal. If it can't start the daemon, it says so and
 chats without it; `aivyx-pa daemon run` starts it by hand.

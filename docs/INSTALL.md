@@ -13,8 +13,13 @@ not required reading to get there.
 Aivyx PA ships a single binary, `aivyx-pa`, plus five optional channel
 adapters baked into it (CLI, Telegram, Discord, Slack, Web UI).
 There are no hosted dependencies — your binary talks directly to
-your LLM provider (Anthropic / OpenAI-compatible / Ollama) and
-stores everything locally in an encrypted redb file.
+your model (a local server — Lemonade, Ollama, llama.cpp, Jan,
+aivyx-broker — or Anthropic / OpenAI under your key) and stores
+everything locally in an encrypted redb file.
+
+**Quick path:** the [shell installer](#shell-installer-recommended),
+then `aivyx-pa init`, then `aivyx-pa`. The
+[first-run checklist](#first-run-checklist) below walks through it.
 
 ## Current install state
 
@@ -383,10 +388,13 @@ phase); until then `docker compose up --build` builds it locally from source.
 |---|---|---|
 | `aivyx-pa` binary | `~/.cargo/bin/aivyx-pa` | Yes — `--install-path` flag on the installer |
 | Config | `~/.config/aivyx-pa/aivyx-pa.toml` (where `init` writes it); a `./aivyx-pa.toml` in the current directory takes precedence when present | Yes — `AIVYX_PA_CONFIG_PATH=<path>` |
-| Encrypted store | per-config (`[storage] path`) | Yes — TOML `[storage] path` |
-| Daemon socket | `$XDG_RUNTIME_DIR/aivyx-pa.sock` (Linux) / `$TMPDIR/aivyx-pa.sock` (macOS) | No |
-| Daemon PID file | `$XDG_RUNTIME_DIR/aivyx-pa.pid` (Linux) / `$TMPDIR/aivyx-pa.pid` (macOS) | No |
-| Web UI port | `127.0.0.1:7843` | Yes — TOML `[daemon] web_ui_port` or `--web-ui-port <N>` |
+| Encrypted store | `~/.local/share/aivyx-pa/store.redb` (what `init` suggests) | Yes — TOML `[storage] path` |
+| Studio sign-in token | `studio-token` next to the store | No — `aivyx-pa studio` prints the link |
+| Saved passphrase (no OS keyring) | `~/.config/aivyx-pa/daemon.env`, `0600` | Delete it to be asked each time |
+| Your files (what `fs.*` reaches) | `~/aivyx-pa-sandbox` at the default `sandbox` access level | Yes — `aivyx-pa access`, TOML `[fs] root` |
+| The assistant's own notebook | `~/.aivyx-pa/workspace` (journal, ideas, plans) | No |
+| Daemon socket, PID file, log | `$XDG_RUNTIME_DIR/aivyx-pa/daemon.{sock,pid,log}` (else `~/.local/share/aivyx-pa/`) | No |
+| Studio (web UI) | `127.0.0.1:7843` | Yes — TOML `[daemon] web_ui_port` or `--web-ui-port <N>` |
 
 ## First-run checklist
 
@@ -396,8 +404,13 @@ After install:
    server that's already running (Ollama, Lemonade Server, llama.cpp,
    Jan or aivyx-broker) and offers it first; with none running it asks,
    and never picks a cloud provider for you. It asks for the passphrase
-   that encrypts your store and keeps it in the OS keyring when there is
-   one, so `aivyx-pa` can start its daemon and the Studio on its own.
+   that encrypts your store and keeps it in the OS keyring; with no
+   keyring (servers, minimal desktops) it offers to save it in
+   `~/.config/aivyx-pa/daemon.env`, readable only by you. Either way
+   `aivyx-pa` can then start its daemon and the Studio on its own. It
+   offers the background service only where one can be installed (a
+   systemd user session, or macOS), and finishes by checking that your
+   model answers.
    Writes `~/.config/aivyx-pa/aivyx-pa.toml` with `0600` permissions —
    found from any directory (a `./aivyx-pa.toml` in the current
    directory still takes precedence; `AIVYX_PA_CONFIG_PATH` points
@@ -458,13 +471,16 @@ After install:
    entry in `aivyx-pa.toml` at the resulting binary. See
    [`docs/TOOL_SDK.md`](TOOL_SDK.md) for the full protocol.
 
-2. **`aivyx-pa`** — auto-spawns the daemon (foreground or
-   background depending on flag), drops you into a REPL session,
-   and serves the Web UI on `127.0.0.1:7843` if you enabled it.
+2. **`aivyx-pa`** — starts the daemon in the background (when it can
+   get your passphrase without asking — keyring, saved file or
+   `AIVYX_PA_PASSPHRASE`) and drops you into a chat. Otherwise it asks
+   for the passphrase and chats without the daemon (no Studio or
+   routines) and says so.
 
-3. **Visit `http://127.0.0.1:7843/`** for the Web UI: Chat,
-   Missions, Audit (with cold-verify), Sessions, Profile,
-   Persona tabs.
+3. **`aivyx-pa studio`** prints your sign-in link for the Studio
+   (`http://127.0.0.1:7843/?token=…`); open it once and the browser
+   stays signed in. Start with **Chat**; the **Guide** screen is the
+   user manual.
 
 4. **`aivyx-pa --verify-only`** at any time runs the offline
    HMAC audit-chain verification pass.
