@@ -1872,8 +1872,8 @@ impl ConcreteAgent {
         let mut outcome = if needs_destructive_confirmation {
             ToolOutcome::RequiresEscalation {
                 reason: format!(
-                    "{tool_name} needs the operator's approval before it runs (`{}` is a \
-                     third-party action Aivyx PA never takes unasked).",
+                    "{tool_name} needs approval before it runs (`{}` is a third-party \
+                     action Aivyx PA never takes unasked).",
                     needed.base()
                 ),
                 // Stamped below like any other RequiresEscalation (RN.3).

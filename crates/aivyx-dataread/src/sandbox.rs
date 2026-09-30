@@ -187,8 +187,8 @@ impl ReaderSandbox {
             if self.confirm_destructive && !aivyx_core::confirm::is_confirmed(input) {
                 return Err(ToolOutcome::RequiresEscalation {
                     reason: format!(
-                        "{path_str:?} already exists and replacing it can't be undone: the \
-                         operator must approve it first."
+                        "{path_str:?} already exists and replacing it can't be undone, so it \
+                         needs approval first."
                     ),
                     scope: None,
                 });

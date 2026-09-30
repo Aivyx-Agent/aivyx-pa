@@ -18,8 +18,9 @@ confirmed before it's applied — you can't bump access by accident.
 
 > **The confirmation safety net.** Regardless of access level, anything
 > irreversible — deleting or overwriting a file, sending a message, dispatching
-> an order — **always stops and asks you first**, and only your reply counts as
-> the yes. Access sets the boundary of what's reachable; the confirmation step
+> an order — **always stops and asks you first** (an *Approval needed* card in
+> the Studio, `Approve? [y/N]` in the terminal; in chat apps, reply "yes"), and
+> the assistant can never approve on your behalf. Access sets the boundary of what's reachable; the confirmation step
 > protects the consequential actions inside that boundary. (The one exception
 > is the `unleashed` autonomy level below, meant for a dedicated machine.)
 

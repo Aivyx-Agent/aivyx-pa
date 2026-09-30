@@ -5,6 +5,22 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Approve or deny, and the reply carries on.** When the assistant wants to do
+  something that can't be undone — delete or overwrite a file, commit, send an
+  email, place an order — the terminal chat asks `Approve? [y/N]` and the
+  Studio shows an *Approval needed* card. Approve and it does exactly what it
+  showed you, then continues; deny (or no answer in 10 minutes) and it tells
+  you it didn't. Chat apps keep "reply yes to approve". The assistant can never
+  approve for you: the confirmation flag is set by Aivyx PA, not the model.
+
+### Fixed
+
+- **Ctrl-C didn't cancel a reply through the daemon.** The daemon didn't read
+  the connection while a turn ran, and the terminal's channel ignored the
+  cancel anyway; both fixed, so Ctrl-C stops a reply at once.
+
 ## [0.12.2] — 2026-10-01
 
 ### Fixed

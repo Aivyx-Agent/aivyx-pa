@@ -608,8 +608,8 @@ impl Tool for GitCommitTool {
         if self.confirm_destructive && !git_is_confirmed(&input) {
             return ToolOutcome::RequiresEscalation {
                 reason: format!(
-                    "git.commit writes {} path(s) to the history of {}: the operator must \
-                     approve it first.",
+                    "git.commit writes {} path(s) to the history of {}, so it needs \
+                     approval first.",
                     paths.len(),
                     repo.display(),
                 ),

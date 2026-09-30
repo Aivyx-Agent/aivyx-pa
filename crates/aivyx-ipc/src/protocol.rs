@@ -3105,8 +3105,10 @@ impl StreamEventPayload {
                 ..
             } => format!("  ← {tool_name} {outcome_summary}\n"),
             StreamEventPayload::ToolOutput { chunk, .. } => chunk.clone(),
-            StreamEventPayload::ApprovalRequest { summary, reason, .. } => {
-                format!("\n  ⚑ Approval needed — {summary}\n    why: {reason}\n")
+            // The prompt itself was shown live (the frontend asked); the
+            // turn's transcript just notes it.
+            StreamEventPayload::ApprovalRequest { summary, .. } => {
+                format!("  ⚑ asked you to approve: {summary}\n")
             }
             StreamEventPayload::ApprovalGate {
                 mission_id,
@@ -3573,7 +3575,7 @@ mod tests {
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(serde_json::from_str::<StreamEventPayload>(&json).unwrap(), ev);
-        assert!(ev.render_for_cli().contains("Approval needed — fs.delete todo.md"));
+        assert_eq!(ev.render_for_cli(), "  ⚑ asked you to approve: fs.delete todo.md\n");
     }
     use super::*;
 

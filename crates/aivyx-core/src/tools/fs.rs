@@ -471,7 +471,7 @@ fn is_confirmed(input: &Value) -> bool {
     input.get("confirmed").and_then(|v| v.as_bool()) == Some(true)
 }
 
-const DESTRUCTIVE_CONFIRM_HINT: &str = "The operator must approve it first.";
+const DESTRUCTIVE_CONFIRM_HINT: &str = "It needs approval first.";
 
 /// The `confirmed` schema property shared by the confirm-first tools.
 fn confirmed_schema_property() -> Value {

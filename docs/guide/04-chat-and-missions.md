@@ -19,6 +19,29 @@ A few things worth knowing:
 - **Risky steps pause.** If a reply requires something irreversible — sending a
   message, deleting a file — the assistant stops and asks you to approve first.
 
+### When it asks first
+
+Some actions can't be undone — deleting or overwriting one of your files,
+committing to a git repository, sending an email, placing an order. When the
+assistant wants to do one of these, it **pauses and asks you**:
+
+- **In the Studio**, an *Approval needed* card appears in Chat with what it wants
+  to do, why it's asking, and the exact details (under *Arguments*). Click
+  **Approve** or **Deny**.
+- **In the terminal**, it shows the same thing and asks `Approve? [y/N]`. Type
+  `y` to approve; Enter (or anything else) says no.
+
+If you approve, it does exactly what it showed you and carries on. If you deny —
+or don't answer within 10 minutes — it doesn't, and it tells you so. The
+assistant can never approve on your behalf.
+
+In the chat apps (Telegram, Discord, Slack) there's no card: the assistant tells
+you what it wants to do and stops, and replying "yes" in your next message lets
+it go ahead once.
+
+If you press Ctrl-C while the terminal is asking, the reply is cancelled; press
+Enter to get back to the chat.
+
 ## Missions (orchestration)
 
 A **mission** is a larger goal you hand off — something that takes several steps,
