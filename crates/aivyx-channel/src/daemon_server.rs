@@ -7973,6 +7973,8 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::ToolCall { .. } => "ToolCall",
         aivyx_audit::AuditEvent::ScopeDenied { .. } => "ScopeDenied",
         aivyx_audit::AuditEvent::RateLimited { .. } => "RateLimited",
+        aivyx_audit::AuditEvent::ApprovalRequested { .. } => "ApprovalRequested",
+        aivyx_audit::AuditEvent::ApprovalResolved { .. } => "ApprovalResolved",
         aivyx_audit::AuditEvent::TurnStarted { .. } => "TurnStarted",
         aivyx_audit::AuditEvent::TurnEnded { .. } => "TurnEnded",
         aivyx_audit::AuditEvent::LlmCost { .. } => "LlmCost",

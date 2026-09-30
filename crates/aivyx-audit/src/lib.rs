@@ -119,6 +119,22 @@ pub enum AuditEvent {
         reason: String,
     },
 
+    /// A tool call paused for the operator's approval in an interactive
+    /// turn (chat approval). Additive.
+    ApprovalRequested {
+        turn_id: TurnId,
+        tool: String,
+        summary: String,
+    },
+
+    /// The operator's answer to an approval prompt: `approved`, `denied`
+    /// or `timed_out`. Additive.
+    ApprovalResolved {
+        turn_id: TurnId,
+        tool: String,
+        outcome: String,
+    },
+
     /// Turn started. Correlates with `TurnEnded` via `turn_id`.
     TurnStarted {
         turn_id: TurnId,
@@ -1227,6 +1243,12 @@ impl From<aivyx_core::AuditTag> for AuditEvent {
                 tool,
                 reason,
             },
+            AuditTag::ApprovalRequested { turn_id, tool, summary } => {
+                AuditEvent::ApprovalRequested { turn_id, tool, summary }
+            }
+            AuditTag::ApprovalResolved { turn_id, tool, outcome } => {
+                AuditEvent::ApprovalResolved { turn_id, tool, outcome }
+            }
             AuditTag::MemoryAccess {
                 turn_id,
                 operation,

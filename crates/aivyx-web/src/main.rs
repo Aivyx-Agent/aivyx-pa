@@ -2514,6 +2514,8 @@ fn audit_event_label(event_type: &str) -> &str {
         "ToolCall" => "Tool used",
         "ScopeDenied" => "Permission denied",
         "RateLimited" => "Rate limited",
+        "ApprovalRequested" => "Approval asked",
+        "ApprovalResolved" => "Approval answered",
         "TurnStarted" => "Reply started",
         "TurnEnded" => "Reply finished",
         "LlmCost" => "Model usage",
@@ -2547,7 +2549,8 @@ mod audit_event_label_tests {
     fn every_audit_event_variant_has_a_readable_name() {
         // Keep in step with `aivyx_audit::AuditEvent`.
         for v in [
-            "ToolCall", "ScopeDenied", "RateLimited", "TurnStarted", "TurnEnded",
+            "ToolCall", "ScopeDenied", "RateLimited", "ApprovalRequested",
+            "ApprovalResolved", "TurnStarted", "TurnEnded",
             "LlmCost", "ModelRouted", "ConversationTainted", "CloudEscalation",
             "CloudConsentGranted", "EscalationArmed", "MemoryAccess", "SkillInvocation",
             "AutoNotifyDispatched", "SkillAutoProposal", "ProfileHintApplied",

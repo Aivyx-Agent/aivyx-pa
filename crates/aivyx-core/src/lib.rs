@@ -306,6 +306,34 @@ pub enum ChannelPlatform {
 // ChannelContext
 // ---------------------------------------------------------------------------
 
+/// How long an approval prompt waits before the action is refused.
+pub const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// A tool call waiting for the operator's yes/no (see
+/// [`ChannelContext::request_approval`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalRequest {
+    /// The tool's name, e.g. `fs.delete`.
+    pub tool: String,
+    /// One line: the tool and what it touches, e.g. `fs.delete todo.md`.
+    pub summary: String,
+    /// The exact arguments that will run if approved.
+    pub input: serde_json::Value,
+    /// Why it's asking (the tool's escalation reason).
+    pub reason: String,
+}
+
+/// The operator's answer to an [`ApprovalRequest`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Approval {
+    Approved,
+    Denied,
+    /// No answer within [`APPROVAL_TIMEOUT`].
+    TimedOut,
+    /// This channel can't ask (a chat app, a script, an unattended run).
+    Unavailable,
+}
+
 /// A channel's view onto an agent turn. Defined here rather than in
 /// `aivyx-channel` because `ToolContext` holds `&dyn ChannelContext` and
 /// moving `Tool` out of core would violate D1's "turn loop is core."
@@ -328,6 +356,14 @@ pub trait ChannelContext: Send + Sync {
     async fn finalize(&self, outcome: &TurnOutcome) -> Result<(), ChannelError>;
 
     fn cancellation_token(&self) -> CancellationToken;
+
+    /// Ask the operator to approve a tool call and wait for the answer.
+    /// Default: the channel can't ask, so the turn falls back to ending with
+    /// the escalation. A default method, like `session_partition`, so every
+    /// existing channel is unchanged (D2).
+    async fn request_approval(&self, _request: &ApprovalRequest) -> Approval {
+        Approval::Unavailable
+    }
 
     /// Stable, per-channel-instance partition identifier used by the
     /// turn loop to namespace session-scoped state (currently: memory
@@ -857,6 +893,18 @@ pub enum AuditTag {
         tool_attempted: ToolId,
         tool: String,
         reason: String,
+    },
+    /// A tool call paused for the operator's approval in an interactive turn.
+    ApprovalRequested {
+        turn_id: TurnId,
+        tool: String,
+        summary: String,
+    },
+    /// The operator's answer: `approved`, `denied` or `timed_out`.
+    ApprovalResolved {
+        turn_id: TurnId,
+        tool: String,
+        outcome: String,
     },
     /// Phase 117 — fires when `skills.invoke` runs successfully.
     /// Distinct from the `ToolCall` entry the planner emits for

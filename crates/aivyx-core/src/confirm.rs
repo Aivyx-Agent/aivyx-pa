@@ -14,7 +14,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use crate::{SessionId, ToolContext, TurnId};
+use crate::{SessionId, TurnId};
 
 /// Appended to a confirm-first refusal so the model knows the rule.
 pub const ASK_THEN_END_TURN: &str = "Ask the operator and END YOUR TURN; only if they agree \
@@ -27,29 +27,40 @@ pub const ASK_THEN_END_TURN: &str = "Ask the operator and END YOUR TURN; only if
 pub struct OperatorConfirmations(Mutex<HashMap<(SessionId, String), TurnId>>);
 
 impl OperatorConfirmations {
-    /// Whether this call may run. `confirmed` is the model's flag; it only
-    /// counts after a refusal of the same `target` in an earlier turn. A
-    /// call that doesn't run is remembered (the first refusal wins), so the
-    /// operator's next turn can confirm it.
-    pub fn allows(&self, ctx: &ToolContext<'_>, target: &str, confirmed: bool) -> bool {
-        let Ok(mut refused) = self.0.lock() else {
-            return false;
-        };
-        let key = (ctx.session_id, target.to_string());
+    /// Remember that `target` was refused in `turn` (the first refusal wins,
+    /// so a later refusal in the same turn doesn't move it forward).
+    pub fn record_refusal(&self, session: SessionId, turn: TurnId, target: &str) {
+        let Ok(mut refused) = self.0.lock() else { return };
+        // Bounded: stale refusals are cheap to forget — the cost is one more
+        // "please confirm" round, never a silent run.
+        if refused.len() > 1024 {
+            refused.clear();
+        }
+        refused.entry((session, target.to_string())).or_insert(turn);
+    }
+
+    /// Transitional (removed once the agent owns confirmation): the old
+    /// combined check — `confirmed` counts only after an earlier-turn
+    /// refusal; a call that doesn't run is recorded.
+    pub fn allows(&self, ctx: &crate::ToolContext<'_>, target: &str, confirmed: bool) -> bool {
+        if confirmed && self.take_refusal(ctx.session_id, ctx.turn_id, target) {
+            return true;
+        }
+        self.record_refusal(ctx.session_id, ctx.turn_id, target);
+        false
+    }
+
+    /// Whether `target` was refused in an EARLIER turn of `session` — i.e. the
+    /// operator has replied since. Consumes the record: one approval, one run.
+    pub fn take_refusal(&self, session: SessionId, turn: TurnId, target: &str) -> bool {
+        let Ok(mut refused) = self.0.lock() else { return false };
+        let key = (session, target.to_string());
         match refused.get(&key) {
-            Some(turn) if confirmed && *turn != ctx.turn_id => {
+            Some(t) if *t != turn => {
                 refused.remove(&key);
                 true
             }
-            _ => {
-                // Bounded: stale refusals are cheap to forget — the cost is
-                // one more "please confirm" round, never a silent run.
-                if refused.len() > 1024 {
-                    refused.clear();
-                }
-                refused.entry(key).or_insert(ctx.turn_id);
-                false
-            }
+            _ => false,
         }
     }
 }
@@ -76,4 +87,21 @@ pub fn target_of(input: &Value) -> String {
         obj.remove("confirmed");
     }
     v.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refusal_counts_only_in_a_later_turn_of_the_same_session() {
+        let ledger = OperatorConfirmations::default();
+        let (s, t1, t2) = (SessionId::new(), TurnId::new(), TurnId::new());
+        assert!(!ledger.take_refusal(s, t1, "fs.delete"), "nothing recorded yet");
+        ledger.record_refusal(s, t1, "fs.delete");
+        assert!(!ledger.take_refusal(s, t1, "fs.delete"), "same turn doesn't count");
+        assert!(!ledger.take_refusal(SessionId::new(), t2, "fs.delete"), "other session");
+        assert!(ledger.take_refusal(s, t2, "fs.delete"), "the operator's next turn");
+        assert!(!ledger.take_refusal(s, TurnId::new(), "fs.delete"), "consumed: one run");
+    }
 }
