@@ -906,6 +906,10 @@ async fn handle_websocket(
     };
     let frame = encode_frame(&start)?;
     unix_writer.write_all(&frame).await?;
+    // Chat approvals — the Studio shows an Approve / Deny card, so a paused
+    // tool call asks instead of ending the turn.
+    let frame = encode_frame(&FrontendMessage::SetApprovals { enabled: true })?;
+    unix_writer.write_all(&frame).await?;
 
     // Read SessionStarted — forward it to the WebSocket as JSON.
     let session_id: String = loop {

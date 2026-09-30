@@ -1058,6 +1058,9 @@ fn App() -> Element {
     let transcript = use_signal(Vec::<ChatLine>::new);
     let streaming = use_signal(String::new);
     let gate = use_signal(|| None::<GateInfo>);
+    // Chat approvals — a paused tool call waiting for Approve / Deny.
+    let approval = use_signal(|| None::<PendingApproval>);
+    use_context_provider(|| approval);
     // Chapter Mission Control — pure UI-navigation state (which mission's
     // graph is currently open); never written by `ws_task`'s coroutine, so
     // deliberately not threaded into its parameter list below. Passed to
@@ -4368,6 +4371,7 @@ fn ChatPanel() -> Element {
     let mut transcript = use_context::<Signal<Vec<ChatLine>>>();
     let streaming = use_context::<Signal<String>>();
     let gate = use_context::<Signal<Option<GateInfo>>>();
+    let pending_approval = use_context::<Signal<Option<PendingApproval>>>();
     let mut routing = use_context::<Signal<RoutingUi>>();
     let mut input = use_signal(String::new);
     let ready = session().is_some();
@@ -4408,6 +4412,9 @@ fn ChatPanel() -> Element {
                         }
                     }
                 }
+            }
+            if let Some(p) = pending_approval() {
+                ApprovalCard { p }
             }
             if let Some(g) = gate() {
                 GatePrompt { gate: g }
@@ -4543,6 +4550,87 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
                 }
             }
         }
+    }
+}
+
+/// A chat tool call waiting for Approve / Deny.
+#[derive(Clone, PartialEq)]
+struct PendingApproval {
+    request_id: String,
+    summary: String,
+    reason: String,
+    input: serde_json::Value,
+    expires_at_ms: f64,
+}
+
+/// The arguments as the card shows them: pretty, and bounded.
+fn approval_args_preview(input: &serde_json::Value) -> String {
+    let pretty = serde_json::to_string_pretty(input).unwrap_or_default();
+    if pretty.chars().count() > 2000 {
+        format!("{}…", pretty.chars().take(2000).collect::<String>())
+    } else {
+        pretty
+    }
+}
+
+/// Chat approvals — the paused call, with Approve / Deny. The answer goes to
+/// the daemon, which runs the exact call (or tells the model it was
+/// declined) and continues the turn.
+#[component]
+fn ApprovalCard(p: PendingApproval) -> Element {
+    let ws = use_context::<Sender>();
+    let mut pending = use_context::<Signal<Option<PendingApproval>>>();
+    let mut transcript = use_context::<Signal<Vec<ChatLine>>>();
+    let minutes_left = ((p.expires_at_ms - js_sys::Date::now()) / 60_000.0).ceil().max(0.0);
+    let args = approval_args_preview(&p.input);
+    let (p_yes, p_no) = (p.clone(), p.clone());
+    rsx! {
+        div { class: "glass-card approval-card",
+            h4 { "⚑ Approval needed — {p.summary}" }
+            p { class: "muted", "{p.reason}" }
+            details {
+                summary { "Arguments" }
+                pre { class: "approval-args", "{args}" }
+            }
+            div { class: "approval-actions",
+                button {
+                    class: "btn",
+                    onclick: move |_| {
+                        ws.send(FrontendMessage::ResolveApproval {
+                            request_id: p_yes.request_id.clone(),
+                            approved: true,
+                        });
+                        transcript.write().push(ChatLine::system(format!("✓ approved: {}", p_yes.summary)));
+                        pending.set(None);
+                    },
+                    "Approve"
+                }
+                button {
+                    class: "btn ghost",
+                    onclick: move |_| {
+                        ws.send(FrontendMessage::ResolveApproval {
+                            request_id: p_no.request_id.clone(),
+                            approved: false,
+                        });
+                        transcript.write().push(ChatLine::system(format!("✗ declined: {}", p_no.summary)));
+                        pending.set(None);
+                    },
+                    "Deny"
+                }
+                span { class: "label-tech", "answer within {minutes_left} min" }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod approval_card_tests {
+    #[test]
+    fn args_preview_is_pretty_and_bounded() {
+        let small = super::approval_args_preview(&serde_json::json!({"path": "todo.md"}));
+        assert!(small.contains("\"path\": \"todo.md\""), "{small}");
+        let big = super::approval_args_preview(&serde_json::json!({"content": "x".repeat(5000)}));
+        assert!(big.chars().count() <= 2001 && big.ends_with('…'), "{}", big.len());
     }
 }
 
@@ -10472,6 +10560,7 @@ async fn read_task(
     // calling a hook outside a render pass, while resolving the same
     // context.
     let ws = consume_context::<Sender>();
+    let mut approval = consume_context::<Signal<Option<PendingApproval>>>();
     {
         while let Some(Ok(Message::Text(text))) = read.next().await {
             let Ok(env) = serde_json::from_str::<DaemonEnvelope>(&text) else {
@@ -11311,6 +11400,22 @@ async fn read_task(
                         let input_oneline = serde_json::to_string(&input).unwrap_or_default();
                         transcript.write().push(ChatLine::system(format!("→ {tool_name} {input_oneline}")));
                     }
+                    StreamEventPayload::ApprovalRequest {
+                        request_id,
+                        summary,
+                        reason,
+                        input,
+                        expires_in_secs,
+                        ..
+                    } => {
+                        approval.set(Some(PendingApproval {
+                            request_id,
+                            summary,
+                            reason,
+                            input,
+                            expires_at_ms: js_sys::Date::now() + (expires_in_secs as f64) * 1000.0,
+                        }));
+                    }
                     StreamEventPayload::ApprovalGate { mission_id, gate_id, reason, .. } => {
                         gate.set(Some(GateInfo { mission_id, gate_id, reason }));
                     }
@@ -11352,6 +11457,14 @@ async fn read_task(
                     _ => {}
                 },
                 DaemonEnvelope::TurnComplete { outcome, .. } => {
+                    // A prompt still open when the turn ends was never
+                    // answered here (it timed out, or the turn was cancelled).
+                    if let Some(p) = approval() {
+                        approval.set(None);
+                        transcript
+                            .write()
+                            .push(ChatLine::system(format!("✗ not approved (no answer): {}", p.summary)));
+                    }
                     let text = streaming();
                     if !text.is_empty() {
                         transcript.write().push(ChatLine::assistant(text.clone()));

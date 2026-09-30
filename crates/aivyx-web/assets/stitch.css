@@ -411,6 +411,10 @@ a { color: var(--color-primary); text-decoration: none; }
 
 .welcome-card { margin-bottom: 18px; }
 .chat-empty { padding: 8px 4px; max-width: 640px; }
+.approval-card { border-color: var(--color-warn, #d97706); margin: 8px 0; }
+.approval-card h4 { margin: 0 0 6px; }
+.approval-args { max-height: 240px; overflow: auto; white-space: pre-wrap; }
+.approval-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
 .chat-empty h3 { margin: 0 0 6px; }
 .chat-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .welcome-card h3 { margin: 0 0 6px; }
