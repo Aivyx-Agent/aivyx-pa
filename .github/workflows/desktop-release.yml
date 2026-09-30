@@ -2,7 +2,8 @@
 # attaches them to the GitHub Release. This is SEPARATE from the cargo-dist CLI
 # release (`release.yml`): the desktop shell links a system webview, so it is
 # gnu-linked (not musl-static like the `aivyx` CLI) and packaged with
-# `cargo-bundle` (a `.deb` on Linux, a `.app`/`.dmg` on macOS).
+# `cargo-bundle` (a `.deb` on Linux, a `.app`/`.dmg` on macOS). Each bundle
+# also carries the `aivyx-pa` daemon the shell runs (First-run E).
 #
 # Exercised on the v0.7.0 release: the Linux `.deb` and macOS `.app` both build
 # correctly on real runners. cargo-dist's `release.yml` is the sole release
@@ -54,6 +55,12 @@ jobs:
       - name: Bundle (.deb)
         working-directory: crates/aivyx-desktop
         run: cargo bundle --release --format deb
+      # First-run E — the shell runs `aivyx-pa daemon run`, so the package
+      # carries the daemon too (built here, on the same runner and glibc).
+      - name: Add the aivyx-pa daemon to the .deb
+        run: |
+          cargo build --release -p aivyx-cli --bin aivyx-pa
+          scripts/add-daemon-to-deb.sh target/release/bundle/deb/*.deb target/release/aivyx-pa
       # Attach to the release cargo-dist creates (release.yml) — wait for it to
       # exist first, then UPLOAD (never create), so we don't race cargo-dist's
       # "Create GitHub Release" step (it fails if the release already exists).
@@ -102,6 +109,14 @@ jobs:
       - name: Bundle (.app)
         working-directory: crates/aivyx-desktop
         run: cargo bundle --release --format osx --target ${{ matrix.target }}
+      # First-run E — the shell runs `aivyx-pa daemon run`: ship the daemon
+      # inside the .app, beside the shell's own executable (which prefers it).
+      - name: Add the aivyx-pa daemon to the .app
+        run: |
+          cargo build --release -p aivyx-cli --bin aivyx-pa --target ${{ matrix.target }}
+          for app in target/${{ matrix.target }}/release/bundle/osx/*.app; do
+            cp target/${{ matrix.target }}/release/aivyx-pa "$app/Contents/MacOS/aivyx-pa"
+          done
       # A `.app` is a directory — zip it so it can be a single release asset.
       # With `--target`, cargo writes under `target/<triple>/release/…`.
       - name: Zip the .app

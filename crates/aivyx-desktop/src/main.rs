@@ -14,7 +14,7 @@
 //! appindicator (`libayatana-appindicator`) — the shell's native dependencies.
 
 use std::net::TcpStream;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use auto_launch::AutoLaunchBuilder;
@@ -28,6 +28,7 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuIt
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
 use wry::WebViewBuilder;
 
+mod first_run;
 mod gate_watch;
 
 /// Where the daemon serves the Studio (HTTP + the `/ws` WebSocket bridge).
@@ -72,6 +73,8 @@ pub(crate) enum UserEvent {
     ShowWindow,
     /// The global hotkey fired — toggle the window's visibility.
     ToggleWindow,
+    /// First-run E — the setup page's **Try again** button.
+    Retry,
 }
 
 /// Build the launch-on-login controller for this executable. `None` if the
@@ -85,10 +88,14 @@ fn auto_launch() -> Option<auto_launch::AutoLaunch> {
         .ok()
 }
 
-/// The `aivyx-pa` binary to drive the daemon: `AIVYX_PA_BIN` if set, else `aivyx-pa` on
-/// `PATH`.
+/// The `aivyx-pa` binary to drive the daemon: `AIVYX_PA_BIN` if set, else the
+/// one installed beside this app, else `aivyx-pa` on `PATH`.
 fn aivyx_bin() -> String {
-    std::env::var("AIVYX_PA_BIN").unwrap_or_else(|_| "aivyx-pa".to_string())
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("aivyx-pa")))
+        .filter(|p| p.is_file());
+    first_run::pick_aivyx_bin(std::env::var("AIVYX_PA_BIN").ok(), sibling)
 }
 
 /// The Studio sign-in token: `AIVYX_PA_STUDIO_TOKEN` when set, else — for a
@@ -138,34 +145,89 @@ fn wait_until_reachable() {
     }
 }
 
-/// Ensure a daemon is serving the Studio: attach if one is up (returns `None`),
-/// else spawn `aivyx-pa daemon run --web-ui` (env inherited) and return the child
-/// so we can stop it on quit. A spawn failure is non-fatal.
-fn ensure_daemon() -> Option<Child> {
+/// Where the daemon this app starts writes its output (`None` if there's no
+/// home to put it in — the output is then dropped).
+fn daemon_log() -> Option<std::path::PathBuf> {
+    first_run::daemon_log_path(
+        std::env::var("XDG_STATE_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+/// Ensure a daemon is serving the Studio: attach if one is up (no child),
+/// else spawn `aivyx-pa daemon run --web-ui` (env inherited, output to
+/// [`daemon_log`]) and return the child so we can stop it on quit. When the
+/// Studio still isn't there, the [`first_run::SetupProblem`] says why, for
+/// the page shown instead (First-run E).
+fn ensure_daemon() -> (Option<Child>, Option<first_run::SetupProblem>) {
     if daemon_reachable() {
-        return None;
+        return (None, None);
     }
     if !studio_is_local() {
         eprintln!(
             "aivyx-desktop: remote Studio {} is unreachable — check the appliance.",
             studio_url()
         );
-        return None;
+        return (None, None);
     }
-    match Command::new(aivyx_bin())
+    let log_path = daemon_log();
+    let log_file = log_path.as_ref().and_then(|path| {
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        std::fs::File::create(path).ok()
+    });
+    let (out, err) = match log_file.and_then(|f| Some((f.try_clone().ok()?, f))) {
+        Some((out, err)) => (Stdio::from(out), Stdio::from(err)),
+        None => (Stdio::null(), Stdio::null()),
+    };
+    let bin = aivyx_bin();
+    let mut child = match Command::new(&bin)
         .args(["daemon", "run", "--web-ui"])
+        .stdin(Stdio::null())
+        .stdout(out)
+        .stderr(err)
         .spawn()
     {
-        Ok(child) => {
-            wait_until_reachable();
-            Some(child)
-        }
+        Ok(child) => child,
         Err(e) => {
             eprintln!("aivyx-desktop: could not spawn the daemon: {e}");
-            eprintln!("aivyx-desktop: start it yourself, then reopen — the window will connect.");
-            None
+            let problem = first_run::SetupProblem::NotInstalled {
+                bin,
+                error: e.to_string(),
+            };
+            return (None, Some(problem));
         }
+    };
+    wait_until_reachable();
+    if daemon_reachable() {
+        return (Some(child), None);
     }
+    let log_path = log_path.unwrap_or_default();
+    match child.try_wait() {
+        Ok(Some(_)) => {
+            let output = std::fs::read_to_string(&log_path).unwrap_or_default();
+            let problem = first_run::SetupProblem::Exited {
+                log_tail: first_run::tail_lines(&output, 8),
+                log_path,
+            };
+            (None, Some(problem))
+        }
+        _ => (Some(child), Some(first_run::SetupProblem::NoAnswer { log_path })),
+    }
+}
+
+/// Start the approval-gate watcher: its own thread + tokio runtime, polling
+/// the daemon for missions awaiting approval and firing OS notifications.
+/// Only once the daemon is up — it gives up for the run on a missing token.
+fn start_gate_watcher(proxy: tao::event_loop::EventLoopProxy<UserEvent>, token: Option<String>) {
+    std::thread::spawn(move || {
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt.block_on(gate_watch::run(proxy, token)),
+            Err(e) => eprintln!("aivyx-desktop: gate watcher runtime failed: {e}"),
+        }
+    });
 }
 
 /// Stop a daemon we own (graceful `aivyx-pa daemon stop`, then reap the child).
@@ -192,10 +254,10 @@ fn tray_icon_image() -> tray_icon::Icon {
 }
 
 fn main() -> wry::Result<()> {
-    let mut daemon_child = ensure_daemon();
+    let (mut daemon_child, mut problem) = ensure_daemon();
     // After `ensure_daemon`, so a daemon that just started has created its
     // automatic token file.
-    let token = studio_token();
+    let mut token = if problem.is_none() { studio_token() } else { None };
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
 
@@ -237,20 +299,10 @@ fn main() -> wry::Result<()> {
     // Launch-on-login controller (None if the platform entry can't be built).
     let autostart = auto_launch();
 
-    // Background approval-gate watcher: its own thread + tokio runtime, polling
-    // the daemon for missions awaiting approval and firing OS notifications.
-    {
-        let watcher_proxy = proxy.clone();
-        let watcher_token = token.clone();
-        std::thread::spawn(move || {
-            match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt.block_on(gate_watch::run(watcher_proxy, watcher_token)),
-                Err(e) => eprintln!("aivyx-desktop: gate watcher runtime failed: {e}"),
-            }
-        });
+    let mut watcher_started = false;
+    if problem.is_none() {
+        start_gate_watcher(proxy.clone(), token.clone());
+        watcher_started = true;
     }
 
     let window = WindowBuilder::new()
@@ -260,7 +312,17 @@ fn main() -> wry::Result<()> {
         .build(&event_loop)
         .expect("failed to create the window");
 
-    let webview = build_webview(&window, &studio_entry_url(token.as_deref()))?;
+    let retry_proxy = proxy.clone();
+    let on_ipc = move |message: &str| {
+        if message == "retry" {
+            let _ = retry_proxy.send_event(UserEvent::Retry);
+        }
+    };
+    let first_page = match &problem {
+        None => Page::Url(studio_entry_url(token.as_deref())),
+        Some(p) => Page::Html(first_run::setup_page_html(p)),
+    };
+    let webview = build_webview(&window, first_page, on_ipc)?;
 
     // Tray menu: Open Studio · Restart daemon · Quit. Built after the event loop
     // (GTK is initialized by then on Linux).
@@ -322,8 +384,12 @@ fn main() -> wry::Result<()> {
                     show(&window, &mut visible);
                 } else if e.id == restart_id {
                     stop_owned_daemon(&mut daemon_child);
-                    daemon_child = ensure_daemon();
-                    let _ = webview.load_url(&studio_entry_url(token.as_deref()));
+                    (daemon_child, problem) = ensure_daemon();
+                    show_studio_or_setup(&webview, &mut problem, &mut token);
+                    if problem.is_none() && !watcher_started {
+                        start_gate_watcher(proxy.clone(), token.clone());
+                        watcher_started = true;
+                    }
                 } else if e.id == autostart_id {
                     // The CheckMenuItem flipped its own checkmark; sync the
                     // platform autostart entry to the new state.
@@ -345,6 +411,33 @@ fn main() -> wry::Result<()> {
             | Event::UserEvent(UserEvent::ShowWindow) => {
                 show(&window, &mut visible);
             }
+            // First-run E — the setup page's Try again: reuse a daemon that's
+            // still starting, else start one, then show the Studio or the
+            // (updated) setup page.
+            Event::UserEvent(UserEvent::Retry) => {
+                if !daemon_reachable() {
+                    let exited = daemon_child
+                        .as_mut()
+                        .is_none_or(|c| matches!(c.try_wait(), Ok(Some(_))));
+                    if exited {
+                        (daemon_child, problem) = ensure_daemon();
+                    } else {
+                        wait_until_reachable();
+                    }
+                }
+                if daemon_reachable() {
+                    problem = None;
+                } else if problem.is_none() {
+                    problem = Some(first_run::SetupProblem::NoAnswer {
+                        log_path: daemon_log().unwrap_or_default(),
+                    });
+                }
+                show_studio_or_setup(&webview, &mut problem, &mut token);
+                if problem.is_none() && !watcher_started {
+                    start_gate_watcher(proxy.clone(), token.clone());
+                    watcher_started = true;
+                }
+            }
             // The global hotkey toggles the window.
             Event::UserEvent(UserEvent::ToggleWindow) => {
                 if visible {
@@ -359,20 +452,67 @@ fn main() -> wry::Result<()> {
     });
 }
 
+/// What the webview opens on: the Studio, or the local setup page.
+enum Page {
+    Url(String),
+    Html(String),
+}
+
+/// Point the webview at the Studio (fetching a fresh sign-in token, since a
+/// daemon that just started has just created it), or at the setup page when
+/// there's a `problem`.
+fn show_studio_or_setup(
+    webview: &wry::WebView,
+    problem: &mut Option<first_run::SetupProblem>,
+    token: &mut Option<String>,
+) {
+    match problem {
+        None => {
+            *token = studio_token();
+            let _ = webview.load_url(&studio_entry_url(token.as_deref()));
+        }
+        Some(p) => {
+            let _ = webview.load_html(&first_run::setup_page_html(p));
+        }
+    }
+}
+
+/// The webview's builder, with the first page and the IPC handler the setup
+/// page's **Try again** posts to.
+fn webview_builder<'a>(
+    page: Page,
+    on_ipc: impl Fn(&str) + 'static,
+) -> WebViewBuilder<'a> {
+    let builder = WebViewBuilder::new()
+        .with_ipc_handler(move |request: wry::http::Request<String>| on_ipc(request.body()));
+    match page {
+        Page::Url(url) => builder.with_url(url),
+        Page::Html(html) => builder.with_html(html),
+    }
+}
+
 /// Build the webview into the window. On Linux the webview attaches to the
 /// window's GTK vbox (the documented wry+tao pattern); elsewhere it builds from
 /// the raw window handle.
 #[cfg(not(target_os = "linux"))]
-fn build_webview(window: &Window, url: &str) -> wry::Result<wry::WebView> {
-    WebViewBuilder::new().with_url(url).build(window)
+fn build_webview(
+    window: &Window,
+    page: Page,
+    on_ipc: impl Fn(&str) + 'static,
+) -> wry::Result<wry::WebView> {
+    webview_builder(page, on_ipc).build(window)
 }
 
 #[cfg(target_os = "linux")]
-fn build_webview(window: &Window, url: &str) -> wry::Result<wry::WebView> {
+fn build_webview(
+    window: &Window,
+    page: Page,
+    on_ipc: impl Fn(&str) + 'static,
+) -> wry::Result<wry::WebView> {
     use tao::platform::unix::WindowExtUnix;
     use wry::WebViewBuilderExtUnix;
     let vbox = window
         .default_vbox()
         .expect("tao window should expose a default GTK vbox on Linux");
-    WebViewBuilder::new().with_url(url).build_gtk(vbox)
+    webview_builder(page, on_ipc).build_gtk(vbox)
 }
