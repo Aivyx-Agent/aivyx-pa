@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.12.2] — 2026-10-01
+
 ### Fixed
 
 - **Integrations couldn't act from chat once confirm-first was on** (the
