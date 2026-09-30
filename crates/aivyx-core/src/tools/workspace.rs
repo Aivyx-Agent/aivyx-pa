@@ -382,8 +382,10 @@ impl Tool for WorkspaceWriteTool {
         "workspace.write"
     }
     fn description(&self) -> &str {
-        "Write (create or overwrite) a file in YOUR workspace. Parent dirs are \
-         created as needed. Input: `{ path, content }`."
+        "Write (create or overwrite) a file in YOUR private notebook workspace — \
+         for your own notes and drafts, not the operator's files (use `fs.write` \
+         for a file they ask for). Parent dirs are created as needed. Input: \
+         `{ path, content }`."
     }
     fn input_schema(&self) -> &Value {
         &self.schema
@@ -521,7 +523,8 @@ impl Tool for WorkspaceDeleteTool {
         "workspace.delete"
     }
     fn description(&self) -> &str {
-        "Delete a file or empty directory from YOUR workspace. Input: `{ path }`."
+        "Delete a file or empty directory from YOUR private notebook workspace \
+         (the operator's files are deleted with `fs.delete`). Input: `{ path }`."
     }
     fn input_schema(&self) -> &Value {
         &self.schema

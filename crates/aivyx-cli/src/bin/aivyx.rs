@@ -9215,11 +9215,10 @@ async fn run_async(
     // mirrors what the model can actually invoke (an allowlist
     // role shouldn't see tools it'll be denied). `AllowAll`
     // roles see every registered tool.
-    let prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> = if matches!(
-        ollama_prompt_strategy,
-        aivyx_config::OllamaFamilyStrategy::StructuredInjection
-            | aivyx_config::OllamaFamilyStrategy::FewShotExamples
-    ) {
+    // Built for every provider: the catalog itself renders only under an
+    // Ollama strategy, but the where-files-live section needs to know
+    // which tool families exist.
+    let prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> = {
         tools
             .snapshot()
             .into_iter()
@@ -9233,8 +9232,6 @@ async fn run_async(
                 input_schema: t.input_schema().clone(),
             })
             .collect()
-    } else {
-        Vec::new()
     };
 
     // Phase 124 Task 3 — apply the per-family strategy via
@@ -9453,11 +9450,7 @@ async fn run_async(
         // get their own catalog snapshot filtered by the child
         // role's allowlist. Built for any non-`None` strategy;
         // empty otherwise → dispatcher is a no-op.
-        let child_prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> = if matches!(
-            ollama_prompt_strategy,
-            aivyx_config::OllamaFamilyStrategy::StructuredInjection
-                | aivyx_config::OllamaFamilyStrategy::FewShotExamples
-        ) {
+        let child_prompt_tool_catalog: Vec<aivyx_llm::LlmToolDescriptor> = {
             tools_for_factory
                 .snapshot()
                 .into_iter()
@@ -9471,8 +9464,6 @@ async fn run_async(
                     input_schema: t.input_schema().clone(),
                 })
                 .collect()
-        } else {
-            Vec::new()
         };
         let child_system_prompt = aivyx_channel::profile_prompt::apply_ollama_prompt_strategy(
             &child_assembled,

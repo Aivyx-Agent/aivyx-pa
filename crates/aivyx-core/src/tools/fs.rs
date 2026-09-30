@@ -641,7 +641,7 @@ impl Tool for FsWriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write a UTF-8 file under the agent's sandbox root, atomically. \
+        "Write a UTF-8 file — the operator's files, under your fs root — atomically. \
          Input is a JSON object with `path` (where to write) and `content` \
          (the UTF-8 text to write). Relative paths resolve against the \
          sandbox root; absolute paths must already be under it. Parent \
@@ -1093,7 +1093,7 @@ impl Tool for FsDeleteTool {
     }
 
     fn description(&self) -> &str {
-        "Delete a file, symlink, or empty directory under the agent's \
+        "Delete one of the operator's files, a symlink, or an empty directory under the agent's \
          sandbox root. Input is a JSON object with a `path` field \
          (relative paths resolve against the sandbox root; absolute \
          paths must already be under it). Deletion is non-recursive: a \

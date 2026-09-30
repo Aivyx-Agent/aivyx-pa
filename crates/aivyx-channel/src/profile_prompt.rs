@@ -482,6 +482,21 @@ pub fn append_tool_catalog(
         }
     }
 
+    out.push_str(&file_areas_section(tools, fs_root));
+
+    out.trim_end().to_string()
+}
+
+/// Where the agent's files live: the `fs.*` root (the operator's files)
+/// and its own `workspace.*` notebook. Every provider needs this — a
+/// model that can't tell the two apart writes the operator's file into
+/// its notebook and then can't find it with `fs.*`, or can't say where
+/// the file went. Empty when neither tool family is registered.
+pub fn file_areas_section(
+    tools: &[LlmToolDescriptor],
+    fs_root: Option<&std::path::Path>,
+) -> String {
+    let mut out = String::new();
     // Filesystem tools are rooted at a sandbox boundary that the
     // operator chooses (Chapter N access levels). Tell the model the
     // ACTUAL root so it reasons correctly about what is in/out of
@@ -501,7 +516,9 @@ pub fn append_tool_catalog(
                      plainly it is outside your accessible root. Resolve a \
                      bare or relative path against `{root}`, and when a \
                      request clearly targets a location under `{root}`, \
-                     invoke the tool rather than refusing.\n",
+                     invoke the tool rather than refusing. Files the operator \
+                     asks you to make go here, and when you make one, tell \
+                     them its full path.\n",
                     root = root.display(),
                 ));
             }
@@ -532,11 +549,12 @@ pub fn append_tool_catalog(
              longer work with `workspace.write` / `workspace.read` / \
              `workspace.list`. Suggested buckets: `journal/`, `ideas/`, \
              `plans/`, `projects/`. Paths are relative to your workspace \
-             root. The operator can see this space, so keep it legible.\n",
+             root. The operator can see this space, so keep it legible. \
+             Files the operator asks you to create, change or delete are \
+             THEIRS, not notes: use `fs.*` for them, never `workspace.*`.\n",
         );
     }
-
-    out.trim_end().to_string()
+    out
 }
 
 /// Phase 124 Task 2 — Append a `## Example tool use` block
@@ -676,7 +694,16 @@ pub fn apply_ollama_prompt_strategy(
     fs_root: Option<&std::path::Path>,
 ) -> String {
     match strategy {
-        OllamaFamilyStrategy::None => base_prompt.to_string(),
+        // No tool catalog (the provider lists tools natively), but the
+        // model still needs to know where files live.
+        OllamaFamilyStrategy::None => {
+            let areas = file_areas_section(tools, fs_root);
+            if areas.is_empty() {
+                base_prompt.to_string()
+            } else {
+                format!("{}{}", base_prompt, areas.trim_end())
+            }
+        }
         OllamaFamilyStrategy::StructuredInjection => {
             append_tool_catalog(base_prompt, tools, fs_root)
         }
@@ -1249,6 +1276,33 @@ mod tests {
             description: description.to_string(),
             input_schema: serde_json::json!({"type": "object"}),
         }
+    }
+
+    /// Non-Ollama providers (Lemonade, llama.cpp, cloud) get no catalog —
+    /// they list tools natively — but still learn where files live, or a
+    /// user's file ends up in the notebook and `fs.*` can't find it.
+    #[test]
+    fn no_catalog_strategy_still_says_where_files_live() {
+        let base = "You are helpful.";
+        let tools = vec![
+            tool("fs.write", "Write a file"),
+            tool("workspace.write", "Write a note"),
+        ];
+        let root = std::path::Path::new("/home/sam/aivyx-pa-sandbox");
+        let out = apply_ollama_prompt_strategy(base, &tools, OllamaFamilyStrategy::None, Some(root));
+        assert!(out.starts_with(base), "{out}");
+        assert!(!out.contains("## Tools available"), "{out}");
+        assert!(out.contains("/home/sam/aivyx-pa-sandbox"), "{out}");
+        assert!(out.contains("tell them its full path"), "{out}");
+        assert!(out.contains("never `workspace.*`"), "{out}");
+    }
+
+    #[test]
+    fn no_catalog_strategy_without_file_tools_leaves_the_prompt_alone() {
+        let base = "You are helpful.";
+        let tools = vec![tool("web.search", "Search")];
+        let out = apply_ollama_prompt_strategy(base, &tools, OllamaFamilyStrategy::None, None);
+        assert_eq!(out, base);
     }
 
     #[test]
