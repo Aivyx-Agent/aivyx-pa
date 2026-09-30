@@ -134,6 +134,77 @@ fn write_env_file_secure(path: &Path, passphrase: &str) -> std::io::Result<()> {
     crate::connect::write_file_at_0600(path, render_env_file(passphrase).as_bytes())
 }
 
+/// Where a saved passphrase lives on a machine without an OS keyring: the
+/// same `0600` file the service unit reads, so `aivyx-pa`, a daemon it
+/// starts, and the installed service all find it.
+pub fn passphrase_file_path() -> Result<PathBuf, String> {
+    Ok(user_config_dir()?.join(ENV_FILE_REL))
+}
+
+/// Save the passphrase to [`passphrase_file_path`] (owner-only from the
+/// moment it exists). Used by `init` when there's no keyring.
+pub fn save_passphrase_file(passphrase: &str) -> Result<PathBuf, String> {
+    let path = passphrase_file_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create config dir {}: {e}", parent.display()))?;
+    }
+    write_env_file_secure(&path, passphrase)
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(path)
+}
+
+/// The passphrase saved in `path`, if there is one. A file other users can
+/// read is refused (like ssh with a private key), so a loosened mode never
+/// silently becomes the way the store is opened.
+pub fn read_passphrase_file(path: &Path) -> Result<Option<String>, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(None);
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .map(|m| m.permissions().mode())
+            .unwrap_or(0);
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "not using the saved passphrase in {}: other users can read it \
+                 (run `chmod 600 {}`)",
+                path.display(),
+                path.display()
+            ));
+        }
+    }
+    Ok(text
+        .lines()
+        .find_map(|l| l.strip_prefix("AIVYX_PA_PASSPHRASE="))
+        .map(str::to_string)
+        .filter(|p| !p.is_empty()))
+}
+
+/// Whether this machine has a service manager `daemon install` can use: on
+/// Linux a reachable systemd *user* session (absent over plain SSH, in
+/// containers, or on non-systemd distros).
+pub fn service_manager_available() -> bool {
+    match Platform::detect() {
+        Platform::Linux => std::process::Command::new("systemctl")
+            .args(["--user", "show-environment"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success()),
+        Platform::MacOs => true,
+        Platform::Unsupported => false,
+    }
+}
+
+/// Why a background service can't be installed here, in the operator's terms.
+pub const NO_SERVICE_MANAGER: &str = "there's no systemd user session here (common over SSH, \
+     in containers and on non-systemd systems), so aivyx-pa can't install itself as a \
+     background service from this shell. Start the daemon with `aivyx-pa daemon run`, or run \
+     `aivyx-pa daemon install` from a desktop login.";
+
 /// Compute the concrete Linux install plan — pure over its inputs so the paths
 /// and unit contents are testable without touching the real home or running any
 /// command.
@@ -229,6 +300,11 @@ pub fn is_active() -> Option<bool> {
 }
 
 fn install_linux(web_ui: bool, start: bool, known: Option<String>) -> Result<(), String> {
+    // Check before writing anything: without a user session every step
+    // below fails, and a half-install used to be left behind.
+    if !service_manager_available() {
+        return Err(NO_SERVICE_MANAGER.to_string());
+    }
     let bin = current_exe_path()?;
     let config_dir = user_config_dir()?;
     let working_dir = install_working_dir();
@@ -240,6 +316,8 @@ fn install_linux(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
         None => resolve_passphrase()?,
     };
 
+    // A passphrase file saved by `init` stays if the install fails.
+    let env_file_existed = plan.env_file_path.exists();
     // Write the 0o600 env file (the only secret on disk), then the unit.
     if let Some(parent) = plan.env_file_path.parent() {
         std::fs::create_dir_all(parent)
@@ -255,13 +333,27 @@ fn install_linux(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
     std::fs::write(&plan.unit_path, &plan.unit_contents)
         .map_err(|e| format!("write unit {}: {e}", plan.unit_path.display()))?;
 
-    // Linger so the service runs without an active login session (runs-for-days).
-    run_cmd("loginctl", &["enable-linger", &current_user()])?;
-    run_cmd("systemctl", &["--user", "daemon-reload"])?;
-    run_cmd("systemctl", &["--user", "enable", SERVICE_UNIT])?;
-    if start {
-        // restart (not just start) so a re-install picks up the new unit/env.
-        run_cmd("systemctl", &["--user", "restart", SERVICE_UNIT])?;
+    let activate = || -> Result<(), String> {
+        // Linger so the service runs without an active login session (runs-for-days).
+        run_cmd("loginctl", &["enable-linger", &current_user()])?;
+        run_cmd("systemctl", &["--user", "daemon-reload"])?;
+        run_cmd("systemctl", &["--user", "enable", SERVICE_UNIT])?;
+        if start {
+            // restart (not just start) so a re-install picks up the new unit/env.
+            run_cmd("systemctl", &["--user", "restart", SERVICE_UNIT])?;
+        }
+        Ok(())
+    };
+    if let Err(e) = activate() {
+        // Take back what this attempt wrote, so a failed install leaves
+        // neither a dead unit nor a stray copy of the passphrase.
+        let _ = run_cmd("systemctl", &["--user", "disable", SERVICE_UNIT]);
+        let _ = std::fs::remove_file(&plan.unit_path);
+        if !env_file_existed {
+            let _ = std::fs::remove_file(&plan.env_file_path);
+        }
+        let _ = run_cmd("systemctl", &["--user", "daemon-reload"]);
+        return Err(format!("{e} (nothing was left installed)"));
     }
 
     eprintln!(
@@ -492,6 +584,11 @@ fn resolve_passphrase_with(
         use secrecy::ExposeSecret;
         return Ok(secret.expose_secret().to_string());
     }
+    // Saved by `init` on a machine without a keyring — the very file the
+    // service will read, so there's nothing new to ask for.
+    if let Ok(Some(p)) = passphrase_file_path().and_then(|path| read_passphrase_file(&path)) {
+        return Ok(p);
+    }
     let p =
         rpassword::prompt_password("Store passphrase for the unattended service (input hidden): ")
             .map_err(|e| format!("failed to read passphrase: {e}"))?;
@@ -592,6 +689,24 @@ mod tests {
         let without = render_systemd_unit("/b/aivyx-pa", false, "/e", "/w");
         assert!(without.contains("ExecStart=/b/aivyx-pa daemon run\n"));
         assert!(!without.contains("--web-ui"));
+    }
+
+    #[test]
+    fn a_saved_passphrase_reads_back_and_a_loose_file_is_refused() {
+        let dir = std::env::temp_dir().join(format!("aivyx-pass-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daemon.env");
+        assert_eq!(read_passphrase_file(&path), Ok(None), "no file, no passphrase");
+        write_env_file_secure(&path, "correct horse").unwrap();
+        assert_eq!(read_passphrase_file(&path), Ok(Some("correct horse".to_string())));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let err = read_passphrase_file(&path).unwrap_err();
+            assert!(err.contains("chmod 600"), "{err}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

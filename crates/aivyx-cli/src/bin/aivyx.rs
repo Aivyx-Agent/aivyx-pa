@@ -5493,16 +5493,31 @@ fn select_passphrase_source(
     // Chapter Keyring — no explicit env/TOML passphrase: prefer the OS keyring
     // (encrypted at rest) over an interactive prompt. An unavailable/locked
     // keyring is not fatal — fall through to the prompt.
-    match aivyx_channel::keyring_store::retrieve() {
+    let keyring_error = match aivyx_channel::keyring_store::retrieve() {
         Ok(Some(secret)) => return Ok(PassphraseSource::FromConfig(secret)),
-        Ok(None) => {}
+        Ok(None) => None,
+        Err(e) => Some(e),
+    };
+    // No keyring: the owner-only file `init` offers to save it in (the
+    // same one the background service reads). A spawned daemon finds it
+    // the same way, so the REPL can start one.
+    if let Ok(path) = daemon_service::passphrase_file_path() {
+        match daemon_service::read_passphrase_file(&path) {
+            Ok(Some(p)) => {
+                return Ok(PassphraseSource::FromConfig(secrecy::SecretString::from(p)));
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("aivyx-pa: {e}"),
+        }
+    }
+    if let Some(e) = keyring_error {
         // First-run D5 — at a terminal a prompt follows, so say it plainly;
         // without one, keep the detail for the log.
-        Err(e) if io::stdin().is_terminal() => {
-            let _ = e;
+        if io::stdin().is_terminal() {
             eprintln!("aivyx-pa: couldn't read the OS keyring, so asking for the passphrase.");
+        } else {
+            eprintln!("aivyx-pa: OS keyring not usable ({e}); trying other passphrase sources");
         }
-        Err(e) => eprintln!("aivyx-pa: OS keyring not usable ({e}); trying other passphrase sources"),
     }
     if io::stdin().is_terminal() {
         Ok(PassphraseSource::InteractivePrompt { confirm: new_store })

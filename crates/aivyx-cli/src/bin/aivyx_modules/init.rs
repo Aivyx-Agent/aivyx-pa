@@ -759,6 +759,8 @@ enum PassphraseSetup {
     ExistingStore,
     /// Chosen now and stored in the OS keyring.
     Stored(String),
+    /// Chosen now; no keyring, so saved in the owner-only passphrase file.
+    SavedToFile(String),
     /// Chosen now; no keyring could hold it (kept for the service install).
     NotStored(String),
     /// Nothing chosen: the first launch asks, as before.
@@ -769,7 +771,9 @@ impl PassphraseSetup {
     /// The passphrase chosen during this run, for the service install.
     fn chosen(&self) -> Option<String> {
         match self {
-            PassphraseSetup::Stored(p) | PassphraseSetup::NotStored(p) => Some(p.clone()),
+            PassphraseSetup::Stored(p)
+            | PassphraseSetup::SavedToFile(p)
+            | PassphraseSetup::NotStored(p) => Some(p.clone()),
             _ => None,
         }
     }
@@ -777,16 +781,19 @@ impl PassphraseSetup {
 
 /// First-run D2 — choose the store passphrase during `init`, so the daemon
 /// (and the Studio) can start without a terminal. Stored in the OS keyring
-/// when there is one; otherwise the choices are explained and nothing is
-/// written in plain text. `prompt_secret` reads hidden input;
-/// `keyring_store` stores the passphrase.
+/// when there is one; otherwise it offers to save it in a file only the
+/// operator can read (`save_file`), which `aivyx-pa` and its daemon read.
+/// `prompt_secret` reads hidden input; `keyring_store` stores the passphrase.
+#[allow(clippy::too_many_arguments)]
 fn setup_passphrase(
     env_set: bool,
     keyring_has_one: bool,
     store_exists: bool,
+    reader: &mut dyn BufRead,
     writer: &mut dyn IoWrite,
     mut prompt_secret: impl FnMut(&str) -> Result<String, String>,
     keyring_store: impl FnOnce(&str) -> Result<(), String>,
+    save_file: impl FnOnce(&str) -> Result<std::path::PathBuf, String>,
 ) -> Result<PassphraseSetup, String> {
     let w = |writer: &mut dyn IoWrite, text: &str| {
         writeln!(writer, "{text}").map_err(|e| format!("write error: {e}"))
@@ -850,13 +857,43 @@ fn setup_passphrase(
         Err(_) => {
             w(
                 writer,
-                "  There's no OS keyring here (common on servers), so it isn't stored. \
-                 For aivyx-pa to start its daemon on its own, either export \
-                 AIVYX_PA_PASSPHRASE, or install the background service below (it keeps \
-                 the passphrase in a file only you can read). Otherwise aivyx-pa asks for \
-                 it each time.",
+                "  There's no OS keyring here (common on servers and minimal desktops).",
             )?;
-            Ok(PassphraseSetup::NotStored(chosen))
+            if !prompt_yes_no(
+                "Save it in a file only you can read, so aivyx-pa and its daemon start on their own?",
+                true,
+                reader,
+                writer,
+            )? {
+                w(
+                    writer,
+                    "  Not saved — aivyx-pa asks for it each time it starts (or export \
+                     AIVYX_PA_PASSPHRASE).",
+                )?;
+                return Ok(PassphraseSetup::NotStored(chosen));
+            }
+            match save_file(&chosen) {
+                Ok(path) => {
+                    w(
+                        writer,
+                        &format!(
+                            "  Saved in {} (readable only by you). Delete that file to be \
+                             asked each time instead.",
+                            path.display()
+                        ),
+                    )?;
+                    Ok(PassphraseSetup::SavedToFile(chosen))
+                }
+                Err(e) => {
+                    w(
+                        writer,
+                        &format!(
+                            "  Couldn't save it ({e}) — aivyx-pa asks for it each time it starts."
+                        ),
+                    )?;
+                    Ok(PassphraseSetup::NotStored(chosen))
+                }
+            }
         }
     }
 }
@@ -3117,22 +3154,35 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         std::env::var("AIVYX_PA_PASSPHRASE").is_ok_and(|v| !v.is_empty()),
         aivyx_channel::keyring_store::is_stored().unwrap_or(false),
         Path::new(&cfg.storage_path).exists(),
+        &mut reader,
         &mut writer,
         prompt_secret,
         |p| {
             aivyx_channel::keyring_store::store(&secrecy::SecretString::from(p.to_string()))
                 .map_err(|e| e.to_string())
         },
+        crate::daemon_service::save_passphrase_file,
     )?;
 
     // Chapter Anchor — the runs-for-days path: a real service so the agent keeps
     // running (and its scheduled routines keep firing) across logout + reboot.
     // Phase 187 — offer to install it right here instead of just printing the
     // command, so first-run can genuinely end with a running service.
-    if matches!(
+    let service_platform = matches!(
         crate::daemon_service::Platform::detect(),
         crate::daemon_service::Platform::Linux | crate::daemon_service::Platform::MacOs
-    ) {
+    );
+    if service_platform && !crate::daemon_service::service_manager_available() {
+        // Offering an install that can only fail (and used to leave a half
+        // install behind) helps no one; say what to do instead.
+        eprintln!(
+            "\nBackground service: this shell has no systemd user session (common over SSH, \
+             in containers and on non-systemd systems), so there's no service to install that \
+             comes back after a reboot. `aivyx-pa` still starts the daemon in the background \
+             whenever it can get your passphrase; to add the service later, run \
+             `aivyx-pa daemon install` from a desktop login."
+        );
+    } else if service_platform {
         let already_installed = crate::daemon_service::installed_unit_path().is_some();
         let active = if already_installed {
             crate::daemon_service::is_active()
@@ -4061,9 +4111,16 @@ mod tests {
             (false, false, true, PassphraseSetup::ExistingStore),
         ] {
             let mut out = Vec::new();
-            let got = setup_passphrase(env, keyring, store, &mut out, answers(&[]), |_| {
-                panic!("nothing to store")
-            })
+            let got = setup_passphrase(
+                env,
+                keyring,
+                store,
+                &mut std::io::Cursor::new(Vec::new()),
+                &mut out,
+                answers(&[]),
+                |_| panic!("nothing to store"),
+                |_| panic!("nothing to save"),
+            )
             .unwrap();
             assert_eq!(got, want);
         }
@@ -4077,12 +4134,14 @@ mod tests {
             false,
             false,
             false,
+            &mut std::io::Cursor::new(Vec::new()),
             &mut out,
             answers(&["one", "two", "", "", "tiger lily", "tiger lily"]),
             |p| {
                 stored = Some(p.to_string());
                 Ok(())
             },
+            |_| panic!("the keyring took it"),
         )
         .unwrap();
         assert_eq!(got, PassphraseSetup::Stored("tiger lily".into()));
@@ -4094,26 +4153,60 @@ mod tests {
     }
 
     #[test]
-    fn without_a_keyring_the_passphrase_is_kept_for_the_service_and_the_choices_explained() {
+    fn without_a_keyring_the_passphrase_is_saved_to_its_file_by_default() {
         let mut out = Vec::new();
-        let got = setup_passphrase(false, false, false, &mut out, answers(&["pw", "pw"]), |_| {
-            Err("no secret service".into())
-        })
+        let mut saved = None;
+        let got = setup_passphrase(
+            false,
+            false,
+            false,
+            &mut std::io::Cursor::new(b"\n".to_vec()),
+            &mut out,
+            answers(&["pw", "pw"]),
+            |_| Err("no secret service".into()),
+            |p| {
+                saved = Some(p.to_string());
+                Ok(std::path::PathBuf::from("/home/u/.config/aivyx-pa/daemon.env"))
+            },
+        )
+        .unwrap();
+        assert_eq!(got, PassphraseSetup::SavedToFile("pw".into()));
+        assert_eq!(saved.as_deref(), Some("pw"));
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("no OS keyring"), "{out}");
+        assert!(out.contains("/home/u/.config/aivyx-pa/daemon.env"), "{out}");
+        assert!(!out.contains("pw\n"), "the passphrase is never echoed: {out}");
+    }
+
+    #[test]
+    fn without_a_keyring_declining_the_file_keeps_it_for_the_service_only() {
+        let mut out = Vec::new();
+        let got = setup_passphrase(
+            false,
+            false,
+            false,
+            &mut std::io::Cursor::new(b"n\n".to_vec()),
+            &mut out,
+            answers(&["pw", "pw"]),
+            |_| Err("no secret service".into()),
+            |_| panic!("declined — nothing is saved"),
+        )
         .unwrap();
         assert_eq!(got, PassphraseSetup::NotStored("pw".into()));
         let out = String::from_utf8(out).unwrap();
-        assert!(out.contains("AIVYX_PA_PASSPHRASE"), "{out}");
-        assert!(out.contains("background service"), "{out}");
-        assert!(!out.contains("pw\n"), "the passphrase is never echoed: {out}");
+        assert!(out.contains("asks for it each time"), "{out}");
     }
 
     #[test]
     fn three_empty_answers_skip_the_passphrase() {
         let mut out = Vec::new();
         let got = setup_passphrase(
-            false, false, false, &mut out,
+            false, false, false,
+            &mut std::io::Cursor::new(Vec::new()),
+            &mut out,
             answers(&["", "", ""]),
             |_| panic!("nothing to store"),
+            |_| panic!("nothing to save"),
         )
         .unwrap();
         assert_eq!(got, PassphraseSetup::Skipped);
