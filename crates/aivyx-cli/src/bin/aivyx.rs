@@ -1209,11 +1209,13 @@ fn run() -> Result<(), String> {
     // is on disk (the unchanged order further down handles that case,
     // exactly as before this branch).
     if should_early_validate(&storage_path) {
+        let config_toml = load_opts.toml_path.clone().unwrap_or_default();
         let validation_result = early_validate_message(
             verify_only,
             audit_export_mode,
             cost_mode,
             &storage_path,
+            (!config_toml.exists()).then_some(config_toml.as_path()),
             || config.validate(&load_opts),
         );
         if let Err(e) = validation_result {
@@ -1513,8 +1515,11 @@ fn run() -> Result<(), String> {
         // Print the config-provenance banner to stderr before any
         // session traffic lands. Operators debugging a surprising
         // value ("why is my model wrong?") can read this once and
-        // see which source each field came from.
-        print_config_banner(&config);
+        // see which source each field came from — in a log, not in the
+        // middle of an interactive chat (First-run D5).
+        if config_banner_wanted(&mode, channel_kind, io::stdin().is_terminal()) {
+            print_config_banner(&config);
+        }
 
         run_async(
             config,
@@ -1579,6 +1584,21 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
         _ => unreachable!("run_daemon_management called with non-management mode"),
     }
     Ok(())
+}
+
+/// First-run D5 — whether to print the config-provenance banner: always,
+/// except for someone chatting in the terminal (it lands in a log for the
+/// daemon, bot channels and piped runs; `aivyx-pa doctor` shows the config
+/// on demand).
+fn config_banner_wanted(
+    mode: &CliMode,
+    channel_kind: aivyx_channel::ChannelKind,
+    stdin_is_terminal: bool,
+) -> bool {
+    let interactive_chat = matches!(mode, CliMode::Session)
+        && channel_kind == aivyx_channel::ChannelKind::Local
+        && stdin_is_terminal;
+    !interactive_chat
 }
 
 /// Print a one-block summary of every [`AivyxConfig`] field plus its
@@ -1937,11 +1957,16 @@ fn should_early_validate(storage_path: &std::path::Path) -> bool {
 /// creates a store — the store is created later by `run()`'s own
 /// passphrase/store-open sequence), so those modes get a remedy that
 /// actually resolves the condition.
+///
+/// `missing_config` is the config path when no file exists there: then
+/// nothing is set up at all, and the message says so instead of naming
+/// whichever field `validate` happened to check first (First-run D4).
 fn early_validate_message(
     verify_only: bool,
     audit_export_mode: bool,
     cost_mode: bool,
     storage_path: &std::path::Path,
+    missing_config: Option<&std::path::Path>,
     validate: impl FnOnce() -> Result<(), aivyx_config::ConfigError>,
 ) -> Result<(), String> {
     if verify_only || audit_export_mode || cost_mode {
@@ -1952,8 +1977,15 @@ fn early_validate_message(
         ))
     } else {
         validate().map_err(|e| {
+            let what = match missing_config {
+                Some(path) => format!(
+                    "not set up yet — there's no config at {}.",
+                    path.display()
+                ),
+                None => e.to_string(),
+            };
             format!(
-                "{e}\n\nRun `aivyx-pa init` to set this up (or `aivyx-pa init \
+                "{what}\n\nRun `aivyx-pa init` to set this up (or `aivyx-pa init \
                  --template coder|researcher|personal` for a quick start)."
             )
         })
@@ -5464,6 +5496,12 @@ fn select_passphrase_source(
     match aivyx_channel::keyring_store::retrieve() {
         Ok(Some(secret)) => return Ok(PassphraseSource::FromConfig(secret)),
         Ok(None) => {}
+        // First-run D5 — at a terminal a prompt follows, so say it plainly;
+        // without one, keep the detail for the log.
+        Err(e) if io::stdin().is_terminal() => {
+            let _ = e;
+            eprintln!("aivyx-pa: couldn't read the OS keyring, so asking for the passphrase.");
+        }
         Err(e) => eprintln!("aivyx-pa: OS keyring not usable ({e}); trying other passphrase sources"),
     }
     if io::stdin().is_terminal() {
@@ -6714,7 +6752,8 @@ async fn run_async(
             Ok(n) => {
                 if n > 0 {
                     eprintln!(
-                        "aivyx-pa daemon: seeded persona chain with {n} delta(s) from [persona_seed]"
+                        "aivyx-pa: planted your assistant's starting personality \
+                         ({n} trait(s) from [persona_seed])"
                     );
                 }
                 n
@@ -15817,6 +15856,7 @@ mod early_validate_message_tests {
             false,
             false,
             Path::new("/nonexistent/path"),
+            None,
             || Ok(()),
         );
         let err = result.expect_err("diagnostic mode must always error when the gate fires");
@@ -15839,6 +15879,7 @@ mod early_validate_message_tests {
             true,
             false,
             Path::new("/nonexistent/path"),
+            None,
             || Ok(()),
         );
         assert!(result.is_err());
@@ -15851,15 +15892,48 @@ mod early_validate_message_tests {
             false,
             true,
             Path::new("/nonexistent/path"),
+            None,
             || Ok(()),
         );
         assert!(result.is_err());
     }
 
     #[test]
+    fn the_config_dump_is_for_logs_not_an_interactive_chat() {
+        use aivyx_channel::ChannelKind;
+        // Someone chatting at a terminal: no dump (`aivyx-pa doctor` has it).
+        assert!(!super::config_banner_wanted(&super::CliMode::Session, ChannelKind::Local, true));
+        // Piped input, a bot channel, or the daemon: the dump goes to a log.
+        assert!(super::config_banner_wanted(&super::CliMode::Session, ChannelKind::Local, false));
+        assert!(super::config_banner_wanted(&super::CliMode::Session, ChannelKind::Telegram, true));
+        assert!(super::config_banner_wanted(&super::CliMode::DaemonRun, ChannelKind::Local, true));
+    }
+
+    #[test]
+    fn with_no_config_file_the_message_says_not_set_up_instead_of_a_missing_key() {
+        let result = early_validate_message(
+            false,
+            false,
+            false,
+            Path::new("/nonexistent/path"),
+            Some(Path::new("/home/me/.config/aivyx-pa/aivyx-pa.toml")),
+            || {
+                Err(aivyx_config::ConfigError::Missing {
+                    field: "anthropic_api_key",
+                })
+            },
+        );
+        let err = result.expect_err("nothing is configured");
+        assert!(err.starts_with("not set up yet"), "{err}");
+        assert!(err.contains("/home/me/.config/aivyx-pa/aivyx-pa.toml"), "{err}");
+        assert!(!err.contains("anthropic_api_key"), "{err}");
+        assert!(err.contains("aivyx-pa init"), "{err}");
+    }
+
+    #[test]
     fn default_mode_passes_through_validate_ok() {
         let result =
-            early_validate_message(false, false, false, Path::new("/nonexistent/path"), || {
+            early_validate_message(false, false, false, Path::new("/nonexistent/path"), None, || {
                 Ok(())
             });
         assert!(result.is_ok());
@@ -15868,7 +15942,7 @@ mod early_validate_message_tests {
     #[test]
     fn default_mode_passes_through_validate_err() {
         let result =
-            early_validate_message(false, false, false, Path::new("/nonexistent/path"), || {
+            early_validate_message(false, false, false, Path::new("/nonexistent/path"), None, || {
                 Err(aivyx_config::ConfigError::Missing {
                     field: "anthropic_api_key",
                 })

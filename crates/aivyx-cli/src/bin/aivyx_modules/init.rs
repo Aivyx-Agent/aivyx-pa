@@ -688,6 +688,7 @@ pub(crate) fn decide_unconfigured_first_run(
 fn offer_service_install(
     already_installed: bool,
     active: Option<bool>,
+    passphrase_known: bool,
     reader: &mut dyn BufRead,
     writer: &mut dyn IoWrite,
     run_install: impl FnOnce(bool, bool) -> Result<(), String>,
@@ -709,17 +710,19 @@ fn offer_service_install(
         ServiceInstallDecision::Declined => {
             writeln!(
                 writer,
-                "  aivyx-pa daemon install       — run it as a background service (survives logout/reboot)"
+                "  Skipped — `aivyx-pa daemon install` sets it up any time."
             )
             .map_err(|write_err| format!("write error: {write_err}"))?;
         }
         ServiceInstallDecision::Install => {
-            writeln!(
-                writer,
-                "  (next: the store passphrase the service will use — set \
-                 AIVYX_PA_PASSPHRASE beforehand to skip the prompt)"
-            )
-            .map_err(|write_err| format!("write error: {write_err}"))?;
+            if !passphrase_known {
+                writeln!(
+                    writer,
+                    "  (next: the store passphrase the service will use — set \
+                     AIVYX_PA_PASSPHRASE beforehand to skip the prompt)"
+                )
+                .map_err(|write_err| format!("write error: {write_err}"))?;
+            }
             // `web_ui = false` only means "no `--web-ui` flag on the unit";
             // the daemon serves the Studio by default, so none is needed.
             match run_install(false, true) {
@@ -743,6 +746,119 @@ fn offer_service_install(
         }
     }
     Ok(())
+}
+
+/// First-run D2 — what `init`'s passphrase step settled on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PassphraseSetup {
+    /// `AIVYX_PA_PASSPHRASE` is set: nothing to ask or store.
+    FromEnv,
+    /// The OS keyring already holds one.
+    InKeyring,
+    /// The encrypted store already exists: its passphrase is already chosen.
+    ExistingStore,
+    /// Chosen now and stored in the OS keyring.
+    Stored(String),
+    /// Chosen now; no keyring could hold it (kept for the service install).
+    NotStored(String),
+    /// Nothing chosen: the first launch asks, as before.
+    Skipped,
+}
+
+impl PassphraseSetup {
+    /// The passphrase chosen during this run, for the service install.
+    fn chosen(&self) -> Option<String> {
+        match self {
+            PassphraseSetup::Stored(p) | PassphraseSetup::NotStored(p) => Some(p.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// First-run D2 — choose the store passphrase during `init`, so the daemon
+/// (and the Studio) can start without a terminal. Stored in the OS keyring
+/// when there is one; otherwise the choices are explained and nothing is
+/// written in plain text. `prompt_secret` reads hidden input;
+/// `keyring_store` stores the passphrase.
+fn setup_passphrase(
+    env_set: bool,
+    keyring_has_one: bool,
+    store_exists: bool,
+    writer: &mut dyn IoWrite,
+    mut prompt_secret: impl FnMut(&str) -> Result<String, String>,
+    keyring_store: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<PassphraseSetup, String> {
+    let w = |writer: &mut dyn IoWrite, text: &str| {
+        writeln!(writer, "{text}").map_err(|e| format!("write error: {e}"))
+    };
+    if env_set {
+        w(writer, "\nUsing the passphrase from AIVYX_PA_PASSPHRASE.")?;
+        return Ok(PassphraseSetup::FromEnv);
+    }
+    if keyring_has_one {
+        w(writer, "\nYour passphrase is already in the OS keyring.")?;
+        return Ok(PassphraseSetup::InKeyring);
+    }
+    if store_exists {
+        w(
+            writer,
+            "\nYour encrypted store already exists, so it keeps its passphrase. \
+             `aivyx-pa keyring set` stores it so aivyx-pa can start its daemon on its own.",
+        )?;
+        return Ok(PassphraseSetup::ExistingStore);
+    }
+
+    w(
+        writer,
+        "\n— Your passphrase —\n\
+         Your assistant keeps its memory and audit log encrypted with a passphrase.\n\
+         Choose one now; you'll need it if you ever move or restore your data.",
+    )?;
+    let (mut empties, mut attempts) = (0, 0);
+    let chosen = loop {
+        if empties == 3 || attempts == 5 {
+            w(
+                writer,
+                "  No passphrase set for now — aivyx-pa asks for it on first launch.",
+            )?;
+            return Ok(PassphraseSetup::Skipped);
+        }
+        attempts += 1;
+        let first = prompt_secret("Passphrase (input hidden): ")?;
+        if first.is_empty() {
+            empties += 1;
+            w(writer, "  The passphrase can't be empty.")?;
+            continue;
+        }
+        let again = prompt_secret("Confirm passphrase: ")?;
+        if first != again {
+            w(writer, "  Those didn't match — try again.")?;
+            continue;
+        }
+        break first;
+    };
+
+    match keyring_store(&chosen) {
+        Ok(()) => {
+            w(
+                writer,
+                "  Stored in your OS keyring, so aivyx-pa can start its background daemon \
+                 (and the Studio) on its own.",
+            )?;
+            Ok(PassphraseSetup::Stored(chosen))
+        }
+        Err(_) => {
+            w(
+                writer,
+                "  There's no OS keyring here (common on servers), so it isn't stored. \
+                 For aivyx-pa to start its daemon on its own, either export \
+                 AIVYX_PA_PASSPHRASE, or install the background service below (it keeps \
+                 the passphrase in a file only you can read). Otherwise aivyx-pa asks for \
+                 it each time.",
+            )?;
+            Ok(PassphraseSetup::NotStored(chosen))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1218,6 +1334,9 @@ struct InitConfig {
     confirm_destructive: bool,
     /// Phase 46: enable bundled web search MCP server.
     enable_web_search: bool,
+    /// First-run D3 — the starter routines run on their own (asked on a
+    /// local provider; a cloud provider writes them disabled regardless).
+    enable_routines: bool,
     /// Phase 57 / Phase 181 — the full P13 Profile, collected by
     /// the guided identity builder. A field is `None` / empty
     /// when undeclared; the renderer only emits a `[profile]`
@@ -1535,6 +1654,22 @@ const ROUTINE_HEALTH_CHECK: &str = "Run a quick self-health check: confirm your 
 const ROUTINE_WEEKLY_DIGEST: &str = "Weekly digest. FIRST read your actual record before writing anything: recall your recent memories, read your workspace journal, and check for pending persona or skill proposals awaiting review. Then write a short, friendly briefing of ONLY what you genuinely found there — what you actually learned or worked on, and any proposals to review. If the record is empty or thin, say so plainly (e.g. \"nothing notable to report yet\"). Never invent, infer, or pad the digest with activity you did not actually find in memory or the journal.";
 const ROUTINE_TREND_SCAN: &str = "Run a trend-scan across the operator's interest areas (see your profile and primary use cases). You MUST actually search the web first — call your web search tool for recent, reputable sources; do not answer from memory or prior knowledge alone. Cross-reference the key points across several results, separate solid facts from speculation, save the distilled findings to memory under a clear topic, and journal a short digest leading with whatever is genuinely new, with links. If the search returns nothing useful, say so plainly and stop — never fabricate findings, sources, or links.";
 
+/// First-run D3 — the starter routines in plain words, before asking.
+fn routines_question_intro(web_search: bool) -> String {
+    let mut text = String::from(
+        "\nYour assistant can do a few things on its own while its daemon runs:\n\
+         \x20 • each morning, a read-only look over its workspace\n\
+         \x20 • each night, tidying up its memory\n\
+         \x20 • every 6 hours, a quick check that it's working\n\
+         \x20 • on Mondays, a short digest of the week",
+    );
+    if web_search {
+        text.push_str("\n  • each morning, a web scan of your interests");
+    }
+    text.push_str("\nYou can change or turn off any of them later in aivyx-pa.toml.");
+    text
+}
+
 /// Render the default starter routines as `[[schedule]]` blocks.
 ///
 /// Gating (operator decisions, 2026-06): the four core routines are ENABLED on
@@ -1545,8 +1680,8 @@ const ROUTINE_TREND_SCAN: &str = "Run a trend-scan across the operator's interes
 /// only configured when the operator enabled web search).
 fn render_default_schedules(cfg: &InitConfig) -> String {
     let local = cfg.provider.is_local();
-    let core_enabled = local;
-    let trend_enabled = local && cfg.enable_web_search;
+    let core_enabled = local && cfg.enable_routines;
+    let trend_enabled = core_enabled && cfg.enable_web_search;
     let b = |on: bool| if on { "true" } else { "false" };
 
     let mut out = String::new();
@@ -2847,7 +2982,22 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     }
 
     // 5b. Web search — bundled MCP server (Phase 46).
-    let enable_web_search = prompt_yes_no("Enable web search?", true, &mut reader, &mut writer)?;
+    let enable_web_search = prompt_yes_no(
+        "Let it search the web? (DuckDuckGo — no account or API key needed)",
+        true,
+        &mut reader,
+        &mut writer,
+    )?;
+
+    // First-run D3 — the starter routines run on their own, so ask (a cloud
+    // provider writes them disabled anyway: each run spends tokens).
+    let enable_routines = if provider.is_local() {
+        writeln!(writer, "{}", routines_question_intro(enable_web_search))
+            .map_err(|e| format!("write error: {e}"))?;
+        prompt_yes_no("Turn these on?", true, &mut reader, &mut writer)?
+    } else {
+        false
+    };
 
     // 5c. Profile bootstrap (Phase 57, PRODUCT.md P13). Q4(c)
     // resolution at sign-off: three short prompts seeding the
@@ -2900,6 +3050,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         access_level,
         confirm_destructive,
         enable_web_search,
+        enable_routines,
         profile_assistant_name: identity.assistant_name,
         profile_operator_profile: identity.operator_profile,
         profile_communication_style: identity.communication_style,
@@ -2938,9 +3089,9 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     }
 
     // 7. Success message + next steps. This is the moment that shapes the
-    // operator's first five minutes — so it surfaces the Studio (the web GUI a
-    // new user won't otherwise discover), `doctor`, and, for the local path, the
-    // capable-hardware guide.
+    // operator's first five minutes: where the config is, the passphrase (so
+    // the daemon and the Studio can start on their own), the optional
+    // service, then one unbroken list of next steps.
     eprintln!("\nWrote {}", config_file.display());
     if cfg.api_key.is_some() {
         eprintln!(
@@ -2949,40 +3100,26 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
             config_file.display()
         );
     }
-    eprintln!("You'll be prompted for a passphrase on first launch (or set AIVYX_PA_PASSPHRASE).");
-    eprintln!(
-        "Store it with `aivyx-pa keyring set` and aivyx-pa starts its background daemon \
-         (and the Studio) for you."
-    );
-    // Be transparent about the unattended routines we just wrote — surprise
-    // autonomous activity erodes trust.
-    if cfg.provider.is_local() {
+    if !cfg.provider.is_local() {
         eprintln!(
-            "\nSet up background routines (in {} under [[schedule]]): a daily \
-             environment review, nightly reflection, a health check, and a weekly digest \
-             run automatically{}. Edit or disable any of them there.",
-            config_file.display(),
-            if cfg.enable_web_search {
-                ", plus a daily web trend-scan of your interests"
-            } else {
-                ""
-            }
-        );
-    } else {
-        eprintln!(
-            "\nWrote background routines (in {} under [[schedule]]) — disabled by \
-             default for cloud providers since each run spends tokens. Flip `enabled = true` \
-             on any you want (a daily environment review, nightly reflection, health check, \
-             weekly digest, trend-scan).",
-            config_file.display()
+            "Background routines are written to it disabled, since each run spends \
+             tokens — set `enabled = true` under any [[schedule]] you want."
         );
     }
-    let web_ui_port = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
-    eprintln!("\nNext steps:");
-    eprintln!("  aivyx-pa                   — chat with your agent in the terminal");
-    // First-run coherence A2 — the Studio is on by default, behind a token
-    // the daemon creates; `aivyx-pa studio` prints the sign-in link.
-    eprintln!("{}", studio_next_step_line(web_ui_port));
+
+    // First-run D2 — the passphrase, chosen now.
+    let passphrase = setup_passphrase(
+        std::env::var("AIVYX_PA_PASSPHRASE").is_ok_and(|v| !v.is_empty()),
+        aivyx_channel::keyring_store::is_stored().unwrap_or(false),
+        Path::new(&cfg.storage_path).exists(),
+        &mut writer,
+        prompt_secret,
+        |p| {
+            aivyx_channel::keyring_store::store(&secrecy::SecretString::from(p.to_string()))
+                .map_err(|e| e.to_string())
+        },
+    )?;
+
     // Chapter Anchor — the runs-for-days path: a real service so the agent keeps
     // running (and its scheduled routines keep firing) across logout + reboot.
     // Phase 187 — offer to install it right here instead of just printing the
@@ -2997,19 +3134,29 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         } else {
             None
         };
+        let chosen = passphrase.chosen();
+        eprintln!();
         offer_service_install(
             already_installed,
             active,
+            chosen.is_some(),
             &mut reader,
             &mut writer,
-            crate::daemon_service::run_install,
+            |web_ui, start| crate::daemon_service::run_install_with(web_ui, start, chosen),
         )?;
     }
+
+    let web_ui_port = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
+    eprintln!("\nNext steps:");
+    eprintln!("  aivyx-pa                   — chat with your agent in the terminal");
+    // First-run coherence A2 — the Studio is on by default, behind a token
+    // the daemon creates; `aivyx-pa studio` prints the sign-in link.
+    eprintln!("{}", studio_next_step_line(web_ui_port));
     eprintln!("  aivyx-pa doctor            — re-check your setup any time");
     if cfg.provider.is_local() && cfg.provider != Provider::MistralRs {
         eprintln!(
             "\nOn a capable GPU (e.g. a 24GB card) you can run a bigger model with more \
-             context — see docs/LOCAL_HOSTING.md."
+             context — see https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/LOCAL_HOSTING.md"
         );
     }
     eprintln!("\nHappy building!");
@@ -3590,7 +3737,7 @@ mod tests {
     fn offer_service_install_prints_status_when_already_installed() {
         let mut input = Cursor::new(b"" as &[u8]);
         let mut output = Vec::new();
-        offer_service_install(true, Some(false), &mut input, &mut output, |_, _| {
+        offer_service_install(true, Some(false), false, &mut input, &mut output, |_, _| {
             panic!("run_install must not be called when already installed")
         })
         .unwrap();
@@ -3603,7 +3750,7 @@ mod tests {
     fn offer_service_install_prints_status_unknown_when_active_state_undetermined() {
         let mut input = Cursor::new(b"" as &[u8]);
         let mut output = Vec::new();
-        offer_service_install(true, None, &mut input, &mut output, |_, _| {
+        offer_service_install(true, None, false, &mut input, &mut output, |_, _| {
             panic!("run_install must not be called when already installed")
         })
         .unwrap();
@@ -3616,7 +3763,7 @@ mod tests {
     fn offer_service_install_prints_todays_hint_when_declined() {
         let mut input = Cursor::new(b"n\n" as &[u8]);
         let mut output = Vec::new();
-        offer_service_install(false, None, &mut input, &mut output, |_, _| {
+        offer_service_install(false, None, false, &mut input, &mut output, |_, _| {
             panic!("run_install must not be called when declined")
         })
         .unwrap();
@@ -3630,7 +3777,7 @@ mod tests {
         let mut input = Cursor::new(b"y\n" as &[u8]);
         let mut output = Vec::new();
         let mut captured: Option<(bool, bool)> = None;
-        offer_service_install(false, None, &mut input, &mut output, |web_ui, start| {
+        offer_service_install(false, None, false, &mut input, &mut output, |web_ui, start| {
             captured = Some((web_ui, start));
             Ok(())
         })
@@ -3646,7 +3793,7 @@ mod tests {
     fn offer_service_install_prints_the_error_and_does_not_fail_on_install_failure() {
         let mut input = Cursor::new(b"y\n" as &[u8]);
         let mut output = Vec::new();
-        let result = offer_service_install(false, None, &mut input, &mut output, |_, _| {
+        let result = offer_service_install(false, None, false, &mut input, &mut output, |_, _| {
             Err("no supported service manager on this platform".to_string())
         });
         // Must return Ok -- a failed install must never fail the wizard.
@@ -3680,6 +3827,7 @@ mod tests {
             access_level: AccessLevel::Sandbox,
             confirm_destructive: false,
             enable_web_search,
+            enable_routines: true,
             profile_assistant_name: None,
             profile_operator_profile: None,
             profile_communication_style: None,
@@ -3862,6 +4010,105 @@ mod tests {
             .await
             .unwrap();
         assert!(no_key.is_none(), "no key → no embedding");
+    }
+
+    #[test]
+    fn the_routines_question_lists_the_web_scan_only_with_web_search() {
+        let with = routines_question_intro(true);
+        let without = routines_question_intro(false);
+        assert!(with.contains("  • each night, tidying up its memory"), "{with}");
+        assert!(with.contains("web scan of your interests"), "{with}");
+        assert!(!without.contains("web scan"), "{without}");
+    }
+
+    #[test]
+    fn declined_routines_are_written_but_all_disabled() {
+        let mut cfg =
+            init_config_no_profile(Provider::Lemonade, "qwen", None, "s", "/r", true);
+        cfg.enable_routines = false;
+        let toml = render_default_schedules(&cfg);
+        let doc: toml_edit::DocumentMut = toml.parse().unwrap();
+        let arr = doc["schedule"].as_array_of_tables().unwrap();
+        assert_eq!(arr.len(), 5, "still written, so they stay discoverable");
+        assert!(
+            arr.iter().all(|t| t.get("enabled").and_then(|v| v.as_bool()) == Some(false)),
+            "{toml}"
+        );
+    }
+
+    /// A scripted hidden prompt: returns the queued answers in order.
+    fn answers(list: &[&str]) -> impl FnMut(&str) -> Result<String, String> {
+        let mut queue: std::collections::VecDeque<String> =
+            list.iter().map(|s| s.to_string()).collect();
+        move |_prompt| Ok(queue.pop_front().expect("an unexpected extra prompt"))
+    }
+
+    #[test]
+    fn a_passphrase_already_provided_is_not_asked_for() {
+        for (env, keyring, store, want) in [
+            (true, false, false, PassphraseSetup::FromEnv),
+            (false, true, false, PassphraseSetup::InKeyring),
+            (false, false, true, PassphraseSetup::ExistingStore),
+        ] {
+            let mut out = Vec::new();
+            let got = setup_passphrase(env, keyring, store, &mut out, answers(&[]), |_| {
+                panic!("nothing to store")
+            })
+            .unwrap();
+            assert_eq!(got, want);
+        }
+    }
+
+    #[test]
+    fn a_new_passphrase_is_confirmed_then_stored_in_the_keyring() {
+        let mut out = Vec::new();
+        let mut stored = None;
+        let got = setup_passphrase(
+            false,
+            false,
+            false,
+            &mut out,
+            answers(&["one", "two", "", "", "tiger lily", "tiger lily"]),
+            |p| {
+                stored = Some(p.to_string());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(got, PassphraseSetup::Stored("tiger lily".into()));
+        assert_eq!(stored.as_deref(), Some("tiger lily"));
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("didn't match"), "{out}");
+        assert!(out.contains("can't be empty"), "{out}");
+        assert!(out.contains("Stored in your OS keyring"), "{out}");
+    }
+
+    #[test]
+    fn without_a_keyring_the_passphrase_is_kept_for_the_service_and_the_choices_explained() {
+        let mut out = Vec::new();
+        let got = setup_passphrase(false, false, false, &mut out, answers(&["pw", "pw"]), |_| {
+            Err("no secret service".into())
+        })
+        .unwrap();
+        assert_eq!(got, PassphraseSetup::NotStored("pw".into()));
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("AIVYX_PA_PASSPHRASE"), "{out}");
+        assert!(out.contains("background service"), "{out}");
+        assert!(!out.contains("pw\n"), "the passphrase is never echoed: {out}");
+    }
+
+    #[test]
+    fn three_empty_answers_skip_the_passphrase() {
+        let mut out = Vec::new();
+        let got = setup_passphrase(
+            false, false, false, &mut out,
+            answers(&["", "", ""]),
+            |_| panic!("nothing to store"),
+        )
+        .unwrap();
+        assert_eq!(got, PassphraseSetup::Skipped);
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("asks for it on first launch"), "{out}");
     }
 
     #[test]

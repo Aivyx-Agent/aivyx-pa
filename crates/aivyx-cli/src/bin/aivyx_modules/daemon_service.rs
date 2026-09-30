@@ -161,9 +161,19 @@ pub fn plan_linux(
 /// `aivyx-pa daemon install` — install + (by default) start the daemon as a
 /// persistent user service. Linux now; macOS in AN.2.
 pub fn run_install(web_ui: bool, start: bool) -> Result<(), String> {
+    run_install_with(web_ui, start, None)
+}
+
+/// [`run_install`] with the passphrase already known (First-run D2: `init`
+/// just had the operator choose it), so it isn't asked for again.
+pub fn run_install_with(
+    web_ui: bool,
+    start: bool,
+    passphrase: Option<String>,
+) -> Result<(), String> {
     match Platform::detect() {
-        Platform::Linux => install_linux(web_ui, start),
-        Platform::MacOs => install_macos(web_ui, start),
+        Platform::Linux => install_linux(web_ui, start, passphrase),
+        Platform::MacOs => install_macos(web_ui, start, passphrase),
         Platform::Unsupported => Err(
             "no supported service manager on this platform — run `aivyx-pa daemon run` \
              directly, or use the Docker appliance (docs/INSTALL.md)."
@@ -218,14 +228,17 @@ pub fn is_active() -> Option<bool> {
     }
 }
 
-fn install_linux(web_ui: bool, start: bool) -> Result<(), String> {
+fn install_linux(web_ui: bool, start: bool, known: Option<String>) -> Result<(), String> {
     let bin = current_exe_path()?;
     let config_dir = user_config_dir()?;
     let working_dir = install_working_dir();
     let plan = plan_linux(&config_dir, &bin, &working_dir, web_ui);
 
     // The passphrase: env first (the established policy), else a no-echo prompt.
-    let passphrase = resolve_passphrase()?;
+    let passphrase = match known {
+        Some(p) => p,
+        None => resolve_passphrase()?,
+    };
 
     // Write the 0o600 env file (the only secret on disk), then the unit.
     if let Some(parent) = plan.env_file_path.parent() {
@@ -361,10 +374,13 @@ fn macos_plist_path() -> Result<PathBuf, String> {
         .join(format!("{LAUNCHD_LABEL}.plist")))
 }
 
-fn install_macos(web_ui: bool, start: bool) -> Result<(), String> {
+fn install_macos(web_ui: bool, start: bool, known: Option<String>) -> Result<(), String> {
     let bin = current_exe_path()?;
     let working_dir = install_working_dir();
-    let passphrase = resolve_passphrase()?;
+    let passphrase = match known {
+        Some(p) => p,
+        None => resolve_passphrase()?,
+    };
     let plist_path = macos_plist_path()?;
 
     if let Some(parent) = plist_path.parent() {

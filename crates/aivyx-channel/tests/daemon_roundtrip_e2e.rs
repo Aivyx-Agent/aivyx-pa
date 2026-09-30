@@ -589,6 +589,14 @@ async fn run_daemon_session_renders_two_turns() {
         3,
         "must have exactly 3 prompts in output, got: {output_str}"
     );
+    // Each prompt starts its own line — a reply that ended mid-line must
+    // not run into it ("…daemon!> ").
+    for (at, _) in output_str.match_indices("> ") {
+        assert!(
+            at == 0 || output_str[..at].ends_with('\n'),
+            "a prompt continued the previous line at byte {at}: {output_str:?}"
+        );
+    }
 
     shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(5), daemon_handle)

@@ -107,9 +107,16 @@ where
     // model, so `routing → …` only prints on a real change (including
     // the first time). `None` until the first routed turn.
     let mut last_routed_model: Option<String> = None;
+    // Whether the last turn's output ended mid-line (a reply rarely ends
+    // with a newline), so the next prompt starts a line of its own.
+    let mut mid_line = false;
 
     loop {
         // Prompt.
+        if mid_line {
+            writeln!(writer).map_err(|e| format!("prompt write: {e}"))?;
+            mid_line = false;
+        }
         if !prompt.is_empty() {
             write!(writer, "{}", prompt).map_err(|e| format!("prompt write: {e}"))?;
             writer.flush().map_err(|e| format!("prompt flush: {e}"))?;
@@ -142,6 +149,7 @@ where
             shown.push_str(&rendered);
         }
         writer.flush().map_err(|e| format!("render flush: {e}"))?;
+        mid_line = !shown.is_empty() && !shown.ends_with('\n');
 
         // Routing visibility B3 — `render_for_cli` renders nothing for
         // `ModelRouted` (a plain renderer must never gain a routing
@@ -153,6 +161,7 @@ where
             let routing_line = crate::daemon_ipc::at_line_start(&shown, &routing_line);
             write!(writer, "{routing_line}").map_err(|e| format!("routing-line write: {e}"))?;
             writer.flush().map_err(|e| format!("routing-line flush: {e}"))?;
+            mid_line = !routing_line.ends_with('\n');
             last_routed_model = Some(new_model);
         }
 
@@ -165,7 +174,11 @@ where
         // report) but never written to the terminal.
         let displayed = concat_text_events(&events);
         if let Some(note) = turn_outcome_correction(&displayed, &outcome) {
+            if mid_line {
+                writeln!(writer).map_err(|e| format!("outcome-correction write: {e}"))?;
+            }
             writeln!(writer, "{note}").map_err(|e| format!("outcome-correction write: {e}"))?;
+            mid_line = false;
             writer.flush().map_err(|e| format!("outcome-correction flush: {e}"))?;
         }
 

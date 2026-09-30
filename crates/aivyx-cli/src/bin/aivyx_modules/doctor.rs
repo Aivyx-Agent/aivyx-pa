@@ -231,7 +231,7 @@ pub fn run_studio(token_only: bool) -> Result<(), String> {
 }
 
 fn check_gatehouse(cfg: &AivyxConfig) {
-    println!("\nWeb UI (Gatehouse):");
+    println!("\nStudio (web UI):");
     let Some(addr) = cfg.studio_addr() else {
         println!("  • the Studio is off (`[daemon] web_ui = false`).");
         return;
