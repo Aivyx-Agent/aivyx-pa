@@ -494,7 +494,12 @@ fn install_macos(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
             "launchctl",
             &["bootout", &format!("{domain}/{LAUNCHD_LABEL}")],
         );
-        run_cmd("launchctl", &["bootstrap", &domain, &plist])?;
+        if let Err(e) = run_cmd("launchctl", &["bootstrap", &domain, &plist]) {
+            // The plist carries the passphrase: don't leave it behind for an
+            // agent that never loaded (same as the Linux path's rollback).
+            let _ = std::fs::remove_file(&plist_path);
+            return Err(format!("{e} (nothing was left installed)"));
+        }
         let _ = run_cmd(
             "launchctl",
             &["enable", &format!("{domain}/{LAUNCHD_LABEL}")],
