@@ -3118,18 +3118,6 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     toml.push_str(&render_default_schedules(&cfg));
     write_config(&config_file, &toml)?;
 
-    // 6b. Chapter P — for the local path, confirm the setup actually works
-    // (the local server reachable, model present) before the user's first
-    // real turn. Best-effort: the config is already written, so a failed
-    // check is informational, not fatal.
-    if cfg.provider.is_local() {
-        eprintln!("\nRunning a quick health check…");
-        if let Err(e) = crate::doctor::run_doctor().await {
-            eprintln!("{e}");
-            eprintln!("(Run `aivyx-pa doctor` again any time to re-check.)");
-        }
-    }
-
     // 7. Success message + next steps. This is the moment that shapes the
     // operator's first five minutes: where the config is, the passphrase (so
     // the daemon and the Studio can start on their own), the optional
@@ -3199,6 +3187,21 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
             &mut writer,
             |web_ui, start| crate::daemon_service::run_install_with(web_ui, start, chosen),
         )?;
+    }
+
+    // 6b. Chapter P — for the local path, confirm the model actually answers
+    // before the first real turn. Last, so "ready" comes after every
+    // question, not before the passphrase. Best-effort: the config is
+    // written, so a failed check is informational, not fatal.
+    if cfg.provider.is_local() {
+        eprintln!("\nChecking your model…");
+        match crate::doctor::check_provider_for_init().await {
+            Ok(true) => eprintln!("\n✓ Ready."),
+            Ok(false) => eprintln!(
+                "\nFix what's marked above, then `aivyx-pa doctor` re-checks any time."
+            ),
+            Err(e) => eprintln!("{e}"),
+        }
     }
 
     let web_ui_port = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;

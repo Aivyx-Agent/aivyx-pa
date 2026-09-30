@@ -25,9 +25,39 @@ fn config_path() -> std::path::PathBuf {
     aivyx_config::resolve_config_path()
 }
 
+/// The model half of the doctor, for the end of `init`: is the provider
+/// reachable and the model there? The rest (memory, service, Studio token)
+/// is `aivyx-pa doctor`'s, not a first run's.
+pub async fn check_provider_for_init() -> Result<bool, String> {
+    let cfg = load_config_for_inspection()?;
+    Ok(match cfg.provider.value {
+        ProviderKind::Ollama => check_ollama(&cfg).await,
+        ProviderKind::Lemonade => check_lemonade(&cfg).await,
+        ProviderKind::Broker => check_broker(&cfg).await,
+        ProviderKind::MistralRs => check_mistralrs(&cfg),
+        other => check_cloud(other, &cfg),
+    })
+}
+
+/// Nothing configured yet (no config file, no store): the checks would
+/// only report defaults nobody chose, so say what to do instead — the
+/// same wording bare `aivyx-pa` uses.
+fn not_set_up_message(cfg: &AivyxConfig) -> Option<String> {
+    let path = config_path();
+    (!path.exists() && !cfg.storage_path.value.exists()).then(|| {
+        format!(
+            "not set up yet — there's no config at {}.\n\nRun `aivyx-pa init` to set it up.",
+            path.display()
+        )
+    })
+}
+
 /// `aivyx-pa doctor` — run the health checks and report.
 pub async fn run_doctor() -> Result<(), String> {
     let cfg = load_config_for_inspection()?;
+    if let Some(message) = not_set_up_message(&cfg) {
+        return Err(message);
+    }
     println!("aivyx-pa doctor — checking your setup\n");
 
     let provider_ok = match cfg.provider.value {
@@ -194,8 +224,9 @@ fn studio_command_output(
     let addr = addr.ok_or_else(|| "the Studio is off (`[daemon] web_ui = false`).".to_string())?;
     if configured_token.is_none() && !insecure_no_auth && auto_token.is_none() {
         return Err(format!(
-            "no Studio sign-in token yet — start the daemon (`aivyx-pa daemon run`), \
-             which creates {}.",
+            "the Studio isn't running yet — its daemon hasn't started. Run `aivyx-pa` \
+             (it starts the daemon when it can get your passphrase) or `aivyx-pa daemon run`, \
+             then `aivyx-pa studio` again. (The daemon creates the sign-in token at {}.)",
             token_path.display()
         ));
     }
@@ -216,6 +247,9 @@ fn studio_command_output(
 /// as the operator; never creates it (the daemon does). No daemon needed.
 pub fn run_studio(token_only: bool) -> Result<(), String> {
     let cfg = load_config_for_inspection()?;
+    if let Some(message) = not_set_up_message(&cfg) {
+        return Err(message);
+    }
     let token_path = aivyx_channel::studio_token::token_path(&cfg.storage_path.value);
     let auto_token = aivyx_channel::studio_token::read_existing(&token_path);
     let out = studio_command_output(
