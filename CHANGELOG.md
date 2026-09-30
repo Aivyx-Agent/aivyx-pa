@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-09-30
+
 ### Changed
 
 - **Cloud-consent requests read as a request, not an error.** Instead of
