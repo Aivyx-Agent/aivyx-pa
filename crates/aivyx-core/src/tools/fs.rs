@@ -471,9 +471,44 @@ fn is_confirmed(input: &Value) -> bool {
     input.get("confirmed").and_then(|v| v.as_bool()) == Some(true)
 }
 
-const DESTRUCTIVE_CONFIRM_HINT: &str = "This is an irreversible action and the operator enabled confirm-first \
-     (`[access] confirm_destructive`). Show the operator exactly what will be \
-     affected, get their explicit approval, then re-call with `confirmed: true`.";
+const DESTRUCTIVE_CONFIRM_HINT: &str = "This is irreversible, so the operator must approve it first. Tell them \
+     exactly what will be affected, ask, and END YOUR TURN. Only if they agree in \
+     their next message, call again with `confirmed: true` — a confirmation in \
+     the same turn as this refusal is not accepted.";
+
+/// The operator, not the model, confirms: `confirmed: true` only counts for a
+/// target this tool refused in an EARLIER turn of the same session. The
+/// model can't read the operator's answer from here, but it can't skip
+/// asking either — it has to end its turn, and only the operator's next
+/// message starts one in which the confirmed call goes through.
+#[derive(Debug, Default)]
+struct ConfirmLedger(
+    std::sync::Mutex<std::collections::HashMap<(crate::SessionId, PathBuf), crate::TurnId>>,
+);
+
+impl ConfirmLedger {
+    /// Whether this call may proceed. A refusal is remembered (first
+    /// refusal wins) so the operator's next turn can confirm it.
+    fn allows(&self, ctx: &ToolContext<'_>, target: &Path, confirmed: bool) -> bool {
+        let Ok(mut refused) = self.0.lock() else {
+            return false;
+        };
+        let key = (ctx.session_id, target.to_path_buf());
+        match refused.get(&key) {
+            Some(turn) if confirmed && *turn != ctx.turn_id => {
+                refused.remove(&key);
+                true
+            }
+            _ => {
+                if refused.len() > 1024 {
+                    refused.clear();
+                }
+                refused.entry(key).or_insert(ctx.turn_id);
+                false
+            }
+        }
+    }
+}
 
 /// The `confirmed` schema property shared by the confirm-first tools.
 fn confirmed_schema_property() -> Value {
@@ -597,6 +632,7 @@ impl FsWriteToolConfig {
             sandbox_root: Arc::from(canonical),
             schema: write_input_schema_value(),
             confirm_destructive: self.confirm_destructive,
+            confirms: ConfirmLedger::default(),
             sensitive: self.sensitive,
         })
     }
@@ -613,8 +649,9 @@ pub struct FsWriteTool {
     sandbox_root: Arc<Path>,
     schema: Value,
     /// Chapter N — when true, overwriting an existing file needs
-    /// `confirmed: true`.
+    /// `confirmed: true`, from a turn after the refusal.
     confirm_destructive: bool,
+    confirms: ConfirmLedger,
     /// Chapter Portcullis — write guard for secret + persistence paths.
     sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
@@ -672,7 +709,7 @@ impl Tool for FsWriteTool {
         }
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         // ---- Validate input fields -------------------------------
         let path_str = match input.get("path").and_then(|v| v.as_str()) {
             Some(s) => s,
@@ -718,7 +755,10 @@ impl Tool for FsWriteTool {
         // A fresh write to a new path is not destructive and never gates;
         // clobbering an existing file is irreversible and needs
         // `confirmed: true` when the operator enabled confirm-first.
-        if self.confirm_destructive && lexical_abs.exists() && !is_confirmed(&input) {
+        if self.confirm_destructive
+            && lexical_abs.exists()
+            && !self.confirms.allows(ctx, &lexical_abs, is_confirmed(&input))
+        {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: format!(
@@ -1049,6 +1089,7 @@ impl FsDeleteToolConfig {
             sandbox_root: Arc::from(canonical),
             schema: delete_input_schema_value(),
             confirm_destructive: self.confirm_destructive,
+            confirms: ConfirmLedger::default(),
             sensitive: self.sensitive,
         })
     }
@@ -1063,8 +1104,10 @@ pub struct FsDeleteTool {
     id: ToolId,
     sandbox_root: Arc<Path>,
     schema: Value,
-    /// Chapter N — when true, every delete needs `confirmed: true`.
+    /// Chapter N — when true, every delete needs `confirmed: true`, from
+    /// a turn after the refusal.
     confirm_destructive: bool,
+    confirms: ConfirmLedger,
     /// Chapter Portcullis — the sensitive-path write guard, checked
     /// alongside the sandbox fence so a protected path can't be deleted
     /// even inside the sandbox root.
@@ -1117,7 +1160,7 @@ impl Tool for FsDeleteTool {
         }
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         // ---- Validate input --------------------------------------
         let path_str = match input.get("path").and_then(|v| v.as_str()) {
             Some(s) => s,
@@ -1129,14 +1172,6 @@ impl Tool for FsDeleteTool {
             }
         };
 
-        // ---- Chapter N: confirm-first on this irreversible op ----
-        if self.confirm_destructive && !is_confirmed(&input) {
-            return ToolOutcome::Failed(AivyxError::Tool {
-                tool: self.id,
-                detail: format!("refusing to delete {path_str:?}. {DESTRUCTIVE_CONFIRM_HINT}"),
-            });
-        }
-
         // ---- Lexical resolve (mirrors FsWriteTool::execute) ------
         let lexical_abs = match lexical_resolve(&self.sandbox_root, Path::new(path_str)) {
             Some(p) => p,
@@ -1147,6 +1182,18 @@ impl Tool for FsDeleteTool {
                 )));
             }
         };
+
+        // ---- Chapter N: confirm-first on this irreversible op ----
+        // Keyed on the resolved path, so "todo.md" and its absolute form
+        // are the same confirmation.
+        if self.confirm_destructive
+            && !self.confirms.allows(ctx, &lexical_abs, is_confirmed(&input))
+        {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("refusing to delete {path_str:?}. {DESTRUCTIVE_CONFIRM_HINT}"),
+            });
+        }
 
         // Refuse to delete the sandbox root itself. Without this the
         // call would fail later with a confusing "parent escapes
@@ -1658,7 +1705,18 @@ mod tests {
     /// cancellation token, so the cheapest fake is a channel and audit
     /// hook that do nothing. Import them from the core test helpers.
     fn run_execute(tool: &dyn Tool, input: Value) -> ToolOutcome {
-        use crate::{AgentId, CancellationToken, NullAuditHook, SessionId, TurnId};
+        run_execute_in(tool, input, crate::SessionId::new(), crate::TurnId::new())
+    }
+
+    /// `run_execute` in a given session and turn — for the confirm-first
+    /// rule, which depends on which turn a refusal happened in.
+    fn run_execute_in(
+        tool: &dyn Tool,
+        input: Value,
+        session: crate::SessionId,
+        turn: crate::TurnId,
+    ) -> ToolOutcome {
+        use crate::{AgentId, CancellationToken, NullAuditHook, SessionId};
 
         // A minimal `ChannelContext` that ignores every call. This is
         // fine for a unit test that only exercises `execute`'s
@@ -1700,14 +1758,14 @@ mod tests {
         }
 
         let channel = NoopChannel {
-            session: SessionId::new(),
+            session,
             token: CancellationToken::new(),
         };
         let audit = NullAuditHook;
         let ctx = ToolContext {
             agent_id: AgentId::new(),
             session_id: channel.session,
-            turn_id: TurnId::new(),
+            turn_id: turn,
             channel: &channel,
             audit: &audit,
             cancellation: &channel.token,
@@ -2631,17 +2689,54 @@ mod tests {
         );
     }
 
+    /// The operator confirms, not the model: `confirmed: true` in the same
+    /// turn as the refusal (or with no refusal at all) is refused; only a
+    /// later turn — the operator's reply — goes through.
     #[test]
-    fn delete_confirm_first_proceeds_with_confirmed() {
+    fn delete_confirm_first_needs_a_later_turn() {
+        use crate::{SessionId, TurnId};
         let sandbox = SandboxDir::new();
         sandbox.write_file("doomed.txt", b"bye");
         let tool = FsDeleteToolConfig::new(sandbox.root.clone())
             .with_confirm_destructive(true)
             .build()
             .unwrap();
-        let outcome = run_execute(&tool, json!({"path": "doomed.txt", "confirmed": true}));
-        assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+        let (session, asked) = (SessionId::new(), TurnId::new());
+        let confirmed = json!({"path": "doomed.txt", "confirmed": true});
+        // Pre-confirming, before anything was refused: refused.
+        let first = run_execute_in(&tool, confirmed.clone(), session, asked);
+        assert!(matches!(first, ToolOutcome::Failed(_)), "{first:?}");
+        // Retrying in the same turn: still refused.
+        let again = run_execute_in(&tool, confirmed.clone(), session, asked);
+        assert!(matches!(again, ToolOutcome::Failed(_)), "{again:?}");
+        assert!(sandbox.root.join("doomed.txt").exists(), "file must survive");
+        // Another session can't borrow this session's refusal.
+        let elsewhere = run_execute_in(&tool, confirmed.clone(), SessionId::new(), TurnId::new());
+        assert!(matches!(elsewhere, ToolOutcome::Failed(_)), "{elsewhere:?}");
+        // The operator's next turn, same target by its absolute path: goes through.
+        let absolute = json!({"path": sandbox.root.join("doomed.txt"), "confirmed": true});
+        let later = run_execute_in(&tool, absolute, session, TurnId::new());
+        assert!(matches!(later, ToolOutcome::Completed { .. }), "{later:?}");
         assert!(!sandbox.root.join("doomed.txt").exists());
+    }
+
+    #[test]
+    fn overwrite_confirm_first_needs_a_later_turn() {
+        use crate::{SessionId, TurnId};
+        let sandbox = SandboxDir::new();
+        sandbox.write_file("notes.txt", b"original");
+        let tool = FsWriteToolConfig::new(sandbox.root.clone())
+            .with_confirm_destructive(true)
+            .build()
+            .unwrap();
+        let session = SessionId::new();
+        let input = json!({"path": "notes.txt", "content": "new", "confirmed": true});
+        let same_turn = run_execute_in(&tool, input.clone(), session, TurnId::new());
+        assert!(matches!(same_turn, ToolOutcome::Failed(_)), "{same_turn:?}");
+        assert_eq!(std::fs::read(sandbox.root.join("notes.txt")).unwrap(), b"original");
+        let later = run_execute_in(&tool, input, session, TurnId::new());
+        assert!(matches!(later, ToolOutcome::Completed { .. }), "{later:?}");
+        assert_eq!(std::fs::read(sandbox.root.join("notes.txt")).unwrap(), b"new");
     }
 
     #[test]

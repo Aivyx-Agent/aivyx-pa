@@ -7361,8 +7361,17 @@ async fn run_async(
         !allow_private_egress.value,
         allow_egress_hosts.clone(),
     ));
-    // Chapter N — confirm-first posture (overwrites need `confirmed: true`).
-    let confirm_destructive = confirm_destructive.value;
+    // Chapter N — confirm-first posture (deletes and overwrites need an
+    // operator-confirmed `confirmed: true`). Unless `[access]
+    // confirm_destructive` says otherwise, the autonomy level decides — on
+    // for every level short of `unleashed`, so even the sandbox (where the
+    // operator's own files now live) asks before deleting.
+    let confirm_destructive = match confirm_destructive.source {
+        aivyx_config::FieldSource::Default => {
+            confirm_destructive.value || autonomy_posture.confirm_destructive
+        }
+        _ => confirm_destructive.value,
+    };
     // aivyx-confine — the operator's `[confine] require_enforcement`
     // posture, unwrapped once here for the shell.exec + git.rs
     // confiner-construction sites below.

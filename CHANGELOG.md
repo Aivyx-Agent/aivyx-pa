@@ -5,6 +5,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Deleting or overwriting a file always asks you first — and it has to be
+  you.** Confirm-first (`[access] confirm_destructive`) was off at the
+  default `sandbox` level, where the files you ask for now live, and even
+  where it was on the model could pass `confirmed: true` on its first try.
+  It now defaults on at every access level (the autonomy level decides;
+  only `unleashed` turns it off, and an explicit setting still wins), and
+  for `fs.delete` and overwrites `confirmed: true` only counts in a turn
+  after the tool refused that same file — so the assistant has to ask and
+  wait for your reply.
+
 ## [0.12.0] — 2026-09-30
 
 ### Changed

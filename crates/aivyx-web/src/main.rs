@@ -4391,7 +4391,8 @@ fn ChatPanel() -> Element {
                         h3 { "Say hi to {assistant_name}" }
                         p { class: "muted",
                             "Ask a question or give it something to do — it remembers what you "
-                            "tell it, keeps notes, searches the web and works with files in its folder."
+                            "tell it, keeps notes, searches the web and works with files in its folder. "
+                            "Before deleting or overwriting a file, it asks you."
                         }
                         div { class: "chat-suggestions",
                             for suggestion in CHAT_SUGGESTIONS {

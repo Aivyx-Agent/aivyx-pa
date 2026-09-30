@@ -25,7 +25,7 @@
 | Default level | **`sandbox`** | Absent `[access]` ⇒ today's behavior, unchanged. Expansion is strictly opt-in. |
 | The reach lever | **`fs_root`** | `fs_root` already derives both the `fs.*:<root>/**` scopes and `shell.exec:cwd:<root>/**` (Local only). Widening it widens both; nothing else needs per-level plumbing. |
 | Who an expanded level applies to | **Local (Trusted) operator only** | The trust-tier ceiling already attenuates remote channels — `shell.exec` is `Ok(None)` for Telegram/Discord/Slack/webhooks. "Full" for the operator is still sandboxed for the internet. This is inherent, not a new knob. |
-| Safety posture | **`confirm_destructive` (default on for `home`/`full`)** | Broad reach + a hard confirm-first gate on *irreversible* ops (delete, overwrite, destructive shell, outbound). Protects the operator from the agent's own mistakes — a hallucinated `rm` asks first. Everything non-destructive runs friction-free. |
+| Safety posture | **`confirm_destructive` (default on at every level unless autonomy is `unleashed`)** | Broad reach + a hard confirm-first gate on *irreversible* ops (delete, overwrite, destructive shell, outbound). Protects the operator from the agent's own mistakes — a hallucinated `rm` asks first. Everything non-destructive runs friction-free. |
 | Authority | **Boundary widens; machinery unchanged** | Same capability attenuation, same HMAC audit chain, same headless gate policy (Chapter H). A level grants *reach*, never *un-auditability* and never authority a remote channel could inherit. |
 
 ---
@@ -84,7 +84,7 @@ confirm_destructive = true
   `home`→`$HOME`, `full`→`/`, `workspace`/`custom`→the declared `root`.
 - An explicit `[fs] root` (or `[access] root`) overrides the derived default.
 - **No `[access]` section ⇒ `sandbox`** ⇒ existing configs unchanged.
-- `confirm_destructive` defaults on for every level except `sandbox`.
+- `confirm_destructive` defaults on at every level, `sandbox` included (the operator's own files live there), unless the autonomy level is `unleashed`; an explicit `[access] confirm_destructive` wins. For `fs.delete` and overwrites the confirmation must come from the operator: `confirmed: true` only counts in a turn *after* the tool refused that same path, so the model has to ask and wait for the reply.
 
 `[access]` is sugar over the `fs_root` + posture the binary already consumes —
 the operator sets one stanza instead of hand-writing capability scopes.
