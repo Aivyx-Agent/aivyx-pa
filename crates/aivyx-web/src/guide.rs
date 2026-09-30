@@ -90,6 +90,12 @@ pub const PAGES: &[Page] = &[
         body: include_str!("../../../docs/guide/12-models-and-routing.md"),
     },
     Page {
+        id: "chat-apps-and-accounts",
+        file: "13-chat-apps-and-accounts.md",
+        title: "Chat apps & accounts",
+        body: include_str!("../../../docs/guide/13-chat-apps-and-accounts.md"),
+    },
+    Page {
         id: "desktop-app",
         file: "11-desktop-app.md",
         title: "Desktop app",

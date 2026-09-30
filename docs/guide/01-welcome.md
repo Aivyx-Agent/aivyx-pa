@@ -30,6 +30,6 @@ for whichever features you want to use. Each Studio screen has its own page.
 
 Aivyx PA runs as a small background service (the *daemon*) on your computer. Every
 way you talk to your assistant — this web Studio, the [desktop app](11-desktop-app.md),
-the terminal, voice, or chat apps — is just a different window onto that same
-daemon. Close a window and the assistant keeps running; your conversation,
-memory, and settings persist.
+the terminal, voice, or [chat apps](13-chat-apps-and-accounts.md) — is just a
+different window onto that same daemon. Close a window and the assistant keeps
+running; your conversation, memory, and settings persist.
