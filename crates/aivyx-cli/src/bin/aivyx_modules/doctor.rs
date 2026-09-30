@@ -257,7 +257,7 @@ fn check_gatehouse(cfg: &AivyxConfig) {
                  → anyone who can reach this host can drive the agent; set a token \
                  (e.g. `openssl rand -hex 32`) in aivyx-pa.toml, or \
                  `web_ui_insecure_no_auth = true` if a reverse proxy already \
-                 authenticates. See docs/GATEHOUSE.md."
+                 authenticates. See https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/GATEHOUSE.md"
             );
         }
         GatehouseStatus::NoTokenLoopback if cfg.web_ui_insecure_no_auth => {
@@ -337,7 +337,7 @@ async fn check_ollama(cfg: &AivyxConfig) -> bool {
                 Some(n) => println!("  context: num_ctx = {n} (explicit)"),
                 None => println!(
                     "  context: num_ctx = auto (≤{AUTO_NUM_CTX_CAP}) — on a capable GPU, \
-                     size the model up and raise `[ollama] num_ctx`: see docs/LOCAL_HOSTING.md"
+                     size the model up and raise `[ollama] num_ctx`: see https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/LOCAL_HOSTING.md"
                 ),
             }
             true

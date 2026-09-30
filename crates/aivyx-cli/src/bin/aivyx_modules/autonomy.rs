@@ -68,7 +68,7 @@ fn run_autonomy_set_at(path: &Path, level: AutonomyLevel, yes: bool) -> Result<(
     eprintln!("  Run `aivyx-pa autonomy show` to see the posture it resolves to.");
     eprintln!(
         "  Note: the dial's runtime effects are being wired incrementally \
-         (see docs/AUTONOMY.md); each dimension takes effect on the next daemon \
+         (see https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/AUTONOMY.md); each dimension takes effect on the next daemon \
          start as its phase lands."
     );
     Ok(())

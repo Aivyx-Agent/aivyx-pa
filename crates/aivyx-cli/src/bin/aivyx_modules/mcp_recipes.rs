@@ -521,7 +521,7 @@ pub fn render_listing() -> String {
     }
     out.push_str(
         "\nRun `aivyx-pa mcp recipes <name>` to print a recipe's full \
-         TOML snippet.\nSee docs/MCP_RECIPES.md for the canonical \
+         TOML snippet.\nSee https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/MCP_RECIPES.md for the canonical \
          catalog.\n",
     );
     out
@@ -675,7 +675,8 @@ mod tests {
     fn render_listing_points_at_canonical_doc() {
         let listing = render_listing();
         assert!(
-            listing.contains("docs/MCP_RECIPES.md"),
+            listing
+                .contains("https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/MCP_RECIPES.md"),
             "listing should point at the canonical doc",
         );
     }

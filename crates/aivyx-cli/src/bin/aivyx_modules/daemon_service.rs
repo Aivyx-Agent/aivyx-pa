@@ -176,7 +176,7 @@ pub fn run_install_with(
         Platform::MacOs => install_macos(web_ui, start, passphrase),
         Platform::Unsupported => Err(
             "no supported service manager on this platform — run `aivyx-pa daemon run` \
-             directly, or use the Docker appliance (docs/INSTALL.md)."
+             directly, or use the Docker appliance (https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md)."
                 .into(),
         ),
     }
