@@ -39,17 +39,6 @@ impl OperatorConfirmations {
         refused.entry((session, target.to_string())).or_insert(turn);
     }
 
-    /// Transitional (removed once the agent owns confirmation): the old
-    /// combined check — `confirmed` counts only after an earlier-turn
-    /// refusal; a call that doesn't run is recorded.
-    pub fn allows(&self, ctx: &crate::ToolContext<'_>, target: &str, confirmed: bool) -> bool {
-        if confirmed && self.take_refusal(ctx.session_id, ctx.turn_id, target) {
-            return true;
-        }
-        self.record_refusal(ctx.session_id, ctx.turn_id, target);
-        false
-    }
-
     /// Whether `target` was refused in an EARLIER turn of `session` — i.e. the
     /// operator has replied since. Consumes the record: one approval, one run.
     pub fn take_refusal(&self, session: SessionId, turn: TurnId, target: &str) -> bool {

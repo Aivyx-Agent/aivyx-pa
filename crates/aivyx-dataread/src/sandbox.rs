@@ -52,9 +52,9 @@ pub struct ReaderSandbox {
     /// operator's policy in.
     sensitive: Arc<aivyx_core::sensitive_paths::SensitivePolicy>,
     /// With `[access] confirm_destructive` on: replacing an existing file
-    /// needs the operator's reply, not just the model's `overwrite: true`.
-    /// `None` keeps the plain `overwrite` flag.
-    overwrite_confirms: Option<Arc<aivyx_core::confirm::OperatorConfirmations>>,
+    /// needs the operator's approval (`confirmed`, set by the agent) as well
+    /// as `overwrite: true`.
+    confirm_destructive: bool,
 }
 
 /// A file that passed both fences, with its bytes read (capped).
@@ -88,15 +88,14 @@ impl ReaderSandbox {
             sensitive: Arc::new(
                 aivyx_core::sensitive_paths::SensitivePolicy::disabled(),
             ),
-            overwrite_confirms: None,
+            confirm_destructive: false,
         })
     }
 
-    /// Chapter N — confirm-first for replacing an existing file: the
-    /// model's `overwrite: true` only counts in a turn after the writer
-    /// refused that same file (see `aivyx_core::confirm`).
+    /// Chapter N — confirm-first for replacing an existing file: it needs
+    /// the operator's approval (the agent sets `confirmed` once given).
     pub fn with_confirm_destructive(mut self, on: bool) -> Self {
-        self.overwrite_confirms = on.then(Default::default);
+        self.confirm_destructive = on;
         self
     }
 
@@ -164,7 +163,6 @@ impl ReaderSandbox {
         &self,
         input: &Value,
         tool: ToolId,
-        ctx: &aivyx_core::ToolContext<'_>,
     ) -> Result<(PathBuf, PathBuf), ToolOutcome> {
         let path_str = match input.get("path").and_then(|v| v.as_str()) {
             Some(s) => s,
@@ -180,23 +178,20 @@ impl ReaderSandbox {
         };
 
         if lexical.exists() {
-            let allowed = match &self.overwrite_confirms {
-                Some(confirms) => {
-                    confirms.allows(ctx, &lexical.display().to_string(), overwrite)
-                }
-                None => overwrite,
-            };
-            if !allowed {
-                let how = if self.overwrite_confirms.is_some() {
-                    format!(
-                        "replacing it is irreversible, so the operator must approve: tell \
-                         them which file. {} (Here the flag is `overwrite: true`.)",
-                        aivyx_core::confirm::ASK_THEN_END_TURN
-                    )
-                } else {
-                    "pass `overwrite: true` to replace it".to_string()
-                };
-                return Err(fail(tool, format!("{path_str:?} already exists — {how}")));
+            if !overwrite {
+                return Err(fail(
+                    tool,
+                    format!("{path_str:?} already exists — pass `overwrite: true` to replace it"),
+                ));
+            }
+            if self.confirm_destructive && !aivyx_core::confirm::is_confirmed(input) {
+                return Err(ToolOutcome::RequiresEscalation {
+                    reason: format!(
+                        "{path_str:?} already exists and replacing it can't be undone: the \
+                         operator must approve it first."
+                    ),
+                    scope: None,
+                });
             }
         }
 

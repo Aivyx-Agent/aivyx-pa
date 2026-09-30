@@ -89,7 +89,7 @@ impl Tool for DataPdfWriteTool {
     fn required_scope(&self, input: &Value) -> Scope {
         self.sandbox.scope_for_write(input)
     }
-    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         let title = input.get("title").and_then(Value::as_str).map(str::to_string);
         let text = match input.get("text").and_then(Value::as_str) {
             Some(s) if !s.trim().is_empty() => s,
@@ -102,7 +102,7 @@ impl Tool for DataPdfWriteTool {
             }
         };
 
-        let (tmp_path, final_path) = match self.sandbox.resolve_write_target(&input, self.id, ctx) {
+        let (tmp_path, final_path) = match self.sandbox.resolve_write_target(&input, self.id) {
             Ok(paths) => paths,
             Err(outcome) => return outcome,
         };
@@ -293,7 +293,8 @@ fn schema() -> Value {
             "path": { "type": "string", "minLength": 1, "description": "Where to write the PDF, under the sandbox root." },
             "title": { "type": "string", "description": "Optional title, rendered larger at the top of page one." },
             "text": { "type": "string", "minLength": 1, "description": "Body text. Newlines start new paragraphs; long lines word-wrap automatically." },
-            "overwrite": { "type": "boolean", "description": "Must be true to replace an existing file (default false)." }
+            "overwrite": { "type": "boolean", "description": "Must be true to replace an existing file (default false)." },
+            "confirmed": { "type": "boolean", "description": "Set only by Aivyx PA after the operator approves replacing an existing file." }
         },
         "required": ["path", "text"],
         "additionalProperties": false
@@ -432,36 +433,38 @@ mod tests {
         assert!(extracted.contains("Hello Sheaf PDF writer"));
     }
 
-    /// With confirm-first on, replacing an existing file needs the
-    /// operator's reply: `overwrite: true` in the same turn as the refusal
-    /// (or with no refusal) is refused; the next turn replaces it.
+    /// With confirm-first on, replacing an existing file needs `overwrite`
+    /// AND the operator's `confirmed` (set by the agent once approved):
+    /// without it the writer asks (`RequiresEscalation`).
     #[tokio::test]
-    async fn replacing_a_file_under_confirm_first_needs_a_later_turn() {
+    async fn replacing_a_file_under_confirm_first_asks_then_runs_when_confirmed() {
         let root = scratch_root();
         std::fs::write(root.join("report.pdf"), b"the operator's file").unwrap();
         let tool =
             DataPdfWriteTool::new(ReaderSandbox::new(&root).unwrap().with_confirm_destructive(true));
         let (channel, audit) = (NoopChannel, NoopAudit);
         let cancellation = aivyx_core::CancellationToken::new();
-        let session = aivyx_core::SessionId::new();
-        let ctx_in = |turn| ToolContext {
+        let ctx = ToolContext {
             agent_id: aivyx_core::AgentId::new(),
-            session_id: session,
-            turn_id: turn,
+            session_id: aivyx_core::SessionId::new(),
+            turn_id: aivyx_core::TurnId::new(),
             channel: &channel,
             audit: &audit,
             cancellation: &cancellation,
             message_origin: aivyx_core::MessageOrigin::Operator,
         };
-        let input = json!({"path": "report.pdf", "text": "new", "overwrite": true});
-        let asked = aivyx_core::TurnId::new();
-        for _ in 0..2 {
-            let out = tool.execute(input.clone(), &ctx_in(asked)).await;
-            assert!(matches!(out, ToolOutcome::Failed(_)), "{out:?}");
-        }
+        let asked = tool
+            .execute(json!({"path": "report.pdf", "text": "new", "overwrite": true}), &ctx)
+            .await;
+        assert!(matches!(asked, ToolOutcome::RequiresEscalation { .. }), "{asked:?}");
         assert_eq!(std::fs::read(root.join("report.pdf")).unwrap(), b"the operator's file");
-        let later = tool.execute(input, &ctx_in(aivyx_core::TurnId::new())).await;
-        assert!(matches!(later, ToolOutcome::Completed { .. }), "{later:?}");
+        let ran = tool
+            .execute(
+                json!({"path": "report.pdf", "text": "new", "overwrite": true, "confirmed": true}),
+                &ctx,
+            )
+            .await;
+        assert!(matches!(ran, ToolOutcome::Completed { .. }), "{ran:?}");
     }
 
     #[test]

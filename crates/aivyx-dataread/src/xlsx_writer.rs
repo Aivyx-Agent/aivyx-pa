@@ -82,7 +82,7 @@ impl Tool for DataXlsxWriteTool {
     fn required_scope(&self, input: &Value) -> Scope {
         self.sandbox.scope_for_write(input)
     }
-    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         let sheet_name = input
             .get("sheet_name")
             .and_then(Value::as_str)
@@ -136,7 +136,7 @@ impl Tool for DataXlsxWriteTool {
             }
         }
 
-        let (tmp_path, final_path) = match self.sandbox.resolve_write_target(&input, self.id, ctx) {
+        let (tmp_path, final_path) = match self.sandbox.resolve_write_target(&input, self.id) {
             Ok(paths) => paths,
             Err(outcome) => return outcome,
         };
@@ -214,7 +214,8 @@ fn schema() -> Value {
                 "items": { "type": "array", "items": { "type": "string" } },
                 "description": "Data rows, each an array of cell strings."
             },
-            "overwrite": { "type": "boolean", "description": "Must be true to replace an existing file (default false)." }
+            "overwrite": { "type": "boolean", "description": "Must be true to replace an existing file (default false)." },
+            "confirmed": { "type": "boolean", "description": "Set only by Aivyx PA after the operator approves replacing an existing file." }
         },
         "required": ["path", "rows"],
         "additionalProperties": false

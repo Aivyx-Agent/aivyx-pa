@@ -471,8 +471,7 @@ fn is_confirmed(input: &Value) -> bool {
     input.get("confirmed").and_then(|v| v.as_bool()) == Some(true)
 }
 
-const DESTRUCTIVE_CONFIRM_HINT: &str = "This is irreversible, so the operator must approve it \
-     first: tell them exactly what will be affected.";
+const DESTRUCTIVE_CONFIRM_HINT: &str = "The operator must approve it first.";
 
 /// The `confirmed` schema property shared by the confirm-first tools.
 fn confirmed_schema_property() -> Value {
@@ -596,7 +595,6 @@ impl FsWriteToolConfig {
             sandbox_root: Arc::from(canonical),
             schema: write_input_schema_value(),
             confirm_destructive: self.confirm_destructive,
-            confirms: Default::default(),
             sensitive: self.sensitive,
         })
     }
@@ -615,7 +613,6 @@ pub struct FsWriteTool {
     /// Chapter N — when true, overwriting an existing file needs
     /// `confirmed: true`, from a turn after the refusal.
     confirm_destructive: bool,
-    confirms: crate::confirm::OperatorConfirmations,
     /// Chapter Portcullis — write guard for secret + persistence paths.
     sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
@@ -673,7 +670,7 @@ impl Tool for FsWriteTool {
         }
     }
 
-    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         // ---- Validate input fields -------------------------------
         let path_str = match input.get("path").and_then(|v| v.as_str()) {
             Some(s) => s,
@@ -719,20 +716,13 @@ impl Tool for FsWriteTool {
         // A fresh write to a new path is not destructive and never gates;
         // clobbering an existing file is irreversible and needs
         // `confirmed: true` when the operator enabled confirm-first.
-        if self.confirm_destructive
-            && lexical_abs.exists()
-            && !self
-                .confirms
-                .allows(ctx, &lexical_abs.display().to_string(), is_confirmed(&input))
-        {
-            return ToolOutcome::Failed(AivyxError::Tool {
-                tool: self.id,
-                detail: format!(
-                    "refusing to overwrite existing file {path_str:?}. \
-                     {DESTRUCTIVE_CONFIRM_HINT} {}",
-                    crate::confirm::ASK_THEN_END_TURN
+        if self.confirm_destructive && lexical_abs.exists() && !is_confirmed(&input) {
+            return ToolOutcome::RequiresEscalation {
+                reason: format!(
+                    "overwriting {path_str:?} can't be undone. {DESTRUCTIVE_CONFIRM_HINT}"
                 ),
-            });
+                scope: None,
+            };
         }
 
         // The lexical path has a parent (it's absolute and has at
@@ -1056,7 +1046,6 @@ impl FsDeleteToolConfig {
             sandbox_root: Arc::from(canonical),
             schema: delete_input_schema_value(),
             confirm_destructive: self.confirm_destructive,
-            confirms: Default::default(),
             sensitive: self.sensitive,
         })
     }
@@ -1074,7 +1063,6 @@ pub struct FsDeleteTool {
     /// Chapter N — when true, every delete needs `confirmed: true`, from
     /// a turn after the refusal.
     confirm_destructive: bool,
-    confirms: crate::confirm::OperatorConfirmations,
     /// Chapter Portcullis — the sensitive-path write guard, checked
     /// alongside the sandbox fence so a protected path can't be deleted
     /// even inside the sandbox root.
@@ -1127,7 +1115,7 @@ impl Tool for FsDeleteTool {
         }
     }
 
-    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         // ---- Validate input --------------------------------------
         let path_str = match input.get("path").and_then(|v| v.as_str()) {
             Some(s) => s,
@@ -1153,18 +1141,11 @@ impl Tool for FsDeleteTool {
         // ---- Chapter N: confirm-first on this irreversible op ----
         // Keyed on the resolved path, so "todo.md" and its absolute form
         // are the same confirmation.
-        if self.confirm_destructive
-            && !self
-                .confirms
-                .allows(ctx, &lexical_abs.display().to_string(), is_confirmed(&input))
-        {
-            return ToolOutcome::Failed(AivyxError::Tool {
-                tool: self.id,
-                detail: format!(
-                    "refusing to delete {path_str:?}. {DESTRUCTIVE_CONFIRM_HINT} {}",
-                    crate::confirm::ASK_THEN_END_TURN
-                ),
-            });
+        if self.confirm_destructive && !is_confirmed(&input) {
+            return ToolOutcome::RequiresEscalation {
+                reason: format!("deleting {path_str:?} can't be undone. {DESTRUCTIVE_CONFIRM_HINT}"),
+                scope: None,
+            };
         }
 
         // Refuse to delete the sandbox root itself. Without this the
@@ -2652,7 +2633,7 @@ mod tests {
             .unwrap();
         let outcome = run_execute(&tool, json!({"path": "doomed.txt"}));
         assert!(
-            matches!(outcome, ToolOutcome::Failed(_)),
+            matches!(outcome, ToolOutcome::RequiresEscalation { .. }),
             "confirm-first must refuse an unconfirmed delete"
         );
         assert!(
@@ -2661,64 +2642,41 @@ mod tests {
         );
     }
 
-    /// The operator confirms, not the model: `confirmed: true` in the same
-    /// turn as the refusal (or with no refusal at all) is refused; only a
-    /// later turn — the operator's reply — goes through.
+    /// Confirm-first tools only say "needs approval" (the agent owns the
+    /// rule that the operator, not the model, confirms — see
+    /// `aivyx_core::confirm`): unconfirmed → `RequiresEscalation`,
+    /// `confirmed: true` → runs.
     #[test]
-    fn delete_confirm_first_needs_a_later_turn() {
-        use crate::{SessionId, TurnId};
+    fn delete_confirm_first_asks_then_runs_when_confirmed() {
         let sandbox = SandboxDir::new();
         sandbox.write_file("doomed.txt", b"bye");
         let tool = FsDeleteToolConfig::new(sandbox.root.clone())
             .with_confirm_destructive(true)
             .build()
             .unwrap();
-        let (session, asked) = (SessionId::new(), TurnId::new());
-        let confirmed = json!({"path": "doomed.txt", "confirmed": true});
-        // Pre-confirming, before anything was refused: refused.
-        let first = run_execute_in(&tool, confirmed.clone(), session, asked);
-        assert!(matches!(first, ToolOutcome::Failed(_)), "{first:?}");
-        // Retrying in the same turn: still refused.
-        let again = run_execute_in(&tool, confirmed.clone(), session, asked);
-        assert!(matches!(again, ToolOutcome::Failed(_)), "{again:?}");
-        assert!(sandbox.root.join("doomed.txt").exists(), "file must survive");
-        // Another session can't borrow this session's refusal.
-        let elsewhere = run_execute_in(&tool, confirmed.clone(), SessionId::new(), TurnId::new());
-        assert!(matches!(elsewhere, ToolOutcome::Failed(_)), "{elsewhere:?}");
-        // The operator's next turn, same target by its absolute path: goes through.
-        let absolute = json!({"path": sandbox.root.join("doomed.txt"), "confirmed": true});
-        let later = run_execute_in(&tool, absolute, session, TurnId::new());
-        assert!(matches!(later, ToolOutcome::Completed { .. }), "{later:?}");
+        let asked = run_execute(&tool, json!({"path": "doomed.txt"}));
+        assert!(matches!(asked, ToolOutcome::RequiresEscalation { .. }), "{asked:?}");
+        assert!(sandbox.root.join("doomed.txt").exists());
+        let ran = run_execute(&tool, json!({"path": "doomed.txt", "confirmed": true}));
+        assert!(matches!(ran, ToolOutcome::Completed { .. }), "{ran:?}");
         assert!(!sandbox.root.join("doomed.txt").exists());
     }
 
     #[test]
-    fn overwrite_confirm_first_needs_a_later_turn() {
-        use crate::{SessionId, TurnId};
+    fn overwrite_confirm_first_asks_then_runs_when_confirmed() {
         let sandbox = SandboxDir::new();
         sandbox.write_file("notes.txt", b"original");
         let tool = FsWriteToolConfig::new(sandbox.root.clone())
             .with_confirm_destructive(true)
             .build()
             .unwrap();
-        let session = SessionId::new();
-        let input = json!({"path": "notes.txt", "content": "new", "confirmed": true});
-        let same_turn = run_execute_in(&tool, input.clone(), session, TurnId::new());
-        assert!(matches!(same_turn, ToolOutcome::Failed(_)), "{same_turn:?}");
-        assert_eq!(std::fs::read(sandbox.root.join("notes.txt")).unwrap(), b"original");
-        let later = run_execute_in(&tool, input, session, TurnId::new());
-        assert!(matches!(later, ToolOutcome::Completed { .. }), "{later:?}");
-        assert_eq!(std::fs::read(sandbox.root.join("notes.txt")).unwrap(), b"new");
-    }
-
-    #[test]
-    fn delete_without_confirm_posture_does_not_gate() {
-        // Default (confirm_destructive off) — deletes run as before.
-        let sandbox = SandboxDir::new();
-        sandbox.write_file("doomed.txt", b"bye");
-        let tool = build_delete_tool(&sandbox);
-        let outcome = run_execute(&tool, json!({"path": "doomed.txt"}));
-        assert!(matches!(outcome, ToolOutcome::Completed { .. }));
+        let asked = run_execute(&tool, json!({"path": "notes.txt", "content": "new"}));
+        assert!(matches!(asked, ToolOutcome::RequiresEscalation { .. }), "{asked:?}");
+        let ran = run_execute(
+            &tool,
+            json!({"path": "notes.txt", "content": "new", "confirmed": true}),
+        );
+        assert!(matches!(ran, ToolOutcome::Completed { .. }), "{ran:?}");
     }
 
     #[test]
@@ -2731,7 +2689,7 @@ mod tests {
             .unwrap();
         let outcome = run_execute(&tool, json!({"path": "notes.txt", "content": "clobbered"}));
         assert!(
-            matches!(outcome, ToolOutcome::Failed(_)),
+            matches!(outcome, ToolOutcome::RequiresEscalation { .. }),
             "overwriting an existing file must gate"
         );
         assert_eq!(
