@@ -146,6 +146,11 @@ pub struct TelegramSessionConfig {
     /// construction site below, same pattern as `injection_scan_enabled`.
     /// `false` preserves pre-fix behavior byte-for-byte.
     pub confirm_destructive: bool,
+    /// Chapter K / Throttle — the operator's `[budget]` day cap and
+    /// `[rate_limit]` caps, as every other channel applies them. `None` =
+    /// ungated.
+    pub budget_gate: Option<std::sync::Arc<dyn aivyx_core::BudgetGate>>,
+    pub rate_gate: Option<std::sync::Arc<dyn aivyx_core::RateGate>>,
     /// `[agent] injection_scan_exempt` — per-tool-name exemption list for
     /// the active scan. See `aivyx_core::TurnSafety` for the full contract.
     pub injection_scan_exempt: std::collections::BTreeSet<String>,
@@ -460,7 +465,9 @@ where
     .with_memory_topic_prefix(config.memory_topic_prefix)
     // Task 4 security-audit fix round 3 — same [access] confirm_destructive
     // posture as every other agent construction path.
-    .with_confirm_destructive(config.confirm_destructive);
+    .with_confirm_destructive(config.confirm_destructive)
+    .with_budget_gate(config.budget_gate)
+    .with_rate_gate(config.rate_gate);
     // Route through the shared per-turn-safety choke point with the
     // operator's configured values.
     let agent = aivyx_core::TurnSafety::interactive(
@@ -838,7 +845,9 @@ where
     .with_checkpointer(checkpointer)
     // Task 4 security-audit fix round 3 — same [access] confirm_destructive
     // posture as every other agent construction path.
-    .with_confirm_destructive(config.confirm_destructive);
+    .with_confirm_destructive(config.confirm_destructive)
+    .with_budget_gate(config.budget_gate)
+    .with_rate_gate(config.rate_gate);
     // Route through the shared per-turn-safety choke point with the
     // operator's configured values.
     let agent = aivyx_core::TurnSafety::interactive(

@@ -292,6 +292,8 @@ fn base_session_config(harness: &MemoryHarness, storage: Arc<dyn Storage>) -> Se
         turn_safety: Default::default(),
         confirm_destructive: false,
         conversation_history_turns: 0,
+        budget_gate: None,
+        rate_gate: None,
     }
 }
 

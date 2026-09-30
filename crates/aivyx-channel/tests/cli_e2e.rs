@@ -267,6 +267,8 @@ async fn scripted_session_drives_two_turns_end_to_end() {
         turn_safety: Default::default(),
         confirm_destructive: false,
         conversation_history_turns: 0,
+        budget_gate: None,
+        rate_gate: None,
     };
 
     // -- Drive the session.
@@ -431,6 +433,8 @@ async fn in_process_allow_cloud_gets_a_local_reply_and_never_calls_the_model() {
         turn_safety: Default::default(),
         confirm_destructive: false,
         conversation_history_turns: 0,
+        budget_gate: None,
+        rate_gate: None,
     };
 
     let report = run_session(provider, audit_hook, None, None, config, channel, reader)
@@ -514,6 +518,8 @@ fn empty_session_config(storage: Arc<dyn Storage>) -> SessionConfig {
         turn_safety: Default::default(),
         confirm_destructive: false,
         conversation_history_turns: 0,
+        budget_gate: None,
+        rate_gate: None,
     }
 }
 
@@ -593,6 +599,45 @@ async fn in_process_chat_remembers_the_conversation_so_far() {
     assert!(!seen[0].contains("Nice to meet you"), "{}", seen[0]);
     assert!(seen[1].contains("My name is Sam."), "{}", seen[1]);
     assert!(seen[1].contains("Nice to meet you, Sam."), "{}", seen[1]);
+}
+
+struct DenyAllBudget;
+impl aivyx_core::BudgetGate for DenyAllBudget {
+    fn open_turn(&self, _model: &str) -> Result<Box<dyn aivyx_core::TurnBudgetGuard>, String> {
+        Err("over the day cap".to_string())
+    }
+}
+
+/// The in-process chat applies the operator's `[budget]` cap like the
+/// daemon does — it used to build its agent with no budget gate at all.
+#[tokio::test]
+async fn in_process_chat_respects_the_budget_gate() {
+    let provider = Arc::new(RecordingProvider {
+        replies: Mutex::new(vec!["should never be asked".to_string()].into()),
+        seen: Mutex::new(Vec::new()),
+    });
+    let audit_hook: Arc<dyn AuditHook> =
+        Arc::new(AuditBridge::new(HmacChainLog::new([42u8; 32].to_vec())));
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+    let config = SessionConfig {
+        budget_gate: Some(Arc::new(DenyAllBudget)),
+        ..empty_session_config(storage)
+    };
+    let report = run_session(
+        provider.clone(),
+        audit_hook,
+        None,
+        None,
+        config,
+        channel,
+        Cursor::new(&b"hello\n"[..]),
+    )
+    .await
+    .expect("run_session completes on EOF");
+    assert_eq!(report.turns_run, 1);
+    assert!(provider.seen.lock().unwrap().is_empty(), "the model must not be called");
 }
 
 /// In-process chat is never routed (only daemon conversations are), so

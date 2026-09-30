@@ -192,6 +192,11 @@ pub struct SessionConfig {
     /// most recent messages are replayed into each turn, as the daemon
     /// does. `0` keeps turns fresh-context (no replay).
     pub conversation_history_turns: usize,
+    /// Chapter K / Throttle — the operator's `[budget]` day cap and
+    /// `[rate_limit]` caps, as the daemon and voice apply them. `None` =
+    /// ungated (no cap configured).
+    pub budget_gate: Option<Arc<dyn aivyx_core::BudgetGate>>,
+    pub rate_gate: Option<Arc<dyn aivyx_core::RateGate>>,
 }
 
 /// Phase 137 — agent-stack construction inputs.
@@ -277,10 +282,8 @@ impl AgentStackSpec {
             context_provider: c.context_provider.clone(),
             system_prompt_refiner: c.system_prompt_refiner.clone(),
             prompt_refresher: c.prompt_refresher.clone(),
-            // The REPL/local path is ungated for now; daemon + voice attach
-            // the shared gate at their own build sites.
-            budget_gate: None,
-            rate_gate: None,
+            budget_gate: c.budget_gate.clone(),
+            rate_gate: c.rate_gate.clone(),
             turn_safety: c.turn_safety.clone(),
             checkpointer: None,
             confirm_destructive: c.confirm_destructive,

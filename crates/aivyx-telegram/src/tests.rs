@@ -1045,6 +1045,8 @@ async fn run_telegram_session_drives_two_scripted_turns() {
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
         confirm_destructive: false,
+        budget_gate: None,
+        rate_gate: None,
     };
 
     // ---- Drive the session loop under a bounded timeout ----------
@@ -1395,6 +1397,8 @@ async fn run_telegram_session_cancelled_turn_renders_and_continues() {
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
         confirm_destructive: false,
+        budget_gate: None,
+        rate_gate: None,
     };
 
     // ---- Watcher: cancel the per-turn token once the stall begins -
@@ -1865,6 +1869,8 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
             confirm_destructive: false,
+            budget_gate: None,
+            rate_gate: None,
         };
         let config_b = TelegramSessionConfig {
             model: "claude-haiku-4-5-20251001".to_string(),
@@ -1880,6 +1886,8 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
             confirm_destructive: false,
+            budget_gate: None,
+            rate_gate: None,
         };
 
         // ---- Per-chat watcher tasks --------------------------------
@@ -2356,6 +2364,8 @@ async fn run_telegram_session_in_band_cancel_cancels_current_turn() {
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
         confirm_destructive: false,
+        budget_gate: None,
+        rate_gate: None,
     };
 
     // ---- Watcher: push `/cancel` once the first turn has started
@@ -2617,6 +2627,8 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
         confirm_destructive: false,
+        budget_gate: None,
+        rate_gate: None,
     };
 
     // ---- Watcher A: push a *normal* (non-/cancel) follow-up message
@@ -2924,6 +2936,8 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
             confirm_destructive: false,
+            budget_gate: None,
+            rate_gate: None,
         };
 
         // ---- Shutdown watcher --------------------------------------
@@ -3371,6 +3385,8 @@ async fn telegram_dispatched_mutating_tool_produces_a_checkpoint() {
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
         confirm_destructive: false,
+        budget_gate: None,
+        rate_gate: None,
     };
 
     let shutdown = CancellationToken::new();
@@ -3638,6 +3654,8 @@ async fn telegram_injection_scan_disabled_skips_escalation() {
         injection_scan_enabled: false,
         injection_scan_exempt: std::collections::BTreeSet::new(),
         confirm_destructive: false,
+        budget_gate: None,
+        rate_gate: None,
     };
 
     let shutdown = CancellationToken::new();

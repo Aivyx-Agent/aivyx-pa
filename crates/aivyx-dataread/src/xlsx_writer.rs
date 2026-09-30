@@ -82,7 +82,7 @@ impl Tool for DataXlsxWriteTool {
     fn required_scope(&self, input: &Value) -> Scope {
         self.sandbox.scope_for_write(input)
     }
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let sheet_name = input
             .get("sheet_name")
             .and_then(Value::as_str)
@@ -136,7 +136,7 @@ impl Tool for DataXlsxWriteTool {
             }
         }
 
-        let (tmp_path, final_path) = match self.sandbox.resolve_write_target(&input, self.id) {
+        let (tmp_path, final_path) = match self.sandbox.resolve_write_target(&input, self.id, ctx) {
             Ok(paths) => paths,
             Err(outcome) => return outcome,
         };

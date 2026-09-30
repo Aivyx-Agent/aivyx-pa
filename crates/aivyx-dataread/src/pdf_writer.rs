@@ -89,7 +89,7 @@ impl Tool for DataPdfWriteTool {
     fn required_scope(&self, input: &Value) -> Scope {
         self.sandbox.scope_for_write(input)
     }
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let title = input.get("title").and_then(Value::as_str).map(str::to_string);
         let text = match input.get("text").and_then(Value::as_str) {
             Some(s) if !s.trim().is_empty() => s,
@@ -102,7 +102,7 @@ impl Tool for DataPdfWriteTool {
             }
         };
 
-        let (tmp_path, final_path) = match self.sandbox.resolve_write_target(&input, self.id) {
+        let (tmp_path, final_path) = match self.sandbox.resolve_write_target(&input, self.id, ctx) {
             Ok(paths) => paths,
             Err(outcome) => return outcome,
         };
@@ -430,6 +430,38 @@ mod tests {
         let bytes = std::fs::read(root.join("report.pdf")).unwrap();
         let extracted = pdf_extract::extract_text_from_mem(&bytes).unwrap();
         assert!(extracted.contains("Hello Sheaf PDF writer"));
+    }
+
+    /// With confirm-first on, replacing an existing file needs the
+    /// operator's reply: `overwrite: true` in the same turn as the refusal
+    /// (or with no refusal) is refused; the next turn replaces it.
+    #[tokio::test]
+    async fn replacing_a_file_under_confirm_first_needs_a_later_turn() {
+        let root = scratch_root();
+        std::fs::write(root.join("report.pdf"), b"the operator's file").unwrap();
+        let tool =
+            DataPdfWriteTool::new(ReaderSandbox::new(&root).unwrap().with_confirm_destructive(true));
+        let (channel, audit) = (NoopChannel, NoopAudit);
+        let cancellation = aivyx_core::CancellationToken::new();
+        let session = aivyx_core::SessionId::new();
+        let ctx_in = |turn| ToolContext {
+            agent_id: aivyx_core::AgentId::new(),
+            session_id: session,
+            turn_id: turn,
+            channel: &channel,
+            audit: &audit,
+            cancellation: &cancellation,
+            message_origin: aivyx_core::MessageOrigin::Operator,
+        };
+        let input = json!({"path": "report.pdf", "text": "new", "overwrite": true});
+        let asked = aivyx_core::TurnId::new();
+        for _ in 0..2 {
+            let out = tool.execute(input.clone(), &ctx_in(asked)).await;
+            assert!(matches!(out, ToolOutcome::Failed(_)), "{out:?}");
+        }
+        assert_eq!(std::fs::read(root.join("report.pdf")).unwrap(), b"the operator's file");
+        let later = tool.execute(input, &ctx_in(aivyx_core::TurnId::new())).await;
+        assert!(matches!(later, ToolOutcome::Completed { .. }), "{later:?}");
     }
 
     #[test]

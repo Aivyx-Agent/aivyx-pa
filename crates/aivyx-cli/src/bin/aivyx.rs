@@ -8035,7 +8035,8 @@ async fn run_async(
         .map_err(|e| format!("failed to build structured-data reader sandbox: {e}"))?
         // Chapter Ward — same secret-guard as fs.read, so the data readers
         // aren't an exfiltration bypass.
-        .with_sensitive_policy(std::sync::Arc::clone(&sensitive_policy));
+        .with_sensitive_policy(std::sync::Arc::clone(&sensitive_policy))
+        .with_confirm_destructive(confirm_destructive);
     let data_csv = DataCsvTool::new(reader_sandbox.clone());
     let data_xlsx = DataXlsxTool::new(reader_sandbox.clone());
     let data_pdf = DataPdfTool::new(reader_sandbox.clone());
@@ -10945,6 +10946,15 @@ async fn run_async(
                 // local.
                 confirm_destructive,
                 conversation_history_turns,
+                // Chapter K / Throttle — the same [budget] day cap and [rate_limit]
+                // caps the daemon and voice apply; in-process chat used to skip them.
+                budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
+                    config_budget.clone(),
+                    Arc::clone(&persistent_audit_for_query),
+                    aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
+                    DEFAULT_MAX_TOKENS,
+                ),
+                rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
 
             let stdin = io::stdin();
@@ -11065,6 +11075,15 @@ async fn run_async(
                 // confirm_destructive posture as every other agent
                 // construction path in this function.
                 confirm_destructive,
+                // Chapter K / Throttle — the same [budget] day cap and [rate_limit]
+                // caps the daemon and voice apply; in-process chat used to skip them.
+                budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
+                    config_budget.clone(),
+                    Arc::clone(&persistent_audit_for_query),
+                    aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
+                    DEFAULT_MAX_TOKENS,
+                ),
+                rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
             run_telegram_multi_session(
                 "aivyx-telegram",
@@ -11191,6 +11210,15 @@ async fn run_async(
                 // confirm_destructive posture as every other agent
                 // construction path in this function.
                 confirm_destructive,
+                // Chapter K / Throttle — the same [budget] day cap and [rate_limit]
+                // caps the daemon and voice apply; in-process chat used to skip them.
+                budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
+                    config_budget.clone(),
+                    Arc::clone(&persistent_audit_for_query),
+                    aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
+                    DEFAULT_MAX_TOKENS,
+                ),
+                rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
             aivyx_discord::run_discord_session(
                 "aivyx-discord",
@@ -11353,6 +11381,15 @@ async fn run_async(
                 // confirm_destructive posture as every other agent
                 // construction path in this function.
                 confirm_destructive,
+                // Chapter K / Throttle — the same [budget] day cap and [rate_limit]
+                // caps the daemon and voice apply; in-process chat used to skip them.
+                budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
+                    config_budget.clone(),
+                    Arc::clone(&persistent_audit_for_query),
+                    aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
+                    DEFAULT_MAX_TOKENS,
+                ),
+                rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
             aivyx_slack::run_slack_session(
                 "aivyx-slack",

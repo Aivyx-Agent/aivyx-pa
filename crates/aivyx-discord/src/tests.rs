@@ -184,6 +184,8 @@ fn discord_session_config(storage: Arc<dyn Storage>) -> DiscordSessionConfig {
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
         confirm_destructive: false,
+        budget_gate: None,
+        rate_gate: None,
     }
 }
 
