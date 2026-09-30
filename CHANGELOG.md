@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-10-01
+
 ### Added
 
 - **Approve or deny, and the reply carries on.** When the assistant wants to do
