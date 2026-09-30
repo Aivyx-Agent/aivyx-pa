@@ -16,9 +16,30 @@ All notable changes to Aivyx are recorded here. This project adheres to
 - **`init` sets up the passphrase.** It asks for the passphrase that
   encrypts your store (twice) and keeps it in the OS keyring, so the daemon
   and the Studio start on their own from the first launch. Without a
-  keyring it explains the choices (an environment variable, or the
-  background service) and hands the passphrase to the service install
-  instead of asking again. Nothing is written in plain text.
+  keyring it offers (default yes) to save it in
+  `~/.config/aivyx-pa/daemon.env`, readable only by you — the file the
+  background service already used — and `aivyx-pa`, the daemon it starts
+  and `daemon install` all read it after the keyring. A file other users
+  can read is refused. Decline, and aivyx-pa asks each time it starts.
+- **`init` offers the background service only where it can work** (a
+  systemd user session, or macOS), and ends by checking that your model
+  answers — after the last question, not before the passphrase.
+- **Every model is told where files live.** The note on the `fs.*` root
+  (your files) versus the assistant's own notebook (`workspace.*`) only
+  reached Ollama models; Lemonade, llama.cpp, Jan, broker and cloud models
+  never got it, so a file you asked for could land in the notebook where
+  `fs.*` couldn't find it, and the assistant couldn't say where it was.
+- **The Studio welcomes a newcomer.** The Command Center shows a start-here
+  card until anything has run; an empty Chat greets you by the assistant's
+  name with example first messages; routines read "every day at 07:00"
+  instead of cron; the audit feed says "Model usage", not "LlmCost".
+- **`aivyx-pa connect` names the Google steps that gate sign-in** (the
+  consent screen, adding yourself as a test user) and no longer asks for a
+  redirect URI a Desktop-app client doesn't have. A blank Client ID
+  cancels.
+- **The installer ends with the next step** (`aivyx-pa init`), and the
+  README's quick start is installer → `init` → chat. A new guide page,
+  *Chat apps & accounts*, covers Telegram, Discord, Slack and Google.
 - **`init` asks before turning on background routines**, listing them in
   plain words (default yes). Declined routines are still written, disabled.
 - **Quieter first launch.** An interactive chat no longer prints the
@@ -43,6 +64,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
 - **A reply ran into the next prompt** in daemon-mode chat (`84.> `).
 - **`init` wrote the config readable by others for a moment** before
   tightening it to `0600`; it's created `0600` from the start.
+- **Chat without the daemon forgot the conversation.** In-process chat (a
+  first run without a keyring, or `--no-daemon`) started every message
+  from scratch; it now replays recent messages like the daemon does
+  (`[agent] conversation_history_turns`).
+- **A failed service install left files behind** — a unit file and a copy
+  of the passphrase. `daemon install` now checks for a systemd user
+  session before writing anything, and removes what it wrote if a later
+  step fails.
+- **The weekly digest ran on Sundays.** `init` promised Mondays but wrote
+  cron day `1`, which the scheduler counts as Sunday; it's `Mon` now.
+  Existing configs keep `1`, and the Studio labels it honestly.
+- **Before `init`, `doctor` reported a made-up Anthropic setup** and
+  `studio` said to start the daemon; both now say aivyx-pa isn't set up.
+- **Smaller first-run rough edges:** the identity preview read "Never
+  never …"; drafted names could be built from tasks ("EmailEva"); a
+  launch line cited `[persona_seed]` when you'd declined seeding;
+  diagnostic lines (skill injection, tool counts) printed into the chat.
 
 ## [0.11.0] — 2026-09-30
 
