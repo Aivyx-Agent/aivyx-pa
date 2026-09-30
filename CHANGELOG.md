@@ -5,6 +5,38 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **`aivyx-pa` finds its config from any directory.** `init` writes
+  `~/.config/aivyx-pa/aivyx-pa.toml`, and every command looks there. A
+  `./aivyx-pa.toml` in the current directory still takes precedence, so an
+  existing setup keeps working unchanged; `AIVYX_PA_CONFIG_PATH` points
+  anywhere else. Before, a config written in one folder was "not set up"
+  from every other, including for the desktop app.
+- **`init` sets up the passphrase.** It asks for the passphrase that
+  encrypts your store (twice) and keeps it in the OS keyring, so the daemon
+  and the Studio start on their own from the first launch. Without a
+  keyring it explains the choices (an environment variable, or the
+  background service) and hands the passphrase to the service install
+  instead of asking again. Nothing is written in plain text.
+- **`init` asks before turning on background routines**, listing them in
+  plain words (default yes). Declined routines are still written, disabled.
+- **Quieter first launch.** An interactive chat no longer prints the
+  config-provenance block (the daemon's log and `aivyx-pa doctor` still
+  have it), and the keyring and persona-seed notices read plainly.
+
+### Fixed
+
+- **Before any setup, `aivyx-pa` said `anthropic_api_key` was missing**, as
+  if Anthropic were required. It now says aivyx-pa isn't set up yet and
+  where it looked (`aivyx-pa: not set up yet — there's no config at …`).
+- **`init`'s service install defaulted to yes, then failed** on an empty
+  passphrase in the middle of the "Next steps" list. It reuses the
+  passphrase you just chose, and the next steps come last, in one list.
+- **A reply ran into the next prompt** in daemon-mode chat (`84.> `).
+- **`init` wrote the config readable by others for a moment** before
+  tightening it to `0600`; it's created `0600` from the start.
+
 ## [0.11.0] — 2026-09-30
 
 ### Changed

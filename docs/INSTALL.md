@@ -377,7 +377,7 @@ phase); until then `docker compose up --build` builds it locally from source.
 | File | Default location | Configurable? |
 |---|---|---|
 | `aivyx-pa` binary | `~/.cargo/bin/aivyx-pa` | Yes — `--install-path` flag on the installer |
-| Config | `./aivyx-pa.toml` (CWD) or `~/.config/aivyx-pa/aivyx-pa.toml` | Yes — `--config <path>` on `aivyx-pa`; the wizard writes to CWD by default |
+| Config | `~/.config/aivyx-pa/aivyx-pa.toml` (where `init` writes it); a `./aivyx-pa.toml` in the current directory takes precedence when present | Yes — `AIVYX_PA_CONFIG_PATH=<path>` |
 | Encrypted store | per-config (`[storage] path`) | Yes — TOML `[storage] path` |
 | Daemon socket | `$XDG_RUNTIME_DIR/aivyx-pa.sock` (Linux) / `$TMPDIR/aivyx-pa.sock` (macOS) | No |
 | Daemon PID file | `$XDG_RUNTIME_DIR/aivyx-pa.pid` (Linux) / `$TMPDIR/aivyx-pa.pid` (macOS) | No |
@@ -387,11 +387,16 @@ phase); until then `docker compose up --build` builds it locally from source.
 
 After install:
 
-1. **`aivyx-pa init`** — interactive wizard. Detects Ollama at
-   `http://127.0.0.1:11434` and offers it as the default
-   provider (no API key required). Otherwise prompts for an
-   Anthropic or OpenAI key. Writes `aivyx-pa.toml` to your CWD with
-   `0600` permissions.
+1. **`aivyx-pa init`** — interactive wizard. Detects a local model
+   server that's already running (Ollama, Lemonade Server, llama.cpp,
+   Jan or aivyx-broker) and offers it first; with none running it asks,
+   and never picks a cloud provider for you. It asks for the passphrase
+   that encrypts your store and keeps it in the OS keyring when there is
+   one, so `aivyx-pa` can start its daemon and the Studio on its own.
+   Writes `~/.config/aivyx-pa/aivyx-pa.toml` with `0600` permissions —
+   found from any directory (a `./aivyx-pa.toml` in the current
+   directory still takes precedence; `AIVYX_PA_CONFIG_PATH` points
+   anywhere else).
 
    **Phase 181 — the guided identity builder.** The wizard's
    identity step is a *guided builder* that shapes who your
@@ -606,8 +611,8 @@ aivyx-pa daemon uninstall
   `EnvironmentVariables` (the plist is written `0600`). Either way the
   secret is owner-only at rest.
 - **Working directory.** The unit runs from the directory holding your
-  `aivyx-pa.toml` (the cwd at install time, else `$HOME`), so the daemon
-  finds your config.
+  `aivyx-pa.toml` when you install from there (a per-directory config),
+  else `$HOME` — where the daemon finds `~/.config/aivyx-pa/aivyx-pa.toml`.
 - **Windows / containers** — use the [Docker appliance](#docker--the-server-appliance)
   (always-on by design) or the desktop app's autostart instead.
 

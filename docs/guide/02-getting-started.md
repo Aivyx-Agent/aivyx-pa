@@ -45,16 +45,22 @@ cloud provider for you. Then it walks you through **creating your agent** —
 giving your assistant a name, a personality, and a level of access to your
 machine. That flow is covered in detail on the next page.
 
-When the wizard finishes it writes a small config file (`aivyx-pa.toml`) and you're
-ready. Launch the assistant with:
+It also asks you to choose a **passphrase**: your assistant's memory and audit
+log are encrypted with it. If your computer has a keyring (most desktops do), the
+passphrase is kept there, so the assistant can start its background service and
+the Studio without asking you each time.
+
+When the wizard finishes it writes a small config file,
+`~/.config/aivyx-pa/aivyx-pa.toml`, and you're ready. Launch the assistant from
+any folder with:
 
 ```sh
 aivyx-pa
 ```
 
-This drops you into a chat session. If your passphrase is stored — in your OS
-keyring (`aivyx-pa keyring set`) or the `AIVYX_PA_PASSPHRASE` environment
-variable — `aivyx-pa` also starts the **daemon** in the background: the
+This drops you into a chat session. With your passphrase stored — in your OS
+keyring, or the `AIVYX_PA_PASSPHRASE` environment variable on a machine without
+one — `aivyx-pa` also starts the **daemon** in the background: the
 long-running part that serves the Studio, runs scheduled routines and keeps
 going after you close the terminal. If it can't start the daemon, it says so and
 chats without it; `aivyx-pa daemon run` starts it by hand.
