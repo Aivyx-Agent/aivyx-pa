@@ -186,6 +186,7 @@ impl GitWriteToolConfig {
             id: ToolId::new(),
             repos: allow_set,
             confirm_destructive: self.confirm_destructive,
+            confirms: Default::default(),
             schema: commit_input_schema(),
             require_enforcement: self.require_enforcement,
             checkpointers: self.checkpointers,
@@ -466,6 +467,8 @@ pub struct GitCommitTool {
     id: ToolId,
     repos: Arc<[PathBuf]>,
     confirm_destructive: bool,
+    /// A commit is confirmed by the operator's reply, not the model's flag.
+    confirms: crate::confirm::OperatorConfirmations,
     schema: Value,
     require_enforcement: bool,
     checkpointers: HashMap<PathBuf, Arc<GitCheckpointer>>,
@@ -605,16 +608,21 @@ impl Tool for GitCommitTool {
 
         // ---- Chapter N confirm-first: refuse an unconfirmed commit
         // when the operator enabled `[access] confirm_destructive`. ----
-        if self.confirm_destructive && !git_is_confirmed(&input) {
+        if self.confirm_destructive
+            && !self
+                .confirms
+                .allows(ctx, &repo.display().to_string(), git_is_confirmed(&input))
+        {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: format!(
                     "git.commit: refusing to commit {} path(s) to {} without confirmation. \
                      This writes repo history and the operator enabled confirm-first \
                      (`[access] confirm_destructive`). Show the operator the paths and \
-                     message, get approval, then re-call with `confirmed: true`.",
+                     message. {}",
                     paths.len(),
                     repo.display(),
+                    crate::confirm::ASK_THEN_END_TURN,
                 ),
             });
         }
@@ -1344,18 +1352,20 @@ mod git_tests {
             )
             .await;
         assert!(ctx_less_outcome_detail(&refused).contains("without confirmation"));
-        // With `confirmed: true` → commits.
-        let ok = tool
-            .execute(
-                json!({
-                    "repo": repo.display().to_string(),
-                    "message": "m",
-                    "paths": ["f.txt"],
-                    "confirmed": true,
-                }),
-                &ctx,
-            )
-            .await;
+        let confirmed = json!({
+            "repo": repo.display().to_string(),
+            "message": "m",
+            "paths": ["f.txt"],
+            "confirmed": true,
+        });
+        // `confirmed: true` in the same turn as the refusal → still refused:
+        // the operator hasn't answered yet.
+        let same_turn = tool.execute(confirmed.clone(), &ctx).await;
+        assert!(ctx_less_outcome_detail(&same_turn).contains("without confirmation"));
+        // The operator's next turn, same session → commits.
+        let mut next_turn = make_ctx(&channel, &audit);
+        next_turn.session_id = ctx.session_id;
+        let ok = tool.execute(confirmed, &next_turn).await;
         assert!(
             matches!(ok, ToolOutcome::Completed { .. }),
             "expected Completed, got {ok:?}"

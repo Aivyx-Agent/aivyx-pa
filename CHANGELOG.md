@@ -5,6 +5,15 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **`git.commit` and out-of-process confirm-first tools (like
+  `kitchen.order.send`) follow the same rule as file deletes:** the model's
+  `confirmed: true` only counts in a turn after the tool refused that same
+  commit or call, so the operator's reply is what approves it. For a
+  bridged tool the check happens on the daemon side, which knows the real
+  conversation.
+
 ## [0.12.1] — 2026-09-30
 
 ### Changed

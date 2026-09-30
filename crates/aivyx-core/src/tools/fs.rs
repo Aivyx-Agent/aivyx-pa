@@ -471,44 +471,8 @@ fn is_confirmed(input: &Value) -> bool {
     input.get("confirmed").and_then(|v| v.as_bool()) == Some(true)
 }
 
-const DESTRUCTIVE_CONFIRM_HINT: &str = "This is irreversible, so the operator must approve it first. Tell them \
-     exactly what will be affected, ask, and END YOUR TURN. Only if they agree in \
-     their next message, call again with `confirmed: true` — a confirmation in \
-     the same turn as this refusal is not accepted.";
-
-/// The operator, not the model, confirms: `confirmed: true` only counts for a
-/// target this tool refused in an EARLIER turn of the same session. The
-/// model can't read the operator's answer from here, but it can't skip
-/// asking either — it has to end its turn, and only the operator's next
-/// message starts one in which the confirmed call goes through.
-#[derive(Debug, Default)]
-struct ConfirmLedger(
-    std::sync::Mutex<std::collections::HashMap<(crate::SessionId, PathBuf), crate::TurnId>>,
-);
-
-impl ConfirmLedger {
-    /// Whether this call may proceed. A refusal is remembered (first
-    /// refusal wins) so the operator's next turn can confirm it.
-    fn allows(&self, ctx: &ToolContext<'_>, target: &Path, confirmed: bool) -> bool {
-        let Ok(mut refused) = self.0.lock() else {
-            return false;
-        };
-        let key = (ctx.session_id, target.to_path_buf());
-        match refused.get(&key) {
-            Some(turn) if confirmed && *turn != ctx.turn_id => {
-                refused.remove(&key);
-                true
-            }
-            _ => {
-                if refused.len() > 1024 {
-                    refused.clear();
-                }
-                refused.entry(key).or_insert(ctx.turn_id);
-                false
-            }
-        }
-    }
-}
+const DESTRUCTIVE_CONFIRM_HINT: &str = "This is irreversible, so the operator must approve it \
+     first: tell them exactly what will be affected.";
 
 /// The `confirmed` schema property shared by the confirm-first tools.
 fn confirmed_schema_property() -> Value {
@@ -632,7 +596,7 @@ impl FsWriteToolConfig {
             sandbox_root: Arc::from(canonical),
             schema: write_input_schema_value(),
             confirm_destructive: self.confirm_destructive,
-            confirms: ConfirmLedger::default(),
+            confirms: Default::default(),
             sensitive: self.sensitive,
         })
     }
@@ -651,7 +615,7 @@ pub struct FsWriteTool {
     /// Chapter N — when true, overwriting an existing file needs
     /// `confirmed: true`, from a turn after the refusal.
     confirm_destructive: bool,
-    confirms: ConfirmLedger,
+    confirms: crate::confirm::OperatorConfirmations,
     /// Chapter Portcullis — write guard for secret + persistence paths.
     sensitive: Arc<crate::sensitive_paths::SensitivePolicy>,
 }
@@ -757,13 +721,16 @@ impl Tool for FsWriteTool {
         // `confirmed: true` when the operator enabled confirm-first.
         if self.confirm_destructive
             && lexical_abs.exists()
-            && !self.confirms.allows(ctx, &lexical_abs, is_confirmed(&input))
+            && !self
+                .confirms
+                .allows(ctx, &lexical_abs.display().to_string(), is_confirmed(&input))
         {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: format!(
                     "refusing to overwrite existing file {path_str:?}. \
-                     {DESTRUCTIVE_CONFIRM_HINT}"
+                     {DESTRUCTIVE_CONFIRM_HINT} {}",
+                    crate::confirm::ASK_THEN_END_TURN
                 ),
             });
         }
@@ -1089,7 +1056,7 @@ impl FsDeleteToolConfig {
             sandbox_root: Arc::from(canonical),
             schema: delete_input_schema_value(),
             confirm_destructive: self.confirm_destructive,
-            confirms: ConfirmLedger::default(),
+            confirms: Default::default(),
             sensitive: self.sensitive,
         })
     }
@@ -1107,7 +1074,7 @@ pub struct FsDeleteTool {
     /// Chapter N — when true, every delete needs `confirmed: true`, from
     /// a turn after the refusal.
     confirm_destructive: bool,
-    confirms: ConfirmLedger,
+    confirms: crate::confirm::OperatorConfirmations,
     /// Chapter Portcullis — the sensitive-path write guard, checked
     /// alongside the sandbox fence so a protected path can't be deleted
     /// even inside the sandbox root.
@@ -1187,11 +1154,16 @@ impl Tool for FsDeleteTool {
         // Keyed on the resolved path, so "todo.md" and its absolute form
         // are the same confirmation.
         if self.confirm_destructive
-            && !self.confirms.allows(ctx, &lexical_abs, is_confirmed(&input))
+            && !self
+                .confirms
+                .allows(ctx, &lexical_abs.display().to_string(), is_confirmed(&input))
         {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
-                detail: format!("refusing to delete {path_str:?}. {DESTRUCTIVE_CONFIRM_HINT}"),
+                detail: format!(
+                    "refusing to delete {path_str:?}. {DESTRUCTIVE_CONFIRM_HINT} {}",
+                    crate::confirm::ASK_THEN_END_TURN
+                ),
             });
         }
 

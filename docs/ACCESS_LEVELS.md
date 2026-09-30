@@ -84,7 +84,7 @@ confirm_destructive = true
   `home`→`$HOME`, `full`→`/`, `workspace`/`custom`→the declared `root`.
 - An explicit `[fs] root` (or `[access] root`) overrides the derived default.
 - **No `[access]` section ⇒ `sandbox`** ⇒ existing configs unchanged.
-- `confirm_destructive` defaults on at every level, `sandbox` included (the operator's own files live there), unless the autonomy level is `unleashed`; an explicit `[access] confirm_destructive` wins. For `fs.delete` and overwrites the confirmation must come from the operator: `confirmed: true` only counts in a turn *after* the tool refused that same path, so the model has to ask and wait for the reply.
+- `confirm_destructive` defaults on at every level, `sandbox` included (the operator's own files live there), unless the autonomy level is `unleashed`; an explicit `[access] confirm_destructive` wins. For `fs.delete`, overwrites, `git.commit` and out-of-process confirm-first tools (e.g. `kitchen.order.send`) the confirmation must come from the operator: `confirmed: true` only counts in a turn *after* the tool refused that same path, so the model has to ask and wait for the reply.
 
 `[access]` is sugar over the `fs_root` + posture the binary already consumes —
 the operator sets one stanza instead of hand-writing capability scopes.

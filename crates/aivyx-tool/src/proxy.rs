@@ -46,6 +46,13 @@ pub struct ToolProxy {
     /// child process and the reader task; many proxies may share
     /// one bridge.
     bridge: Arc<ToolProcessBridge>,
+    /// For a confirm-first tool (its schema declares `confirmed`): the
+    /// operator, not the model, confirms. The child process sees a fresh
+    /// session/turn per call, so the rule is enforced here, where the real
+    /// ones are known — a `confirmed: true` that doesn't follow a refusal
+    /// in an earlier turn reaches the child as unconfirmed, and the tool's
+    /// own confirm-first path (usually an escalation) answers.
+    confirms: Option<aivyx_core::confirm::OperatorConfirmations>,
 }
 
 impl ToolProxy {
@@ -61,6 +68,8 @@ impl ToolProxy {
         required_scope_str: &str,
     ) -> Option<Self> {
         let required_scope = Scope::parse(required_scope_str)?;
+        let confirms =
+            aivyx_core::confirm::declares_confirmed(&input_schema).then(Default::default);
         Some(ToolProxy {
             id: ToolId::new(),
             name,
@@ -68,6 +77,7 @@ impl ToolProxy {
             input_schema,
             required_scope,
             bridge,
+            confirms,
         })
     }
 
@@ -82,6 +92,8 @@ impl ToolProxy {
         input_schema: Value,
         scope: Scope,
     ) -> Self {
+        let confirms =
+            aivyx_core::confirm::declares_confirmed(&input_schema).then(Default::default);
         ToolProxy {
             id: ToolId::new(),
             name,
@@ -89,6 +101,7 @@ impl ToolProxy {
             input_schema,
             required_scope: scope,
             bridge,
+            confirms,
         }
     }
 }
@@ -163,6 +176,18 @@ impl Tool for ToolProxy {
         // generate a call_id.
         if context.cancellation.is_cancelled() {
             return ToolOutcome::Failed(AivyxError::Cancelled);
+        }
+
+        let mut input = input;
+        if let Some(confirms) = &self.confirms {
+            let confirmed = aivyx_core::confirm::is_confirmed(&input);
+            let target = format!("{}:{}", self.name, aivyx_core::confirm::target_of(&input));
+            if !confirms.allows(context, &target, confirmed) && confirmed {
+                // Self-confirmed: forward as unconfirmed.
+                if let Some(obj) = input.as_object_mut() {
+                    obj.insert("confirmed".into(), Value::Bool(false));
+                }
+            }
         }
 
         let turn_id = context.turn_id.to_string();

@@ -32,6 +32,7 @@
 
 pub mod agent;
 pub mod claim_check;
+pub mod confirm;
 pub mod egress;
 pub mod gate_policy;
 pub mod llm_planner;

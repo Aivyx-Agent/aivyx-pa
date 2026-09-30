@@ -94,7 +94,7 @@ picks. See [`ACCESS_LEVELS.md`](ACCESS_LEVELS.md).
 
 ## 3. Layer 2 — `confirm_destructive`, and the attended/unattended split
 
-`confirm_destructive` (default **on** at every access level unless the autonomy level is `unleashed`; since 2026-09-30, for `fs.delete` and overwrites, a `confirmed: true` only counts in a turn after the tool's refusal, so the operator — not the model — confirms) routes
+`confirm_destructive` (default **on** at every access level unless the autonomy level is `unleashed`; since 2026-09-30, for `fs.delete`, overwrites, `git.commit` and any out-of-process confirm-first tool (e.g. `kitchen.order.send`), a `confirmed: true` only counts in a turn after the tool's refusal, so the operator — not the model — confirms) routes
 *irreversible* operations — destructive shell, `fs.delete`, overwrites,
 outbound-money tools (`kitchen.order.send`, the `confirmed: true` pattern),
 and — since the 2026-09-16 security audit fix (Task 4) — every withheld
