@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-09-30
+
 ### Changed
 
 - **Deleting or overwriting a file always asks you first — and it has to be

@@ -22,16 +22,16 @@ verifiable offline.
 
 ![The Aivyx PA Studio — the local-first web GUI (Command Center), shown here in the native desktop app](docs/images/desktop-app.png)
 
-## Status (v0.12.0 — source-available, BUSL-1.1, 2026-09-30)
+## Status (v0.12.1 — source-available, BUSL-1.1, 2026-09-30)
 
 | | |
 |---|---|
 | Phases shipped | Phase 0 → the complete Studio, plus every chapter since (the per-chapter list is in [`CHANGELOG.md`](CHANGELOG.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md)) |
 | Forward-commitment ledger | **Closed** — all 14 PRODUCT.md commitments (P1–P14) and all 7 goal commitments (G1–G7) shipped; subsequent chapters extend the platform within the locked contract |
-| Release pipeline | **Active** — on each version tag, cargo-dist builds the CLI (Linux x86_64/aarch64 musl + macOS x86_64/aarch64) and a separate workflow builds the **desktop app** (`.deb` + macOS `.app`); both attach to the GitHub Release. Latest is **`v0.12.0`** (a first run that just works: config found from any directory, the passphrase set up in `init` — keyring or an owner-only file — the daemon and Studio starting on their own, a chat that remembers the conversation, and a welcoming Studio; plus a desktop app that ships its daemon) via the [shell installer](docs/INSTALL.md#shell-installer-recommended), the [desktop app](docs/INSTALL.md#desktop-app), or the [WSL distro](docs/INSTALL.md#windows-wsl2-or-docker) |
+| Release pipeline | **Active** — on each version tag, cargo-dist builds the CLI (Linux x86_64/aarch64 musl + macOS x86_64/aarch64) and a separate workflow builds the **desktop app** (`.deb` + macOS `.app`); both attach to the GitHub Release. Latest is **`v0.12.1`** (deleting or overwriting a file always asks you first; v0.12.0: a first run that just works: config found from any directory, the passphrase set up in `init` — keyring or an owner-only file — the daemon and Studio starting on their own, a chat that remembers the conversation, and a welcoming Studio; plus a desktop app that ships its daemon) via the [shell installer](docs/INSTALL.md#shell-installer-recommended), the [desktop app](docs/INSTALL.md#desktop-app), or the [WSL distro](docs/INSTALL.md#windows-wsl2-or-docker) |
 | Studio (web GUI) | **Complete** — all 24 screens live (see below); offline, local-first, served on `:7843` |
 | Workspace crates | 40 |
-| Rust tests | 6,799 passing |
+| Rust tests | 6,800 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
 | Capability scope bases | 95 |
@@ -234,7 +234,7 @@ real need.
 ## Release pipeline status
 
 The release pipeline is **active** on the public repo. The latest
-release is `v0.12.0` (see the CHANGELOG for what shipped):
+release is `v0.12.1` (see the CHANGELOG for what shipped):
 
 - `.github/workflows/release.yml` (cargo-dist-generated) cross-compiles
   the CLI for x86_64/aarch64 Linux musl + x86_64/aarch64 macOS on every
