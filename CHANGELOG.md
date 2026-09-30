@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-09-30
+
 ### Changed
 
 - **`aivyx-pa` finds its config from any directory.** `init` writes
