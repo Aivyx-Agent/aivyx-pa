@@ -65,7 +65,14 @@ pub struct LocalChannel<W: Write + Send + 'static> {
     /// trait surface untouched.
     token: Arc<Mutex<CancellationToken>>,
     writer: Arc<Mutex<W>>,
+    /// Chat approvals in-process: answers a paused tool call (the binary
+    /// installs a terminal prompt). `None` → the channel can't ask.
+    approver: Option<Approver>,
 }
+
+/// Answers an approval prompt for [`LocalChannel`].
+pub type Approver =
+    Arc<dyn Fn(&aivyx_core::ApprovalRequest) -> aivyx_core::Approval + Send + Sync>;
 
 impl<W: Write + Send + 'static> LocalChannel<W> {
     /// Construct a `LocalChannel` with a caller-supplied writer. The
@@ -78,7 +85,14 @@ impl<W: Write + Send + 'static> LocalChannel<W> {
             session: SessionId::new(),
             token: Arc::new(Mutex::new(CancellationToken::new())),
             writer: Arc::new(Mutex::new(writer)),
+            approver: None,
         }
+    }
+
+    /// Let this channel ask the operator to approve paused tool calls.
+    pub fn with_approver(mut self, approver: Approver) -> Self {
+        self.approver = Some(approver);
+        self
     }
 
     /// Obtain a second handle to the underlying writer. Tests use this
@@ -166,6 +180,25 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
 
     fn cancellation_token(&self) -> CancellationToken {
         self.token.lock().expect("token mutex poisoned").clone()
+    }
+
+    /// Ask through the installed approver (a terminal prompt in the
+    /// binary), on a blocking thread; no answer in `APPROVAL_TIMEOUT` →
+    /// `TimedOut`. No approver → the channel can't ask.
+    async fn request_approval(
+        &self,
+        request: &aivyx_core::ApprovalRequest,
+    ) -> aivyx_core::Approval {
+        let Some(approver) = self.approver.clone() else {
+            return aivyx_core::Approval::Unavailable;
+        };
+        let request = request.clone();
+        let ask = tokio::task::spawn_blocking(move || approver(&request));
+        match tokio::time::timeout(aivyx_core::APPROVAL_TIMEOUT, ask).await {
+            Ok(Ok(answer)) => answer,
+            Ok(Err(_)) => aivyx_core::Approval::Denied,
+            Err(_) => aivyx_core::Approval::TimedOut,
+        }
     }
 
     /// The daemon cancels a terminal client's turn (`CancelTurn`) through

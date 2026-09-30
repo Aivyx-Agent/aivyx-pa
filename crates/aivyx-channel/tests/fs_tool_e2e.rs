@@ -881,3 +881,101 @@ async fn scripted_withheld_scope_escalates_when_confirm_destructive_threads_from
         "ToolCall audit entry must record RequiresEscalation"
     );
 }
+
+/// Chat approval, in-process: the same withheld-scope call, but the
+/// `LocalChannel` can ask — the approver says yes, so the exact call runs
+/// and the turn completes instead of ending `Escalated`.
+#[tokio::test]
+async fn in_process_chat_asks_and_runs_the_approved_call() {
+    let sandbox = TestSandbox::new();
+    let storage = open_scratch_storage(&sandbox).await;
+
+    let tool = Arc::new(EmailSendFakeTool::new());
+    let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![tool as Arc<dyn Tool>]));
+    let capabilities = CapabilitySet::from_scopes([Scope::parse("email.send").unwrap()]);
+
+    let provider = ScriptedProvider::new(vec![
+        ScriptedStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![ToolCallEnd {
+                    call_id: "toolu_send_01".to_string(),
+                    tool_name: "gmail.send".to_string(),
+                    input: json!({}),
+                    name_resolution: aivyx_llm::NameResolution::Known,
+                }],
+                text_so_far: String::new(),
+                usage: zero_usage(),
+            },
+        },
+        ScriptedStep {
+            events: vec![],
+            terminal: LlmStepEnd::FinalMessage {
+                text: "Sent.".to_string(),
+                usage: zero_usage(),
+            },
+        },
+    ]);
+
+    let audit_log = HmacChainLog::new([22u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let asked_by_approver = Arc::clone(&asked);
+    let channel = LocalChannel::<Vec<u8>>::new("approval-e2e", Vec::new()).with_approver(Arc::new(
+        move |r: &aivyx_core::ApprovalRequest| {
+            asked_by_approver.lock().unwrap().push(r.summary.clone());
+            aivyx_core::Approval::Approved
+        },
+    ));
+
+    let config = SessionConfig {
+        model: "claude-haiku-4-5-20251001".to_string(),
+        system_prompt: "test".to_string(),
+        max_tokens: 256,
+        capabilities,
+        tools,
+        storage,
+        prompt: String::new(),
+        banner: None,
+        tool_allowlist: None,
+        memory_topic_prefix: None,
+        role_overrides: None,
+        context_window_tokens: None,
+        prune_sink: None,
+        context_provider: None,
+        system_prompt_refiner: None,
+        prompt_refresher: None,
+        turn_safety: Default::default(),
+        confirm_destructive: true,
+        conversation_history_turns: 0,
+        budget_gate: None,
+        rate_gate: None,
+    };
+
+    let report = run_session(
+        Arc::clone(&provider) as Arc<dyn LlmProvider>,
+        audit_hook,
+        None,
+        None,
+        config,
+        channel,
+        Cursor::new(&b"send the email\n"[..]),
+    )
+    .await
+    .expect("run_session completes");
+
+    assert_eq!(report.turns_run, 1);
+    assert!(
+        matches!(report.last_outcome, Some(TurnOutcome::Completed { .. })),
+        "{:?}",
+        report.last_outcome
+    );
+    assert_eq!(*asked.lock().unwrap(), vec!["gmail.send".to_string()]);
+    let entries = audit_bridge.writer().entries().expect("entries");
+    assert!(entries.iter().any(|e| matches!(&e.event,
+        AuditEvent::ApprovalResolved { outcome, .. } if outcome == "approved")));
+    assert!(entries.iter().any(|e| matches!(&e.event,
+        AuditEvent::ToolCall { outcome: ToolOutcomeSummary::Completed { .. }, .. })));
+}

@@ -10839,6 +10839,22 @@ async fn run_async(
 
             // In-process fallback (original Phase 3 path).
             let channel = LocalChannel::new("aivyx-cli", io::stdout());
+            // Chat approvals — on a terminal, a paused tool call asks here
+            // (read from /dev/tty: the chat loop owns stdin). Piped input
+            // can't be asked, so it keeps "reply to approve".
+            let channel = if io::stdin().is_terminal() {
+                channel.with_approver(Arc::new(|r: &aivyx_core::ApprovalRequest| {
+                    let text =
+                        aivyx_channel::approval_prompt::render(&r.summary, &r.reason, &r.input);
+                    match aivyx_channel::approval_prompt::ask_tty(&text) {
+                        Some(true) => aivyx_core::Approval::Approved,
+                        Some(false) => aivyx_core::Approval::Denied,
+                        None => aivyx_core::Approval::Unavailable,
+                    }
+                }))
+            } else {
+                channel
+            };
             let token_slot = channel.token_slot();
 
             tokio::spawn(async move {
