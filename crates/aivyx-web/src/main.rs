@@ -3246,9 +3246,10 @@ fn MemoryProfileCard(config: MemoryProfileConfigView) -> Element {
         div { class: "glass-card settings-section",
             div { class: "panel-head", h3 { "Memory profile" } span { class: "chip", "{config.profile}" } }
             p { class: "label-tech",
-                "Off: today's behavior. Lite: recall fusion over existing memory, no paid \
-                 generation. Smart: adds the wiki/graph extraction sweeps. Takes effect on \
-                 the next daemon restart."
+                "How your assistant recalls what it knows. Off: no automatic recall. Lite: \
+                 finds related memories by their words — no extra model needed. Smart: also \
+                 by meaning, and builds knowledge pages and a graph (needs an embedding model \
+                 below). Takes effect on the next daemon restart."
             }
             div { class: "field-row",
                 label { "Profile" }
@@ -4349,6 +4350,14 @@ fn SpecialistDrillIn(node: MissionGraphNode, roster: TeamConfig, mission: TeamMi
 // Chat view — the terminal look
 // ---------------------------------------------------------------------------
 
+/// Example first messages on an empty Chat: a click fills the box (it
+/// doesn't send), so the operator sees what they're asking before asking.
+const CHAT_SUGGESTIONS: [&str; 3] = [
+    "What can you help me with?",
+    "Remember that I prefer short answers.",
+    "Make a file with my to-dos for this week.",
+];
+
 #[component]
 fn ChatPanel() -> Element {
     let ws = use_context::<Sender>();
@@ -4360,6 +4369,9 @@ fn ChatPanel() -> Element {
     let mut input = use_signal(String::new);
     let ready = session().is_some();
     let live_card = routing().consent_line;
+    let assistant_name = use_context::<Signal<Dashboard>>()()
+        .assistant_name
+        .unwrap_or_else(|| "your assistant".to_string());
 
     rsx! {
         div { class: "chat",
@@ -4375,7 +4387,22 @@ fn ChatPanel() -> Element {
                     div { class: "line asst streaming", "{streaming}" }
                 }
                 if transcript().is_empty() && streaming().is_empty() {
-                    p { class: "empty label-tech", "Send a message to start a turn." }
+                    div { class: "chat-empty",
+                        h3 { "Say hi to {assistant_name}" }
+                        p { class: "muted",
+                            "Ask a question or give it something to do — it remembers what you "
+                            "tell it, keeps notes, searches the web and works with files in its folder."
+                        }
+                        div { class: "chat-suggestions",
+                            for suggestion in CHAT_SUGGESTIONS {
+                                button {
+                                    class: "btn ghost",
+                                    onclick: move |_| input.set(suggestion.to_string()),
+                                    "{suggestion}"
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if let Some(g) = gate() {
