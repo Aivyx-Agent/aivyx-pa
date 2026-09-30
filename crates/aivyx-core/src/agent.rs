@@ -276,6 +276,10 @@ pub struct ConcreteAgent {
     /// section for the full writeup. Fail-safe, not fail-open — a stuck
     /// escalation blocks the action, it never lets it through.
     confirm_destructive: bool,
+    /// Which withheld-integration tools the operator was asked about, per
+    /// session — the first call escalates; the operator's reply opens a
+    /// later turn in which that tool may run once (`aivyx_core::confirm`).
+    integration_confirms: crate::confirm::OperatorConfirmations,
     /// Model routing Part 3b — where this agent marks a conversation
     /// routing-tainted (so it never escalates to a cloud endpoint). `None`
     /// (the default) runs no taint machinery at all: the daemon attaches
@@ -320,6 +324,7 @@ impl ConcreteAgent {
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
             confirm_destructive: false,
+            integration_confirms: Default::default(),
             taint: None,
             taint_tool_prefixes: Vec::new(),
             taint_channels: Vec::new(),
@@ -1674,19 +1679,22 @@ impl ConcreteAgent {
         // resolution path — the operator approves (or doesn't) out of
         // band — the same mechanism any other escalating tool already
         // uses; this task does not invent a second one.
+        // The operator's reply is the approval: the first call escalates
+        // (the turn ends with the reason below), and in the operator's next
+        // turn this tool may run once. Plain chat has no approve-and-resume
+        // step, so without this the integration could never run at all.
         let needs_destructive_confirmation = self.confirm_destructive
-            && aivyx_capability::is_withheld_integration_base(needed.base());
+            && aivyx_capability::is_withheld_integration_base(needed.base())
+            && !self.integration_confirms.allows(&ctx, tool_name, true);
 
         let step_start = Instant::now();
         let mut outcome = if needs_destructive_confirmation {
             ToolOutcome::RequiresEscalation {
                 reason: format!(
-                    "{tool_name} needs operator confirmation before it can run: \
-                     `[access] confirm_destructive` is enabled and `{}` is a \
-                     third-party-integration scope Aivyx PA never auto-confirms, \
-                     even once a role explicitly holds it. Show the operator \
-                     exactly what this call will do and get their explicit \
-                     approval before retrying.",
+                    "{tool_name} needs the operator's approval before it runs (`{}` is a \
+                     third-party action Aivyx PA never takes unasked). Show the operator \
+                     exactly what this call will do and ask. If they agree in their next \
+                     message, it can run once then.",
                     needed.base()
                 ),
                 // Stamped below like any other RequiresEscalation (RN.3).
@@ -6041,6 +6049,42 @@ mod tests {
             })
             .expect("ToolCall must be audited even when the confirm gate short-circuits");
         assert_eq!(*tool_call, ToolOutcomeSummary::RequiresEscalation);
+    }
+
+    /// The operator's reply approves: after the escalation, the same tool
+    /// runs once in the operator's next turn of that session — plain chat
+    /// has no approve-and-resume step, so without this an integration
+    /// write could never run with confirm-first on.
+    #[tokio::test]
+    async fn an_escalated_integration_write_runs_once_in_the_operators_next_turn() {
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("gmail.send", "email.send"));
+        let tool_id = tool.id();
+        let agent_caps = CapabilitySet::from_scopes([Scope::parse("email.send").unwrap()]);
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("sent".to_string()),
+        ];
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan)
+            .with_confirm_destructive(true);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+
+        let asked = agent.turn(Message::text(channel.session, "send it"), &channel).await;
+        assert!(matches!(asked, TurnOutcome::Escalated { .. }), "{asked:?}");
+        let approved = agent.turn(Message::text(channel.session, "yes, send it"), &channel).await;
+        assert!(matches!(approved, TurnOutcome::Completed { .. }), "{approved:?}");
+        // One approval, one run: the next attempt asks again.
+        let again = agent.turn(Message::text(channel.session, "send another"), &channel).await;
+        assert!(matches!(again, TurnOutcome::Escalated { .. }), "{again:?}");
+        // Another session can't use this session's approval.
+        let other = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let elsewhere = agent.turn(Message::text(other.session, "send"), &other).await;
+        assert!(matches!(elsewhere, TurnOutcome::Escalated { .. }), "{elsewhere:?}");
     }
 
     #[tokio::test]
