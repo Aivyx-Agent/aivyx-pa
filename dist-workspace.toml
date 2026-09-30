@@ -29,6 +29,10 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# The installer's last word is the next step (it used to be just
+# "everything's installed!"). Plain text only: it's embedded in the
+# generated shell script, so no backticks or quotes.
+install-success-msg = "aivyx-pa is installed. Next, set it up with: aivyx-pa init"
 # Build ONLY the packages that ship a release artifact (aivyx-cli → the
 # `aivyx` binary), not the whole workspace. Without this, cargo-dist does a
 # single workspace-wide "fat build" that also compiles default-member crates
