@@ -76,6 +76,9 @@ pub struct ToolCallRequest {
     /// the dominant case. Threaded to the per-call audit emission;
     /// composes with `auto_corrected_from` when both fire.
     pub extracted_from_text: Option<String>,
+    /// Set only by the agent when re-running a call the operator approved
+    /// through `ChannelContext::request_approval`. Planners always set `false`.
+    pub operator_approved: bool,
 }
 
 /// What the planner observes after each executed step. Carries only the

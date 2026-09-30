@@ -276,10 +276,11 @@ pub struct ConcreteAgent {
     /// section for the full writeup. Fail-safe, not fail-open — a stuck
     /// escalation blocks the action, it never lets it through.
     confirm_destructive: bool,
-    /// Which withheld-integration tools the operator was asked about, per
-    /// session — the first call escalates; the operator's reply opens a
-    /// later turn in which that tool may run once (`aivyx_core::confirm`).
-    integration_confirms: crate::confirm::OperatorConfirmations,
+    /// Session + tool name: confirm-first and withheld-integration calls
+    /// that escalated. For a channel that can't ask, the operator's reply
+    /// opens a later turn in which that tool may run once
+    /// (`aivyx_core::confirm`).
+    confirms: crate::confirm::OperatorConfirmations,
     /// Model routing Part 3b — where this agent marks a conversation
     /// routing-tainted (so it never escalates to a cloud endpoint). `None`
     /// (the default) runs no taint machinery at all: the daemon attaches
@@ -324,7 +325,7 @@ impl ConcreteAgent {
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
             confirm_destructive: false,
-            integration_confirms: Default::default(),
+            confirms: Default::default(),
             taint: None,
             taint_tool_prefixes: Vec::new(),
             taint_channels: Vec::new(),
@@ -641,18 +642,9 @@ impl ConcreteAgent {
         // hold a handle so the task is aborted cleanly when the turn
         // ends normally — otherwise a fleet of long-running agents
         // would leak timeout tasks until they eventually fired.
-        let deadline_fired = Arc::new(AtomicBool::new(false));
-        let deadline_task = {
-            let deadline_fired = Arc::clone(&deadline_fired);
-            let token = cancellation.clone();
-            // Chapter Bridle (BR.4) — per-agent, operator-configurable.
-            let timeout = self.turn_timeout;
-            tokio::spawn(async move {
-                tokio::time::sleep(timeout).await;
-                deadline_fired.store(true, Ordering::SeqCst);
-                token.cancel();
-            })
-        };
+        // Chapter Bridle (BR.4) — per-agent, operator-configurable; paused
+        // while an approval prompt waits for the operator.
+        let mut deadline = TurnDeadline::start(self.turn_timeout, cancellation.clone());
 
         let mut observed: Vec<StepObservation> = Vec::new();
         let mut tool_calls_made: usize = 0;
@@ -677,7 +669,7 @@ impl ConcreteAgent {
         let mut cycle_state: Option<CycleState> = self.cycle_config.clone().map(CycleState::new);
 
         loop {
-            if let Some(out) = classify_cancellation(&cancellation, &deadline_fired) {
+            if let Some(out) = classify_cancellation(&cancellation, &deadline.fired) {
                 loop_outcome = out;
                 break;
             }
@@ -697,7 +689,7 @@ impl ConcreteAgent {
             // Completed outcome when the turn was actually
             // interrupted. We let the next loop iteration's top-of-
             // loop check handle the termination uniformly.
-            if let Some(out) = classify_cancellation(&cancellation, &deadline_fired) {
+            if let Some(out) = classify_cancellation(&cancellation, &deadline.fired) {
                 loop_outcome = out;
                 break;
             }
@@ -748,14 +740,27 @@ impl ConcreteAgent {
                         effective: &effective,
                         message_origin: message.origin,
                     };
+                    let input_for_approval = input.clone();
                     let req = crate::planner::ToolCallRequest {
                         tool_id,
                         input,
                         auto_corrected_from,
                         extracted_from_text,
+                        operator_approved: false,
                     };
-                    let (observation, outcome, injection_reason) =
+                    let (mut observation, mut outcome, mut injection_reason) =
                         self.run_tool_call(&env, req).await;
+                    if let ToolOutcome::RequiresEscalation { reason, .. } = &outcome
+                        && injection_reason.is_none()
+                    {
+                        let reason = reason.clone();
+                        if let Some(resolved) = self
+                            .seek_approval(&env, &mut deadline, tool_id, input_for_approval, &reason)
+                            .await
+                        {
+                            (observation, outcome, injection_reason) = resolved;
+                        }
+                    }
                     observed.push(observation);
 
                     // Phase 35: escalation breaks the loop instead of
@@ -842,6 +847,8 @@ impl ConcreteAgent {
                         effective: &effective,
                         message_origin: message.origin,
                     };
+                    let inputs: Vec<(ToolId, serde_json::Value)> =
+                        batch.iter().map(|r| (r.tool_id, r.input.clone())).collect();
                     let futures: Vec<_> = batch
                         .into_iter()
                         .map(|req| self.run_tool_call(&env, req))
@@ -851,7 +858,22 @@ impl ConcreteAgent {
                     tool_calls_made += results.len();
                     let mut escalated: Option<(String, ToolId, Option<Scope>)> = None;
 
-                    for (observation, outcome, injection_reason) in results {
+                    for ((observation, outcome, injection_reason), (call_id, call_input)) in
+                        results.into_iter().zip(inputs)
+                    {
+                        let (mut observation, mut outcome, mut injection_reason) =
+                            (observation, outcome, injection_reason);
+                        if let ToolOutcome::RequiresEscalation { reason, .. } = &outcome
+                            && injection_reason.is_none()
+                        {
+                            let reason = reason.clone();
+                            if let Some(resolved) = self
+                                .seek_approval(&env, &mut deadline, call_id, call_input, &reason)
+                                .await
+                            {
+                                (observation, outcome, injection_reason) = resolved;
+                            }
+                        }
                         let obs_tool_id = observation.tool_id;
                         observed.push(observation);
                         // Audit M3 fix — first-fire wins for the
@@ -896,7 +918,7 @@ impl ConcreteAgent {
         // (b) still sleeping, in which case we want it gone so it
         // doesn't leak. Either way, explicit abort is cheap and
         // intentional.
-        deadline_task.abort();
+        deadline.stop();
 
         let duration = start.elapsed();
         let outcome = match loop_outcome {
@@ -1042,6 +1064,71 @@ impl ConcreteAgent {
         }
 
         final_outcome
+    }
+}
+
+/// One line for an approval prompt: the tool and what it touches.
+pub(crate) fn approval_summary(tool_name: &str, input: &serde_json::Value) -> String {
+    const KEYS: [&str; 6] = ["path", "repo", "to", "recipient", "purchase_order_id", "name"];
+    let what = KEYS
+        .iter()
+        .find_map(|k| input.get(*k).and_then(|v| v.as_str()))
+        .map(str::to_string)
+        .or_else(|| {
+            input.as_object().and_then(|o| {
+                o.iter()
+                    .filter(|(k, _)| k.as_str() != "confirmed")
+                    .find_map(|(_, v)| v.as_str().map(str::to_string))
+            })
+        });
+    match what {
+        Some(w) => format!("{tool_name} {}", w.chars().take(80).collect::<String>()),
+        None => tool_name.to_string(),
+    }
+}
+
+/// The turn's wall-clock deadline, pausable while an approval prompt waits
+/// (a slow human answer must not time the turn out).
+struct TurnDeadline {
+    fired: Arc<AtomicBool>,
+    token: CancellationToken,
+    remaining: Duration,
+    started: Instant,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl TurnDeadline {
+    fn start(timeout: Duration, token: CancellationToken) -> Self {
+        let mut d = TurnDeadline {
+            fired: Arc::new(AtomicBool::new(false)),
+            token,
+            remaining: timeout,
+            started: Instant::now(),
+            task: None,
+        };
+        d.resume();
+        d
+    }
+    fn resume(&mut self) {
+        let (fired, token, remaining) =
+            (Arc::clone(&self.fired), self.token.clone(), self.remaining);
+        self.started = Instant::now();
+        self.task = Some(tokio::spawn(async move {
+            tokio::time::sleep(remaining).await;
+            fired.store(true, Ordering::SeqCst);
+            token.cancel();
+        }));
+    }
+    fn pause(&mut self) {
+        if let Some(t) = self.task.take() {
+            t.abort();
+            self.remaining = self.remaining.saturating_sub(self.started.elapsed());
+        }
+    }
+    fn stop(&mut self) {
+        if let Some(t) = self.task.take() {
+            t.abort();
+        }
     }
 }
 
@@ -1344,6 +1431,84 @@ struct TurnCallEnv<'a> {
 }
 
 impl ConcreteAgent {
+    /// A call came back `RequiresEscalation`: ask the operator through the
+    /// channel. `Some(result)` replaces the escalation (approved re-run, or a
+    /// "declined" / "no answer" tool result the model sees); `None` keeps it
+    /// (the channel can't ask — the turn ends and the ledger lets the
+    /// operator's next message approve).
+    async fn seek_approval(
+        &self,
+        env: &TurnCallEnv<'_>,
+        deadline: &mut TurnDeadline,
+        tool_id: ToolId,
+        input: serde_json::Value,
+        reason: &str,
+    ) -> Option<(StepObservation, ToolOutcome, Option<String>)> {
+        let tool_name = self.tools.get(tool_id)?.name().to_string();
+        let mut shown = input;
+        if let Some(obj) = shown.as_object_mut() {
+            obj.remove("confirmed");
+        }
+        let request = crate::ApprovalRequest {
+            tool: tool_name.clone(),
+            summary: approval_summary(&tool_name, &shown),
+            input: shown.clone(),
+            reason: reason.to_string(),
+        };
+        deadline.pause();
+        let answer = env.channel.request_approval(&request).await;
+        deadline.resume();
+        let outcome_label = match answer {
+            crate::Approval::Approved => "approved",
+            crate::Approval::Denied => "denied",
+            crate::Approval::TimedOut => "timed_out",
+            crate::Approval::Unavailable => return None,
+        };
+        self.audit.on_event(AuditTag::ApprovalRequested {
+            turn_id: env.turn_id,
+            tool: tool_name.clone(),
+            summary: request.summary.clone(),
+        });
+        self.audit.on_event(AuditTag::ApprovalResolved {
+            turn_id: env.turn_id,
+            tool: tool_name,
+            outcome: outcome_label.to_string(),
+        });
+        match answer {
+            crate::Approval::Approved => Some(
+                self.run_tool_call(
+                    env,
+                    crate::planner::ToolCallRequest {
+                        tool_id,
+                        input: shown,
+                        auto_corrected_from: None,
+                        extracted_from_text: None,
+                        operator_approved: true,
+                    },
+                )
+                .await,
+            ),
+            _ => {
+                let detail = if answer == crate::Approval::TimedOut {
+                    "No answer within 10 minutes, so this action was not taken."
+                } else {
+                    "The operator declined this action."
+                };
+                Some((
+                    StepObservation {
+                        tool_id,
+                        summary: ToolOutcomeSummary::Failed,
+                    },
+                    ToolOutcome::Failed(AivyxError::Tool {
+                        tool: tool_id,
+                        detail: detail.to_string(),
+                    }),
+                    None,
+                ))
+            }
+        }
+    }
+
     /// Execute one tool call: resolve the tool, compute its required
     /// scope via R1, scope-check, execute-or-deny, emit the matching
     /// audit event, and return both the observation (for the
@@ -1373,6 +1538,7 @@ impl ConcreteAgent {
             input,
             auto_corrected_from,
             extracted_from_text,
+            operator_approved,
         } = req;
         let Some(tool) = self.tools.get(tool_id) else {
             // Unknown tool — no scope check possible. This shouldn't happen
@@ -1626,6 +1792,20 @@ impl ConcreteAgent {
             message_origin,
         };
 
+        // The operator, not the model, confirms. For a confirm-first tool
+        // (its schema declares `confirmed`) the flag is ours to set: true
+        // only for an operator-approved re-run, or — where the channel
+        // can't ask — when the operator replied after an earlier refusal.
+        let confirm_first = crate::confirm::declares_confirmed(tool.input_schema());
+        if confirm_first {
+            let operator_confirmed = operator_approved
+                || (crate::confirm::is_confirmed(&input)
+                    && self.confirms.take_refusal(ctx.session_id, turn_id, tool.name()));
+            if let Some(obj) = input.as_object_mut() {
+                obj.insert("confirmed".into(), serde_json::Value::Bool(operator_confirmed));
+            }
+        }
+
         let input_bytes = serde_json::to_vec(&input).unwrap_or_default();
         let input_hash = sha256_array(&input_bytes);
 
@@ -1685,16 +1865,15 @@ impl ConcreteAgent {
         // step, so without this the integration could never run at all.
         let needs_destructive_confirmation = self.confirm_destructive
             && aivyx_capability::is_withheld_integration_base(needed.base())
-            && !self.integration_confirms.allows(&ctx, tool_name, true);
+            && !operator_approved
+            && !self.confirms.take_refusal(ctx.session_id, turn_id, tool_name);
 
         let step_start = Instant::now();
         let mut outcome = if needs_destructive_confirmation {
             ToolOutcome::RequiresEscalation {
                 reason: format!(
                     "{tool_name} needs the operator's approval before it runs (`{}` is a \
-                     third-party action Aivyx PA never takes unasked). Show the operator \
-                     exactly what this call will do and ask. If they agree in their next \
-                     message, it can run once then.",
+                     third-party action Aivyx PA never takes unasked).",
                     needed.base()
                 ),
                 // Stamped below like any other RequiresEscalation (RN.3).
@@ -1704,6 +1883,12 @@ impl ConcreteAgent {
             tool.execute(input, &ctx).await
         };
         let step_duration = step_start.elapsed();
+
+        // Remember a refusal so that, on a channel that can't ask, the
+        // operator's next message can approve it (see `seek_approval`).
+        if matches!(outcome, ToolOutcome::RequiresEscalation { .. }) && !operator_approved {
+            self.confirms.record_refusal(ctx.session_id, turn_id, tool_name);
+        }
 
         // Chapter Reins (RN.3) — stamp an escalation with the authoritative
         // capability scope the gate just checked (`needed`), so the daemon's
@@ -6087,6 +6272,231 @@ mod tests {
         assert!(matches!(elsewhere, TurnOutcome::Escalated { .. }), "{elsewhere:?}");
     }
 
+    // ---- Chat approval: the agent asks through the channel ----
+
+    /// A `FakeChannel` whose `request_approval` returns scripted answers and
+    /// records what it was asked.
+    struct ApprovingChannel {
+        inner: FakeChannel,
+        answers: Mutex<std::collections::VecDeque<crate::Approval>>,
+        asked: Mutex<Vec<crate::ApprovalRequest>>,
+    }
+    impl ApprovingChannel {
+        fn new(answers: &[crate::Approval]) -> Self {
+            ApprovingChannel {
+                inner: FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted),
+                answers: Mutex::new(answers.iter().copied().collect()),
+                asked: Mutex::new(Vec::new()),
+            }
+        }
+    }
+    #[async_trait]
+    impl ChannelContext for ApprovingChannel {
+        fn channel_name(&self) -> &str {
+            self.inner.channel_name()
+        }
+        fn platform(&self) -> ChannelPlatform {
+            self.inner.platform()
+        }
+        fn trust_tier(&self) -> TrustTier {
+            self.inner.trust_tier()
+        }
+        fn session_id(&self) -> SessionId {
+            self.inner.session_id()
+        }
+        async fn stream_event(&self, e: StreamEvent<'_>) -> Result<(), ChannelError> {
+            self.inner.stream_event(e).await
+        }
+        async fn finalize(&self, o: &TurnOutcome) -> Result<(), ChannelError> {
+            self.inner.finalize(o).await
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.inner.cancellation_token()
+        }
+        async fn request_approval(&self, r: &crate::ApprovalRequest) -> crate::Approval {
+            self.asked.lock().unwrap().push(r.clone());
+            self.answers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(crate::Approval::Unavailable)
+        }
+    }
+
+    /// Confirm-first: escalates unless `confirmed: true`; records every input.
+    struct ConfirmFirstTool {
+        id: ToolId,
+        schema: Value,
+        ran_with: Mutex<Vec<Value>>,
+    }
+    impl ConfirmFirstTool {
+        fn new() -> Arc<Self> {
+            Arc::new(ConfirmFirstTool {
+                id: ToolId::new(),
+                schema: json!({"type": "object", "properties": {
+                    "path": {"type": "string"}, "confirmed": {"type": "boolean"}}}),
+                ran_with: Mutex::new(Vec::new()),
+            })
+        }
+    }
+    #[async_trait]
+    impl Tool for ConfirmFirstTool {
+        fn id(&self) -> ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            "fs.delete"
+        }
+        fn description(&self) -> &str {
+            "test"
+        }
+        fn input_schema(&self) -> &Value {
+            &self.schema
+        }
+        fn required_scope(&self, _: &Value) -> Scope {
+            Scope::parse("fs.read").unwrap()
+        }
+        async fn execute(&self, input: Value, _: &ToolContext<'_>) -> ToolOutcome {
+            self.ran_with.lock().unwrap().push(input.clone());
+            if crate::confirm::is_confirmed(&input) {
+                ToolOutcome::Completed {
+                    output: json!({"deleted": true}),
+                    verified: Verification::Verified,
+                }
+            } else {
+                ToolOutcome::RequiresEscalation {
+                    reason: "deleting can't be undone".into(),
+                    scope: None,
+                }
+            }
+        }
+    }
+
+    fn delete_plan(tool_id: ToolId, input: Value) -> Vec<NextStep> {
+        vec![
+            NextStep::ToolCall {
+                tool_id,
+                input,
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("done".to_string()),
+        ]
+    }
+
+    fn fs_read_caps() -> CapabilitySet {
+        CapabilitySet::from_scopes([Scope::parse("fs.read").unwrap()])
+    }
+
+    #[tokio::test]
+    async fn an_approved_call_reruns_the_exact_input_with_confirmed() {
+        let tool = ConfirmFirstTool::new();
+        let agent = make_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            RecordingAudit::new(),
+            delete_plan(tool.id, json!({"path": "todo.md"})),
+        );
+        let channel = ApprovingChannel::new(&[crate::Approval::Approved]);
+        let out = agent
+            .turn(Message::text(channel.session_id(), "delete todo.md"), &channel)
+            .await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        let ran = tool.ran_with.lock().unwrap().clone();
+        assert_eq!(
+            ran,
+            vec![
+                json!({"path": "todo.md", "confirmed": false}),
+                json!({"path": "todo.md", "confirmed": true})
+            ]
+        );
+        let asked = channel.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].summary, "fs.delete todo.md");
+        assert_eq!(asked[0].input, json!({"path": "todo.md"}));
+    }
+
+    #[tokio::test]
+    async fn a_model_supplied_confirmed_is_stripped_before_asking() {
+        let tool = ConfirmFirstTool::new();
+        let agent = make_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            RecordingAudit::new(),
+            delete_plan(tool.id, json!({"path": "todo.md", "confirmed": true})),
+        );
+        let channel = ApprovingChannel::new(&[crate::Approval::Denied]);
+        let out = agent
+            .turn(Message::text(channel.session_id(), "delete"), &channel)
+            .await;
+        assert!(
+            matches!(out, TurnOutcome::Completed { .. }),
+            "declined continues the turn: {out:?}"
+        );
+        let ran = tool.ran_with.lock().unwrap().clone();
+        assert_eq!(
+            ran,
+            vec![json!({"path": "todo.md", "confirmed": false})],
+            "never ran confirmed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_approval_reports_no_answer_and_continues() {
+        let tool = ConfirmFirstTool::new();
+        let audit = RecordingAudit::new();
+        let agent = make_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            audit.clone(),
+            delete_plan(tool.id, json!({"path": "todo.md"})),
+        );
+        let channel = ApprovingChannel::new(&[crate::Approval::TimedOut]);
+        let out = agent
+            .turn(Message::text(channel.session_id(), "delete"), &channel)
+            .await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        let events = audit.snapshot();
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AuditTag::ApprovalRequested { .. })));
+        assert!(events.iter().any(|e| matches!(e,
+            AuditTag::ApprovalResolved { outcome, .. } if outcome == "timed_out")));
+    }
+
+    #[tokio::test]
+    async fn unavailable_escalates_and_the_next_turn_may_confirm() {
+        let tool = ConfirmFirstTool::new();
+        let agent = make_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            RecordingAudit::new(),
+            delete_plan(tool.id, json!({"path": "todo.md", "confirmed": true})),
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let first = agent.turn(Message::text(channel.session, "delete"), &channel).await;
+        assert!(matches!(first, TurnOutcome::Escalated { .. }), "{first:?}");
+        let second = agent.turn(Message::text(channel.session, "yes"), &channel).await;
+        assert!(matches!(second, TurnOutcome::Completed { .. }), "{second:?}");
+        assert_eq!(
+            tool.ran_with.lock().unwrap().last().unwrap()["confirmed"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn approval_summary_names_the_target() {
+        assert_eq!(
+            approval_summary("fs.delete", &json!({"path": "todo.md", "confirmed": true})),
+            "fs.delete todo.md"
+        );
+        assert_eq!(
+            approval_summary("kitchen.order.send", &json!({"purchase_order_id": "PO-7"})),
+            "kitchen.order.send PO-7"
+        );
+        assert_eq!(approval_summary("x.y", &json!({"count": 3})), "x.y");
+    }
+
     #[tokio::test]
     async fn granted_email_send_scope_completes_normally_when_confirm_destructive_is_off() {
         // Companion to the test above: same granted scope, same
@@ -6516,12 +6926,14 @@ mod tests {
                     input: json!({"path": "/a.txt"}),
                     auto_corrected_from: None,
                     extracted_from_text: None,
+                    operator_approved: false,
                 },
                 ToolCallRequest {
                     tool_id: tool_b_id,
                     input: json!({"topic": "notes"}),
                     auto_corrected_from: None,
                     extracted_from_text: None,
+                    operator_approved: false,
                 },
             ]),
             NextStep::FinalMessage("done".to_string()),
@@ -6663,12 +7075,14 @@ mod tests {
                 input: json!({}),
                 auto_corrected_from: None,
                 extracted_from_text: None,
+                operator_approved: false,
             },
             ToolCallRequest {
                 tool_id: tool_b_id,
                 input: json!({}),
                 auto_corrected_from: None,
                 extracted_from_text: None,
+                operator_approved: false,
             },
         ])];
 

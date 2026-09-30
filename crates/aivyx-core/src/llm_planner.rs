@@ -1277,6 +1277,7 @@ impl LlmPlanner {
                 input: call.input,
                 auto_corrected_from,
                 extracted_from_text,
+                operator_approved: false,
             }),
             false,
         )
