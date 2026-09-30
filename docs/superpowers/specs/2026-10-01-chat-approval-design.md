@@ -73,8 +73,10 @@ The agent's `run_tool_call` owns operator confirmation; the tool-level ledgers
   - `Denied` / `TimedOut` → the model receives a tool result "the operator
     declined this action" and the turn continues.
   - `Unavailable` → today's behaviour: the turn ends `Escalated`, and the
-    agent's `OperatorConfirmations` ledger (session + tool) lets the re-issued
-    call run once in the operator's next turn.
+    agent's `OperatorConfirmations` ledger (session + tool name; the model
+    regenerates arguments, so a per-argument key would rarely match) lets the
+    re-issued call run once in the operator's next turn. The ledger records a
+    refusal only when the tool actually escalated.
 - **Unattended runs** (`GatePolicy::RejectAndAbort`) never ask: refused, as now.
 - **Audit:** new audit events `ApprovalRequested { tool, summary }` and
   `ApprovalResolved { tool, outcome }` (additive `AuditEvent` variants, same
@@ -95,13 +97,23 @@ The agent's `run_tool_call` owns operator confirmation; the tool-level ledgers
   (unchanged ordering). Applies to every connection kind. This also makes
   mid-turn Ctrl-C effective.
 - **New messages** (additive; `docs/DAEMON_IPC.md` updated):
+  - frontend → daemon: `FrontendMessage::SetApprovals { enabled }` — a frontend
+    that can show the prompt opts in once per connection (the terminal chat and
+    the Studio's web server do). Every other connection — the TUI, chat-app
+    frontends, one-shot `--headless` — never gets a request: its bridge reports
+    `Unavailable`, so nothing ever waits 10 minutes on a client that can't
+    answer.
   - daemon → frontend: `StreamEventPayload::ApprovalRequest { request_id, tool,
     summary, input, reason, expires_in_secs }`
   - frontend → daemon: `FrontendMessage::ResolveApproval { request_id, approved }`
 - **`IpcChannelBridge::request_approval`** sends the event and awaits a oneshot
   keyed by `request_id`, resolved by `ResolveApproval`; 10 minutes → `TimedOut`;
   connection closed or turn cancelled → `Denied`.
-- **Chat-app daemon frontends** report `Unavailable`. Missions unchanged.
+- **Connections that didn't send `SetApprovals`** (chat-app daemon frontends,
+  the TUI, headless submits) report `Unavailable`. Missions unchanged.
+- **Terminal client:** today `DaemonSession::send_and_collect` buffers every
+  event until `TurnComplete`; it gains an optional approver hook called when an
+  `ApprovalRequest` arrives mid-turn, then sends `ResolveApproval`.
 
 ### 4. Surfaces
 
