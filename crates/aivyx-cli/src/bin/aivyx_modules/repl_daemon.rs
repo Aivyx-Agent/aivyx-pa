@@ -146,7 +146,7 @@ pub fn in_process_cloud_warning(routing: Option<&aivyx_route::RoutingConfig>) ->
 /// daemon-backed read loop. `Err` is the session failing, for the caller to
 /// report.
 pub async fn run_connected(
-    session: aivyx_channel::daemon_client::DaemonSession,
+    mut session: aivyx_channel::daemon_client::DaemonSession,
     socket_path: &std::path::Path,
     role: &str,
     prompt: &str,
@@ -176,6 +176,20 @@ pub async fn run_connected(
             flag_for_signal.store(true, Ordering::Relaxed);
         }
     });
+
+    // Chat approvals — a tool call that needs the operator's yes pauses and
+    // asks here (read from the terminal: the chat loop owns stdin).
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        let approver: aivyx_channel::daemon_client::Approver =
+            Arc::new(|summary: &str, reason: &str, input: &serde_json::Value| {
+                let text = aivyx_channel::approval_prompt::render(summary, reason, input);
+                aivyx_channel::approval_prompt::ask_tty(&text).unwrap_or(false)
+            });
+        session
+            .enable_approvals(approver)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
 
     let daemon_config = aivyx_channel::DaemonSessionConfig {
         socket_path: socket_path.to_path_buf(),

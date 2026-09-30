@@ -318,3 +318,35 @@ async fn a_frame_sent_during_a_turn_is_handled_after_it() {
     assert_eq!(order, vec!["turn", "negotiation"]);
     shutdown.cancel();
 }
+
+/// The terminal client (`DaemonSession`) answers through its approver hook
+/// mid-turn — the prompt it shows is its own business.
+#[tokio::test]
+async fn terminal_client_answers_an_approval_through_its_approver() {
+    for (says_yes, expected) in [(true, "answer=Approved"), (false, "answer=Denied")] {
+        let (agent, _) = asking_agent();
+        let (_scratch, socket, shutdown) = start_daemon(agent).await;
+        let mut session = aivyx_channel::daemon_client::DaemonSession::connect(&socket, None, None)
+            .await
+            .expect("connect");
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen_by_approver = Arc::clone(&seen);
+        session
+            .enable_approvals(Arc::new(move |summary: &str, _reason: &str, _input: &serde_json::Value| {
+                seen_by_approver.lock().unwrap().push(summary.to_string());
+                says_yes
+            }))
+            .await
+            .expect("opt in");
+        let (_events, outcome) = tokio::time::timeout(
+            Duration::from_secs(10),
+            session.submit_input("delete todo.md".into()),
+        )
+        .await
+        .expect("the turn completes")
+        .expect("no protocol error");
+        assert!(outcome.contains(expected), "{outcome}");
+        assert_eq!(*seen.lock().unwrap(), vec!["fs.delete todo.md".to_string()]);
+        shutdown.cancel();
+    }
+}

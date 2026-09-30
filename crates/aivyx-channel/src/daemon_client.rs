@@ -39,12 +39,18 @@ pub struct DaemonTurnResult {
 
 /// A connected, session-aware daemon client that supports multi-turn
 /// interaction. Created by [`DaemonSession::connect`].
+/// Answers an approval prompt: `(summary, reason, input) -> approved`.
+/// Called on a blocking thread, so it may read from the terminal.
+pub type Approver = Arc<dyn Fn(&str, &str, &serde_json::Value) -> bool + Send + Sync>;
+
 pub struct DaemonSession {
     reader: tokio::net::unix::OwnedReadHalf,
     writer: Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
     buf: Vec<u8>,
     pub session_id: String,
     pub daemon_version: Option<String>,
+    /// Set by [`Self::enable_approvals`]; answers `ApprovalRequest`s.
+    approver: Option<Approver>,
 }
 
 impl DaemonSession {
@@ -146,7 +152,17 @@ impl DaemonSession {
             buf,
             session_id,
             daemon_version,
+            approver: None,
         })
+    }
+
+    /// Show approval prompts: tool calls that need the operator's yes pause
+    /// mid-turn and `approver(summary, reason, input)` answers them.
+    pub async fn enable_approvals(&mut self, approver: Approver) -> Result<(), DaemonError> {
+        self.approver = Some(approver);
+        let frame = encode_frame(&FrontendMessage::SetApprovals { enabled: true })?;
+        self.writer.lock().await.write_all(&frame).await?;
+        Ok(())
     }
 
     pub async fn submit_input_for_mission(
@@ -228,6 +244,32 @@ impl DaemonSession {
             match decode_frame::<DaemonEnvelope>(&self.buf) {
                 Ok((DaemonEnvelope::StreamEvent { event, .. }, consumed)) => {
                     self.buf.drain(..consumed);
+                    // A paused tool call: answer it now, mid-turn.
+                    if let (
+                        StreamEventPayload::ApprovalRequest {
+                            request_id,
+                            summary,
+                            reason,
+                            input,
+                            ..
+                        },
+                        Some(approver),
+                    ) = (&event, self.approver.clone())
+                    {
+                        let (summary, reason, input) =
+                            (summary.clone(), reason.clone(), input.clone());
+                        let approved = tokio::task::spawn_blocking(move || {
+                            approver(&summary, &reason, &input)
+                        })
+                        .await
+                        .unwrap_or(false);
+                        let answer = FrontendMessage::ResolveApproval {
+                            request_id: request_id.clone(),
+                            approved,
+                        };
+                        let frame = encode_frame(&answer)?;
+                        self.writer.lock().await.write_all(&frame).await?;
+                    }
                     events.push(event);
                 }
                 Ok((DaemonEnvelope::TurnComplete { outcome, .. }, consumed)) => {
