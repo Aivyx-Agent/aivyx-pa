@@ -156,13 +156,30 @@ const TEST_MASTER: [u8; 32] = [7u8; 32];
 /// audit keys.
 const TEST_AUDIT_KEY: [u8; 32] = [0x42u8; 32];
 
+/// Reopens retry briefly on redb's file lock: dropping a session's
+/// handles doesn't release the database until the audit drain's last
+/// in-flight write (on a blocking thread) finishes, and on a loaded CI
+/// runner that can outlast the callers' yield loops. Any other error, or
+/// a lock that never releases, still fails the test.
 async fn open_store(dir: &SharedStoreDir) -> Arc<dyn Storage> {
-    RedbStorage::open(
-        StorageConfig::new(dir.store.clone()),
-        MasterKey::from_raw(TEST_MASTER),
-    )
-    .await
-    .expect("scratch storage must open")
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match RedbStorage::open(
+            StorageConfig::new(dir.store.clone()),
+            MasterKey::from_raw(TEST_MASTER),
+        )
+        .await
+        {
+            Ok(storage) => return storage,
+            Err(e)
+                if format!("{e:?}").contains("already open")
+                    && std::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(e) => panic!("scratch storage must open: {e:?}"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
