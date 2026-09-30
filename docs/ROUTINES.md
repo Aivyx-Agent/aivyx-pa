@@ -64,7 +64,8 @@ notify_when = "on_completed_non_empty"   # always | on_failed | on_completed_non
 ```
 
 - **`cron`** — 6 fields, seconds first (`cron` crate syntax). `0 0 7 * * *` is
-  7am daily; `0 0 */6 * * *` is every six hours; `0 0 8 * * 1` is Monday 8am.
+  7am daily; `0 0 */6 * * *` is every six hours; `0 0 8 * * Mon` is Monday 8am.
+  Prefer day names: numbered days count from Sunday = 1, so `1` is *Sunday*.
 - **`role`** — which role the routine runs as (its tools/scopes).
 - **`notify_when`** — `always`, `on_failed`, or `on_completed_non_empty`.
 

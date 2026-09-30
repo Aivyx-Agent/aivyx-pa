@@ -1758,7 +1758,7 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
     // built from the memory substrate, not an LLM turn that confabulates.
     emit(
         "weekly-digest",
-        "0 0 8 * * 1",
+        "0 0 8 * * Mon",
         ROUTINE_WEEKLY_DIGEST,
         core_enabled,
         "on_completed_non_empty",
@@ -4256,6 +4256,30 @@ mod tests {
             r.contains("never invent"),
             "reflection must forbid invention"
         );
+    }
+
+    /// init promises "on Mondays, a short digest of the week". The `cron`
+    /// crate numbers weekdays from Sunday = 1, so a bare `1` fired it on
+    /// Sundays; the day is spelled out now.
+    #[test]
+    fn weekly_digest_fires_on_monday_as_promised() {
+        use cron::TimeUnitSpec;
+        use std::str::FromStr;
+        use toml_edit::DocumentMut;
+        assert!(routines_question_intro(false).contains("on Mondays"));
+        let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s", "/r", true);
+        let doc: DocumentMut = render_default_schedules(&cfg).parse().unwrap();
+        let cron_expr = doc["schedule"]
+            .as_array_of_tables()
+            .unwrap()
+            .iter()
+            .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("weekly-digest"))
+            .and_then(|t| t.get("cron").and_then(|v| v.as_str()).map(String::from))
+            .unwrap();
+        let sched = cron::Schedule::from_str(&cron_expr).unwrap();
+        // The crate's own numbering: Sunday = 1, Monday = 2.
+        let days: Vec<u32> = sched.days_of_week().iter().collect();
+        assert_eq!(days, vec![2], "{cron_expr} must fire on Mondays only");
     }
 
     /// Chapter Ledger (#6 fix) — the weekly-digest routine is rendered as a
