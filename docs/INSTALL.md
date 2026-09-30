@@ -163,7 +163,12 @@ cargo build -p aivyx-desktop --release
 ```
 
 On launch it attaches to a running daemon, or spawns one (`aivyx-pa daemon run
---web-ui`) — resolving the `aivyx-pa` binary from `AIVYX_PA_BIN` or `PATH`.
+--web-ui`) — resolving the `aivyx-pa` binary from `AIVYX_PA_BIN`, else the one
+installed beside the app (the `.deb` and `.app` both ship it, so the versions
+match), else `PATH`. The daemon's output goes to
+`~/.local/state/aivyx-pa/desktop-daemon.log`. If it can't start — typically
+because `aivyx-pa init` hasn't been run yet — the window shows what it said,
+how to fix it, and a **Try again** button, instead of a connection error.
 
 ### Packaging (installer)
 

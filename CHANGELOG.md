@@ -27,6 +27,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
+- **The desktop app couldn't start on its own.** Its `.deb` (and `.app`)
+  contained only the window, not the `aivyx-pa` daemon it runs, and when the
+  daemon failed the window showed a bare connection error. The packages now
+  include the daemon (the app prefers the one beside it, so the versions
+  match), and a failed start shows a page with what the daemon said, how to
+  fix it (usually `aivyx-pa init`), and a **Try again** button. The daemon's
+  output goes to `~/.local/state/aivyx-pa/desktop-daemon.log`.
 - **Before any setup, `aivyx-pa` said `anthropic_api_key` was missing**, as
   if Anthropic were required. It now says aivyx-pa isn't set up yet and
   where it looked (`aivyx-pa: not set up yet — there's no config at …`).

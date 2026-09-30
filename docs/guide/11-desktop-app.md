@@ -33,9 +33,15 @@ Right-click (or click) the tray icon for:
 
 ## Getting it
 
-The desktop app is installed separately from the command-line version. See the
+Download the `.deb` (Linux) or the `.app` (macOS) from the
+[latest release](https://github.com/Aivyx-Agent/aivyx-pa/releases/latest). It
+includes the `aivyx-pa` command, so there's nothing else to install. See the
 [installation guide](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md#desktop-app)
-for downloads and the build-from-source steps.
+for the build-from-source steps.
+
+**The first time**, open a terminal and run `aivyx-pa init` to choose your model
+and passphrase. If you open the app before that, it says so and shows a **Try
+again** button to press once you've run it.
 
 > **On Linux** the desktop app needs a few system packages (a webview and the
 > tray libraries) — the install guide lists them for your distribution. macOS
