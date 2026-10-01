@@ -887,8 +887,22 @@ mod gather_tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use aivyx_audit::{AuditEvent, AutoNotifyOutcomeSummary, SignedEntry, TriggerKindSummary};
+    use aivyx_storage::{KeyDomain, Storage};
 
     const NOW: i64 = 2_000_000_000;
+
+    /// A fresh encrypted store in its own temp dir (the caller removes it).
+    async fn temp_storage() -> (std::path::PathBuf, Arc<dyn Storage>) {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{RedbStorage, StorageConfig};
+        let dir = std::env::temp_dir().join(format!("aivyx-briefing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage: Arc<dyn Storage> =
+            RedbStorage::open(StorageConfig::new(dir.join("store.redb")), MasterKey::from_raw([3u8; 32]))
+                .await
+                .unwrap();
+        (dir, storage)
+    }
 
     fn at(unix: i64) -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(unix as u64)
@@ -1035,14 +1049,7 @@ mod gather_tests {
 
     #[tokio::test]
     async fn gather_reads_missions_schedules_and_reminders() {
-        use aivyx_crypto::MasterKey;
-        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
-        let dir = std::env::temp_dir().join(format!("aivyx-briefing-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let storage: Arc<dyn Storage> =
-            RedbStorage::open(StorageConfig::new(dir.join("store.redb")), MasterKey::from_raw([3u8; 32]))
-                .await
-                .unwrap();
+        let (dir, storage) = temp_storage().await;
         let now = crate::activity::now_unix();
         let missions = storage.domain(KeyDomain::Missions);
 
@@ -1161,14 +1168,7 @@ mod gather_tests {
     /// trigger label.
     #[tokio::test]
     async fn a_user_mission_that_merely_mentions_trigger_is_not_mistaken_for_a_routine() {
-        use aivyx_crypto::MasterKey;
-        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
-        let dir = std::env::temp_dir().join(format!("aivyx-briefing-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let storage: Arc<dyn Storage> =
-            RedbStorage::open(StorageConfig::new(dir.join("store.redb")), MasterKey::from_raw([3u8; 32]))
-                .await
-                .unwrap();
+        let (dir, storage) = temp_storage().await;
         let now = crate::activity::now_unix();
         let missions = storage.domain(KeyDomain::Missions);
 
@@ -1203,14 +1203,7 @@ mod gather_tests {
     /// skipped on the assumption a mission will cover it.
     #[tokio::test]
     async fn fired_digest_and_team_schedules_are_counted_even_when_wrap_mission_is_set() {
-        use aivyx_crypto::MasterKey;
-        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
-        let dir = std::env::temp_dir().join(format!("aivyx-briefing-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let storage: Arc<dyn Storage> =
-            RedbStorage::open(StorageConfig::new(dir.join("store.redb")), MasterKey::from_raw([3u8; 32]))
-                .await
-                .unwrap();
+        let (dir, storage) = temp_storage().await;
         let now = crate::activity::now_unix();
         let schedules = storage.domain(KeyDomain::Schedules);
 

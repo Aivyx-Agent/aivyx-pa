@@ -10,10 +10,11 @@ use tokio::net::UnixStream;
 
 use aivyx_capability::CapabilitySet;
 use aivyx_channel::LocalChannel;
-use aivyx_channel::daemon_ipc::{
-    DaemonEnvelope, FrameError, FrontendMessage, QueryPayload, QueryResponsePayload, decode_frame, encode_frame,
-};
 use aivyx_channel::activity::Activity;
+use aivyx_channel::daemon_ipc::{
+    DaemonEnvelope, FrameError, FrontendMessage, QueryPayload, QueryResponsePayload, decode_frame,
+    encode_frame,
+};
 use aivyx_channel::daemon_server::{ChannelFactory, DaemonConfig, run_daemon, run_daemon_compat};
 use aivyx_core::{Agent, AgentId, CancellationToken, ChannelContext, Message, TurnOutcome};
 
@@ -31,7 +32,11 @@ impl Agent for QuietAgent {
         &self.caps
     }
     async fn turn(&self, _m: Message, _c: &dyn ChannelContext) -> TurnOutcome {
-        TurnOutcome::Completed { final_message: "ok".into(), tool_calls_made: 0, duration: Duration::from_millis(1) }
+        TurnOutcome::Completed {
+            final_message: "ok".into(),
+            tool_calls_made: 0,
+            duration: Duration::from_millis(1),
+        }
     }
 }
 
@@ -39,9 +44,20 @@ async fn send(stream: &mut UnixStream, msg: &FrontendMessage) {
     stream.write_all(&encode_frame(msg).unwrap()).await.unwrap();
 }
 
-async fn query(stream: &mut UnixStream, buf: &mut Vec<u8>, id: &str, payload: QueryPayload) -> QueryResponsePayload {
-    let msg = FrontendMessage::Query { id: id.into(), payload };
-    stream.write_all(&encode_frame(&msg).unwrap()).await.unwrap();
+async fn query(
+    stream: &mut UnixStream,
+    buf: &mut Vec<u8>,
+    id: &str,
+    payload: QueryPayload,
+) -> QueryResponsePayload {
+    let msg = FrontendMessage::Query {
+        id: id.into(),
+        payload,
+    };
+    stream
+        .write_all(&encode_frame(&msg).unwrap())
+        .await
+        .unwrap();
     loop {
         match decode_frame::<DaemonEnvelope>(buf) {
             Ok((env, n)) => {
@@ -65,11 +81,15 @@ async fn query(stream: &mut UnixStream, buf: &mut Vec<u8>, id: &str, payload: Qu
 
 #[tokio::test]
 async fn get_briefing_answers_over_ipc() {
-    let dir: PathBuf = std::env::temp_dir().join(format!("aivyx-briefing-e2e-{}", uuid::Uuid::new_v4()));
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("aivyx-briefing-e2e-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let socket = dir.join("daemon.sock");
     let shutdown = CancellationToken::new();
-    let agent: Arc<dyn Agent> = Arc::new(QuietAgent { id: AgentId::new(), caps: CapabilitySet::empty() });
+    let agent: Arc<dyn Agent> = Arc::new(QuietAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
     let channel = Arc::new(LocalChannel::new("briefing-e2e", Vec::<u8>::new()));
     let (s, sd) = (socket.clone(), shutdown.clone());
     tokio::spawn(async move {
@@ -84,18 +104,35 @@ async fn get_briefing_answers_over_ipc() {
     let mut stream = UnixStream::connect(&socket).await.unwrap();
     let mut buf = Vec::new();
 
-    let QueryResponsePayload::Briefing { briefing } = query(&mut stream, &mut buf, "b1", QueryPayload::GetBriefing).await
+    let QueryResponsePayload::Briefing { briefing } =
+        query(&mut stream, &mut buf, "b1", QueryPayload::GetBriefing).await
     else {
         panic!("expected a Briefing");
     };
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     assert_eq!(briefing.last_active_unix, None);
     assert!((briefing.window_start_unix - (now - 24 * 3600)).abs() < 60);
     assert!(!briefing.window_capped);
 
     // No reminder store in the compat daemon → a clean "not ok", not an error.
-    let resp = query(&mut stream, &mut buf, "r1", QueryPayload::CompleteReminder { id: "x".into() }).await;
-    assert_eq!(resp, QueryResponsePayload::ReminderUpdated { id: "x".into(), ok: false, due_unix: None });
+    let resp = query(
+        &mut stream,
+        &mut buf,
+        "r1",
+        QueryPayload::CompleteReminder { id: "x".into() },
+    )
+    .await;
+    assert_eq!(
+        resp,
+        QueryResponsePayload::ReminderUpdated {
+            id: "x".into(),
+            ok: false,
+            due_unix: None
+        }
+    );
 
     shutdown.cancel();
     let _ = std::fs::remove_dir_all(&dir);
@@ -104,7 +141,11 @@ async fn get_briefing_answers_over_ipc() {
 /// The persisted operator-activity record, read straight from the store the
 /// daemon writes it to.
 async fn persisted(store: &aivyx_storage::DomainHandle) -> Option<Activity> {
-    store.get(b"operator.activity").await.unwrap().map(|b| serde_json::from_slice(&b).unwrap())
+    store
+        .get(b"operator.activity")
+        .await
+        .unwrap()
+        .map(|b| serde_json::from_slice(&b).unwrap())
 }
 
 /// The connection's reader task stamps operator activity for what the
@@ -115,18 +156,25 @@ async fn operator_actions_are_stamped_over_ipc_but_looking_is_not() {
     use aivyx_crypto::MasterKey;
     use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
 
-    let dir: PathBuf = std::env::temp_dir().join(format!("aivyx-briefing-e2e-{}", uuid::Uuid::new_v4()));
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("aivyx-briefing-e2e-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
-    let storage: Arc<dyn Storage> =
-        RedbStorage::open(StorageConfig::new(dir.join("store.redb")), MasterKey::from_raw([9u8; 32]))
-            .await
-            .unwrap();
+    let storage: Arc<dyn Storage> = RedbStorage::open(
+        StorageConfig::new(dir.join("store.redb")),
+        MasterKey::from_raw([9u8; 32]),
+    )
+    .await
+    .unwrap();
     let activity_store = storage.domain(KeyDomain::ChannelState);
 
     let socket = dir.join("daemon.sock");
     let shutdown = CancellationToken::new();
-    let agent: Arc<dyn Agent> = Arc::new(QuietAgent { id: AgentId::new(), caps: CapabilitySet::empty() });
-    let channel: Arc<dyn ChannelContext + Send + Sync> = Arc::new(LocalChannel::new("briefing-e2e", Vec::<u8>::new()));
+    let agent: Arc<dyn Agent> = Arc::new(QuietAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+    let channel: Arc<dyn ChannelContext + Send + Sync> =
+        Arc::new(LocalChannel::new("briefing-e2e", Vec::<u8>::new()));
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
     let config = DaemonConfig {
         socket_path: socket.clone(),
@@ -243,18 +291,33 @@ async fn operator_actions_are_stamped_over_ipc_but_looking_is_not() {
         },
     )
     .await;
-    let QueryResponsePayload::Briefing { .. } = query(&mut stream, &mut buf, "b1", QueryPayload::GetBriefing).await
+    let QueryResponsePayload::Briefing { .. } =
+        query(&mut stream, &mut buf, "b1", QueryPayload::GetBriefing).await
     else {
         panic!("expected a Briefing");
     };
     assert_eq!(persisted(&activity_store).await, None);
 
     // Acting does: the reader task stamps it before the action is answered.
-    let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-    let _ = query(&mut stream, &mut buf, "r1", QueryPayload::CompleteReminder { id: "x".into() }).await;
-    let stamped = persisted(&activity_store).await.expect("an operator action is persisted");
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let _ = query(
+        &mut stream,
+        &mut buf,
+        "r1",
+        QueryPayload::CompleteReminder { id: "x".into() },
+    )
+    .await;
+    let stamped = persisted(&activity_store)
+        .await
+        .expect("an operator action is persisted");
     let at = stamped.last_action.expect("last_action is set");
-    assert!((before..before + 60).contains(&at), "stamped at {at}, expected ~{before}");
+    assert!(
+        (before..before + 60).contains(&at),
+        "stamped at {at}, expected ~{before}"
+    );
     assert_eq!(stamped.anchor, None);
 
     shutdown.cancel();
