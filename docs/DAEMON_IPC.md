@@ -463,8 +463,9 @@ here alongside the two mutations and the query that built on it.
 
 **`GetReminders`** → `Reminders { reminders }`. Each `ReminderView` carries
 `id`, `due_unix`, `message`, `notify_targets` (channel/target strings the
-reminder also notifies, may be empty) and `created_unix`. Soonest-first is
-the caller's job; the daemon returns them in store order.
+reminder also notifies, may be empty) and `created_unix`. The daemon
+returns them soonest first (`ReminderStore::list` sorts by `due_unix`, then
+`id`).
 
 **`CompleteReminder { id: String }`** and **`SnoozeReminder { id: String,
 secs: u64 }`** → both answered by `ReminderUpdated { id, ok, due_unix }`.
@@ -485,7 +486,7 @@ briefing.rs`):
 | `window_capped` | `true` when the window was cut back to 7 days. |
 | `spend_24h_usd` | Rolling 24 h `LlmCost` spend; `None` if the audit chain couldn't be read. |
 | `memory_topics` | Operator-visible memory topic count; `None` without a memory substrate. |
-| `needs_you` | `Vec<NeedsYouItem>` — approvals, proposals, failures and due reminders, each with a `NeedsYouAction` (`MissionGate`, `TeamGate`, `Review`, `Reminder`, or `Look`) and a `link` to the screen that owns it. |
+| `needs_you` | `Vec<NeedsYouItem>` — approvals, proposals, failures (a routine that failed several times is one item, "failed N times") and reminders coming up in the next 2 hours (plus any already due the reminder driver hasn't fired yet; soonest first, `detail` = "due in 25 min" / "due in 1 h 10 min" / "due now"), each with a `NeedsYouAction` (`MissionGate`, `TeamGate`, `Review`, `Reminder`, or `Look`) and a `link` to the screen that owns it. |
 | `log` | `Vec<LogEntry>`, oldest first, capped at 12 (`briefing::LOG_CAP`). Each has `at_unix`, a first-person `sentence`, `warn` (show the time in the warn colour), and a `link`. |
 | `log_more` | Older log lines left out of `log`; 0 when nothing was cut. |
 | `coming_up` | `Vec<UpcomingItem>` — `at_unix: Option<i64>` (`None` for work already in progress), `sentence`, `link`. |
@@ -500,7 +501,8 @@ through. It is **read-only** and does not itself count as activity.
 The daemon tracks one clock per process (`aivyx-channel::activity::
 ActivityClock`), touched whenever a frame decoded off the daemon socket is
 one of the things the operator actually *does* — `is_operator_action`'s
-list: `SubmitInput`, `ResolveApproval`, `ResolveGate`,
+list: `SubmitInput` (unless `headless: true` — an automated submit isn't the
+operator), `ResolveApproval`, `ResolveGate`,
 `ResolvePersonaProposal`, and the `Query` variants `ResolveTeamGate`,
 `CompleteReminder`, `SnoozeReminder`. Everything else, `GetBriefing` and
 `GetReminders` included, is a read and never touches the clock.

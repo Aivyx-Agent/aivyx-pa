@@ -7,7 +7,7 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Changed
 
-- **Studio Command Center is now a logbook.** One readable column instead of stat cards: a ruled instrument strip (daemon, model, 24 h spend against your day budget, memory, audit chain), what needs you (mission and team approvals, pending proposals, failed routines and notifications, due reminders — with Approve/Deny/Done/Snooze right there), a first-person log of what your assistant did since you were last here, and what's coming up. Written from the record with fixed wording — no model involved.
+- **Studio Command Center is now a logbook.** One readable column instead of stat cards: a ruled instrument strip (daemon, model, 24 h spend against your day budget, memory, audit chain), what needs you (mission and team approvals, pending proposals, failed routines and notifications, reminders coming up in the next 2 hours — with Approve/Deny/Done/Snooze right there), a first-person log of what your assistant did since you were last here, and what's coming up. Written from the record with fixed wording — no model involved.
 
 ### Added
 

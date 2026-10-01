@@ -290,6 +290,22 @@ precedence over anything earlier in this spec that disagrees.
   - one line of memories saved.
 
   Finished team missions carry no timestamp, so they stay on Mission Control.
+- **Reminders coming up, not only due.** The reminder driver fires and
+  removes a reminder within ~30 s of it falling due, so "due now" alone
+  would almost never show. "Needs you" lists reminders coming up in the
+  next 2 hours (`due_unix <= now + 2 h`, plus any already due the driver
+  hasn't fired yet), soonest first, each with a relative time ("due in 25
+  min", "due in 1 h 10 min", "due now").
+- **Final-review refinements.**
+  - A routine that failed several times in the window is one "Needs you"
+    card ("The routine X failed 5 times."); the log keeps every run.
+  - The changes line skips `workspace` (the assistant's own notebook) and
+    `mcp.call` (read/write isn't recorded) besides read-only and `memory.*`.
+  - A headless (automated) `SubmitInput` is not operator activity.
+  - "Coming up" names at most 3 pieces of work in progress, then "and N
+    more in progress.".
+  - Skill proposals link to Skills; the empty-log line under "In the last
+    24 hours" / "In the last 7 days" is "All quiet.".
 - **Refresh.**
   - The briefing polls every 10 s while the Command Center is open, not on
     the 1.5 s live poll, because it walks the recent audit chain.

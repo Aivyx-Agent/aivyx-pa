@@ -48,18 +48,21 @@ assistant in its own voice, in this order:
 - **Needs you.** Everything waiting on you: your own pending chat approval,
   mission and team-mission gates (Approve / Deny), pending persona and
   skill proposals (Review), failed routines and failed notifications,
-  sources the daemon couldn't read, and due reminders (Done / Snooze 1 h).
+  sources the daemon couldn't read, and reminders coming up in the next 2
+  hours, soonest first with how long until they're due (Done / Snooze 1 h).
+  A routine that failed several times is one card ("failed 5 times").
   "Nothing needs you." when there's nothing.
 - **Since you were last here.** Up to 12 lines of what your assistant did,
-  oldest first, each with a time and a plain sentence. The heading changes
-  to "In the last 24 hours" the first time you ever open it, and "In the
-  last 7 days" if you've been away longer than a week; otherwise it's
+  oldest first, each with a time and a plain sentence. The heading reads
+  "In the last 24 hours" until there's a previous visit to measure from
+  (you've done something here, then been away 30 minutes or more), and "In
+  the last 7 days" if you've been away longer than a week; otherwise it's
   "Since you were last here" — and "last here" means the end of your
   *previous* visit, not just now, so acting on a card here never empties
   the log you're reading. A trailing "and N more → Audit" covers anything
   past the 12-line cap.
-- **Coming up.** The next few scheduled routines and any work already in
-  progress.
+- **Coming up.** The next three scheduled routines and up to three pieces of
+  work already in progress ("and N more in progress." past that).
 
 The log is written straight from the record with fixed wording — no model
 is involved, ever. That also means it can't tell you *which* files changed:
