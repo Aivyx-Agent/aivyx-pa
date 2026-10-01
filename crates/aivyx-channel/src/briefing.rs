@@ -13,6 +13,19 @@ use aivyx_storage::DomainHandle;
 pub const LOG_CAP: usize = 12;
 const DAY: i64 = 24 * 3600;
 const WEEK: i64 = 7 * DAY;
+/// How far ahead "Needs you" looks for reminders. The reminder driver fires
+/// (and removes) a reminder within ~30 s of it falling due, so the page
+/// shows the ones coming up, not only the already-due.
+pub const REMINDER_LOOKAHEAD_SECS: i64 = 2 * 3600;
+/// How many pieces of work in progress "Coming up" names.
+const IN_PROGRESS_CAP: usize = 3;
+/// Tool bases whose completed calls aren't "changes" for the log, beside
+/// read-only bases and `memory.*` (which gets its own line).
+/// - `workspace`: the assistant's own notebook; every op (read or write)
+///   shares the one base.
+/// - `mcp.call`: every MCP tool shares the one base, and whether a call
+///   read or wrote isn't recorded.
+const NOT_CHANGES: &[&str] = &["workspace", "mcp.call"];
 
 /// A routine (or other trigger) run inside the window.
 #[derive(Debug, Clone, PartialEq)]
@@ -84,7 +97,9 @@ pub struct Facts {
     pub mission_gates: Vec<GateFact>,
     pub team_gates: Vec<TeamGateFact>,
     pub proposals: Vec<ProposalFact>,
-    pub due_reminders: Vec<ReminderFact>,
+    /// Reminders due within [`REMINDER_LOOKAHEAD_SECS`] (and any already
+    /// due the driver hasn't fired yet).
+    pub reminders: Vec<ReminderFact>,
     pub upcoming: Vec<UpcomingFact>,
     /// Goals of work in progress.
     pub in_progress: Vec<String>,
@@ -112,8 +127,22 @@ fn item(key: String, sentence: String, detail: Option<String>, action: NeedsYouA
     NeedsYouItem { key, sentence, detail, action, link: link.to_string() }
 }
 
+/// `due_unix` relative to `now`: "due now", "due in 25 min", "due in 1 h
+/// 10 min". Minutes round up, so "due in 0 min" never shows.
+fn due_in(due_unix: i64, now: i64) -> String {
+    if due_unix <= now {
+        return "due now".into();
+    }
+    let mins = (due_unix - now + 59) / 60;
+    match (mins / 60, mins % 60) {
+        (0, m) => format!("due in {m} min"),
+        (h, 0) => format!("due in {h} h"),
+        (h, m) => format!("due in {h} h {m} min"),
+    }
+}
+
 /// Pure: facts in, the briefing out.
-pub fn compose(f: &Facts, _now: i64) -> Briefing {
+pub fn compose(f: &Facts, now: i64) -> Briefing {
     let mut needs = Vec::new();
 
     // Approvals.
@@ -142,17 +171,21 @@ pub fn compose(f: &Facts, _now: i64) -> Briefing {
         } else {
             format!("I'd like to update my {}.", p.category)
         };
-        needs.push(item(format!("proposal:{}", p.id), sentence, p.reason.clone(), NeedsYouAction::Review, "agents"));
+        let link = if p.is_skill { "skills" } else { "agents" };
+        needs.push(item(format!("proposal:{}", p.id), sentence, p.reason.clone(), NeedsYouAction::Review, link));
     }
-    // Went wrong.
+    // Went wrong: one card per failing routine, in first-failure order.
+    let mut failures: Vec<(&str, usize)> = Vec::new();
     for r in f.routine_runs.iter().filter(|r| r.failed == Some(true)) {
-        needs.push(item(
-            format!("failed:{}:{}", r.what, r.at_unix),
-            format!("The {} failed.", r.what),
-            None,
-            NeedsYouAction::Look,
-            "missions",
-        ));
+        match failures.iter_mut().find(|(w, _)| *w == r.what) {
+            Some(g) => g.1 += 1,
+            None => failures.push((&r.what, 1)),
+        }
+    }
+    for (what, count) in failures {
+        let sentence =
+            if count == 1 { format!("The {what} failed.") } else { format!("The {what} failed {count} times.") };
+        needs.push(item(format!("failed:{what}"), sentence, None, NeedsYouAction::Look, "missions"));
     }
     // Failed notifications, grouped by (target, kind) in first-seen order.
     let mut groups: Vec<(&str, &str, usize)> = Vec::new();
@@ -183,12 +216,14 @@ pub fn compose(f: &Facts, _now: i64) -> Briefing {
             "command",
         ));
     }
-    // Due reminders.
-    for r in &f.due_reminders {
+    // Reminders coming up, soonest first.
+    let mut reminders: Vec<&ReminderFact> = f.reminders.iter().collect();
+    reminders.sort_by(|a, b| a.due_unix.cmp(&b.due_unix).then(a.id.cmp(&b.id)));
+    for r in reminders {
         needs.push(item(
             format!("reminder:{}", r.id),
             format!("Reminder: {}", r.message),
-            None,
+            Some(due_in(r.due_unix, now)),
             NeedsYouAction::Reminder { id: r.id.clone() },
             "reminders",
         ));
@@ -250,11 +285,18 @@ pub fn compose(f: &Facts, _now: i64) -> Briefing {
         .take(3)
         .map(|u| UpcomingItem { at_unix: Some(u.at_unix), sentence: u.name.clone(), link: "schedules".into() })
         .collect();
-    coming_up.extend(f.in_progress.iter().map(|goal| UpcomingItem {
+    coming_up.extend(f.in_progress.iter().take(IN_PROGRESS_CAP).map(|goal| UpcomingItem {
         at_unix: None,
         sentence: format!("Working on \u{201c}{goal}\u{201d}."),
         link: "mission-control".into(),
     }));
+    if f.in_progress.len() > IN_PROGRESS_CAP {
+        coming_up.push(UpcomingItem {
+            at_unix: None,
+            sentence: format!("and {} more in progress.", f.in_progress.len() - IN_PROGRESS_CAP),
+            link: "mission-control".into(),
+        });
+    }
 
     Briefing {
         last_active_unix: f.last_here,
@@ -325,7 +367,8 @@ pub fn audit_facts(
             AuditEvent::ToolCall { scope_used, outcome: aivyx_core::ToolOutcomeSummary::Completed { .. }, .. }
                 // Memory writes get their own line ("I saved N memories").
                 if !aivyx_capability::is_read_only_base(scope_used.base())
-                    && !scope_used.base().starts_with("memory.") =>
+                    && !scope_used.base().starts_with("memory.")
+                    && !NOT_CHANGES.contains(&scope_used.base()) =>
             {
                 a.changes.push((scope_used.base().to_string(), t));
             }
@@ -364,19 +407,31 @@ pub fn trigger_label(description: &str) -> Option<String> {
 /// The newest entries back to `since` (inclusive), oldest first. Pages
 /// backwards so a long chain isn't read in full.
 fn read_since(log: &PersistentAuditLog, since: i64) -> Result<Vec<SignedEntry>, String> {
+    page_back(log.len() as u64, |from, n| log.entries_range(from, n).map_err(|e| e.to_string()), since)
+}
+
+/// [`read_since`] over any `fetch(from, n)` of a `len`-entry chain: reads
+/// pages newest-first until one starts before `since`, then concatenates
+/// them oldest-first once.
+fn page_back(
+    len: u64,
+    mut fetch: impl FnMut(u64, usize) -> Result<Vec<SignedEntry>, String>,
+    since: i64,
+) -> Result<Vec<SignedEntry>, String> {
     const PAGE: u64 = 512;
-    let mut end = log.len() as u64;
-    let mut out: Vec<SignedEntry> = Vec::new();
+    let mut end = len;
+    let mut pages: Vec<Vec<SignedEntry>> = Vec::new();
     while end > 0 {
         let from = end.saturating_sub(PAGE);
-        let page = log.entries_range(from, (end - from) as usize).map_err(|e| e.to_string())?;
+        let page = fetch(from, (end - from) as usize)?;
         let reached = page.first().is_some_and(|e| unix_of(e.appended_at) < since);
-        out.splice(0..0, page);
+        pages.push(page);
         if reached {
             break;
         }
         end = from;
     }
+    let mut out: Vec<SignedEntry> = pages.into_iter().rev().flatten().collect();
     out.retain(|e| unix_of(e.appended_at) >= since);
     Ok(out)
 }
@@ -465,7 +520,11 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
                     // except digest routines: `run_digest_report` runs them
                     // without ever creating a mission, even when
                     // `wrap_mission` is set, so they'd otherwise vanish.
-                    if (!r.wrap_mission || r.report_kind.as_deref() == Some("digest"))
+                    // Team-mission routines likewise run as a team mission,
+                    // never a `trg-` mission record.
+                    if (!r.wrap_mission
+                        || r.report_kind.as_deref() == Some("digest")
+                        || r.team_mission.is_some())
                         && let Some(ms) = r.last_fired_at
                         && (ms / 1000) as i64 >= window_start
                     {
@@ -519,10 +578,11 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
     }
 
     if let Some(store) = src.reminders {
-        match store.due(now).await {
-            Ok(due) => {
-                f.due_reminders = due
+        match store.list().await {
+            Ok(all) => {
+                f.reminders = all
                     .into_iter()
+                    .filter(|r| r.due_unix <= now + REMINDER_LOOKAHEAD_SECS)
                     .map(|r| ReminderFact { id: r.id, message: r.message, due_unix: r.due_unix })
                     .collect();
             }
@@ -574,7 +634,7 @@ mod tests {
     #[test]
     fn needs_you_is_approvals_then_proposals_then_problems_then_reminders() {
         let mut f = base();
-        f.due_reminders = vec![ReminderFact { id: "r1".into(), message: "call mom".into(), due_unix: NOW - 5 }];
+        f.reminders = vec![ReminderFact { id: "r1".into(), message: "call mom".into(), due_unix: NOW - 5 }];
         f.notifications = vec![
             NotifyFact { target: "telegram".into(), at_unix: NOW - 50, error_kind: Some("auth".into()) },
             NotifyFact { target: "telegram".into(), at_unix: NOW - 40, error_kind: Some("auth".into()) },
@@ -609,11 +669,13 @@ mod tests {
         assert_eq!(b.needs_you[1].link, "mission-control");
         assert_eq!(b.needs_you[2].action, NeedsYouAction::Review);
         assert_eq!(b.needs_you[2].detail.as_deref(), Some("you ask for this often"));
-        assert_eq!(b.needs_you[2].link, "agents");
+        assert_eq!(b.needs_you[2].link, "skills");
+        assert_eq!(b.needs_you[3].link, "agents");
         assert_eq!(b.needs_you[4].link, "missions");
         assert_eq!(b.needs_you[5].link, "notifications");
         assert_eq!(b.needs_you[7].action, NeedsYouAction::Reminder { id: "r1".into() });
         assert_eq!(b.needs_you[7].link, "reminders");
+        assert_eq!(b.needs_you[7].detail.as_deref(), Some("due now"));
         // Keys are unique.
         let mut keys: Vec<&str> = b.needs_you.iter().map(|n| n.key.as_str()).collect();
         keys.sort();
@@ -728,6 +790,84 @@ mod tests {
     }
 
     #[test]
+    fn reminders_coming_up_read_soonest_first_with_a_relative_time() {
+        let mut f = base();
+        f.reminders = vec![
+            ReminderFact { id: "b".into(), message: "water plants".into(), due_unix: NOW + 70 * 60 },
+            ReminderFact { id: "c".into(), message: "standup".into(), due_unix: NOW + 3_600 },
+            ReminderFact { id: "a".into(), message: "call mom".into(), due_unix: NOW + 25 * 60 },
+            ReminderFact { id: "d".into(), message: "kettle".into(), due_unix: NOW + 30 },
+            ReminderFact { id: "e".into(), message: "late".into(), due_unix: NOW - 90 },
+            ReminderFact { id: "f".into(), message: "on the dot".into(), due_unix: NOW },
+        ];
+        let b = compose(&f, NOW);
+        let got: Vec<(&str, Option<&str>)> =
+            b.needs_you.iter().map(|n| (n.sentence.as_str(), n.detail.as_deref())).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Reminder: late", Some("due now")),
+                ("Reminder: on the dot", Some("due now")),
+                ("Reminder: kettle", Some("due in 1 min")),
+                ("Reminder: call mom", Some("due in 25 min")),
+                ("Reminder: standup", Some("due in 1 h")),
+                ("Reminder: water plants", Some("due in 1 h 10 min")),
+            ]
+        );
+        assert_eq!(b.needs_you[3].action, NeedsYouAction::Reminder { id: "a".into() });
+        assert_eq!(b.needs_you[3].key, "reminder:a");
+    }
+
+    #[test]
+    fn repeated_failures_of_one_routine_are_one_card() {
+        let mut f = base();
+        f.routine_runs = vec![
+            RoutineRun { what: "routine scan".into(), at_unix: NOW - 500, failed: Some(true) },
+            RoutineRun { what: "routine digest".into(), at_unix: NOW - 400, failed: Some(true) },
+            RoutineRun { what: "routine scan".into(), at_unix: NOW - 300, failed: Some(true) },
+            RoutineRun { what: "routine scan".into(), at_unix: NOW - 250, failed: Some(false) },
+            RoutineRun { what: "routine scan".into(), at_unix: NOW - 200, failed: Some(true) },
+            RoutineRun { what: "routine scan".into(), at_unix: NOW - 150, failed: Some(true) },
+            RoutineRun { what: "routine scan".into(), at_unix: NOW - 100, failed: Some(true) },
+        ];
+        let b = compose(&f, NOW);
+        let got: Vec<(&str, &str)> = b.needs_you.iter().map(|n| (n.key.as_str(), n.sentence.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("failed:routine scan", "The routine scan failed 5 times."),
+                ("failed:routine digest", "The routine digest failed."),
+            ]
+        );
+        assert!(b.needs_you.iter().all(|n| n.action == NeedsYouAction::Look && n.link == "missions"));
+        // The log keeps every run on its own line.
+        assert_eq!(b.log.len(), 7);
+        assert_eq!(b.log.iter().filter(|l| l.warn).count(), 6);
+    }
+
+    #[test]
+    fn coming_up_shows_at_most_three_pieces_of_work() {
+        let mut f = base();
+        f.in_progress = (1..=5).map(|i| format!("job {i}")).collect();
+        let b = compose(&f, NOW);
+        let s: Vec<(Option<i64>, &str, &str)> =
+            b.coming_up.iter().map(|u| (u.at_unix, u.sentence.as_str(), u.link.as_str())).collect();
+        assert_eq!(
+            s,
+            vec![
+                (None, "Working on \u{201c}job 1\u{201d}.", "mission-control"),
+                (None, "Working on \u{201c}job 2\u{201d}.", "mission-control"),
+                (None, "Working on \u{201c}job 3\u{201d}.", "mission-control"),
+                (None, "and 2 more in progress.", "mission-control"),
+            ]
+        );
+
+        let mut f = base();
+        f.in_progress = (1..=3).map(|i| format!("job {i}")).collect();
+        assert_eq!(compose(&f, NOW).coming_up.len(), 3);
+    }
+
+    #[test]
     fn instruments_and_window_pass_through() {
         let mut f = base();
         f.spend_24h_usd = Some(0.42);
@@ -782,6 +922,59 @@ mod gather_tests {
         }
     }
 
+    fn chain(n: u64, first_unix: i64) -> Vec<SignedEntry> {
+        (0..n)
+            .map(|i| {
+                entry(i, first_unix + i as i64, AuditEvent::MemoryAccess {
+                    turn_id: aivyx_core::TurnId::new(),
+                    operation: aivyx_audit::MemoryOperation::Write,
+                    scope: aivyx_capability::Scope::parse("memory.write").unwrap(),
+                    query_or_key: "k".into(),
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn paging_back_reads_only_what_it_needs_oldest_first() {
+        let all = chain(1_300, 10_000);
+        let mut fetches = Vec::new();
+        let got = page_back(
+            all.len() as u64,
+            |from, n| {
+                fetches.push((from, n));
+                Ok(all[from as usize..from as usize + n].to_vec())
+            },
+            10_000 + 200,
+        )
+        .unwrap();
+        let seqs: Vec<u64> = got.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, (200..1_300).collect::<Vec<u64>>());
+        // Three pages back from the end: 788..1300, 276..788, 0..276.
+        assert_eq!(fetches, vec![(788, 512), (276, 512), (0, 276)]);
+
+        // A window inside the newest page stops after one fetch.
+        let mut fetches = 0;
+        let got = page_back(
+            all.len() as u64,
+            |from, n| {
+                fetches += 1;
+                Ok(all[from as usize..from as usize + n].to_vec())
+            },
+            10_000 + 1_290,
+        )
+        .unwrap();
+        assert_eq!(got.len(), 10);
+        assert_eq!(fetches, 1);
+
+        // An empty chain never fetches.
+        let got = page_back(0, |_, _| panic!("no fetch on an empty chain"), 0).unwrap();
+        assert!(got.is_empty());
+
+        // A fetch error surfaces.
+        assert_eq!(page_back(5, |_, _| Err("boom".into()), 0).unwrap_err(), "boom");
+    }
+
     #[test]
     fn trigger_missions_name_their_routine() {
         assert_eq!(trigger_label("cron trigger cfg-digest: summarise"), Some("routine digest".into()));
@@ -806,7 +999,10 @@ mod gather_tests {
             entry(2, start + 10, tool("fs.write", completed.clone())),
             entry(3, start + 20, tool("fs.read", completed.clone())),
             entry(4, start + 30, tool("fs.delete", aivyx_core::ToolOutcomeSummary::Denied)),
-            entry(4, start + 35, tool("memory.write", completed)),
+            entry(4, start + 35, tool("memory.write", completed.clone())),
+            // The assistant's own notebook and MCP calls aren't changes.
+            entry(4, start + 36, tool("workspace", completed.clone())),
+            entry(4, start + 37, tool("mcp.call:srv:tool", completed)),
             entry(5, start + 40, AuditEvent::MemoryAccess {
                 turn_id: aivyx_core::TurnId::new(),
                 operation: aivyx_audit::MemoryOperation::Write,
@@ -904,16 +1100,18 @@ mod gather_tests {
             })
             .await
             .unwrap();
-        reminders
-            .set(&crate::reminder_store::Reminder {
-                id: "later".into(),
-                due_unix: now + 9_999,
-                message: "later".into(),
-                notify_targets: vec![],
-                created_unix: 0,
-            })
-            .await
-            .unwrap();
+        for (id, due_unix) in [("soon", now + 25 * 60), ("edge", now + 2 * 3_600), ("later", now + 2 * 3_600 + 1)] {
+            reminders
+                .set(&crate::reminder_store::Reminder {
+                    id: id.into(),
+                    due_unix,
+                    message: id.into(),
+                    notify_targets: vec![],
+                    created_unix: 0,
+                })
+                .await
+                .unwrap();
+        }
 
         let pricing = aivyx_cost::Pricing::new();
         let src = BriefingSources {
@@ -941,9 +1139,15 @@ mod gather_tests {
         // The gated mission ("write the report") must not also appear as
         // in-progress work — only the plain running one does.
         assert_eq!(f.in_progress, vec!["update the household budget".to_string()]);
+        // Reminders coming up in the next 2 hours (plus any already due
+        // the driver hasn't fired yet), soonest first.
         assert_eq!(
-            f.due_reminders,
-            vec![ReminderFact { id: "due".into(), message: "call mom".into(), due_unix: now - 10 }]
+            f.reminders,
+            vec![
+                ReminderFact { id: "due".into(), message: "call mom".into(), due_unix: now - 10 },
+                ReminderFact { id: "soon".into(), message: "soon".into(), due_unix: now + 25 * 60 },
+                ReminderFact { id: "edge".into(), message: "edge".into(), due_unix: now + 2 * 3_600 },
+            ]
         );
         assert!(f.source_errors.is_empty());
         assert_eq!(f.spend_24h_usd, None);
@@ -998,7 +1202,7 @@ mod gather_tests {
     /// so its firing must be counted straight from the schedule record, not
     /// skipped on the assumption a mission will cover it.
     #[tokio::test]
-    async fn a_fired_digest_schedule_is_counted_even_when_wrap_mission_is_set() {
+    async fn fired_digest_and_team_schedules_are_counted_even_when_wrap_mission_is_set() {
         use aivyx_crypto::MasterKey;
         use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
         let dir = std::env::temp_dir().join(format!("aivyx-briefing-{}", uuid::Uuid::new_v4()));
@@ -1032,6 +1236,32 @@ mod gather_tests {
         standup.last_fired_at = None;
         crate::schedule::create_schedule(&schedules, &standup).await.unwrap();
 
+        // A team-mission routine runs as a team mission, never a `trg-`
+        // mission record, so it too is counted from the schedule — even
+        // with `wrap_mission` set.
+        let mut team = crate::schedule::ScheduleRecord::new_team_mission(
+            "cfg-prep".into(),
+            "0 0 6 * * *".into(),
+            "prep the line".into(),
+            None,
+        )
+        .unwrap();
+        team.wrap_mission = true;
+        team.last_fired_at = Some(((now - 50) * 1000) as u64);
+        crate::schedule::create_schedule(&schedules, &team).await.unwrap();
+
+        // An ordinary wrapped routine is counted from its mission, not here.
+        let mut wrapped = crate::schedule::ScheduleRecord::new(
+            "cfg-wrapped".into(),
+            "0 0 7 * * *".into(),
+            "default".into(),
+            "wrapped".into(),
+        )
+        .unwrap();
+        wrapped.wrap_mission = true;
+        wrapped.last_fired_at = Some(((now - 60) * 1000) as u64);
+        crate::schedule::create_schedule(&schedules, &wrapped).await.unwrap();
+
         let pricing = aivyx_cost::Pricing::new();
         let src = BriefingSources {
             mission_store: None,
@@ -1044,9 +1274,14 @@ mod gather_tests {
             pricing: &pricing,
         };
         let f = gather(&src, Some(now - 3_600), now).await;
+        let mut runs = f.routine_runs.clone();
+        runs.sort_by(|a, b| a.what.cmp(&b.what));
         assert_eq!(
-            f.routine_runs,
-            vec![RoutineRun { what: "routine digest".into(), at_unix: now - 100, failed: None }]
+            runs,
+            vec![
+                RoutineRun { what: "routine digest".into(), at_unix: now - 100, failed: None },
+                RoutineRun { what: "routine prep".into(), at_unix: now - 50, failed: None },
+            ]
         );
         // Both schedules are enabled, so both get an upcoming entry from
         // their own future cron fire; the point under test is that the
