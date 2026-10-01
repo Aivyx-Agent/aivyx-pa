@@ -845,6 +845,16 @@ pub enum QueryPayload {
     /// (`crate::reminder_tool::RemindListTool`). Always "all pending" —
     /// no parameters, matching `ReminderStore::list`'s own shape.
     GetReminders,
+    /// The Command Center's briefing. Answered by the daemon's connection
+    /// loop (it needs the connection's activity clock). Replies with
+    /// [`QueryResponsePayload::Briefing`].
+    GetBriefing,
+    /// Mark a reminder done (removes it). Replies with
+    /// [`QueryResponsePayload::ReminderUpdated`]; an unknown id → `ok: false`.
+    CompleteReminder { id: String },
+    /// Move a reminder's due time to `now + secs`, keeping its message and
+    /// targets. Replies with [`QueryResponsePayload::ReminderUpdated`].
+    SnoozeReminder { id: String, secs: u64 },
 }
 
 /// Chapter Repertoire — one row in the Studio Skills library: a
@@ -1572,6 +1582,12 @@ pub enum QueryResponsePayload {
     McpServerCallStats { servers: Vec<McpServerCallStats> },
     /// Response to [`QueryPayload::GetReminders`].
     Reminders { reminders: Vec<ReminderView> },
+    /// Response to [`QueryPayload::GetBriefing`].
+    Briefing { briefing: crate::briefing::Briefing },
+    /// Response to [`QueryPayload::CompleteReminder`] /
+    /// [`QueryPayload::SnoozeReminder`]. `due_unix` is the new due time
+    /// after a snooze, `None` after a completion or a failure.
+    ReminderUpdated { id: String, ok: bool, due_unix: Option<i64> },
 }
 
 /// Studio Gallery — one ComfyUI generation, read from `/history`. Wasm-clean

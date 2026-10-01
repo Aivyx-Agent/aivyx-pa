@@ -13,6 +13,7 @@
 //! Deps: `aivyx-team-types` (itself wasm-clean) + `serde` only.
 
 pub mod backlog;
+pub mod briefing;
 pub mod insights;
 pub mod ledgers;
 pub mod loop_state;

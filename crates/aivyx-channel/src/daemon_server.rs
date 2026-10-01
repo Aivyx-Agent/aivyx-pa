@@ -4707,6 +4707,18 @@ async fn handle_query(
             }
         }
         QueryPayload::GetReminders => reminders_query_response(reminder_store).await,
+        QueryPayload::CompleteReminder { id } => {
+            reminder_command(reminder_store, id, None, now_unix_secs()).await
+        }
+        QueryPayload::SnoozeReminder { id, secs } => {
+            reminder_command(reminder_store, id, Some(secs), now_unix_secs()).await
+        }
+        // Answered by the connection loop, which holds the activity clock
+        // (see `handle_connection`). Only a caller that bypasses it lands here.
+        QueryPayload::GetBriefing => QueryResponsePayload::QueryError {
+            code: "briefing_unavailable".into(),
+            message: "the briefing is answered by the connection loop".into(),
+        },
         QueryPayload::AllowCloudEscalation { session_id } => {
             let Ok(uuid) = session_id.parse::<uuid::Uuid>() else {
                 return QueryResponsePayload::QueryError {
@@ -8198,6 +8210,49 @@ async fn reminders_query_response(
     }
 }
 
+/// `CompleteReminder` (`snooze_secs = None`) / `SnoozeReminder`. A missing
+/// store, an unknown id, or a storage error → `ok: false`.
+async fn reminder_command(
+    reminder_store: Option<&crate::reminder_tool::SharedReminderStore>,
+    id: String,
+    snooze_secs: Option<u64>,
+    now_unix: i64,
+) -> QueryResponsePayload {
+    let failed = |id: String| QueryResponsePayload::ReminderUpdated { id, ok: false, due_unix: None };
+    let Some(store) = reminder_store else {
+        return failed(id);
+    };
+    match snooze_secs {
+        None => match store.cancel(&id).await {
+            Ok(true) => QueryResponsePayload::ReminderUpdated { id, ok: true, due_unix: None },
+            _ => failed(id),
+        },
+        Some(secs) => {
+            let Ok(all) = store.list().await else {
+                return failed(id);
+            };
+            let Some(mut r) = all.into_iter().find(|r| r.id == id) else {
+                return failed(id);
+            };
+            r.due_unix = now_unix.saturating_add(secs.min(i64::MAX as u64) as i64);
+            match store.set(&r).await {
+                Ok(()) => QueryResponsePayload::ReminderUpdated { id, ok: true, due_unix: Some(r.due_unix) },
+                Err(_) => failed(id),
+            }
+        }
+    }
+}
+
+/// Seconds-since-epoch clock for reminder commands answered from
+/// `handle_query` (not the connection loop, which has its own activity
+/// clock already).
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// POLISH_WAVES.md sub-project 8 item C — fold `mcp.call`-scoped audit
 /// `ToolCall` events into per-MCP-server statistics. Shares
 /// `fold_tool_stats`'s own audit-walking/cutoff-window shape, but
@@ -10033,6 +10088,57 @@ system_prompt = "You are a custom role."
             panic!("expected Reminders, got {resp:?}");
         };
         assert!(reminders.is_empty());
+    }
+
+    #[tokio::test]
+    async fn complete_removes_and_snooze_moves_a_reminder() {
+        let store = open_reminder_store().await;
+        for id in ["r1", "r2"] {
+            store
+                .set(&crate::reminder_store::Reminder {
+                    id: id.into(),
+                    due_unix: 100,
+                    message: format!("msg {id}"),
+                    notify_targets: vec!["telegram:1".into()],
+                    created_unix: 0,
+                })
+                .await
+                .unwrap();
+        }
+
+        let done = reminder_command(Some(&store), "r1".into(), None, 1_000).await;
+        assert_eq!(
+            done,
+            QueryResponsePayload::ReminderUpdated { id: "r1".into(), ok: true, due_unix: None }
+        );
+
+        let snoozed = reminder_command(Some(&store), "r2".into(), Some(3_600), 1_000).await;
+        assert_eq!(
+            snoozed,
+            QueryResponsePayload::ReminderUpdated { id: "r2".into(), ok: true, due_unix: Some(4_600) }
+        );
+
+        let left = store.list().await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, "r2");
+        assert_eq!(left[0].due_unix, 4_600);
+        assert_eq!(left[0].message, "msg r2");
+        assert_eq!(left[0].notify_targets, vec!["telegram:1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn reminder_commands_on_an_unknown_id_or_no_store_report_not_ok() {
+        let store = open_reminder_store().await;
+        for snooze in [None, Some(60)] {
+            assert_eq!(
+                reminder_command(Some(&store), "nope".into(), snooze, 0).await,
+                QueryResponsePayload::ReminderUpdated { id: "nope".into(), ok: false, due_unix: None }
+            );
+            assert_eq!(
+                reminder_command(None, "nope".into(), snooze, 0).await,
+                QueryResponsePayload::ReminderUpdated { id: "nope".into(), ok: false, due_unix: None }
+            );
+        }
     }
 
     // -- Chapter U Settings handlers --------------------------------------
