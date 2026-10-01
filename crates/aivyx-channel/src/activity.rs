@@ -87,20 +87,26 @@ impl ActivityClock {
     /// moved [`PERSIST_EVERY_SECS`] since the last write. A failed write is
     /// logged, not fatal: the in-memory value still serves this run.
     pub async fn touch(&self, now: i64) {
-        let next = {
+        let (next, previous) = {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
             s.0 = s.0.touched(now);
             if self.store.is_none() || !worth_persisting(s.1, s.0) {
                 return;
             }
+            let previous = s.1;
             s.1 = s.0;
-            s.0
+            (s.0, previous)
         };
         if let Some(store) = &self.store
             && let Ok(bytes) = serde_json::to_vec(&next)
             && let Err(e) = store.put(KEY, &bytes).await
         {
             eprintln!("aivyx-pa daemon: failed to persist operator activity: {e}");
+            // Not saved after all: let the next action try again.
+            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if s.1 == next {
+                s.1 = previous;
+            }
         }
     }
 }
