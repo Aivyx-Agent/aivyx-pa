@@ -17,6 +17,10 @@ pub const VISIT_GAP_SECS: i64 = 30 * 60;
 
 const KEY: &[u8] = b"operator.activity";
 
+/// How far `last_action` moves before it is written again. A restart
+/// loses at most this much precision; a new visit is always written.
+pub const PERSIST_EVERY_SECS: i64 = 60;
+
 /// The persisted pair: the newest action, and the end of the visit before
 /// the current one.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,8 +51,18 @@ impl Activity {
 
 /// The daemon's one clock, shared by every connection.
 pub struct ActivityClock {
-    state: Mutex<Activity>,
+    /// (current, last persisted).
+    state: Mutex<(Activity, Activity)>,
     store: Option<DomainHandle>,
+}
+
+/// Whether moving from the persisted value to `next` is worth a write.
+fn worth_persisting(persisted: Activity, next: Activity) -> bool {
+    next.anchor != persisted.anchor
+        || match (persisted.last_action, next.last_action) {
+            (Some(p), Some(n)) => (n - p).abs() >= PERSIST_EVERY_SECS,
+            (p, n) => p != n,
+        }
 }
 
 impl ActivityClock {
@@ -61,20 +75,26 @@ impl ActivityClock {
             },
             None => Activity::default(),
         };
-        ActivityClock { state: Mutex::new(state), store }
+        ActivityClock { state: Mutex::new((state, state)), store }
     }
 
     pub fn snapshot(&self) -> Activity {
-        *self.state.lock().unwrap_or_else(|e| e.into_inner())
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).0
     }
 
-    /// Record an operator action. A failed write is logged, not fatal: the
-    /// in-memory value still serves this run.
+    /// Record an operator action. The in-memory value always moves; the
+    /// store is written only when a new visit starts or `last_action` has
+    /// moved [`PERSIST_EVERY_SECS`] since the last write. A failed write is
+    /// logged, not fatal: the in-memory value still serves this run.
     pub async fn touch(&self, now: i64) {
         let next = {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            *s = s.touched(now);
-            *s
+            s.0 = s.0.touched(now);
+            if self.store.is_none() || !worth_persisting(s.1, s.0) {
+                return;
+            }
+            s.1 = s.0;
+            s.0
         };
         if let Some(store) = &self.store
             && let Ok(bytes) = serde_json::to_vec(&next)
@@ -205,6 +225,52 @@ mod tests {
             Activity { last_action: Some(1_000 + VISIT_GAP_SECS + 10), anchor: Some(1_000) }
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Touch a fresh store's clock at each of `touches`, then reopen it and
+    /// return what was persisted (alongside the in-memory value before).
+    async fn persisted_after(touches: &[i64]) -> (Activity, Activity) {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let dir = std::env::temp_dir().join(format!("aivyx-activity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("store.redb");
+        let in_memory = {
+            let store: Arc<dyn Storage> =
+                RedbStorage::open(StorageConfig::new(path.clone()), MasterKey::from_raw([5u8; 32]))
+                    .await
+                    .unwrap();
+            let clock = ActivityClock::load(Some(store.domain(KeyDomain::ChannelState))).await;
+            for t in touches {
+                clock.touch(*t).await;
+            }
+            clock.snapshot()
+        };
+        let store: Arc<dyn Storage> =
+            RedbStorage::open(StorageConfig::new(path), MasterKey::from_raw([5u8; 32])).await.unwrap();
+        let persisted = ActivityClock::load(Some(store.domain(KeyDomain::ChannelState))).await.snapshot();
+        let _ = std::fs::remove_dir_all(&dir);
+        (in_memory, persisted)
+    }
+
+    #[tokio::test]
+    async fn the_clock_persists_only_when_it_matters() {
+        // Two touches 10 s apart: memory moves, the store keeps the first.
+        let (mem, disk) = persisted_after(&[1_000, 1_010]).await;
+        assert_eq!(mem, Activity { last_action: Some(1_010), anchor: None });
+        assert_eq!(disk, Activity { last_action: Some(1_000), anchor: None });
+
+        // A minute past the last persisted value is persisted.
+        let (_, disk) = persisted_after(&[1_000, 1_010, 1_059]).await;
+        assert_eq!(disk.last_action, Some(1_000));
+        let (_, disk) = persisted_after(&[1_000, 1_010, 1_060]).await;
+        assert_eq!(disk.last_action, Some(1_060));
+
+        // A new visit (anchor change) is persisted.
+        let later = 1_010 + VISIT_GAP_SECS + 1;
+        let (mem, disk) = persisted_after(&[1_000, 1_010, later]).await;
+        assert_eq!(disk, mem);
+        assert_eq!(disk, Activity { last_action: Some(later), anchor: Some(1_010) });
     }
 
     #[tokio::test]
