@@ -452,3 +452,72 @@ cancelled turn or a closed connection denies it at once. On approval the exact
 paused call runs and the turn continues; on denial the model is told the
 operator declined and the turn continues. Both are recorded on the audit chain
 (`ApprovalRequested`, `ApprovalResolved`).
+
+## Command Center addendum — reminders and the briefing
+
+Phase 186 added `QueryPayload::GetReminders` (no fields) →
+`QueryResponsePayload::Reminders { reminders: Vec<ReminderView> }`, the
+read-only reminders list behind the TUI Dashboard and the Studio Reminders
+screen, but never got a `DAEMON_IPC.md` entry of its own. It's documented
+here alongside the two mutations and the query that built on it.
+
+**`GetReminders`** → `Reminders { reminders }`. Each `ReminderView` carries
+`id`, `due_unix`, `message`, `notify_targets` (channel/target strings the
+reminder also notifies, may be empty) and `created_unix`. Soonest-first is
+the caller's job; the daemon returns them in store order.
+
+**`CompleteReminder { id: String }`** and **`SnoozeReminder { id: String,
+secs: u64 }`** → both answered by `ReminderUpdated { id, ok, due_unix }`.
+`CompleteReminder` cancels the reminder (`due_unix: None` on success);
+`SnoozeReminder` cancels it and re-sets it with the same message and
+targets, due `secs` seconds from now (`due_unix: Some(new_time)`). An
+unknown `id` gives `ok: false` for either. Both are **operator activity**
+(see below).
+
+**`GetBriefing`** (no fields) → `QueryResponsePayload::Briefing { briefing
+}`, the Command Center logbook's one query. `Briefing` (`aivyx-ipc/src/
+briefing.rs`):
+
+| Field | Meaning |
+|---|---|
+| `last_active_unix` | End of the operator's *previous* visit; `None` before any activity has ever been recorded. |
+| `window_start_unix` | Where the log below starts. |
+| `window_capped` | `true` when the window was cut back to 7 days. |
+| `spend_24h_usd` | Rolling 24 h `LlmCost` spend; `None` if the audit chain couldn't be read. |
+| `memory_topics` | Operator-visible memory topic count; `None` without a memory substrate. |
+| `needs_you` | `Vec<NeedsYouItem>` — approvals, proposals, failures and due reminders, each with a `NeedsYouAction` (`MissionGate`, `TeamGate`, `Review`, `Reminder`, or `Look`) and a `link` to the screen that owns it. |
+| `log` | `Vec<LogEntry>`, oldest first, capped at 12 (`briefing::LOG_CAP`). Each has `at_unix`, a first-person `sentence`, `warn` (show the time in the warn colour), and a `link`. |
+| `log_more` | Older log lines left out of `log`; 0 when nothing was cut. |
+| `coming_up` | `Vec<UpcomingItem>` — `at_unix: Option<i64>` (`None` for work already in progress), `sentence`, `link`. |
+
+`GetBriefing` is answered by the per-connection loop (`handle_connection`),
+which is also the one place that holds the operator-activity clock — not by
+the shared `handle_query` dispatcher the other `QueryPayload` variants go
+through. It is **read-only** and does not itself count as activity.
+
+### Operator activity
+
+The daemon tracks one clock per process (`aivyx-channel::activity::
+ActivityClock`), touched whenever a frame decoded off the daemon socket is
+one of the things the operator actually *does* — `is_operator_action`'s
+list: `SubmitInput`, `ResolveApproval`, `ResolveGate`,
+`ResolvePersonaProposal`, and the `Query` variants `ResolveTeamGate`,
+`CompleteReminder`, `SnoozeReminder`. Everything else, `GetBriefing` and
+`GetReminders` included, is a read and never touches the clock.
+
+- **Visits.** Actions less than 30 minutes apart (`activity::
+  VISIT_GAP_SECS`) are one visit. "Last here" is the end of the
+  **previous** visit, not the newest action — so approving a card on the
+  Command Center never empties its own log out from under the operator.
+- **24 h fallback and 7-day cap.** Before any activity has ever been
+  recorded, the log window is the last 24 hours. Once there's a previous
+  visit, the window starts at its end, but never further back than 7 days
+  (`briefing::window`); a capped window changes the log's heading to "In
+  the last 7 days".
+- **Persistence.** The clock is stored in the encrypted `KeyDomain::
+  ChannelState` domain, so "last here" survives a daemon restart.
+- **What doesn't count yet.** Only frames arriving over the daemon Unix
+  socket are seen by this clock — the CLI chat, the TUI, and the Studio.
+  Telegram, Discord and Slack run inside the daemon on a different path and
+  don't call into it, so operator turns taken through those channels don't
+  register as activity in this version.

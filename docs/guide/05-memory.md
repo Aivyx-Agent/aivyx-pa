@@ -22,7 +22,9 @@ the things linked to it.
 
 Browse everything your assistant has learned, organized by topic. Search by
 keyword or by meaning, and read individual entries. This is the plain,
-entry-by-entry view of its knowledge.
+entry-by-entry view of its knowledge. It also carries the **Learning**
+section — a digest of recent tidying and merges — which used to live on the
+Command Center.
 
 ## The Wiki screen
 

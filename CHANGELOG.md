@@ -5,6 +5,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Studio Command Center is now a logbook.** One readable column instead of stat cards: a ruled instrument strip (daemon, model, 24 h spend against your day budget, memory, audit chain), what needs you (mission and team approvals, pending proposals, failed routines and notifications, due reminders — with Approve/Deny/Done/Snooze right there), a first-person log of what your assistant did since you were last here, and what's coming up. Written from the record with fixed wording — no model involved.
+
 ### Added
 
 - **The `manual` autonomy level does what it says.** Every tool call that can
@@ -12,6 +16,7 @@ All notable changes to Aivyx are recorded here. This project adheres to
   (Studio card, terminal prompt; reply "yes" in chat apps); looking things up
   doesn't. Scheduled routines aren't affected. It used to behave like
   `assisted`.
+- **IPC:** `GetBriefing`, `CompleteReminder`, `SnoozeReminder` queries (see `docs/DAEMON_IPC.md`); the daemon remembers your last activity across restarts.
 
 ## [0.13.0] — 2026-10-01
 

@@ -6,7 +6,7 @@ page in this guide; this is the map.
 | Screen | What it's for |
 |---|---|
 | **Create** | The guided setup that gives your assistant its identity (see [Create your agent](03-create-your-agent.md)). |
-| **Command** | Your home dashboard — at-a-glance status, active missions, a live activity feed, and whether the assistant is busy. |
+| **Command** | Your logbook — an instrument strip, what needs you, what your assistant did since you were last here, and what's coming up. |
 | **Missions** | Hand off larger multi-step jobs and watch them run; approve gates (see [Chat & missions](04-chat-and-missions.md)). |
 | **Mission Control** | A live view of one running mission: its lead and specialists, drill-in, and controls to approve, reject, pause, resume or abort. |
 | **Schedules** | Routines that run on a timer — yours, your config's, and ones the assistant proposes for your approval. |
@@ -14,7 +14,7 @@ page in this guide; this is the map.
 | **Loop** | The autonomous backlog: stories the assistant works through on its own, and each run's progress. |
 | **Reminders** | Reminders you or the assistant have set. |
 | **Chat** | A direct conversation with your assistant. |
-| **Memory** | Browse and search everything your assistant has learned. |
+| **Memory** | Browse and search everything your assistant has learned, including its Learning digest (moved here from the Command Center). |
 | **Wiki** | Your assistant's knowledge as readable per-topic pages. |
 | **Graph** | The same knowledge as a visual map of connected topics. |
 | **Settings** | Access level and spending budgets (see [Access & settings](08-access-and-settings.md)). |
@@ -33,10 +33,39 @@ page in this guide; this is the map.
 
 ## Command Center
 
-The landing dashboard. It pulls together the things you most often want to glance
-at — how many missions are active, recent activity, the assistant's current
-status, and the integrity of the audit log — without you having to open each
-screen.
+The landing screen, and it works like a logbook rather than a dashboard:
+instead of stat cards and panels, it's one readable column written by the
+assistant in its own voice, in this order:
+
+- **Instrument strip.** A ruled line of readings — daemon status, the model
+  and its context window, today's spend against your budget (24 h,
+  rolling), memory topic count, and whether the audit chain is sealed or
+  broken. Click any reading to jump to the screen it belongs to; a reading
+  turns warn or rust when something needs attention (offline, spend at 80%
+  or more of budget, a broken chain).
+- **Greeting.** A time-of-day headline, then the date and when you were last
+  active — "Wednesday 1 October · last here 9 h ago".
+- **Needs you.** Everything waiting on you: your own pending chat approval,
+  mission and team-mission gates (Approve / Deny), pending persona and
+  skill proposals (Review), failed routines and failed notifications,
+  sources the daemon couldn't read, and due reminders (Done / Snooze 1 h).
+  "Nothing needs you." when there's nothing.
+- **Since you were last here.** Up to 12 lines of what your assistant did,
+  oldest first, each with a time and a plain sentence. The heading changes
+  to "In the last 24 hours" the first time you ever open it, and "In the
+  last 7 days" if you've been away longer than a week; otherwise it's
+  "Since you were last here" — and "last here" means the end of your
+  *previous* visit, not just now, so acting on a card here never empties
+  the log you're reading. A trailing "and N more → Audit" covers anything
+  past the 12-line cap.
+- **Coming up.** The next few scheduled routines and any work already in
+  progress.
+
+The log is written straight from the record with fixed wording — no model
+is involved, ever. That also means it can't tell you *which* files changed:
+the audit trail keeps only a hash of each call's arguments, so a line can
+say "I made 3 changes" but never name them. Every line links to the screen
+that holds the full detail (Missions, Audit, Memory, Notifications).
 
 ## Documents
 

@@ -82,7 +82,9 @@ and open the link it prints (it looks like `http://127.0.0.1:7843/?token=…`).
 You only need it once per browser — after that the Studio remembers you.
 
 The first time, you'll land on the **Create your agent** screen if you haven't
-set up an identity yet; otherwise you arrive at the **Command Center** dashboard.
+set up an identity yet; otherwise you arrive at the **Command Center** — your
+logbook of what needs you and what your assistant has done since you were
+last here.
 Don't want the Studio at all? Set `web_ui = false` under `[daemon]` in
 `aivyx-pa.toml`.
 
