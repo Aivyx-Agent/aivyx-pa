@@ -17,6 +17,9 @@ const WEEK: i64 = 7 * DAY;
 /// (and removes) a reminder within ~30 s of it falling due, so the page
 /// shows the ones coming up, not only the already-due.
 pub const REMINDER_LOOKAHEAD_SECS: i64 = 2 * 3600;
+/// A schedule's `last_fired_at` within this of a `trg-` mission run of the
+/// same routine is that run, not another one.
+const DUPLICATE_RUN_SECS: i64 = 120;
 /// How many pieces of work in progress "Coming up" names.
 const IN_PROGRESS_CAP: usize = 3;
 /// Tool bases whose completed calls aren't "changes" for the log, beside
@@ -555,6 +558,8 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
         }
     }
 
+    // Every run so far came from a `trg-` mission.
+    let mission_runs = f.routine_runs.len();
     if let Some(store) = src.schedule_store {
         match crate::schedule::list_schedules(store).await {
             Ok(records) => {
@@ -575,11 +580,17 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
                         && let Some(ms) = r.last_fired_at
                         && (ms / 1000) as i64 >= window_start
                     {
-                        f.routine_runs.push(RoutineRun {
-                            what: format!("routine {name}"),
-                            at_unix: (ms / 1000) as i64,
-                            failed: None,
-                        });
+                        let what = format!("routine {name}");
+                        let at_unix = (ms / 1000) as i64;
+                        // Without a digest builder, a wrapped digest routine
+                        // falls back to a `trg-` mission — already counted
+                        // above, so don't count the firing twice.
+                        let counted = f.routine_runs[..mission_runs]
+                            .iter()
+                            .any(|m| m.what == what && (m.at_unix - at_unix).abs() <= DUPLICATE_RUN_SECS);
+                        if !counted {
+                            f.routine_runs.push(RoutineRun { what, at_unix, failed: None });
+                        }
                     }
                 }
             }
@@ -1424,5 +1435,67 @@ mod gather_tests {
         // plain (non-digest) schedule produces one too.
         assert!(f.upcoming.iter().any(|u| u.name == "standup"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without a digest builder, a wrapped digest routine falls back to a
+    /// `trg-` mission — which is counted from the mission, so the schedule's
+    /// `last_fired_at` must not count it a second time. A digest run with
+    /// no matching mission nearby is still counted from the schedule.
+    #[tokio::test]
+    async fn a_digest_run_that_fell_back_to_a_mission_is_counted_once() {
+        async fn runs(mission_at: i64, fired_at: i64, now: i64) -> Vec<RoutineRun> {
+            let (dir, storage) = temp_storage().await;
+            let missions = storage.domain(KeyDomain::Missions);
+            let schedules = storage.domain(KeyDomain::Schedules);
+            let mut m = crate::mission::MissionRecord::new(
+                "trg-9".into(),
+                "default".into(),
+                "cron trigger cfg-digest: send digest".into(),
+            );
+            m.state = crate::mission::MissionState::Completed;
+            m.updated_at = (mission_at * 1000) as u64;
+            crate::mission::create_mission(&missions, &m).await.unwrap();
+            let mut digest = crate::schedule::ScheduleRecord::new(
+                "cfg-digest".into(),
+                "0 0 3 * * *".into(),
+                "default".into(),
+                "send digest".into(),
+            )
+            .unwrap();
+            digest.wrap_mission = true;
+            digest.report_kind = Some("digest".into());
+            digest.last_fired_at = Some((fired_at * 1000) as u64);
+            crate::schedule::create_schedule(&schedules, &digest).await.unwrap();
+            let pricing = aivyx_cost::Pricing::new();
+            let src = BriefingSources {
+                mission_store: Some(&missions),
+                schedule_store: Some(&schedules),
+                audit_log: None,
+                persona_proposals: None,
+                team_missions: None,
+                reminders: None,
+                memory: None,
+                pricing: &pricing,
+                audit_cache: None,
+            };
+            let f = gather(&src, Some(now - 3_600), now).await;
+            let _ = std::fs::remove_dir_all(&dir);
+            f.routine_runs
+        }
+        let now = crate::activity::now_unix();
+        // The mission completes 90 s after the schedule fired: one run.
+        assert_eq!(
+            runs(now - 100, now - 190, now).await,
+            vec![RoutineRun { what: "routine digest".into(), at_unix: now - 100, failed: Some(false) }]
+        );
+        // A mission from an earlier, unrelated firing doesn't hide this one.
+        let got = runs(now - 1_000, now - 190, now).await;
+        assert_eq!(
+            got,
+            vec![
+                RoutineRun { what: "routine digest".into(), at_unix: now - 1_000, failed: Some(false) },
+                RoutineRun { what: "routine digest".into(), at_unix: now - 190, failed: None },
+            ]
+        );
     }
 }
