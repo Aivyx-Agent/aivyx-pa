@@ -5,6 +5,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.14.2] — 2026-10-02
+
+### Fixed
+
+- Builds cleanly with Rust 1.99 (`async-trait` 0.1.92). The v0.14.1 tag's
+  release build failed on Rust 1.99's new `double_must_use` lint, so no
+  v0.14.1 CLI release was published; v0.14.2 carries all of v0.14.1's changes.
+
 ## [0.14.1] — 2026-10-02
 
 ### Changed
