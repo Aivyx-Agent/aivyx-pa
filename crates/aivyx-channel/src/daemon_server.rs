@@ -837,6 +837,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     // Command Center — the daemon's one operator-activity clock, loaded
     // once and shared by every connection.
     let activity = Arc::new(crate::activity::ActivityClock::load(activity_store).await);
+    // …and its one audit-walk cache, so every open Command Center polling
+    // `GetBriefing` doesn't re-walk the chain when nothing new landed.
+    let audit_facts_cache = Arc::new(crate::briefing::AuditFactsCache::default());
     // Chapter Codex (CX.3) — spawn the knowledge-wiki stale-page sweep on
     // the maintenance cadence when `[wiki].enabled`. Best-effort + shutdown-
     // aware; absent ⇒ no synthesis (byte-identical default).
@@ -1827,6 +1830,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             document_roots: document_roots.clone(),
             reminder_store: reminder_store.clone(),
             activity: Arc::clone(&activity),
+            audit_facts_cache: Arc::clone(&audit_facts_cache),
             pricing: pricing.clone(),
             comfyui_base_url: comfyui_base_url.clone(),
             routing_guard: routing_guard.clone(),
@@ -2145,6 +2149,8 @@ struct ConnectionContext {
     reminder_store: Option<crate::reminder_tool::SharedReminderStore>,
     /// Command Center — the daemon's one operator-activity clock.
     activity: Arc<crate::activity::ActivityClock>,
+    /// Command Center — the daemon's one briefing audit-walk cache.
+    audit_facts_cache: Arc<crate::briefing::AuditFactsCache>,
     /// Command Center — prices the briefing's 24 h spend.
     pricing: aivyx_cost::Pricing,
     /// Model routing Part 3b — see `DaemonConfig::routing_guard`.
@@ -2209,6 +2215,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         document_roots,
         reminder_store,
         activity,
+        audit_facts_cache,
         pricing,
         comfyui_base_url,
         routing_guard,
@@ -3149,6 +3156,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     reminders: reminder_store.as_ref(),
                                     memory: memory.as_ref(),
                                     pricing: &pricing,
+                                    audit_cache: Some(&audit_facts_cache),
                                 };
                                 let facts = crate::briefing::gather(
                                     &sources,
@@ -4097,6 +4105,7 @@ async fn run_single_connection_daemon(
         document_roots: Default::default(),
         reminder_store: None,
         activity: Arc::new(crate::activity::ActivityClock::load(None).await),
+        audit_facts_cache: Arc::new(crate::briefing::AuditFactsCache::default()),
         pricing: aivyx_cost::Pricing::default(),
         comfyui_base_url: None,
         routing_guard,

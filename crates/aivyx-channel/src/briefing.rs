@@ -323,6 +323,53 @@ pub struct BriefingSources<'a> {
     pub reminders: Option<&'a crate::reminder_tool::SharedReminderStore>,
     pub memory: Option<&'a Arc<dyn aivyx_memory::Memory>>,
     pub pricing: &'a aivyx_cost::Pricing,
+    /// The daemon's audit-walk cache; `None` walks the chain every time.
+    pub audit_cache: Option<&'a AuditFactsCache>,
+}
+
+/// What an audit walk depends on: the chain's length, the log window's
+/// start, and the minute (so the rolling 24 h spend boundary moves at most
+/// a minute late).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuditKey {
+    pub chain_len: u64,
+    pub window_start: i64,
+    pub minute: i64,
+}
+
+/// The key for a walk at `now`. The walk runs at the start of `now`'s
+/// minute, so a window that rolls with the clock (no last visit, or the
+/// 7-day cap) stays put across the minute's polls.
+pub fn audit_key(chain_len: u64, last_here: Option<i64>, now: i64) -> AuditKey {
+    let minute = now.div_euclid(60);
+    AuditKey { chain_len, window_start: window(last_here, minute * 60).0, minute }
+}
+
+/// The last audit walk, kept so repeated briefing polls with nothing new
+/// on the chain skip the walk. One per daemon.
+#[derive(Debug, Default)]
+pub struct AuditFactsCache {
+    last: std::sync::Mutex<Option<(AuditKey, AuditFacts)>>,
+}
+
+impl AuditFactsCache {
+    /// The cached facts for `key`, else `compute()`'s (cached on success).
+    /// The lock is held across `compute`, so concurrent polls walk once.
+    pub fn get_or_compute<E>(
+        &self,
+        key: AuditKey,
+        compute: impl FnOnce() -> Result<AuditFacts, E>,
+    ) -> Result<AuditFacts, E> {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((k, facts)) = last.as_ref()
+            && *k == key
+        {
+            return Ok(facts.clone());
+        }
+        let facts = compute()?;
+        *last = Some((key, facts.clone()));
+        Ok(facts)
+    }
 }
 
 /// What the audit chain contributes.
@@ -541,9 +588,21 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
     }
 
     if let Some(log) = src.audit_log {
-        match read_since(log, window_start.min(now - DAY)) {
-            Ok(entries) => {
-                let a = audit_facts(&entries, window_start, now, src.pricing);
+        // The walk runs at the start of the minute (see `audit_key`), so a
+        // cached walk and a fresh one agree; entries appended since then
+        // change the chain length and so the key.
+        let key = audit_key(log.len() as u64, last_here, now);
+        let walk_now = key.minute * 60;
+        let walk = || {
+            read_since(log, key.window_start.min(walk_now - DAY))
+                .map(|entries| audit_facts(&entries, key.window_start, walk_now, src.pricing))
+        };
+        let walked = match src.audit_cache {
+            Some(cache) => cache.get_or_compute(key, walk),
+            None => walk(),
+        };
+        match walked {
+            Ok(a) => {
                 f.notifications = a.notifications;
                 f.changes = a.changes;
                 f.memories_saved = a.memories_saved;
@@ -887,6 +946,7 @@ mod gather_tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use aivyx_audit::{AuditEvent, AutoNotifyOutcomeSummary, SignedEntry, TriggerKindSummary};
+    use aivyx_audit::AuditWriter;
     use aivyx_storage::{KeyDomain, Storage};
 
     const NOW: i64 = 2_000_000_000;
@@ -987,6 +1047,86 @@ mod gather_tests {
 
         // A fetch error surfaces.
         assert_eq!(page_back(5, |_, _| Err("boom".into()), 0).unwrap_err(), "boom");
+    }
+
+    #[test]
+    fn the_audit_cache_computes_once_per_key() {
+        let cache = AuditFactsCache::default();
+        let mut calls = 0;
+        let mut get = |key: AuditKey, n: i64| {
+            cache
+                .get_or_compute(key, || -> Result<AuditFacts, String> {
+                    calls += 1;
+                    Ok(AuditFacts { memories_saved: vec![n], ..Default::default() })
+                })
+                .unwrap()
+        };
+        let k = AuditKey { chain_len: 10, window_start: 100, minute: 7 };
+        assert_eq!(get(k, 1).memories_saved, vec![1]);
+        // Same key: served from the cache (the compute isn't called again).
+        assert_eq!(get(k, 2).memories_saved, vec![1]);
+        // Any key part changing recomputes.
+        assert_eq!(get(AuditKey { chain_len: 11, ..k }, 3).memories_saved, vec![3]);
+        assert_eq!(get(AuditKey { chain_len: 11, window_start: 90, ..k }, 4).memories_saved, vec![4]);
+        assert_eq!(get(AuditKey { chain_len: 11, window_start: 90, minute: 8 }, 5).memories_saved, vec![5]);
+        assert_eq!(get(AuditKey { chain_len: 11, window_start: 90, minute: 8 }, 6).memories_saved, vec![5]);
+        assert_eq!(calls, 4);
+
+        // A failed compute isn't cached.
+        let cache = AuditFactsCache::default();
+        assert!(cache.get_or_compute(k, || Err::<AuditFacts, _>("boom")).is_err());
+        assert_eq!(cache.get_or_compute(k, || Ok::<_, &str>(AuditFacts::default())).unwrap(), AuditFacts::default());
+    }
+
+    /// Within one minute, a briefing with no last visit keeps the same
+    /// audit window — so repeated polls hit the cache.
+    #[test]
+    fn the_audit_key_is_stable_within_a_minute() {
+        let base = 60 * 1_000_000;
+        assert_eq!(audit_key(5, None, base + 1), audit_key(5, None, base + 59));
+        assert_ne!(audit_key(5, None, base + 59), audit_key(5, None, base + 60));
+        assert_eq!(audit_key(5, Some(base - 600), base + 1), audit_key(5, Some(base - 600), base + 30));
+        assert_eq!(audit_key(5, Some(base - 600), base).window_start, base - 600);
+        assert_ne!(audit_key(5, None, base), audit_key(6, None, base));
+    }
+
+    /// `gather` reads the audit facts through the cache when it has one.
+    #[tokio::test]
+    async fn gather_serves_audit_facts_from_the_cache() {
+        let (dir, storage) = temp_storage().await;
+        let log = PersistentAuditLog::open(storage, [9u8; 32]).await.unwrap();
+        log.append(AuditEvent::MemoryAccess {
+            turn_id: aivyx_core::TurnId::new(),
+            operation: aivyx_audit::MemoryOperation::Write,
+            scope: aivyx_capability::Scope::parse("memory.write").unwrap(),
+            query_or_key: "k".into(),
+        })
+        .unwrap();
+        let now = crate::activity::now_unix();
+        let pricing = aivyx_cost::Pricing::new();
+        let cache = AuditFactsCache::default();
+        // Seed the key this gather will use with a marker value.
+        let marker = AuditFacts { memories_saved: vec![42], ..Default::default() };
+        cache.get_or_compute(audit_key(log.len() as u64, None, now), || Ok::<_, String>(marker)).unwrap();
+        let mut src = BriefingSources {
+            mission_store: None,
+            schedule_store: None,
+            audit_log: Some(&log),
+            persona_proposals: None,
+            team_missions: None,
+            reminders: None,
+            memory: None,
+            pricing: &pricing,
+            audit_cache: Some(&cache),
+        };
+        let f = gather(&src, None, now).await;
+        assert_eq!(f.memories_saved, vec![42]);
+        // Without the cache, the chain is read.
+        src.audit_cache = None;
+        let f = gather(&src, None, now).await;
+        assert_eq!(f.memories_saved.len(), 1);
+        assert_ne!(f.memories_saved, vec![42]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1130,6 +1270,7 @@ mod gather_tests {
             reminders: Some(&reminders),
             memory: None,
             pricing: &pricing,
+            audit_cache: None,
         };
         let f = gather(&src, Some(now - 3_600), now).await;
         assert_eq!(f.routine_runs.len(), 2);
@@ -1190,6 +1331,7 @@ mod gather_tests {
             reminders: None,
             memory: None,
             pricing: &pricing,
+            audit_cache: None,
         };
         let f = gather(&src, Some(now - 3_600), now).await;
         assert!(f.routine_runs.is_empty());
@@ -1265,6 +1407,7 @@ mod gather_tests {
             reminders: None,
             memory: None,
             pricing: &pricing,
+            audit_cache: None,
         };
         let f = gather(&src, Some(now - 3_600), now).await;
         let mut runs = f.routine_runs.clone();
