@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-10-02
+
 ### Changed
 
 - Command Center briefing polls are cheaper: the daemon caches the audit
