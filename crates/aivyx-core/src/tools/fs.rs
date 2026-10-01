@@ -56,6 +56,7 @@
 //! any existing directory and then call `required_scope` with any
 //! input, no further I/O required.
 
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -217,6 +218,39 @@ pub fn lexical_resolve(sandbox_root: &Path, input_path: &Path) -> Option<PathBuf
 
     Some(stack.into_iter().collect())
 }
+
+/// True when any component of `path` is exactly `.git`.
+///
+/// A write (or delete) anywhere under a `.git` directory can redefine what
+/// `git` itself does on a *later*, completely unrelated command: a
+/// `core.fsmonitor` or `filter.<name>.clean`/`.smudge` entry in
+/// `.git/config` (paired with a matching `.gitattributes` line) makes the
+/// next `git status`/`diff`/`add`/`commit` run an arbitrary program, and a
+/// file dropped in `.git/hooks/` runs on the next `commit`/`checkout`/etc.
+/// `aivyx-checkpoint`'s `GitCheckpointer` runs `git add -A` **unconfined**
+/// (outside Landlock) before every mutating tool call on a checkpointed
+/// git repo (the `fs` root and the `workspace` notebook, when either is a
+/// git repo — see `crates/aivyx-core/src/agent.rs`'s `checkpointer` field
+/// and `crates/aivyx-core/src/tools/workspace.rs`). So a tool write into
+/// `.git/` turns "the agent may write a file" into "the agent may run any
+/// program," entirely outside the confinement the rest of this module
+/// exists to provide. This predicate is the shared check every mutating
+/// fs/workspace/data-writer tool runs, unconditionally, after resolving
+/// the input path and before any confirm-first/escalation logic — it is
+/// not a `[access] allow_sensitive_paths`-style opt-out-able guard.
+///
+/// Matching is on path *components*, not a substring, so a legitimate
+/// `.github/workflow.yml` or `.gitignore` (which share the `.git` prefix
+/// as text but are different path components) are unaffected.
+pub fn touches_git_metadata(path: &Path) -> bool {
+    path.components()
+        .any(|c| c == Component::Normal(OsStr::new(".git")))
+}
+
+/// Shared refusal text for every tool that blocks a write/delete under
+/// `.git` — see [`touches_git_metadata`].
+pub const GIT_METADATA_WRITE_BLOCKED: &str = "Writing inside .git is blocked: git runs programs \
+named there (hooks, filters, fsmonitor). Ask the operator to change git settings themselves.";
 
 #[async_trait]
 impl Tool for FsReadTool {
@@ -712,6 +746,17 @@ impl Tool for FsWriteTool {
             }
         };
 
+        // ---- git-metadata block (unconditional) -------------------
+        // Checked before any confirm-first/escalation logic, and never
+        // gated by `[access] allow_sensitive_paths` — see
+        // `touches_git_metadata`'s doc comment for why.
+        if touches_git_metadata(&lexical_abs) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: GIT_METADATA_WRITE_BLOCKED.to_string(),
+            });
+        }
+
         // ---- Chapter N: confirm-first when OVERWRITING -----------
         // A fresh write to a new path is not destructive and never gates;
         // clobbering an existing file is irreversible and needs
@@ -1137,6 +1182,16 @@ impl Tool for FsDeleteTool {
                 )));
             }
         };
+
+        // ---- git-metadata block (unconditional) -------------------
+        // Same shared check as `FsWriteTool::execute` — see
+        // `touches_git_metadata`'s doc comment.
+        if touches_git_metadata(&lexical_abs) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: GIT_METADATA_WRITE_BLOCKED.to_string(),
+            });
+        }
 
         // ---- Chapter N: confirm-first on this irreversible op ----
         // Keyed on the resolved path, so "todo.md" and its absolute form
@@ -1604,6 +1659,38 @@ mod tests {
 
     use crate::MessageOrigin;
     use aivyx_capability::{CapabilitySet, TrustTier};
+
+    // ---- touches_git_metadata ========================================
+
+    #[test]
+    fn touches_git_metadata_true_for_dotgit_config() {
+        assert!(touches_git_metadata(Path::new("/r/.git/config")));
+    }
+
+    #[test]
+    fn touches_git_metadata_true_for_bare_dotgit() {
+        assert!(touches_git_metadata(Path::new("/r/.git")));
+    }
+
+    #[test]
+    fn touches_git_metadata_true_for_nested_dotgit_hooks() {
+        assert!(touches_git_metadata(Path::new("/r/sub/.git/hooks/x")));
+    }
+
+    #[test]
+    fn touches_git_metadata_false_for_dotgithub_workflow() {
+        assert!(!touches_git_metadata(Path::new("/r/.github/w.yml")));
+    }
+
+    #[test]
+    fn touches_git_metadata_false_for_dotgitignore() {
+        assert!(!touches_git_metadata(Path::new("/r/.gitignore")));
+    }
+
+    #[test]
+    fn touches_git_metadata_false_for_dotgitattributes() {
+        assert!(!touches_git_metadata(Path::new("/r/.gitattributes")));
+    }
 
     /// RAII temp directory — creates `$TMPDIR/aivyx-fs-test-<uuid>/root`
     /// on construction, removes the whole tree on drop. Rolled here to
@@ -2110,6 +2197,61 @@ mod tests {
     }
 
     #[test]
+    fn write_refuses_dotgit_config_even_with_sensitive_guard_disabled() {
+        // No `with_sensitive_policy` — Portcullis is off by default. The
+        // `.git` metadata block must fire anyway: it's unconditional, not
+        // an `[access] allow_sensitive_paths`-style opt-out-able guard.
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+
+        let outcome = run_execute(
+            &tool,
+            json!({"path": ".git/config", "content": "[core]\n\tfsmonitor = /tmp/x\n"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for .git/config, got {other:?}"),
+        }
+        assert!(
+            !sandbox.root.join(".git/config").exists(),
+            ".git/config must not have been created"
+        );
+    }
+
+    #[test]
+    fn write_refuses_nested_dotgit_hooks_path() {
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "sub/.git/hooks/post-commit", "content": "#!/bin/sh\nrm -rf ~\n"}),
+        );
+        assert!(matches!(outcome, ToolOutcome::Failed(AivyxError::Tool { .. })));
+        assert!(!sandbox.root.join("sub/.git/hooks/post-commit").exists());
+    }
+
+    #[test]
+    fn write_still_allows_dotgithub_and_dotgitignore() {
+        let sandbox = SandboxDir::new();
+        let tool = build_write_tool(&sandbox);
+
+        assert!(matches!(
+            run_execute(
+                &tool,
+                json!({"path": ".github/workflows/ci.yml", "content": "name: ci\n"})
+            ),
+            ToolOutcome::Completed { .. }
+        ));
+        assert!(matches!(
+            run_execute(&tool, json!({"path": ".gitignore", "content": "/target\n"})),
+            ToolOutcome::Completed { .. }
+        ));
+    }
+
+    #[test]
     fn portcullis_refuses_writes_to_persistence_and_secret_paths() {
         use crate::sensitive_paths::SensitivePolicy;
         let sandbox = SandboxDir::new();
@@ -2558,6 +2700,37 @@ mod tests {
         // An ordinary delete still succeeds.
         assert!(matches!(
             run_execute(&tool, json!({ "path": "notes.md" })),
+            ToolOutcome::Completed { .. }
+        ));
+    }
+
+    #[test]
+    fn delete_refuses_dotgit_config_even_with_sensitive_guard_disabled() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file(".git/config", b"[core]\n\trepositoryformatversion = 0\n");
+        let tool = build_delete_tool(&sandbox);
+
+        let outcome = run_execute(&tool, json!({"path": ".git/config"}));
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for .git/config, got {other:?}"),
+        }
+        assert!(
+            sandbox.root.join(".git/config").exists(),
+            ".git/config must not have been deleted"
+        );
+    }
+
+    #[test]
+    fn delete_still_allows_dotgitignore() {
+        let sandbox = SandboxDir::new();
+        sandbox.write_file(".gitignore", b"/target\n");
+        let tool = build_delete_tool(&sandbox);
+
+        assert!(matches!(
+            run_execute(&tool, json!({"path": ".gitignore"})),
             ToolOutcome::Completed { .. }
         ));
     }

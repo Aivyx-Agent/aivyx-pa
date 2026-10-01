@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use aivyx_capability::Scope;
 
-use crate::tools::fs::lexical_resolve;
+use crate::tools::fs::{GIT_METADATA_WRITE_BLOCKED, lexical_resolve, touches_git_metadata};
 use crate::{AivyxError, GitCheckpointer, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 
 /// Seed README written into a fresh workspace (only when absent — the agent's
@@ -417,6 +417,11 @@ impl Tool for WorkspaceWriteTool {
         let Some(lexical_abs) = resolve_in_workspace(&self.root, &path) else {
             return tool_fail(self.id, format!("path {path:?} escapes the workspace"));
         };
+        // git-metadata block (unconditional) — see `touches_git_metadata`'s
+        // doc comment in `tools::fs`.
+        if touches_git_metadata(&lexical_abs) {
+            return tool_fail(self.id, GIT_METADATA_WRITE_BLOCKED);
+        }
         if let Some(parent) = lexical_abs.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return tool_fail(self.id, format!("cannot create parent of {path:?}: {e}"));
@@ -549,6 +554,11 @@ impl Tool for WorkspaceDeleteTool {
         if lexical_abs.as_path() == &*self.root {
             return tool_fail(self.id, "cannot delete the workspace root itself");
         }
+        // git-metadata block (unconditional) — see `touches_git_metadata`'s
+        // doc comment in `tools::fs`.
+        if touches_git_metadata(&lexical_abs) {
+            return tool_fail(self.id, GIT_METADATA_WRITE_BLOCKED);
+        }
         let abs = match canonical_fence_parent(&self.root, &lexical_abs) {
             Ok(p) => p,
             Err(e) => return tool_fail(self.id, e),
@@ -617,6 +627,14 @@ impl Tool for WorkspaceNoteTool {
         let Some(lexical_abs) = resolve_in_workspace(&self.root, &rel) else {
             return tool_fail(self.id, "internal: journal path escaped workspace");
         };
+        // git-metadata block (unconditional) — `category` survives
+        // `trim_matches` with interior `/`/`.` intact (e.g. `x/.git/hooks`
+        // trims only the leading/trailing char class), so this is reachable
+        // through the model-influenced `category` field, not just `path`.
+        // See `touches_git_metadata`'s doc comment in `tools::fs`.
+        if touches_git_metadata(&lexical_abs) {
+            return tool_fail(self.id, GIT_METADATA_WRITE_BLOCKED);
+        }
         if let Some(parent) = lexical_abs.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -857,6 +875,64 @@ mod tests {
         );
         let body2 = std::fs::read_to_string(root.join(&appended)).unwrap();
         assert!(body2.contains("today I learned X") && body2.contains("second thought"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn write_refuses_dotgit_config() {
+        let (root, tools) = tools_at("write-dotgit");
+        let outcome = run_execute(
+            named(&tools, "workspace.write"),
+            json!({"path": ".git/config", "content": "[core]\n\tfsmonitor = /tmp/x\n"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for .git/config, got {other:?}"),
+        }
+        assert!(!root.join(".git/config").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_refuses_dotgit_config() {
+        let (root, tools) = tools_at("delete-dotgit");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join(".git/config"), b"[core]\n").unwrap();
+
+        let outcome = run_execute(
+            named(&tools, "workspace.delete"),
+            json!({"path": ".git/config"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for .git/config, got {other:?}"),
+        }
+        assert!(root.join(".git/config").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn note_refuses_a_category_that_smuggles_a_dotgit_component() {
+        // `category` is sanitized with `trim_matches`, which only strips
+        // leading/trailing non-alphanumeric chars — an interior `/.git/`
+        // survives untouched, so `category` is a second model-influenced
+        // path input alongside `path` on the other tools.
+        let (root, tools) = tools_at("note-dotgit");
+        let outcome = run_execute(
+            named(&tools, "workspace.note"),
+            json!({"content": "pwned", "category": "x/.git/hooks"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for a .git-smuggling category, got {other:?}"),
+        }
+        assert!(!root.join("x/.git").exists());
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aivyx_capability::Scope;
-use aivyx_core::tools::fs::lexical_resolve;
+use aivyx_core::tools::fs::{GIT_METADATA_WRITE_BLOCKED, lexical_resolve, touches_git_metadata};
 use aivyx_core::{AivyxError, ToolId, ToolOutcome};
 use serde_json::Value;
 
@@ -176,6 +176,15 @@ impl ReaderSandbox {
                 return Err(fail(tool, format!("path {path_str:?} escapes the sandbox root")))
             }
         };
+
+        // git-metadata block (unconditional) — shared by data.xlsx.write /
+        // data.pdf.write, same as fs.write/fs.delete/workspace.*. Checked
+        // before the overwrite/confirm logic below, and never gated by
+        // `[access] allow_sensitive_paths`. See `touches_git_metadata`'s
+        // doc comment in `aivyx_core::tools::fs`.
+        if touches_git_metadata(&lexical) {
+            return Err(fail(tool, GIT_METADATA_WRITE_BLOCKED.to_string()));
+        }
 
         if lexical.exists() {
             if !overwrite {
@@ -430,5 +439,50 @@ mod tests {
         let gf = sb.read_guarded(&json!({"path": "hello.txt"}), ToolId::new()).unwrap();
         assert_eq!(gf.bytes, b"hello world");
         assert!(!gf.truncated);
+    }
+
+    #[test]
+    fn resolve_write_target_refuses_dotgit_config() {
+        // Shared by data.xlsx.write / data.pdf.write — the git-metadata
+        // block must fire here too, unconditionally (no sensitive-policy
+        // opt-in needed), matching fs.write/fs.delete/workspace.*.
+        let root = scratch_root();
+        let sb = ReaderSandbox::new(&root).unwrap();
+        let err = sb
+            .resolve_write_target(&json!({"path": ".git/config"}), ToolId::new())
+            .expect_err("must refuse a write target under .git");
+        match err {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected Failed(Tool), got {other:?}"),
+        }
+        assert!(!root.join(".git/config").exists());
+    }
+
+    #[test]
+    fn resolve_write_target_refuses_dotgit_even_with_overwrite_true() {
+        // The block must come before the overwrite/confirm logic, not be
+        // bypassable by `overwrite: true`.
+        let root = scratch_root();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join(".git/config"), b"[core]\n").unwrap();
+        let sb = ReaderSandbox::new(&root).unwrap();
+        let err = sb
+            .resolve_write_target(
+                &json!({"path": ".git/config", "overwrite": true}),
+                ToolId::new(),
+            )
+            .expect_err("must refuse even with overwrite: true");
+        assert!(matches!(err, ToolOutcome::Failed(AivyxError::Tool { .. })));
+    }
+
+    #[test]
+    fn resolve_write_target_still_allows_ordinary_paths() {
+        let root = scratch_root();
+        let sb = ReaderSandbox::new(&root).unwrap();
+        assert!(sb
+            .resolve_write_target(&json!({"path": "report.xlsx"}), ToolId::new())
+            .is_ok());
     }
 }

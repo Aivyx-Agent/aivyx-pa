@@ -353,6 +353,36 @@ mod tests {
         assert!(matches!(out, ToolOutcome::Failed(_)));
     }
 
+    #[tokio::test]
+    async fn refuses_to_write_under_dotgit() {
+        let root = scratch_root();
+        let sandbox = ReaderSandbox::new(&root).unwrap();
+        let tool = DataXlsxWriteTool::new(sandbox);
+        let (agent_id, session_id, turn_id) = ctx_parts();
+        let channel = NoopChannel;
+        let audit = NoopAudit;
+        let cancellation = aivyx_core::CancellationToken::new();
+        let ctx = ToolContext {
+            agent_id,
+            session_id,
+            turn_id,
+            channel: &channel,
+            audit: &audit,
+            cancellation: &cancellation,
+            message_origin: aivyx_core::MessageOrigin::Operator,
+        };
+        let out = tool
+            .execute(json!({"path": ".git/config", "rows": [["x"]]}), &ctx)
+            .await;
+        match out {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for .git/config, got {other:?}"),
+        }
+        assert!(!root.join(".git/config").exists());
+    }
+
     #[test]
     fn tool_metadata_is_sound() {
         let dir = std::env::temp_dir();
