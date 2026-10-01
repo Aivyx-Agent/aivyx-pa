@@ -6717,6 +6717,8 @@ async fn run_async(
     // the level's intent is reported but no uncapped loop is conjured.
     let autonomy_posture =
         aivyx_config::resolve_posture(autonomy_level.value, &autonomy_overrides, None);
+    // The `manual` level: every change asks first (TurnSafety::with_confirm_all).
+    let manual_autonomy = matches!(autonomy_posture.gate, aivyx_config::GatePosture::ConfirmAll);
     let loop_state: Option<aivyx_channel::loop_driver::SharedLoopState> = match &config_loop {
         Some(c) if autonomy_posture.arms_loop(c.enabled) => {
             if !c.enabled {
@@ -9637,6 +9639,7 @@ async fn run_async(
             injection_scan_enabled,
             injection_scan_exempt_for_factory.clone(),
         )
+        .with_confirm_all(manual_autonomy)
         .apply(child_agent);
 
         Ok(Box::new(child_agent) as Box<dyn Agent>)
@@ -10188,6 +10191,7 @@ async fn run_async(
             injection_scan_enabled,
             injection_scan_exempt.clone(),
         )
+        .with_confirm_all(manual_autonomy)
         .apply(daemon_agent);
         let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
 
@@ -10955,7 +10959,8 @@ async fn run_async(
                     cycle_detection,
                     injection_scan_enabled,
                     injection_scan_exempt.clone(),
-                ),
+                )
+                .with_confirm_all(manual_autonomy),
                 // Task 4 fix round 1 — same `[access] confirm_destructive`
                 // posture as the tool-level fs.write/fs.delete/git.commit
                 // gate wired above from this same `confirm_destructive`
@@ -11546,7 +11551,8 @@ async fn run_async(
                         cycle_detection,
                         injection_scan_enabled,
                         injection_scan_exempt.clone(),
-                    ),
+                    )
+                    .with_confirm_all(manual_autonomy),
                     checkpointer: checkpointer.clone(),
                     // Task 4 fix round 1 — same `[access] confirm_destructive`
                     // posture as the Local arm and the tool-level

@@ -281,6 +281,10 @@ pub struct ConcreteAgent {
     /// opens a later turn in which that tool may run once
     /// (`aivyx_core::confirm`).
     confirms: crate::confirm::OperatorConfirmations,
+    /// The `manual` autonomy level: every tool call that can change
+    /// something (anything outside `aivyx_capability::is_read_only_base`)
+    /// asks the operator first, in operator-originated turns. Off by default.
+    confirm_all: bool,
     /// Model routing Part 3b — where this agent marks a conversation
     /// routing-tainted (so it never escalates to a cloud endpoint). `None`
     /// (the default) runs no taint machinery at all: the daemon attaches
@@ -326,6 +330,7 @@ impl ConcreteAgent {
             injection_scan_exempt: std::collections::BTreeSet::new(),
             confirm_destructive: false,
             confirms: Default::default(),
+            confirm_all: false,
             taint: None,
             taint_tool_prefixes: Vec::new(),
             taint_channels: Vec::new(),
@@ -447,6 +452,12 @@ impl ConcreteAgent {
     /// withheld-integration-scope confirm gate. See the
     /// [`Self::confirm_destructive`] field doc for the full contract.
     /// `false` (the default) preserves pre-Task-4 behavior byte-for-byte.
+    /// The `manual` autonomy level (see the `confirm_all` field).
+    pub fn with_confirm_all(mut self, on: bool) -> Self {
+        self.confirm_all = on;
+        self
+    }
+
     pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
         self.confirm_destructive = confirm;
         self
@@ -1082,7 +1093,12 @@ pub(crate) fn approval_summary(tool_name: &str, input: &serde_json::Value) -> St
             })
         });
     match what {
-        Some(w) => format!("{tool_name} {}", w.chars().take(80).collect::<String>()),
+        // Keep the END of a long value: for a path that's the file name.
+        Some(w) if w.chars().count() > 80 => {
+            let tail: String = w.chars().rev().take(79).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("{tool_name} …{tail}")
+        }
+        Some(w) => format!("{tool_name} {w}"),
         None => tool_name.to_string(),
     }
 }
@@ -1266,6 +1282,8 @@ pub struct TurnSafety {
     cycle_config: Option<CycleConfig>,
     injection_scan_enabled: bool,
     injection_scan_exempt: std::collections::BTreeSet<String>,
+    /// The `manual` autonomy level: every change asks first.
+    confirm_all: bool,
 }
 
 impl Default for TurnSafety {
@@ -1283,6 +1301,7 @@ impl Default for TurnSafety {
             cycle_config: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
+            confirm_all: false,
         }
     }
 }
@@ -1308,7 +1327,15 @@ impl TurnSafety {
                 .then(CycleConfig::default_enabled),
             injection_scan_enabled,
             injection_scan_exempt,
+            confirm_all: false,
         }
+    }
+
+    /// The `manual` autonomy level: every tool call that can change
+    /// something asks the operator first (operator-originated turns only).
+    pub fn with_confirm_all(mut self, on: bool) -> Self {
+        self.confirm_all = on;
+        self
     }
 
     /// Autonomous posture (team / mission agents): the small-cycle breaker is a
@@ -1327,6 +1354,7 @@ impl TurnSafety {
             cycle_config: Some(CycleConfig::default_enabled()),
             injection_scan_enabled,
             injection_scan_exempt,
+            confirm_all: false,
         }
     }
 
@@ -1335,6 +1363,7 @@ impl TurnSafety {
     /// `TurnSafety::<posture>(...).apply(agent)`.
     pub fn apply(&self, agent: ConcreteAgent) -> ConcreteAgent {
         let agent = agent.with_cycle_detection(self.cycle_config.clone());
+        let agent = agent.with_confirm_all(self.confirm_all);
         let agent = agent
             .with_injection_scan_enabled(self.injection_scan_enabled)
             .with_injection_scan_exempt(self.injection_scan_exempt.clone());
@@ -1863,19 +1892,36 @@ impl ConcreteAgent {
         // (the turn ends with the reason below), and in the operator's next
         // turn this tool may run once. Plain chat has no approve-and-resume
         // step, so without this the integration could never run at all.
-        let needs_destructive_confirmation = self.confirm_destructive
+        // Why this call must ask first, if it must: a withheld integration
+        // write (confirm-first), or — at the `manual` autonomy level — any
+        // change in an operator's turn.
+        let ask_reason = if self.confirm_destructive
             && aivyx_capability::is_withheld_integration_base(needed.base())
-            && !operator_approved
-            && !self.confirms.take_refusal(ctx.session_id, turn_id, tool_name);
+        {
+            Some(format!(
+                "{tool_name} needs approval before it runs (`{}` is a third-party \
+                 action Aivyx PA never takes unasked).",
+                needed.base()
+            ))
+        } else if self.confirm_all
+            && message_origin == MessageOrigin::Operator
+            && !aivyx_capability::is_read_only_base(needed.base())
+        {
+            Some(format!(
+                "{tool_name} would change something, and the autonomy level is manual: \
+                 every change needs approval first."
+            ))
+        } else {
+            None
+        };
+        let ask_reason = ask_reason.filter(|_| {
+            !operator_approved && !self.confirms.take_refusal(ctx.session_id, turn_id, tool_name)
+        });
 
         let step_start = Instant::now();
-        let mut outcome = if needs_destructive_confirmation {
+        let mut outcome = if let Some(reason) = ask_reason {
             ToolOutcome::RequiresEscalation {
-                reason: format!(
-                    "{tool_name} needs approval before it runs (`{}` is a third-party \
-                     action Aivyx PA never takes unasked).",
-                    needed.base()
-                ),
+                reason,
                 // Stamped below like any other RequiresEscalation (RN.3).
                 scope: None,
             }
@@ -6484,6 +6530,61 @@ mod tests {
         );
     }
 
+    // ---- Manual autonomy: every change asks first ----
+
+    fn one_call_plan(tool_id: ToolId) -> Vec<NextStep> {
+        delete_plan(tool_id, json!({}))
+    }
+
+    #[tokio::test]
+    async fn manual_asks_before_a_change_and_runs_it_once_approved() {
+        let tool = Arc::new(FakeTool::new_bare("memory.write", "memory.write"));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let agent = make_agent(caps, vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()))
+            .with_confirm_all(true);
+        let channel = ApprovingChannel::new(&[crate::Approval::Approved]);
+        let out = agent.turn(Message::text(channel.session_id(), "note it"), &channel).await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        let asked = channel.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].tool, "memory.write");
+    }
+
+    #[tokio::test]
+    async fn manual_doesnt_ask_about_reads() {
+        let tool = Arc::new(FakeTool::new_bare("fs.read", "fs.read"));
+        let agent = make_agent(fs_read_caps(), vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()))
+            .with_confirm_all(true);
+        let channel = ApprovingChannel::new(&[]);
+        let out = agent.turn(Message::text(channel.session_id(), "read it"), &channel).await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        assert!(channel.asked.lock().unwrap().is_empty(), "a read never asks");
+    }
+
+    #[tokio::test]
+    async fn manual_doesnt_apply_to_unattended_turns() {
+        let tool = Arc::new(FakeTool::new_bare("memory.write", "memory.write"));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let agent = make_agent(caps, vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()))
+            .with_confirm_all(true);
+        let channel = ApprovingChannel::new(&[]);
+        let msg = Message::text(channel.session_id(), "routine").system_originated();
+        let out = agent.turn(msg, &channel).await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        assert!(channel.asked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn manual_off_runs_changes_without_asking() {
+        let tool = Arc::new(FakeTool::new_bare("memory.write", "memory.write"));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let agent = make_agent(caps, vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()));
+        let channel = ApprovingChannel::new(&[]);
+        let out = agent.turn(Message::text(channel.session_id(), "note it"), &channel).await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        assert!(channel.asked.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn approval_summary_names_the_target() {
         assert_eq!(
@@ -6495,6 +6596,10 @@ mod tests {
             "kitchen.order.send PO-7"
         );
         assert_eq!(approval_summary("x.y", &json!({"count": 3})), "x.y");
+        let long = format!("/home/sam/{}/colours.txt", "deep/".repeat(30));
+        let summary = approval_summary("fs.write", &json!({ "path": long }));
+        assert!(summary.ends_with("/colours.txt"), "{summary}");
+        assert!(summary.starts_with("fs.write …"), "{summary}");
     }
 
     #[tokio::test]

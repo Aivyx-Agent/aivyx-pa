@@ -5,6 +5,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **The `manual` autonomy level does what it says.** Every tool call that can
+  change something — a note, a file, a command, a message — asks you first
+  (Studio card, terminal prompt; reply "yes" in chat apps); looking things up
+  doesn't. Scheduled routines aren't affected. It used to behave like
+  `assisted`.
+
 ## [0.13.0] — 2026-10-01
 
 ### Added

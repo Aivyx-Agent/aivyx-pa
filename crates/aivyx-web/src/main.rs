@@ -7085,7 +7085,7 @@ fn SettingsPanel() -> Element {
                         class: "input",
                         value: "{auto_level}",
                         onchange: move |e| auto_level.set(e.value()),
-                        option { value: "manual", "manual — like assisted for now (asking before every step is coming)" }
+                        option { value: "manual", "manual — asks before every change it makes (not before reading)" }
                         option { value: "assisted", "assisted — irreversible steps ask you first (default)" }
                         option { value: "supervised", "supervised — may work its backlog on its own; irreversible steps still ask" }
                         option { value: "autonomous", "autonomous — works its backlog on its own, within caps; irreversible steps still ask" }

@@ -577,6 +577,63 @@ pub fn is_irreversible_base(base: &str) -> bool {
     IRREVERSIBLE_BASES.contains(&base)
 }
 
+/// Capability bases whose tools only LOOK — read, list, search, status,
+/// fetch, compute — and change nothing. At the `manual` autonomy level every
+/// tool call outside this list asks the operator first, so the list errs
+/// small: an unknown or unlisted base counts as a change. (The `workspace`
+/// base covers the assistant's notebook reads and writes alike, so it is not
+/// here.)
+const READ_ONLY_BASES: &[&str] = &[
+    "app.read",
+    "audit.read",
+    "budget.read",
+    "calc.eval",
+    "calendar.read",
+    "channel.receive",
+    "config.read",
+    "contacts.read",
+    "convert.units",
+    "date.compute",
+    "drive.read",
+    "email.read",
+    "file_watch.list",
+    "fs.metadata",
+    "fs.read",
+    "git.read",
+    "graph.read",
+    "health.read",
+    "kitchen.read",
+    "llm.call",
+    "llm.embed",
+    "memory.read",
+    "mission.list",
+    "mission.status",
+    "n8n.read",
+    "net.dns",
+    "net.fetch",
+    "notion.read",
+    "obsidian.read",
+    "ollama.list",
+    "ollama.show",
+    "remind.read",
+    "routing.read",
+    "routing.status",
+    "schedule.list",
+    "skill_defaults.list",
+    "skill_defaults.read",
+    "skills.invoke",
+    "skills.list",
+    "task.read",
+    "web.search",
+    "webhook.list",
+];
+
+/// Whether a capability `base` only looks and changes nothing (see
+/// [`READ_ONLY_BASES`]). Unknown bases return `false`: they count as a change.
+pub fn is_read_only_base(base: &str) -> bool {
+    READ_ONLY_BASES.contains(&base)
+}
+
 /// Third-party/OAuth integration write/send/delete/archive bases —
 /// Task 4 (HIGH security fix, 2026-09-16 audit). Derived from the real
 /// `Scope::parse(...)` call sites in `aivyx-gmail`, `aivyx-drive`,
@@ -1405,6 +1462,19 @@ mod tests {
         // Unknown bases are not classified irreversible — the allowlist's
         // deny-by-default is what stops them auto-approving.
         assert!(!is_irreversible_base("totally.unknown"));
+    }
+
+    #[test]
+    fn read_only_bases_are_known_and_never_irreversible() {
+        for base in READ_ONLY_BASES {
+            assert!(KNOWN_BASES.contains(base), "{base} isn't a known base");
+            assert!(!is_irreversible_base(base), "{base} can't be both");
+            assert!(!is_withheld_integration_base(base), "{base} can't be both");
+        }
+        for changes in ["fs.write", "fs.delete", "memory.write", "shell.exec", "workspace"] {
+            assert!(!is_read_only_base(changes), "{changes} changes something");
+        }
+        assert!(!is_read_only_base("totally.unknown"), "unknown counts as a change");
     }
 
     /// Drift guard: every irreversible base must be a real `KNOWN_BASES` entry,

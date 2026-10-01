@@ -27,17 +27,18 @@ confirmed before it's applied — you can't bump access by accident.
 ## Autonomy
 
 Autonomy is how much your assistant does on its own. Set it in **Settings →
-Autonomy** or with `aivyx-pa autonomy`. Today the level changes two things:
+Autonomy** or with `aivyx-pa autonomy`. Today the level changes three things:
 
+- **What asks you first.** At `manual`, every change it makes — saving a note,
+  writing a file, running a command — asks first (looking things up doesn't).
+  From `assisted` *(the default)* up, only irreversible steps ask. At
+  `unleashed` nothing asks; that level is only for an isolated machine you're
+  prepared to let it change.
 - **Whether it may work through its backlog on its own** (the autonomous loop):
-  off at `manual` and `assisted` *(the default)*, available from `supervised`
-  up.
-- **Whether irreversible steps ask you first:** yes at every level except
-  `unleashed`, which is only for an isolated machine you're prepared to let it
-  change.
+  off at `manual` and `assisted`, available from `supervised` up.
 
-Finer differences between the levels (such as `manual` asking before every
-step) are still being built. Whatever the level, a scheduled or unattended run
+Finer differences between the upper levels (batching approvals at
+`supervised`) are still being built. Whatever the level, a scheduled or unattended run
 never waits for an answer — an irreversible step there is refused, not taken —
 and the assistant can never raise its own autonomy or access; only you can.
 
