@@ -1,0 +1,476 @@
+//! The Command Center as a logbook: an instrument strip, a greeting, what
+//! needs the operator, what the assistant did since they were last here, and
+//! what's coming up — all from the daemon's `Briefing`. The helpers at the
+//! top are pure (tested natively); the components below render them.
+
+use aivyx_ipc::briefing::{Briefing, NeedsYouAction, NeedsYouItem};
+use aivyx_ipc::protocol::{FrontendMessage, QueryPayload};
+use dioxus::prelude::*;
+
+use crate::{ApprovalCard, Dashboard, PendingApproval, Sender, View};
+
+/// The headline for a local hour (0–23).
+pub fn greeting(hour: u32) -> &'static str {
+    match hour {
+        5..=11 => "Good morning.",
+        12..=17 => "Good afternoon.",
+        _ => "Good evening.",
+    }
+}
+
+/// "just now", "12 min ago", "9 h ago", "3 days ago".
+pub fn ago(then: i64, now: i64) -> String {
+    let d = (now - then).max(0);
+    match d {
+        0..=59 => "just now".to_string(),
+        60..=3_599 => format!("{} min ago", d / 60),
+        3_600..=86_399 => format!("{} h ago", d / 3_600),
+        _ if d < 2 * 86_400 => "1 day ago".to_string(),
+        _ => format!("{} days ago", d / 86_400),
+    }
+}
+
+pub fn hhmm(hour: u32, minute: u32) -> String {
+    format!("{hour:02}:{minute:02}")
+}
+
+/// A "Coming up" time: today → "19:00", tomorrow → "tmrw 07:00",
+/// later → "in 3 d · 07:00".
+pub fn when_label(day_offset: i64, hhmm: &str) -> String {
+    match day_offset {
+        i64::MIN..=0 => hhmm.to_string(),
+        1 => format!("tmrw {hhmm}"),
+        n => format!("in {n} d · {hhmm}"),
+    }
+}
+
+pub fn log_heading(b: &Briefing) -> &'static str {
+    if b.window_capped {
+        "In the last 7 days"
+    } else if b.last_active_unix.is_none() {
+        "In the last 24 hours"
+    } else {
+        "Since you were last here"
+    }
+}
+
+/// The spend instrument and whether it should warn (≥ 80 % of the day cap).
+pub fn spend_reading(spend: Option<f64>, per_day: Option<f64>) -> (String, bool) {
+    match (spend, per_day) {
+        (None, _) => ("spend —".to_string(), false),
+        (Some(s), Some(cap)) if cap > 0.0 => {
+            (format!("${s:.2} of ${cap:.2} · 24 h"), s >= 0.8 * cap)
+        }
+        (Some(s), _) => (format!("${s:.2} · 24 h"), false),
+    }
+}
+
+pub fn more_line(n: u32) -> Option<String> {
+    (n > 0).then(|| format!("and {n} more → Audit"))
+}
+
+/// The latest briefing, when it arrived, and the last failed action.
+#[derive(Clone, Default, PartialEq)]
+pub struct BriefingState {
+    pub briefing: Option<Briefing>,
+    /// `Date.now()` when `briefing` arrived — the "as of" line when offline.
+    pub as_of_ms: f64,
+    pub notice: Option<String>,
+}
+
+pub fn briefing_query() -> FrontendMessage {
+    FrontendMessage::Query { id: "cc-briefing".to_string(), payload: QueryPayload::GetBriefing }
+}
+
+/// Local (hour, minute, day number) for a unix time — wasm only.
+fn local_parts(unix: i64) -> (u32, u32, i64) {
+    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(unix as f64 * 1000.0));
+    let offset_ms = d.get_timezone_offset() * 60_000.0;
+    let day = ((unix as f64 * 1000.0 - offset_ms) / 86_400_000.0).floor() as i64;
+    (d.get_hours(), d.get_minutes(), day)
+}
+
+fn now_unix() -> i64 {
+    (js_sys::Date::now() / 1000.0) as i64
+}
+
+fn go(mut view: Signal<View>, slug: &str) {
+    if let Some(v) = View::from_slug(slug) {
+        view.set(v);
+    }
+}
+
+/// Send an action, then re-ask for the briefing on the same connection, so
+/// the answer already reflects it (frames are handled in order). A new
+/// action clears the last failure's notice.
+fn act(ws: Sender, mut state: Signal<BriefingState>, msg: FrontendMessage) {
+    state.write().notice = None;
+    ws.send(msg);
+    ws.send(briefing_query());
+}
+
+fn action_query(payload: QueryPayload) -> FrontendMessage {
+    FrontendMessage::Query { id: "cc-action".to_string(), payload }
+}
+
+#[component]
+fn InstrumentStrip(
+    dashboard: Dashboard,
+    connected: bool,
+    briefing: Option<Briefing>,
+    view: Signal<View>,
+) -> Element {
+    let model = match &dashboard.settings {
+        Some(s) => {
+            let ctx = s
+                .num_ctx
+                .map(|n| format!("{}k ctx", n / 1024))
+                .unwrap_or_else(|| "default ctx".into());
+            format!("{} · {ctx}", s.model)
+        }
+        None => "model —".to_string(),
+    };
+    let per_day = dashboard.settings.as_ref().and_then(|s| s.budget.per_day_usd);
+    let (spend, spend_warn) =
+        spend_reading(briefing.as_ref().and_then(|b| b.spend_24h_usd), per_day);
+    let memory = briefing
+        .as_ref()
+        .and_then(|b| b.memory_topics)
+        .map(|n| format!("{n} topics"))
+        .unwrap_or_else(|| "memory —".into());
+    let (chain, chain_bad) = match dashboard.chain_ok {
+        Some(true) => ("◆ chain sealed", false),
+        Some(false) => ("◆ chain broken", true),
+        None => ("◆ chain …", false),
+    };
+    rsx! {
+        div { class: "cc-strip",
+            button {
+                class: if connected { "cc-reading" } else { "cc-reading bad" },
+                onclick: move |_| go(view, "sessions"),
+                if connected { "● daemon" } else { "● offline" }
+            }
+            button { class: "cc-reading", onclick: move |_| go(view, "models"), "{model}" }
+            button {
+                class: if spend_warn { "cc-reading warn" } else { "cc-reading" },
+                onclick: move |_| go(view, "settings"),
+                "{spend}"
+            }
+            button { class: "cc-reading", onclick: move |_| go(view, "memory"), "{memory}" }
+            button {
+                class: if chain_bad { "cc-reading bad" } else { "cc-reading" },
+                onclick: move |_| go(view, "audit"),
+                "{chain}"
+            }
+        }
+    }
+}
+
+#[component]
+fn NeedsYouCard(item: NeedsYouItem, view: Signal<View>) -> Element {
+    let ws = use_context::<Sender>();
+    let state = use_context::<Signal<BriefingState>>();
+    let link = item.link.clone();
+    let buttons = match item.action.clone() {
+        NeedsYouAction::MissionGate { mission_id, gate_id } => {
+            let (m2, g2) = (mission_id.clone(), gate_id.clone());
+            rsx! {
+                button {
+                    class: "btn",
+                    onclick: move |_| act(ws, state, FrontendMessage::ResolveGate {
+                        mission_id: mission_id.clone(),
+                        gate_id: gate_id.clone(),
+                        approved: true,
+                    }),
+                    "Approve"
+                }
+                button {
+                    class: "btn ghost",
+                    onclick: move |_| act(ws, state, FrontendMessage::ResolveGate {
+                        mission_id: m2.clone(),
+                        gate_id: g2.clone(),
+                        approved: false,
+                    }),
+                    "Deny"
+                }
+            }
+        }
+        NeedsYouAction::TeamGate { mission_id, step } => {
+            let (m2, s2) = (mission_id.clone(), step.clone());
+            rsx! {
+                button {
+                    class: "btn",
+                    onclick: move |_| act(ws, state, action_query(QueryPayload::ResolveTeamGate {
+                        mission_id: mission_id.clone(),
+                        step: step.clone(),
+                        approve: true,
+                    })),
+                    "Approve"
+                }
+                button {
+                    class: "btn ghost",
+                    onclick: move |_| act(ws, state, action_query(QueryPayload::ResolveTeamGate {
+                        mission_id: m2.clone(),
+                        step: s2.clone(),
+                        approve: false,
+                    })),
+                    "Deny"
+                }
+            }
+        }
+        NeedsYouAction::Reminder { id } => {
+            let id2 = id.clone();
+            rsx! {
+                button {
+                    class: "btn",
+                    onclick: move |_| act(ws, state, action_query(QueryPayload::CompleteReminder { id: id.clone() })),
+                    "Done"
+                }
+                button {
+                    class: "btn ghost",
+                    onclick: move |_| act(ws, state, action_query(QueryPayload::SnoozeReminder { id: id2.clone(), secs: 3_600 })),
+                    "Snooze 1 h"
+                }
+            }
+        }
+        NeedsYouAction::Review => rsx! {
+            button { class: "btn", onclick: move |_| go(view, &link), "Review" }
+        },
+        NeedsYouAction::Look => rsx! {
+            button { class: "btn ghost", onclick: move |_| go(view, &link), "Open" }
+        },
+    };
+    rsx! {
+        div { class: "cc-card",
+            p { class: "cc-sentence", "{item.sentence}" }
+            if let Some(d) = &item.detail {
+                p { class: "muted", "{d}" }
+            }
+            div { class: "cc-actions", {buttons} }
+        }
+    }
+}
+
+/// One rendered line of the log or of "Coming up".
+#[derive(Clone, PartialEq)]
+struct Row {
+    time: String,
+    sentence: String,
+    warn: bool,
+    link: String,
+}
+
+/// The whole home screen.
+#[component]
+pub fn Logbook(
+    dashboard: Dashboard,
+    connected: bool,
+    view: Signal<View>,
+    first_visit: bool,
+    name: String,
+) -> Element {
+    let state = use_context::<Signal<BriefingState>>();
+    let pending = use_context::<Signal<Option<PendingApproval>>>();
+    let s = state();
+    let now = now_unix();
+    let (hour, _, today) = local_parts(now);
+    let date_line = String::from(js_sys::Date::new_0().to_date_string());
+    let last_here = s
+        .briefing
+        .as_ref()
+        .and_then(|b| b.last_active_unix)
+        .map(|t| format!(" · last here {}", ago(t, now)));
+    let as_of = (!connected && s.as_of_ms > 0.0).then(|| {
+        let (h, m, _) = local_parts((s.as_of_ms / 1000.0) as i64);
+        format!(" · as of {}", hhmm(h, m))
+    });
+
+    rsx! {
+        div { class: if connected { "cc-page" } else { "cc-page stale" },
+            InstrumentStrip { dashboard: dashboard.clone(), connected, briefing: s.briefing.clone(), view }
+            if first_visit {
+                div { class: "glass-card welcome-card",
+                    h3 { "Start here: say hi to {name}" }
+                    p { class: "muted",
+                        "Chat is where you ask for things — try “What can you help me with?” "
+                        "This page fills in as it works: what needs you, what it did, and what's next."
+                    }
+                    div { class: "welcome-actions",
+                        button { class: "btn", onclick: move |_| go(view, "chat"), "Open Chat" }
+                        button { class: "btn ghost", onclick: move |_| go(view, "guide"), "Read the guide" }
+                    }
+                }
+            }
+            h1 { class: "cc-greeting", "{greeting(hour)}" }
+            p { class: "label-tech cc-dateline",
+                "{date_line}"
+                if let Some(l) = last_here {
+                    "{l}"
+                }
+                if let Some(a) = as_of {
+                    "{a}"
+                }
+            }
+            match &s.briefing {
+                None => rsx! { p { class: "label-tech", "Reading the record…" } },
+                Some(b) => rsx! {
+                    Sections { briefing: b.clone(), notice: s.notice.clone(), pending: pending(), view, today }
+                },
+            }
+        }
+    }
+}
+
+/// "Needs you", the log, and "Coming up" for a loaded briefing.
+#[component]
+fn Sections(
+    briefing: Briefing,
+    notice: Option<String>,
+    pending: Option<PendingApproval>,
+    view: Signal<View>,
+    today: i64,
+) -> Element {
+    let b = &briefing;
+    let count = b.needs_you.len() + usize::from(pending.is_some());
+    let log: Vec<Row> = b
+        .log
+        .iter()
+        .map(|l| {
+            let (h, m, _) = local_parts(l.at_unix);
+            Row { time: hhmm(h, m), sentence: l.sentence.clone(), warn: l.warn, link: l.link.clone() }
+        })
+        .collect();
+    let upcoming: Vec<Row> = b
+        .coming_up
+        .iter()
+        .map(|u| {
+            let time = match u.at_unix {
+                Some(t) => {
+                    let (h, m, day) = local_parts(t);
+                    when_label(day - today, &hhmm(h, m))
+                }
+                None => "now".to_string(),
+            };
+            Row { time, sentence: u.sentence.clone(), warn: false, link: u.link.clone() }
+        })
+        .collect();
+    let heading = log_heading(b);
+    let more = more_line(b.log_more);
+
+    rsx! {
+        h2 { class: "label-tech cc-needs", "Needs you · {count}" }
+        if let Some(n) = notice {
+            p { class: "cc-notice", "{n}" }
+        }
+        if let Some(p) = pending {
+            ApprovalCard { p }
+        }
+        if count == 0 {
+            p { class: "cc-quiet", "Nothing needs you." }
+        }
+        for item in b.needs_you.iter() {
+            NeedsYouCard { key: "{item.key}", item: item.clone(), view }
+        }
+
+        h2 { class: "label-tech cc-section", "{heading}" }
+        if log.is_empty() {
+            p { class: "cc-quiet", "All quiet since you were last here." }
+        }
+        for (i, row) in log.into_iter().enumerate() {
+            EntryRow { key: "{i}", row, view }
+        }
+        if let Some(more) = more {
+            button { class: "cc-entry cc-more", onclick: move |_| go(view, "audit"), "{more}" }
+        }
+
+        h2 { class: "label-tech cc-section", "Coming up" }
+        if upcoming.is_empty() {
+            button { class: "cc-entry cc-quiet", onclick: move |_| go(view, "schedules"), "Nothing scheduled." }
+        }
+        for (i, row) in upcoming.into_iter().enumerate() {
+            EntryRow { key: "{i}", row, view }
+        }
+    }
+}
+
+#[component]
+fn EntryRow(row: Row, view: Signal<View>) -> Element {
+    let slug = row.link.clone();
+    rsx! {
+        button { class: "cc-entry", onclick: move |_| go(view, &slug),
+            span { class: if row.warn { "cc-time warn" } else { "cc-time" }, "{row.time}" }
+            span { "{row.sentence}" }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn greeting_turns_at_five_noon_and_six() {
+        assert_eq!(greeting(4), "Good evening.");
+        assert_eq!(greeting(5), "Good morning.");
+        assert_eq!(greeting(11), "Good morning.");
+        assert_eq!(greeting(12), "Good afternoon.");
+        assert_eq!(greeting(17), "Good afternoon.");
+        assert_eq!(greeting(18), "Good evening.");
+        assert_eq!(greeting(23), "Good evening.");
+    }
+
+    #[test]
+    fn ago_reads_in_one_unit() {
+        assert_eq!(ago(100, 130), "just now");
+        assert_eq!(ago(0, 720), "12 min ago");
+        assert_eq!(ago(0, 9 * 3_600 + 5), "9 h ago");
+        assert_eq!(ago(0, 86_400 + 5), "1 day ago");
+        assert_eq!(ago(0, 3 * 86_400), "3 days ago");
+        assert_eq!(ago(500, 100), "just now");
+    }
+
+    #[test]
+    fn coming_up_times() {
+        assert_eq!(hhmm(7, 0), "07:00");
+        assert_eq!(when_label(0, "19:00"), "19:00");
+        assert_eq!(when_label(1, "07:00"), "tmrw 07:00");
+        assert_eq!(when_label(3, "07:00"), "in 3 d · 07:00");
+    }
+
+    #[test]
+    fn the_log_heading_follows_the_window() {
+        let mut b = Briefing { last_active_unix: Some(1), ..Default::default() };
+        assert_eq!(log_heading(&b), "Since you were last here");
+        b.window_capped = true;
+        assert_eq!(log_heading(&b), "In the last 7 days");
+        let b = Briefing::default();
+        assert_eq!(log_heading(&b), "In the last 24 hours");
+    }
+
+    #[test]
+    fn spend_warns_at_eighty_percent_of_the_cap() {
+        assert_eq!(spend_reading(None, Some(2.0)), ("spend —".to_string(), false));
+        assert_eq!(spend_reading(Some(0.42), None), ("$0.42 · 24 h".to_string(), false));
+        assert_eq!(
+            spend_reading(Some(0.42), Some(2.0)),
+            ("$0.42 of $2.00 · 24 h".to_string(), false)
+        );
+        assert!(spend_reading(Some(1.6), Some(2.0)).1);
+    }
+
+    #[test]
+    fn more_line_only_when_something_was_left_out() {
+        assert_eq!(more_line(0), None);
+        assert_eq!(more_line(3).as_deref(), Some("and 3 more → Audit"));
+    }
+
+    #[test]
+    fn the_briefing_query_asks_for_the_briefing() {
+        match briefing_query() {
+            FrontendMessage::Query { id, payload: QueryPayload::GetBriefing } => {
+                assert_eq!(id, "cc-briefing")
+            }
+            _ => panic!("not a GetBriefing query"),
+        }
+    }
+}

@@ -37,6 +37,7 @@ use aivyx_ipc::graph::{GraphEntity, GraphTriple};
 use std::collections::{HashMap, HashSet};
 
 /// End-user guide content + markdown rendering for the Guide screen.
+mod command_center;
 mod cron_text;
 mod guide;
 /// Routing visibility B4 — pure helpers for the Models screen, the status
@@ -1030,6 +1031,8 @@ fn App() -> Element {
     // poll tick.
     let running_overlay = use_signal(HashMap::<String, HashSet<usize>>::new);
     let dashboard = use_signal(Dashboard::default);
+    let briefing = use_signal(command_center::BriefingState::default);
+    use_context_provider(|| briefing);
     let memory = use_signal(MemoryState::default);
     let wiki = use_signal(WikiState::default);
     let lattice = use_signal(GraphKnowledgeState::default);
@@ -1088,7 +1091,7 @@ fn App() -> Element {
             rx, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
             notifications, loop_ui, reminders_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
-            gate, mission_ui, server_info, routing,
+            gate, mission_ui, server_info, routing, briefing,
         )
     });
     use_context_provider(|| ws);
@@ -1232,6 +1235,25 @@ fn App() -> Element {
                 },
             });
             TimeoutFuture::new(POLL_INTERVAL_MS).await;
+        }
+    });
+
+    // Command Center — the briefing walks the recent audit chain, so it
+    // refreshes every 10 s (and right after each card action), not on the
+    // 1.5 s live poll.
+    use_future(move || async move {
+        loop {
+            if view() == View::Command && connected() {
+                ws.send(command_center::briefing_query());
+            }
+            TimeoutFuture::new(10_000).await;
+        }
+    });
+    // ...and at once on opening the Command Center (or on reconnecting while
+    // it is open), so the page doesn't wait for the next tick.
+    use_effect(move || {
+        if view() == View::Command && connected() {
+            ws.send(command_center::briefing_query());
         }
     });
 
@@ -1783,117 +1805,17 @@ fn CommandPanel(
     view: Signal<View>,
 ) -> Element {
     // Until the first dashboard snapshot arrives, show a skeleton instead of
-    // flashing placeholder zeros (which then pop to real values on load).
+    // flashing placeholder values (which then pop to real ones on load).
     if !dashboard.loaded {
         return rsx! { CommandSkeleton {} };
     }
-    let active = missions
-        .iter()
-        .filter(|m| !m.phase.is_terminal())
-        .count();
-    let chain = dashboard.chain_ok;
-    let routines = dashboard.schedules.clone();
-    let routines_total = routines.len();
-    let routines_on = routines.iter().filter(|r| r.enabled).count();
     let first_visit = missions.is_empty() && nothing_has_happened_yet(&dashboard);
     let name = dashboard
         .assistant_name
         .clone()
         .unwrap_or_else(|| "your assistant".to_string());
     rsx! {
-        if first_visit {
-            div { class: "glass-card welcome-card",
-                h3 { "Start here: say hi to {name}" }
-                p { class: "muted",
-                    "Chat is where you ask for things — try “What can you help me with?” "
-                    "This page fills in as it works: missions, background routines and "
-                    "an audit trail of everything it does."
-                }
-                div { class: "welcome-actions",
-                    button { class: "btn", onclick: move |_| { let mut v = view; v.set(View::Chat); }, "Open Chat" }
-                    button { class: "btn ghost", onclick: move |_| { let mut v = view; v.set(View::Guide); }, "Read the guide" }
-                }
-            }
-        }
-        div { class: "stat-row stat-row-5",
-            StatCard { icon: ICON_MISSIONS, label: "Missions", value: "{missions.len()}", tone: None }
-            StatCard { icon: ICON_AGENTS, label: "Active", value: "{active}", tone: None }
-            StatCard { icon: ICON_COMMAND, label: "Routines", value: "{routines_on}/{routines_total}", tone: None }
-            StatCard { icon: ICON_MEMORY, label: "Audit Events", value: "{dashboard.audit_total}", tone: None }
-            StatCard { icon: ICON_SETTINGS, label: "Chain", value: chain_label(chain).to_string(), tone: chain_tone(chain) }
-        }
-        div { class: "dash-grid",
-            div { class: "dash-main",
-                section { class: "panel",
-                    div { class: "panel-head",
-                        h3 { "Active Missions" }
-                        span { class: "label-tech", "{missions.len()} total" }
-                    }
-                    if missions.is_empty() {
-                        div { class: "glass-card empty", p { class: "label-tech", "No missions yet — start one from the Missions tab." } }
-                    } else {
-                        div { class: "feed",
-                            for m in missions.iter().take(4) {
-                                DashMissionRow { mission: m.clone() }
-                            }
-                        }
-                    }
-                }
-                section { class: "panel",
-                    div { class: "panel-head",
-                        h3 { "Routines" }
-                        span { class: "label-tech", "{routines_on} of {routines_total} active" }
-                    }
-                    if routines.is_empty() {
-                        div { class: "glass-card empty", p { class: "label-tech", "No background routines configured." } }
-                    } else {
-                        div { class: "feed",
-                            for r in routines.iter() {
-                                RoutineRow { routine: r.clone() }
-                            }
-                        }
-                    }
-                }
-                section { class: "panel",
-                    div { class: "panel-head",
-                        h3 { "Audit Trail" }
-                        span { class: "label-tech", "newest {AUDIT_FEED_N}" }
-                    }
-                    AuditFeed { entries: dashboard.audit_entries.clone() }
-                }
-            }
-            aside { class: "dash-rail",
-                AgentStatus { name: dashboard.assistant_name.clone(), connected, chain_ok: chain, settings: dashboard.settings.clone() }
-                section { class: "panel",
-                    div { class: "panel-head", h3 { "Learning" } }
-                    match &dashboard.learning {
-                        None => rsx! {
-                            div { class: "glass-card empty",
-                                p { class: "label-tech", "Loading…" }
-                            }
-                        },
-                        Some(d) if d.recalls_total == 0 => rsx! {
-                            div { class: "glass-card empty",
-                                p { class: "label-tech", "Nothing learned yet — no recalls in the lookback window." }
-                            }
-                        },
-                        Some(d) => rsx! {
-                            div { class: "glass-card",
-                                p { class: "label-tech", "{d.recalls_scored}/{d.recalls_total} recalls scored · {d.promoted} promoted · {d.proposals_in_window} proposals this window" }
-                                if !d.top_helpful.is_empty() {
-                                    p { class: "label-tech", style: "margin-top:6px;",
-                                        "Most helpful: "
-                                        for (topic, score) in d.top_helpful.iter().take(3) {
-                                            span { style: "margin-right:8px;", "{topic} ({score:.2})" }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                    }
-                }
-            }
-        }
+        command_center::Logbook { dashboard, connected, view, first_visit, name }
     }
 }
 
@@ -1949,47 +1871,16 @@ mod first_visit_tests {
     }
 }
 
-/// Loading skeleton for the Command Center — mirrors the real layout (4 stat
-/// cards + the two-panel main + rail) so swapping in live data causes no shift.
+/// Loading skeleton for the Command Center — the instrument strip and three
+/// quiet bars, so swapping in live data doesn't shift the page.
 #[component]
 fn CommandSkeleton() -> Element {
     rsx! {
-        div { class: "stat-row",
-            for i in 0..4 {
-                div { key: "{i}", class: "glass-card stat-card",
-                    div { class: "stat-top",
-                        span { class: "skeleton sk-ico" }
-                        span { class: "skeleton sk-line sk-w40" }
-                    }
-                    span { class: "skeleton sk-value" }
-                }
-            }
-        }
-        div { class: "dash-grid",
-            div { class: "dash-main",
-                section { class: "panel",
-                    div { class: "panel-head", span { class: "skeleton sk-line sk-w30" } }
-                    div { class: "glass-card",
-                        span { class: "skeleton sk-line sk-w70" }
-                        span { class: "skeleton sk-line sk-w50" }
-                    }
-                }
-                section { class: "panel",
-                    div { class: "panel-head", span { class: "skeleton sk-line sk-w30" } }
-                    div { class: "glass-card",
-                        for i in 0..3 {
-                            span { key: "{i}", class: "skeleton sk-line sk-w60" }
-                        }
-                    }
-                }
-            }
-            aside { class: "dash-rail",
-                div { class: "glass-card",
-                    span { class: "skeleton sk-line sk-w50" }
-                    span { class: "skeleton sk-line sk-w80" }
-                    span { class: "skeleton sk-line sk-w70" }
-                }
-            }
+        div { class: "cc-page",
+            div { class: "cc-strip skeleton", "\u{00a0}" }
+            div { class: "skeleton cc-skel-line wide" }
+            div { class: "skeleton cc-skel-line" }
+            div { class: "skeleton cc-skel-line" }
         }
     }
 }
@@ -2023,65 +1914,6 @@ fn SkeletonCards(cards: usize) -> Element {
                     span { class: "skeleton sk-line sk-w70" }
                     span { class: "skeleton sk-line sk-w30" }
                 }
-            }
-        }
-    }
-}
-
-#[component]
-fn StatCard(icon: Asset, label: &'static str, value: String, tone: Option<&'static str>) -> Element {
-    rsx! {
-        div { class: "glass-card stat-card",
-            div { class: "stat-top",
-                span { class: "ico", style: "--ico: url({icon})" }
-                span { class: "label-tech", "{label}" }
-            }
-            span {
-                class: if let Some(t) = tone { "value {t}" } else { "value" },
-                "{value}"
-            }
-        }
-    }
-}
-
-#[component]
-fn DashMissionRow(mission: TeamMissionView) -> Element {
-    let pct = mission.progress.min(100);
-    rsx! {
-        div { class: "glass-card dash-mission",
-            div { class: "row1",
-                span { class: "chip {phase_class(mission.phase)}", "{phase_label(mission.phase)}" }
-                span { class: "goal", "{mission.goal}" }
-            }
-            div { class: "progress", div { class: "fill", style: "width: {pct}%;" } }
-        }
-    }
-}
-
-#[component]
-fn RoutineRow(routine: ScheduleView) -> Element {
-    let last = routine
-        .last_fired_unix_ms
-        .map(rel_time)
-        .unwrap_or_else(|| "never".to_string());
-    let next = if routine.enabled {
-        routine
-            .next_fire_unix_ms
-            .map(until_time)
-            .unwrap_or_else(|| "—".to_string())
-    } else {
-        "paused".to_string()
-    };
-    rsx! {
-        div { class: "glass-card routine-row",
-            div { class: "row1",
-                span { class: if routine.enabled { "dot live" } else { "dot off" } }
-                span { class: "name", "{routine.name}" }
-                span { class: "label-tech cron", title: "{routine.cron}", {cron_text::describe_cron(&routine.cron).unwrap_or_else(|| routine.cron.clone())} }
-            }
-            div { class: "row2 label-tech",
-                span { "next " span { class: "v", "{next}" } }
-                span { "last " span { class: "v", "{last}" } }
             }
         }
     }
@@ -3760,102 +3592,6 @@ fn AuditPanel() -> Element {
                 }
             }
         }
-    }
-}
-
-#[component]
-fn AgentStatus(
-    name: Option<String>,
-    connected: bool,
-    chain_ok: Option<bool>,
-    settings: Option<SettingsSnapshot>,
-) -> Element {
-    let agent = name.unwrap_or_else(|| "—".to_string());
-    let chain_class = match chain_tone(chain_ok) {
-        Some(t) => format!("v {t}"),
-        None => "v".to_string(),
-    };
-    let chain = chain_label(chain_ok);
-    // Live agent vitals from the running snapshot (GetSettings). Precomputed so
-    // the rsx stays declarative.
-    let has_vitals = settings.is_some();
-    let (model, provider, ctx, autonomy, access) = match &settings {
-        Some(s) => {
-            let ctx = match s.num_ctx {
-                Some(n) if n % 1024 == 0 => format!("{}k tok", n / 1024),
-                Some(n) => format!("{n} tok"),
-                None => "auto".to_string(),
-            };
-            (
-                s.model.clone(),
-                s.provider.clone(),
-                ctx,
-                s.autonomy_level.clone(),
-                s.access_level.clone(),
-            )
-        }
-        None => (
-            "—".to_string(),
-            "—".to_string(),
-            "—".to_string(),
-            "—".to_string(),
-            "—".to_string(),
-        ),
-    };
-    rsx! {
-        section { class: "glass-card agent-status",
-            div { class: "panel-head", h3 { "Agent" } }
-            div { class: "kv",
-                span { class: "label-tech", "Name" }
-                span { class: "v", "{agent}" }
-            }
-            div { class: "kv",
-                span { class: "label-tech", "Daemon" }
-                span { class: if connected { "v ok" } else { "v off" },
-                    if connected { span { class: "dot live" } }
-                    if connected { "online" } else { "offline" }
-                }
-            }
-            if has_vitals {
-                div { class: "kv",
-                    span { class: "label-tech", "Model" }
-                    span { class: "v mono", "{model}" }
-                }
-                div { class: "kv",
-                    span { class: "label-tech", "Provider" }
-                    span { class: "v", "{provider} · {ctx}" }
-                }
-                div { class: "kv",
-                    span { class: "label-tech", "Autonomy" }
-                    span { class: "v", "{autonomy}" }
-                }
-                div { class: "kv",
-                    span { class: "label-tech", "Access" }
-                    span { class: "v", "{access}" }
-                }
-            }
-            div { class: "kv",
-                span { class: "label-tech", "Chain" }
-                span { class: "{chain_class}", "{chain}" }
-            }
-        }
-    }
-}
-
-/// "Secure" / "FAILED" / "…" for the chain status.
-fn chain_label(ok: Option<bool>) -> &'static str {
-    match ok {
-        Some(true) => "Secure",
-        Some(false) => "FAILED",
-        None => "…",
-    }
-}
-
-fn chain_tone(ok: Option<bool>) -> Option<&'static str> {
-    match ok {
-        Some(true) => Some("ok"),
-        Some(false) => Some("off"),
-        None => None,
     }
 }
 
@@ -10398,6 +10134,7 @@ async fn ws_task(
     mission_ui: Signal<MissionControlUi>,
     server_info: Signal<ServerInfoUi>,
     routing: Signal<RoutingUi>,
+    briefing: Signal<command_center::BriefingState>,
 ) {
     // Vitrine walkthrough fix (2026-07-05, third operator casualty): a
     // daemon restart used to END this task — the socket died, `connected`
@@ -10432,7 +10169,7 @@ async fn ws_task(
             read, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
             notifications, loop_ui, reminders_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
-            gate, mission_ui, server_info, routing,
+            gate, mission_ui, server_info, routing, briefing,
         ));
 
         // (Re)hydrate the dashboard one-shots — on a fresh page load this
@@ -10547,6 +10284,7 @@ async fn read_task(
     mut mission_ui: Signal<MissionControlUi>,
     mut server_info: Signal<ServerInfoUi>,
     mut routing: Signal<RoutingUi>,
+    mut briefing: Signal<command_center::BriefingState>,
 ) {
     // POLISH_WAVES.md sub-project 5, item E — the conflict resolve/dismiss
     // acks below need to re-issue `mem_conflicts_query()` after a
@@ -10676,6 +10414,14 @@ async fn read_task(
                     } else {
                         (false, error.unwrap_or_else(|| "Operation failed.".to_string()))
                     });
+                }
+                // A failed Command Center card action or briefing → the one
+                // notice line above the "Needs you" cards.
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id == "cc-action" || id == "cc-briefing" => {
+                    briefing.write().notice = Some(message);
                 }
                 // A denied path / read failure on the Documents screen (ids
                 // prefixed `mc-docs`) → a notice, leaving the listing intact.
@@ -10899,6 +10645,22 @@ async fn read_task(
                     ..
                 } => {
                     loop_ui.write().last_control_result = Some((ok, message));
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::Briefing { briefing: b },
+                    ..
+                } => {
+                    let mut s = briefing.write();
+                    s.briefing = Some(b);
+                    s.as_of_ms = js_sys::Date::now();
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::ReminderUpdated { ok, .. },
+                    ..
+                } => {
+                    briefing.write().notice = (!ok).then(|| {
+                        "That reminder couldn't be updated — it may already be gone.".to_string()
+                    });
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::Reminders { reminders },

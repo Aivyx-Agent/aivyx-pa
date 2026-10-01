@@ -1159,3 +1159,32 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 @media (max-width: 860px) {
   .statusbar .seg-model { display: none; }
 }
+
+/* Command Center — the logbook */
+.cc-page { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.cc-page.stale > *:not(.cc-strip) { opacity: .55; }
+.cc-strip { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--color-border-subtle); border-radius: 4px; }
+.cc-reading { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--color-text-secondary); background: none; border: 0;
+  border-right: 1px solid var(--color-border-subtle); padding: 6px 10px; cursor: pointer; }
+.cc-reading:last-child { border-right: 0; }
+.cc-reading:hover { color: var(--color-primary); }
+.cc-reading.warn { color: var(--color-warning); }
+.cc-reading.bad { color: var(--color-secondary); }
+.cc-greeting { font-family: var(--font-display); font-weight: 600; font-size: 34px; margin: 18px 0 0; }
+.cc-dateline { margin: 0 0 8px; }
+.cc-needs { color: var(--color-primary); margin-top: 10px; }
+.cc-section { margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--color-border-subtle); }
+.cc-card { background: var(--color-bg-surface); border: 1px solid var(--color-border-subtle); border-radius: 4px; padding: 10px 12px; }
+.cc-sentence { margin: 0 0 6px; }
+.cc-actions { display: flex; gap: 8px; }
+.cc-entry { display: flex; gap: 14px; width: 100%; text-align: left; background: none; border: 0; color: inherit;
+  padding: 4px 0; cursor: pointer; font: inherit; }
+.cc-entry:hover span:last-child { color: var(--color-primary); }
+.cc-time { flex: none; width: 92px; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-secondary); }
+.cc-time.warn { color: var(--color-warning); }
+.cc-quiet, .cc-more { color: var(--color-text-secondary); }
+.cc-notice { color: var(--color-secondary); margin: 0; }
+.cc-skel-line { height: 14px; border-radius: 3px; margin: 8px 0; width: 60%; }
+.cc-skel-line.wide { height: 34px; width: 45%; }
+@media (max-width: 600px) { .cc-greeting { font-size: 26px; } .cc-time { width: 72px; } }
