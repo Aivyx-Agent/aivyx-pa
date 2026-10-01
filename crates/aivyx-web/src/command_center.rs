@@ -65,13 +65,16 @@ pub fn empty_log_line(b: &Briefing) -> &'static str {
 }
 
 /// The spend instrument and whether it should warn (≥ 80 % of the day cap).
-pub fn spend_reading(spend: Option<f64>, per_day: Option<f64>) -> (String, bool) {
+/// `untracked`: some model used in the window has no known price, so `spend`
+/// is a lower bound — shown as `$0.42+` rather than `$0.42`.
+pub fn spend_reading(spend: Option<f64>, per_day: Option<f64>, untracked: bool) -> (String, bool) {
+    let plus = if untracked { "+" } else { "" };
     match (spend, per_day) {
         (None, _) => ("spend —".to_string(), false),
         (Some(s), Some(cap)) if cap > 0.0 => {
-            (format!("${s:.2} of ${cap:.2} · 24 h"), s >= 0.8 * cap)
+            (format!("${s:.2}{plus} of ${cap:.2} · 24 h"), s >= 0.8 * cap)
         }
-        (Some(s), _) => (format!("${s:.2} · 24 h"), false),
+        (Some(s), _) => (format!("${s:.2}{plus} · 24 h"), false),
     }
 }
 
@@ -226,8 +229,14 @@ fn InstrumentStrip(
         None => "model —".to_string(),
     };
     let per_day = dashboard.settings.as_ref().and_then(|s| s.budget.per_day_usd);
+    let spend_untracked = briefing.as_ref().is_some_and(|b| b.spend_untracked);
     let (spend, spend_warn) =
-        spend_reading(briefing.as_ref().and_then(|b| b.spend_24h_usd), per_day);
+        spend_reading(briefing.as_ref().and_then(|b| b.spend_24h_usd), per_day, spend_untracked);
+    let spend_title = if spend_untracked {
+        "Some models used have no known price, so this is a lower bound."
+    } else {
+        ""
+    };
     let memory = briefing
         .as_ref()
         .and_then(|b| b.memory_topics)
@@ -248,6 +257,7 @@ fn InstrumentStrip(
             button { class: "cc-reading", onclick: move |_| go(view, "models"), "{model}" }
             button {
                 class: if spend_warn { "cc-reading warn" } else { "cc-reading" },
+                title: "{spend_title}",
                 onclick: move |_| go(view, "settings"),
                 "{spend}"
             }
@@ -580,13 +590,26 @@ mod tests {
 
     #[test]
     fn spend_warns_at_eighty_percent_of_the_cap() {
-        assert_eq!(spend_reading(None, Some(2.0)), ("spend —".to_string(), false));
-        assert_eq!(spend_reading(Some(0.42), None), ("$0.42 · 24 h".to_string(), false));
+        assert_eq!(spend_reading(None, Some(2.0), false), ("spend —".to_string(), false));
+        assert_eq!(spend_reading(Some(0.42), None, false), ("$0.42 · 24 h".to_string(), false));
         assert_eq!(
-            spend_reading(Some(0.42), Some(2.0)),
+            spend_reading(Some(0.42), Some(2.0), false),
             ("$0.42 of $2.00 · 24 h".to_string(), false)
         );
-        assert!(spend_reading(Some(1.6), Some(2.0)).1);
+        assert!(spend_reading(Some(1.6), Some(2.0), false).1);
+    }
+
+    #[test]
+    fn spend_reading_marks_untracked_spend_as_a_lower_bound() {
+        assert_eq!(spend_reading(Some(0.42), None, true), ("$0.42+ · 24 h".to_string(), false));
+        assert_eq!(
+            spend_reading(Some(0.42), Some(2.0), true),
+            ("$0.42+ of $2.00 · 24 h".to_string(), false)
+        );
+        // Still warns normally when untracked.
+        assert!(spend_reading(Some(1.6), Some(2.0), true).1);
+        // No spend at all: untracked is moot, no "+".
+        assert_eq!(spend_reading(None, Some(2.0), true), ("spend —".to_string(), false));
     }
 
     #[test]

@@ -107,6 +107,9 @@ pub struct Facts {
     /// Goals of work in progress.
     pub in_progress: Vec<String>,
     pub spend_24h_usd: Option<f64>,
+    /// `true` when any `LlmCost` in the 24 h window had no known price, so
+    /// `spend_24h_usd` is a lower bound, not the full spend.
+    pub spend_untracked: bool,
     pub memory_topics: Option<u64>,
     /// Sources that couldn't be read ("reminders", "the audit trail", …).
     pub source_errors: Vec<String>,
@@ -311,6 +314,7 @@ pub fn compose(f: &Facts, now: i64) -> Briefing {
         log,
         log_more: log_more as u32,
         coming_up,
+        spend_untracked: f.spend_untracked,
     }
 }
 
@@ -382,6 +386,9 @@ pub struct AuditFacts {
     pub changes: Vec<(String, i64)>,
     pub memories_saved: Vec<i64>,
     pub spend_24h_usd: f64,
+    /// `true` when any `LlmCost` in the 24 h window had no known price, so
+    /// `spend_24h_usd` is a lower bound, not the full spend.
+    pub spend_untracked: bool,
 }
 
 fn unix_of(t: SystemTime) -> i64 {
@@ -408,7 +415,11 @@ pub fn audit_facts(
                 cache_read: usage.cache_read_input_tokens as u64,
                 cache_write: usage.cache_creation_input_tokens as u64,
             };
-            a.spend_24h_usd += pricing.cost_of(model, &counts).usd;
+            let cost = pricing.cost_of(model, &counts);
+            a.spend_24h_usd += cost.usd;
+            if !cost.priced {
+                a.spend_untracked = true;
+            }
         }
         if t < window_start {
             continue;
@@ -618,6 +629,7 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
                 f.changes = a.changes;
                 f.memories_saved = a.memories_saved;
                 f.spend_24h_usd = Some(a.spend_24h_usd);
+                f.spend_untracked = a.spend_untracked;
             }
             Err(_) => f.source_errors.push("the audit trail".into()),
         }
@@ -941,9 +953,11 @@ mod tests {
     fn instruments_and_window_pass_through() {
         let mut f = base();
         f.spend_24h_usd = Some(0.42);
+        f.spend_untracked = true;
         f.memory_topics = Some(12);
         let b = compose(&f, NOW);
         assert_eq!(b.spend_24h_usd, Some(0.42));
+        assert!(b.spend_untracked);
         assert_eq!(b.memory_topics, Some(12));
         assert_eq!(b.window_start_unix, NOW - 3_600);
         assert!(!b.window_capped);
@@ -1196,6 +1210,38 @@ mod gather_tests {
             .cost_of("claude-sonnet-5", &aivyx_cost::TokenCounts { input: 1_000_000, ..Default::default() })
             .usd;
         assert!((a.spend_24h_usd - expected).abs() < 1e-9);
+        assert!(!a.spend_untracked, "every model in this fixture is priced");
+    }
+
+    /// An `LlmCost` entry for a model with no known rate flags the spend as
+    /// a lower bound.
+    #[test]
+    fn audit_facts_flags_unpriced_models_as_untracked() {
+        let pricing = aivyx_cost::Pricing::new();
+        let entries = vec![entry(0, NOW - 10, AuditEvent::LlmCost {
+            turn_id: aivyx_core::TurnId::new(),
+            model: "some-mystery-model".into(),
+            usage: aivyx_core::TokenUsage { input_tokens: 1_000, ..Default::default() },
+        })];
+        let a = audit_facts(&entries, NOW - 3_600, NOW, &pricing);
+        assert_eq!(a.spend_24h_usd, 0.0);
+        assert!(a.spend_untracked);
+    }
+
+    /// A genuinely free local model is `priced = true, usd = 0` — it must
+    /// NOT set `spend_untracked` (it isn't a lower bound, it's exact).
+    #[test]
+    fn audit_facts_does_not_flag_a_free_local_model() {
+        assert!(aivyx_cost::is_local_model("llama3.1"));
+        let pricing = aivyx_cost::Pricing::new();
+        let entries = vec![entry(0, NOW - 10, AuditEvent::LlmCost {
+            turn_id: aivyx_core::TurnId::new(),
+            model: "llama3.1".into(),
+            usage: aivyx_core::TokenUsage { input_tokens: 1_000, ..Default::default() },
+        })];
+        let a = audit_facts(&entries, NOW - 3_600, NOW, &pricing);
+        assert_eq!(a.spend_24h_usd, 0.0);
+        assert!(!a.spend_untracked);
     }
 
     #[tokio::test]

@@ -26,6 +26,10 @@ pub struct Briefing {
     /// Older log lines left out of `log`.
     pub log_more: u32,
     pub coming_up: Vec<UpcomingItem>,
+    /// `true` when any `LlmCost` in the 24 h window had no known price, so
+    /// `spend_24h_usd` is a lower bound, not the full spend.
+    #[serde(default)]
+    pub spend_untracked: bool,
 }
 
 /// One card under "Needs you".
@@ -99,6 +103,7 @@ mod tests {
             log: vec![LogEntry { at_unix: 20, sentence: "I ran the routine digest.".into(), warn: false, link: "schedules".into() }],
             log_more: 0,
             coming_up: vec![UpcomingItem { at_unix: None, sentence: "Working on “ship it”.".into(), link: "mission-control".into() }],
+            spend_untracked: true,
         };
         let resp = QueryResponsePayload::Briefing { briefing: b };
         let json = serde_json::to_string(&resp).unwrap();
@@ -115,5 +120,24 @@ mod tests {
         let upd = QueryResponsePayload::ReminderUpdated { id: "r1".into(), ok: true, due_unix: Some(99) };
         let json = serde_json::to_string(&upd).unwrap();
         assert_eq!(serde_json::from_str::<QueryResponsePayload>(&json).unwrap(), upd);
+    }
+
+    /// Old JSON (written before `spend_untracked` existed) still
+    /// deserializes, defaulting the new field to `false`.
+    #[test]
+    fn briefing_without_spend_untracked_field_deserializes() {
+        let json = r#"{
+            "last_active_unix": null,
+            "window_start_unix": 10,
+            "window_capped": false,
+            "spend_24h_usd": 0.25,
+            "memory_topics": null,
+            "needs_you": [],
+            "log": [],
+            "log_more": 0,
+            "coming_up": []
+        }"#;
+        let b: Briefing = serde_json::from_str(json).unwrap();
+        assert!(!b.spend_untracked);
     }
 }
