@@ -33,6 +33,7 @@ pub mod daemon_ipc;
 pub mod daemon_scheduler;
 pub mod approval_desk;
 pub mod approval_prompt;
+pub mod activity;
 pub mod daemon_server;
 pub mod document_browse;
 pub mod mcp_status;
