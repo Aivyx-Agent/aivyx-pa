@@ -4430,11 +4430,14 @@ fn MemoryPanel() -> Element {
     });
 
     let m = memory();
-    let learning = use_context::<Signal<Dashboard>>()().learning;
+    // Only the Learning digest — not the whole Dashboard — so the rest of
+    // the dashboard's refreshes don't re-render this view.
+    let dashboard = use_context::<Signal<Dashboard>>();
+    let learning = use_memo(move || dashboard.read().learning.clone());
     rsx! {
         div { class: "mem",
             aside { class: "mem-rail",
-                LearningSection { learning }
+                LearningSection { learning: learning() }
                 div { class: "panel-head", h3 { "Topics" } span { class: "label-tech", "{m.topics.len()}" } }
                 button {
                     class: if scope() == "recent" { "mem-topic active" } else { "mem-topic" },

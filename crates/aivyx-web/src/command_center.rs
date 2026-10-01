@@ -54,6 +54,16 @@ pub fn log_heading(b: &Briefing) -> &'static str {
     }
 }
 
+/// The line under the log heading when there's nothing to log — it must
+/// agree with [`log_heading`].
+pub fn empty_log_line(b: &Briefing) -> &'static str {
+    if log_heading(b) == "Since you were last here" {
+        "All quiet since you were last here."
+    } else {
+        "All quiet."
+    }
+}
+
 /// The spend instrument and whether it should warn (≥ 80 % of the day cap).
 pub fn spend_reading(spend: Option<f64>, per_day: Option<f64>) -> (String, bool) {
     match (spend, per_day) {
@@ -99,6 +109,12 @@ impl BriefingState {
     pub fn begin_gate(&mut self, mission_id: String, gate_id: String) {
         self.begin_action();
         self.pending_gate = Some((mission_id, gate_id));
+    }
+
+    /// This mission gate's Approve / Deny is in flight (its buttons are
+    /// disabled until it's answered, so a double press can't send twice).
+    pub fn gate_pending(&self, mission_id: &str, gate_id: &str) -> bool {
+        self.pending_gate.as_ref().is_some_and(|(m, g)| m == mission_id && g == gate_id)
     }
 
     pub fn on_briefing(&mut self, briefing: Briefing, now_ms: f64) {
@@ -252,10 +268,15 @@ fn NeedsYouCard(item: NeedsYouItem, view: Signal<View>) -> Element {
     let link = item.link.clone();
     let buttons = match item.action.clone() {
         NeedsYouAction::MissionGate { mission_id, gate_id } => {
+            let sending = state.read().gate_pending(&mission_id, &gate_id);
             let (m2, g2) = (mission_id.clone(), gate_id.clone());
             rsx! {
+                if sending {
+                    span { class: "label-tech", "Sending…" }
+                }
                 button {
                     class: "btn",
+                    disabled: sending,
                     onclick: move |_| act(ws, state, FrontendMessage::ResolveGate {
                         mission_id: mission_id.clone(),
                         gate_id: gate_id.clone(),
@@ -265,6 +286,7 @@ fn NeedsYouCard(item: NeedsYouItem, view: Signal<View>) -> Element {
                 }
                 button {
                     class: "btn ghost",
+                    disabled: sending,
                     onclick: move |_| act(ws, state, FrontendMessage::ResolveGate {
                         mission_id: m2.clone(),
                         gate_id: g2.clone(),
@@ -442,6 +464,7 @@ fn Sections(
         })
         .collect();
     let heading = log_heading(b);
+    let quiet = empty_log_line(b);
     let more = more_line(b.log_more);
 
     rsx! {
@@ -461,7 +484,7 @@ fn Sections(
 
         h2 { class: "label-tech cc-section", "{heading}" }
         if log.is_empty() {
-            p { class: "cc-quiet", "All quiet since you were last here." }
+            p { class: "cc-quiet", "{quiet}" }
         }
         for (i, row) in log.into_iter().enumerate() {
             EntryRow { key: "{i}", row, view }
@@ -532,6 +555,27 @@ mod tests {
         assert_eq!(log_heading(&b), "In the last 7 days");
         let b = Briefing::default();
         assert_eq!(log_heading(&b), "In the last 24 hours");
+    }
+
+    #[test]
+    fn the_empty_log_line_matches_the_heading() {
+        let mut b = Briefing { last_active_unix: Some(1), ..Default::default() };
+        assert_eq!(empty_log_line(&b), "All quiet since you were last here.");
+        b.window_capped = true;
+        assert_eq!(empty_log_line(&b), "All quiet.");
+        assert_eq!(empty_log_line(&Briefing::default()), "All quiet.");
+    }
+
+    #[test]
+    fn only_the_gate_in_flight_reads_as_pending() {
+        let mut s = BriefingState::default();
+        assert!(!s.gate_pending("m1", "g1"));
+        s.begin_gate("m1".into(), "g1".into());
+        assert!(s.gate_pending("m1", "g1"));
+        assert!(!s.gate_pending("m1", "g2"));
+        assert!(!s.gate_pending("m2", "g1"));
+        s.on_gate_resolved("m1", "g1");
+        assert!(!s.gate_pending("m1", "g1"));
     }
 
     #[test]
