@@ -525,6 +525,9 @@ pub struct DaemonConfig {
     /// query returns an empty list rather than erroring — matches the
     /// existing `remind.*` tools' own degrade-gracefully posture.
     pub reminder_store: Option<crate::reminder_tool::SharedReminderStore>,
+    /// Command Center — where the operator's last activity is persisted
+    /// (the `ChannelState` domain). `None` ⇒ kept in memory for this run.
+    pub activity_store: Option<DomainHandle>,
     /// Model routing Part 3b — the process's ONE routing guard, when cloud
     /// escalation is active: `/allow-cloud` and the `AllowCloudEscalation`
     /// query record consent on it. `None` ⇒ escalation isn't configured and
@@ -820,6 +823,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         seed_draft_llm,
         document_roots,
         reminder_store,
+        activity_store,
         routing_guard,
         routed,
         escalation_arming,
@@ -830,6 +834,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         graph_store,
         conflict_dismissals,
     } = config;
+    // Command Center — the daemon's one operator-activity clock, loaded
+    // once and shared by every connection.
+    let activity = Arc::new(crate::activity::ActivityClock::load(activity_store).await);
     // Chapter Codex (CX.3) — spawn the knowledge-wiki stale-page sweep on
     // the maintenance cadence when `[wiki].enabled`. Best-effort + shutdown-
     // aware; absent ⇒ no synthesis (byte-identical default).
@@ -1819,6 +1826,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             seed_draft_llm: seed_draft_llm.clone(),
             document_roots: document_roots.clone(),
             reminder_store: reminder_store.clone(),
+            activity: Arc::clone(&activity),
+            pricing: pricing.clone(),
             comfyui_base_url: comfyui_base_url.clone(),
             routing_guard: routing_guard.clone(),
             routed: routed.clone(),
@@ -2134,6 +2143,10 @@ struct ConnectionContext {
     document_roots: DocumentRoots,
     /// Phase 186 — see `DaemonConfig::reminder_store`'s own doc comment.
     reminder_store: Option<crate::reminder_tool::SharedReminderStore>,
+    /// Command Center — the daemon's one operator-activity clock.
+    activity: Arc<crate::activity::ActivityClock>,
+    /// Command Center — prices the briefing's 24 h spend.
+    pricing: aivyx_cost::Pricing,
     /// Model routing Part 3b — see `DaemonConfig::routing_guard`.
     routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
     /// Routing visibility B1 — see `DaemonConfig::routed`.
@@ -2195,6 +2208,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         seed_draft_llm,
         document_roots,
         reminder_store,
+        activity,
+        pricing,
         comfyui_base_url,
         routing_guard,
         routed,
@@ -2231,6 +2246,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
     // every other frame that arrives mid-turn waits in `deferred`, in order.
     let (frame_tx, mut frames) =
         tokio::sync::mpsc::unbounded_channel::<Result<FrontendMessage, FrameError>>();
+    let reader_activity = Arc::clone(&activity);
     let reader_task = tokio::spawn(async move {
         let mut buf = Vec::with_capacity(4096);
         let mut tmp = [0u8; 4096];
@@ -2243,6 +2259,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                 match decode_frame::<FrontendMessage>(&buf) {
                     Ok((msg, consumed)) => {
                         buf.drain(..consumed);
+                        // Command Center — stamp what the operator *does*
+                        // here, so it counts even mid-turn (an approval).
+                        if crate::activity::is_operator_action(&msg) {
+                            reader_activity.touch(crate::activity::now_unix()).await;
+                        }
                         if frame_tx.send(Ok(msg)).is_err() {
                             return;
                         }
@@ -3114,55 +3135,81 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // Phase 47 — inspection queries. Read-only; no
                             // capability check (IPC socket auth is the
                             // authorization boundary, per Q2).
-                            let response_payload = handle_query(
-                                payload,
-                                &daemon_state,
-                                mission_store.as_deref(),
-                                schedule_store.as_deref(),
-                                notify_targets.as_slice(),
-                                audit_log.as_deref(),
-                                &profile,
-                                persona_log.as_deref(),
-                                &shared_persona,
-                                persona_proposal_log.as_deref(),
-                                memory.as_ref(),
-                                embedding_provider.as_ref(),
-                                recall_log.as_ref(),
-                                helpfulness_ledger.as_ref(),
-                                cooccurrence_ledger.as_ref(),
-                                wiki_store.as_ref(),
-                                graph_store.as_ref(),
-                                conflict_dismissals.as_ref(),
-                                skill_effectiveness_ledger.as_ref(),
-                                correction_ledger.as_ref(),
-                                persona_selection_stat.as_ref(),
-                                recall_cluster_stat.as_ref(),
-                                proactive_stat.as_ref(),
-                                persona_lifecycle_stat.as_ref(),
-                                persona_consolidation_stat.as_ref(),
-                                correction_consolidation_stat.as_ref(),
-                                correction_judgment_stat.as_ref(),
-                                recall_judgment_stat.as_ref(),
-                                recall_feedback_config.as_ref(),
-                                &cadence_stats,
-                                &tool_descriptors,
-                                tool_relevance_ledger.as_ref(),
-                                loop_backlog.as_ref(),
-                                loop_state.as_ref(),
-                                loop_config.as_ref(),
-                                team_missions.as_ref(),
-                                config_toml_path.as_deref(),
-                                role_override.as_deref(),
-                                team_config_write_path.as_deref(),
-                                &document_roots,
-                                seed_draft_llm.as_ref(),
-                                comfyui_base_url.as_deref(),
-                                reminder_store.as_ref(),
-                                routing_guard.as_deref(),
-                                routed.as_deref(),
-                                audit_log.as_deref(),
-                            )
-                            .await;
+                            let response_payload = if matches!(payload, QueryPayload::GetBriefing) {
+                                // Command Center — answered here, not by
+                                // `handle_query`, because only the
+                                // connection loop holds the activity clock.
+                                let now = crate::activity::now_unix();
+                                let sources = crate::briefing::BriefingSources {
+                                    mission_store: mission_store.as_deref(),
+                                    schedule_store: schedule_store.as_deref(),
+                                    audit_log: audit_log.as_deref(),
+                                    persona_proposals: persona_proposal_log.as_deref(),
+                                    team_missions: team_missions.as_ref(),
+                                    reminders: reminder_store.as_ref(),
+                                    memory: memory.as_ref(),
+                                    pricing: &pricing,
+                                };
+                                let facts = crate::briefing::gather(
+                                    &sources,
+                                    activity.snapshot().last_here(now),
+                                    now,
+                                )
+                                .await;
+                                QueryResponsePayload::Briefing {
+                                    briefing: crate::briefing::compose(&facts, now),
+                                }
+                            } else {
+                                handle_query(
+                                    payload,
+                                    &daemon_state,
+                                    mission_store.as_deref(),
+                                    schedule_store.as_deref(),
+                                    notify_targets.as_slice(),
+                                    audit_log.as_deref(),
+                                    &profile,
+                                    persona_log.as_deref(),
+                                    &shared_persona,
+                                    persona_proposal_log.as_deref(),
+                                    memory.as_ref(),
+                                    embedding_provider.as_ref(),
+                                    recall_log.as_ref(),
+                                    helpfulness_ledger.as_ref(),
+                                    cooccurrence_ledger.as_ref(),
+                                    wiki_store.as_ref(),
+                                    graph_store.as_ref(),
+                                    conflict_dismissals.as_ref(),
+                                    skill_effectiveness_ledger.as_ref(),
+                                    correction_ledger.as_ref(),
+                                    persona_selection_stat.as_ref(),
+                                    recall_cluster_stat.as_ref(),
+                                    proactive_stat.as_ref(),
+                                    persona_lifecycle_stat.as_ref(),
+                                    persona_consolidation_stat.as_ref(),
+                                    correction_consolidation_stat.as_ref(),
+                                    correction_judgment_stat.as_ref(),
+                                    recall_judgment_stat.as_ref(),
+                                    recall_feedback_config.as_ref(),
+                                    &cadence_stats,
+                                    &tool_descriptors,
+                                    tool_relevance_ledger.as_ref(),
+                                    loop_backlog.as_ref(),
+                                    loop_state.as_ref(),
+                                    loop_config.as_ref(),
+                                    team_missions.as_ref(),
+                                    config_toml_path.as_deref(),
+                                    role_override.as_deref(),
+                                    team_config_write_path.as_deref(),
+                                    &document_roots,
+                                    seed_draft_llm.as_ref(),
+                                    comfyui_base_url.as_deref(),
+                                    reminder_store.as_ref(),
+                                    routing_guard.as_deref(),
+                                    routed.as_deref(),
+                                    audit_log.as_deref(),
+                                )
+                                .await
+                            };
                             let resp = DaemonMessage::QueryResponse {
                                 id,
                                 payload: response_payload,
@@ -4049,6 +4096,8 @@ async fn run_single_connection_daemon(
         seed_draft_llm: None,
         document_roots: Default::default(),
         reminder_store: None,
+        activity: Arc::new(crate::activity::ActivityClock::load(None).await),
+        pricing: aivyx_cost::Pricing::default(),
         comfyui_base_url: None,
         routing_guard,
         routed,
@@ -4147,6 +4196,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         seed_draft_llm: None,
         document_roots: Default::default(),
         reminder_store: None,
+        activity_store: None,
         routing_guard: None,
         routed: None,
         escalation_arming: None,

@@ -10532,6 +10532,9 @@ async fn run_async(
             // built above (used to wire the `remind.*` tools + spawn the
             // reminder driver) is also the `GetReminders` query's source.
             reminder_store: Some(Arc::clone(&reminder_store)),
+            // Command Center — the operator's last-activity clock persists
+            // in the same encrypted store the other daemon-wide domains use.
+            activity_store: Some(storage.domain(KeyDomain::ChannelState)),
             routing_guard: routing_guard.clone(),
             // Routing visibility B1 — `ModelRouted` after each routed turn,
             // and the `GetRoutingStatus` / `SetRoutingPin` queries.
