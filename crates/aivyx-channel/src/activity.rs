@@ -86,10 +86,11 @@ impl ActivityClock {
 }
 
 /// Frames that are the operator doing something (any daemon-socket front
-/// end: CLI chat, TUI, Studio). Reads — `GetBriefing` included — don't count.
+/// end: CLI chat, TUI, Studio). Reads — `GetBriefing` included — don't count,
+/// and neither does a headless (automated) `SubmitInput`.
 pub fn is_operator_action(msg: &FrontendMessage) -> bool {
     match msg {
-        FrontendMessage::SubmitInput { .. }
+        FrontendMessage::SubmitInput { headless: false, .. }
         | FrontendMessage::ResolveApproval { .. }
         | FrontendMessage::ResolveGate { .. }
         | FrontendMessage::ResolvePersonaProposal { .. } => true,
@@ -163,6 +164,14 @@ mod tests {
             assert!(is_operator_action(m), "{m:?}");
         }
         let no = [
+            // A headless (automated) submit isn't the operator acting.
+            FrontendMessage::SubmitInput {
+                session_id: "s".into(),
+                text: "scheduled".into(),
+                mission_id: None,
+                attachments: Vec::new(),
+                headless: true,
+            },
             FrontendMessage::Query { id: "x".into(), payload: QueryPayload::GetBriefing },
             FrontendMessage::Query { id: "x".into(), payload: QueryPayload::GetReminders },
             FrontendMessage::SetApprovals { enabled: true },

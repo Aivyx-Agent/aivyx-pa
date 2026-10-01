@@ -4758,10 +4758,10 @@ async fn handle_query(
         }
         QueryPayload::GetReminders => reminders_query_response(reminder_store).await,
         QueryPayload::CompleteReminder { id } => {
-            reminder_command(reminder_store, id, None, now_unix_secs()).await
+            reminder_command(reminder_store, id, None, crate::activity::now_unix()).await
         }
         QueryPayload::SnoozeReminder { id, secs } => {
-            reminder_command(reminder_store, id, Some(secs), now_unix_secs()).await
+            reminder_command(reminder_store, id, Some(secs), crate::activity::now_unix()).await
         }
         // Answered by the connection loop, which holds the activity clock
         // (see `handle_connection`). Only a caller that bypasses it lands here.
@@ -8291,16 +8291,6 @@ async fn reminder_command(
             }
         }
     }
-}
-
-/// Seconds-since-epoch clock for reminder commands answered from
-/// `handle_query` (not the connection loop, which has its own activity
-/// clock already).
-fn now_unix_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 /// POLISH_WAVES.md sub-project 8 item C — fold `mcp.call`-scoped audit
