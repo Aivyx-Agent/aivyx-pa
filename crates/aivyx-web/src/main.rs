@@ -36,15 +36,18 @@ use aivyx_ipc::wiki::{WikiPage, WikiPageSummary};
 use aivyx_ipc::graph::{GraphEntity, GraphTriple};
 use std::collections::{HashMap, HashSet};
 
-/// End-user guide content + markdown rendering for the Guide screen.
+/// The Command Center home screen: a logbook rendered from the daemon's `Briefing`.
 mod command_center;
 mod cron_text;
+/// End-user guide content + markdown rendering for the Guide screen.
 mod guide;
 /// Routing visibility B4 — pure helpers for the Models screen, the status
 /// bar's model segment and the cloud-consent card.
 mod routing;
 
-/// How many recent audit entries the Command Center feed shows.
+/// How many of the newest audit entries the `mc-audit` poll fetches. Nothing
+/// shows them any more: they only feed `nothing_has_happened_yet` (the
+/// first-visit welcome card) and mark the dashboard loaded.
 const AUDIT_FEED_N: u32 = 8;
 /// Chapter Herald — how many recent notification-history entries the
 /// poll keeps in view (mirrors the audit feed's self-correcting window).
@@ -620,11 +623,12 @@ struct Dashboard {
     audit_total: u64,
     chain_ok: Option<bool>,
     assistant_name: Option<String>,
-    /// The running agent's vitals (model / provider / context / autonomy /
-    /// access) from `GetSettings` — drives the agent-vitals rail.
+    /// The running agent's settings (model / provider / context / budget /
+    /// …) from `GetSettings` — drives the Command Center's model and spend
+    /// instruments.
     settings: Option<SettingsSnapshot>,
-    /// The agent's scheduled background routines (`GetSchedules`) — drives the
-    /// Routines panel + stat card, the "live agent working on its own" signal.
+    /// The agent's scheduled background routines (`GetSchedules`) — read by
+    /// the Schedules screen.
     schedules: Vec<ScheduleView>,
     /// POLISH_WAVES.md sub-project 7 plan 3 — the editable
     /// `[[reflection_schedule]]` list, distinct from `schedules` above
@@ -632,7 +636,7 @@ struct Dashboard {
     /// `GetReflectionScheduleConfigs`/`ReflectionScheduleConfigApplied`.
     reflection_schedules: Vec<ReflectionScheduleConfigView>,
     /// `/classic` retirement — the self-learning digest (VITRINE.md's
-    /// Learning pane, folded in here rather than a dedicated screen).
+    /// Learning pane), shown as the Learning section of the Memory screen.
     /// `None` until the first response arrives.
     learning: Option<aivyx_ipc::insights::LearningDigest>,
     /// `false` until the first dashboard snapshot (the audit-entries response)
@@ -667,8 +671,8 @@ struct NotificationsState {
 }
 
 /// `/classic` retirement — the dedicated Audit screen's state (distinct
-/// from `Dashboard.audit_entries`, the Command Center's own short,
-/// auto-following tail — this one is explicitly paginated by the
+/// from `Dashboard.audit_entries`, the short auto-following tail the
+/// first-visit check reads — this one is explicitly paginated by the
 /// operator). Chain-verify reuses `Dashboard.chain_ok` directly rather
 /// than duplicating it; see the AuditPanel component below.
 #[derive(Clone, Default, PartialEq)]
@@ -1161,7 +1165,7 @@ fn App() -> Element {
     // (in `AuditPanel`) can't know the chain's true `total_len` before its
     // first response arrives, so on a chain longer than one page it
     // necessarily asks for the OLDEST page first (from_seq=0), not the
-    // newest — unlike the Command Center's own `mc-audit` tail below,
+    // newest — unlike the dashboard's own `mc-audit` tail below,
     // which self-corrects every poll tick, `AuditPanel`'s query is a
     // one-shot `use_future` with no ongoing poll (by design — this screen
     // doesn't need the Command Center's continuous refresh).
@@ -1194,8 +1198,9 @@ fn App() -> Element {
         }
     });
 
-    // Live poll: mission feed + the newest audit tail, every interval. The audit
-    // window self-corrects to the newest entries once `audit_total` is known.
+    // Live poll: mission feed + the newest audit tail (for the first-visit
+    // check), every interval. The audit window self-corrects to the newest
+    // entries once `audit_total` is known.
     use_future(move || async move {
         loop {
             ws.send(FrontendMessage::Query {
@@ -1278,8 +1283,8 @@ fn App() -> Element {
             id: "mc-schedules".to_string(),
             payload: QueryPayload::GetSchedules,
         });
-        // `/classic` retirement — the self-learning digest, folded into the
-        // Command Center rail rather than a dedicated screen.
+        // `/classic` retirement — the self-learning digest, shown on the
+        // Memory screen's Learning section.
         ws.send(FrontendMessage::Query {
             id: "mc-learning".to_string(),
             payload: QueryPayload::GetLearningInsights { window_secs: None },
@@ -1794,7 +1799,7 @@ fn StatusBar(connected: bool, agent_name: String, model: routing::StatusModel) -
 }
 
 // ---------------------------------------------------------------------------
-// Command Center — the home dashboard (read-only)
+// Command Center — the home screen (a logbook; see `command_center`)
 // ---------------------------------------------------------------------------
 
 #[component]
@@ -3586,7 +3591,7 @@ fn AuditPanel() -> Element {
                     div { class: "panel-head", h3 { "About" } }
                     div { class: "glass-card",
                         p { class: "label-tech",
-                            "Every allowed or denied action, HMAC-chained and offline-verifiable. This screen shows {AUDIT_PAGE_SIZE} events at a time — use Older/Newer to page through the chain. The Command Center's own short tail is separate and always shows the very latest few."
+                            "Every allowed or denied action, HMAC-chained and offline-verifiable. This screen shows {AUDIT_PAGE_SIZE} events at a time — use Older/Newer to page through the chain."
                         }
                     }
                 }
@@ -4425,9 +4430,11 @@ fn MemoryPanel() -> Element {
     });
 
     let m = memory();
+    let learning = use_context::<Signal<Dashboard>>()().learning;
     rsx! {
         div { class: "mem",
             aside { class: "mem-rail",
+                LearningSection { learning }
                 div { class: "panel-head", h3 { "Topics" } span { class: "label-tech", "{m.topics.len()}" } }
                 button {
                     class: if scope() == "recent" { "mem-topic active" } else { "mem-topic" },
@@ -4544,6 +4551,42 @@ fn MemoryPanel() -> Element {
                 if let Some((ok, msg)) = memory_ui().notice.clone() {
                     div { class: if ok { "notice ok" } else { "notice err" }, "{msg}" }
                 }
+            }
+        }
+    }
+}
+
+/// The self-learning digest (`GetLearningInsights`, polled as `mc-learning`)
+/// — what used to be the Command Center's Learning panel.
+#[component]
+fn LearningSection(learning: Option<aivyx_ipc::insights::LearningDigest>) -> Element {
+    rsx! {
+        section { class: "panel",
+            div { class: "panel-head", h3 { "Learning" } }
+            match &learning {
+                None => rsx! {
+                    div { class: "glass-card empty",
+                        p { class: "label-tech", "Loading…" }
+                    }
+                },
+                Some(d) if d.recalls_total == 0 => rsx! {
+                    div { class: "glass-card empty",
+                        p { class: "label-tech", "Nothing learned yet — no recalls in the lookback window." }
+                    }
+                },
+                Some(d) => rsx! {
+                    div { class: "glass-card",
+                        p { class: "label-tech", "{d.recalls_scored}/{d.recalls_total} recalls scored · {d.promoted} promoted · {d.proposals_in_window} proposals this window" }
+                        if !d.top_helpful.is_empty() {
+                            p { class: "label-tech", style: "margin-top:6px;",
+                                "Most helpful: "
+                                for (topic, score) in d.top_helpful.iter().take(3) {
+                                    span { style: "margin-right:8px;", "{topic} ({score:.2})" }
+                                }
+                            }
+                        }
+                    }
+                },
             }
         }
     }
@@ -8592,10 +8635,9 @@ fn upsert_mission_view(missions: &mut Vec<TeamMissionView>, updated: TeamMission
 }
 
 /// Chapter Mission Control — which missions this view's selector offers:
-/// genuinely worth watching or acting on right now. Narrower than the
-/// Command Center's own "Active" stat (which also counts `Halted`, since
-/// that's a general dashboard metric) — a `Halted` mission has nothing
-/// left to watch or resume, so it's excluded here.
+/// genuinely worth watching or acting on right now — not merely
+/// non-terminal: a `Halted` mission has nothing left to watch or resume,
+/// so it's excluded here.
 fn watchable_missions(missions: &[TeamMissionView]) -> Vec<&TeamMissionView> {
     missions
         .iter()
@@ -10420,8 +10462,14 @@ async fn read_task(
                 DaemonEnvelope::QueryResponse {
                     id,
                     payload: QueryResponsePayload::QueryError { message, .. },
-                } if id == "cc-action" || id == "cc-briefing" => {
-                    briefing.write().notice = Some(message);
+                } if id == "cc-action" => {
+                    briefing.write().on_action_error(message);
+                }
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id == "cc-briefing" => {
+                    briefing.write().on_briefing_error(message);
                 }
                 // A denied path / read failure on the Documents screen (ids
                 // prefixed `mc-docs`) → a notice, leaving the listing intact.
@@ -10650,17 +10698,17 @@ async fn read_task(
                     payload: QueryResponsePayload::Briefing { briefing: b },
                     ..
                 } => {
-                    let mut s = briefing.write();
-                    s.briefing = Some(b);
-                    s.as_of_ms = js_sys::Date::now();
+                    briefing.write().on_briefing(b, js_sys::Date::now());
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::ReminderUpdated { ok, .. },
                     ..
                 } => {
-                    briefing.write().notice = (!ok).then(|| {
-                        "That reminder couldn't be updated — it may already be gone.".to_string()
-                    });
+                    if !ok {
+                        briefing.write().on_action_error(
+                            "That reminder couldn't be updated — it may already be gone.".to_string(),
+                        );
+                    }
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::Reminders { reminders },
@@ -10742,8 +10790,7 @@ async fn read_task(
                     ..
                 } => {
                     // Feeds both the Settings screen and the Command Center's
-                    // agent-vitals rail (same snapshot — model/provider/ctx/
-                    // autonomy/access).
+                    // model and spend instruments (same snapshot).
                     dashboard.write().settings = Some(snap.clone());
                     settings.write().snapshot = Some(snap);
                 }
@@ -11294,7 +11341,13 @@ async fn read_task(
                 } if id == "routing-allow-cloud" => {
                     routing.write().consent = ConsentState::Failed(message);
                 }
+                DaemonEnvelope::GateResolved { mission_id, gate_id, .. } => {
+                    briefing.write().on_gate_resolved(&mission_id, &gate_id);
+                }
                 DaemonEnvelope::Error { message, .. } => {
+                    // A Command Center mission-gate press answers with a bare
+                    // Error (no request id); show it there too.
+                    briefing.write().on_daemon_error(message.clone());
                     transcript.write().push(ChatLine::error(message));
                 }
                 DaemonEnvelope::ServerInfo { boot_id } => {
@@ -11308,6 +11361,9 @@ async fn read_task(
         // session — the ws bridge mints a fresh one on reconnect.
         connected.set(false);
         session.set(None);
+        // A gate press the dead socket never answered can't claim a later,
+        // unrelated error.
+        briefing.write().pending_gate = None;
     }
 }
 

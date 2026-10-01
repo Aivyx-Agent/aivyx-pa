@@ -363,13 +363,6 @@ a { color: var(--color-primary); text-decoration: none; }
   border: 1.5px solid currentColor; margin-right: 6px; vertical-align: middle;
 }
 
-.stat-card {
-  display: flex; flex-direction: column; gap: 6px;
-  transition: box-shadow 0.15s var(--ease-smooth);
-}
-.stat-card:hover { box-shadow: var(--shadow-md), var(--shadow-glow); }
-.stat-card .value { font-family: var(--font-display); font-weight: 700; font-size: 26px; }
-
 /* progress bar */
 .progress { height: 6px; background: var(--color-bg-elevated); border-radius: 3px; overflow: hidden; }
 .progress .fill { height: 100%; background: linear-gradient(90deg, var(--color-primary-dim), var(--color-primary)); transition: width 0.3s var(--ease-smooth); }
@@ -401,14 +394,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .gateprompt { margin-top: 4px; }
 .gate-label { flex: 1; color: var(--color-primary); font-size: 13px; min-width: 200px; }
 
-/* ── Command Center dashboard ──────────────────────────────────────────────── */
-.stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
-.stat-card .stat-top { display: flex; align-items: center; gap: 8px; color: var(--color-text-secondary); }
-.stat-card .stat-top .ico { width: 15px; height: 15px; }
-.stat-card .value { font-family: var(--font-display); font-weight: 700; font-size: 26px; color: var(--color-text-primary); }
-.stat-card .value.ok { color: var(--color-success); }
-.stat-card .value.off { color: var(--color-error); }
-
+/* ── Shared cards + two-column dashboard grid (Schedules, Audit, …) ─────────── */
 .welcome-card { margin-bottom: 18px; }
 .chat-empty { padding: 8px 4px; max-width: 640px; }
 .approval-card { border-color: var(--color-warn, #d97706); margin: 8px 0; }
@@ -420,7 +406,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .welcome-card h3 { margin: 0 0 6px; }
 .welcome-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .dash-grid { display: grid; grid-template-columns: 1fr 300px; gap: 18px; align-items: start; }
-@media (max-width: 900px) { .dash-grid { grid-template-columns: 1fr; } .stat-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 900px) { .dash-grid { grid-template-columns: 1fr; } }
 .dash-main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .dash-rail { display: flex; flex-direction: column; gap: 18px; }
 .panel {
@@ -434,10 +420,6 @@ a { color: var(--color-primary); text-decoration: none; }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; }
 .panel-head h3 { font-size: 16px; }
 
-.dash-mission { display: flex; flex-direction: column; gap: 8px; }
-.dash-mission .row1 { display: flex; gap: 10px; align-items: baseline; }
-.dash-mission .goal { flex: 1; color: var(--color-text-primary); font-size: 13.5px; }
-
 .audit-feed { display: flex; flex-direction: column; }
 .audit-feed .empty { padding: 8px 0; }
 .audit-row {
@@ -448,12 +430,6 @@ a { color: var(--color-primary); text-decoration: none; }
 .audit-row .ev { flex: 1; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-text-primary); }
 .audit-row .when { white-space: nowrap; }
 .audit-row .seq { white-space: nowrap; color: var(--color-text-disabled); }
-
-.agent-status { display: flex; flex-direction: column; gap: 2px; }
-.agent-status .kv { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; }
-.agent-status .kv .v { font-size: 13px; color: var(--color-text-primary); }
-.agent-status .kv .v.ok { color: var(--color-success); }
-.agent-status .kv .v.off { color: var(--color-text-disabled); }
 
 /* ── Memory view ───────────────────────────────────────────────────────────── */
 .mem { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: start; }
@@ -998,15 +974,11 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
     grid-template-columns: 1fr; align-items: start; gap: 6px;
   }
   .kv-grid { grid-template-columns: 1fr; }
-  .stat-row { grid-template-columns: repeat(2, 1fr); }
   .newbar, .mem-search, .composer { flex-wrap: wrap; }
 }
-@media (max-width: 440px) {
-  .stat-row { grid-template-columns: 1fr; }
-}
 
-/* ── Loading skeletons (Command Center first-paint) ───────────────────────
-   Shimmering placeholder blocks shown until the first dashboard snapshot
+/* ── Loading skeletons (first paint) ──────────────────────────────────────
+   Shimmering placeholder blocks shown until a screen's first snapshot
    arrives. The global prefers-reduced-motion rule above freezes the shimmer
    to a static block automatically. */
 .skeleton {
@@ -1020,11 +992,9 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   animation: skeleton-shimmer 1.4s ease infinite;
 }
 @keyframes skeleton-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
-.sk-ico { width: 16px; height: 16px; border-radius: 4px; }
 .sk-line { height: 10px; margin: 9px 0; }
-.sk-value { height: 26px; width: 55%; margin-top: 10px; }
 .sk-w30 { width: 30%; } .sk-w40 { width: 40%; } .sk-w50 { width: 50%; }
-.sk-w60 { width: 60%; } .sk-w70 { width: 70%; } .sk-w80 { width: 80%; }
+.sk-w70 { width: 70%; } .sk-w80 { width: 80%; }
 
 /* ── Accessibility: visible keyboard focus + skip link ────────────────────
    No focus indicator existed (and inputs did `outline:none`), so keyboard
@@ -1091,40 +1061,24 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   text-align: right;
 }
 
-/* ── Command Center: agent vitals + routines (v0.7.1) ───────────────────── */
-.stat-row-5 { grid-template-columns: repeat(5, 1fr); }
-@media (max-width: 900px) {
-  .stat-row-5 { grid-template-columns: repeat(2, 1fr); }
-  /* 5 tiles in a 2-column grid always strands the 5th alone in the last
-     row — span it across both columns instead of leaving it orphaned. */
-  .stat-row-5 > :last-child { grid-column: 1 / -1; }
-}
-/* NOTE: `.stat-row`'s own `@media (max-width: 440px)` rule (stitch.css,
-   "Responsive content grids" block above) sets `grid-template-columns: 1fr`
-   and has the *same specificity* as `.stat-row-5` above (both single-class
-   selectors) — the 2-column-not-1-column behavior on elements with both
-   classes (e.g. Command Center's `class="stat-row stat-row-5"`) only holds
-   because this block comes later in the file. Moving either block would
-   silently flip which one wins at <=440px. */
+/* ── Routine rows (Schedules screen) ───────────────────────────────────── */
 
-.agent-status .v.mono { font-family: var(--font-mono); font-size: 0.78em; }
-
-/* live/idle status dot — agent rail + routine rows (scoped to avoid the
-   statusbar's own .dot) */
-.agent-status .dot, .routine-row .dot {
+/* live/idle status dot — routine rows (scoped to avoid the statusbar's own
+   .dot) */
+.routine-row .dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
   margin-right: 6px; vertical-align: middle;
 }
-.agent-status .dot.live, .routine-row .dot.live {
+.routine-row .dot.live {
   background: var(--color-success); animation: dot-pulse 2s ease-in-out infinite;
 }
-.agent-status .dot.off, .routine-row .dot.off { background: var(--color-text-disabled); }
+.routine-row .dot.off { background: var(--color-text-disabled); }
 @keyframes dot-pulse {
   0%,100% { box-shadow: 0 0 0 0 rgba(77,139,106,0.5); }
   50%     { box-shadow: 0 0 0 5px rgba(77,139,106,0); }
 }
 
-/* routine rows in the Routines panel */
+/* routine rows */
 .routine-row { display: flex; flex-direction: column; gap: 6px; }
 .routine-row .row1 { display: flex; align-items: center; gap: 6px; }
 .routine-row .row1 .name { font-weight: 600; color: var(--color-text-primary); }

@@ -69,13 +69,77 @@ pub fn more_line(n: u32) -> Option<String> {
     (n > 0).then(|| format!("and {n} more → Audit"))
 }
 
-/// The latest briefing, when it arrived, and the last failed action.
+/// The latest briefing, when it arrived, and the last failure to show.
 #[derive(Clone, Default, PartialEq)]
 pub struct BriefingState {
     pub briefing: Option<Briefing>,
     /// `Date.now()` when `briefing` arrived — the "as of" line when offline.
     pub as_of_ms: f64,
+    /// The one notice line above the "Needs you" cards.
     pub notice: Option<String>,
+    /// `notice` came from a failed `GetBriefing` (not a card action), so the
+    /// next good briefing clears it. An action's failure stays until the
+    /// next action: the post-action re-fetch must not wipe it.
+    pub notice_from_briefing: bool,
+    /// A mission gate's Approve / Deny in flight, `(mission_id, gate_id)`.
+    /// `ResolveGate` answers with `GateResolved` or a bare
+    /// `DaemonEnvelope::Error`, which carries no request id — this marker is
+    /// how that error is recognised as the card's.
+    pub pending_gate: Option<(String, String)>,
+}
+
+impl BriefingState {
+    /// A card action is about to be sent: the last failure no longer applies.
+    pub fn begin_action(&mut self) {
+        self.notice = None;
+        self.notice_from_briefing = false;
+    }
+
+    /// A mission gate's Approve / Deny is about to be sent.
+    pub fn begin_gate(&mut self, mission_id: String, gate_id: String) {
+        self.begin_action();
+        self.pending_gate = Some((mission_id, gate_id));
+    }
+
+    pub fn on_briefing(&mut self, briefing: Briefing, now_ms: f64) {
+        self.briefing = Some(briefing);
+        self.as_of_ms = now_ms;
+        if self.notice_from_briefing {
+            self.notice = None;
+            self.notice_from_briefing = false;
+        }
+    }
+
+    pub fn on_briefing_error(&mut self, message: String) {
+        self.notice = Some(message);
+        self.notice_from_briefing = true;
+    }
+
+    pub fn on_action_error(&mut self, message: String) {
+        self.notice = Some(message);
+        self.notice_from_briefing = false;
+    }
+
+    pub fn on_gate_resolved(&mut self, mission_id: &str, gate_id: &str) {
+        if self
+            .pending_gate
+            .as_ref()
+            .is_some_and(|(m, g)| m == mission_id && g == gate_id)
+        {
+            self.pending_gate = None;
+        }
+    }
+
+    /// A `DaemonEnvelope::Error` arrived. If a gate action is in flight it is
+    /// that action's answer: show it and return `true`.
+    pub fn on_daemon_error(&mut self, message: String) -> bool {
+        if self.pending_gate.take().is_some() {
+            self.on_action_error(message);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 pub fn briefing_query() -> FrontendMessage {
@@ -90,6 +154,15 @@ fn local_parts(unix: i64) -> (u32, u32, i64) {
     (d.get_hours(), d.get_minutes(), day)
 }
 
+/// Today as "Wednesday 1 October" — wasm only.
+fn today_line() -> String {
+    let options = js_sys::Object::new();
+    for (k, v) in [("weekday", "long"), ("day", "numeric"), ("month", "long")] {
+        let _ = js_sys::Reflect::set(&options, &k.into(), &v.into());
+    }
+    String::from(js_sys::Date::new_0().to_locale_date_string("en-GB", &options))
+}
+
 fn now_unix() -> i64 {
     (js_sys::Date::now() / 1000.0) as i64
 }
@@ -102,9 +175,15 @@ fn go(mut view: Signal<View>, slug: &str) {
 
 /// Send an action, then re-ask for the briefing on the same connection, so
 /// the answer already reflects it (frames are handled in order). A new
-/// action clears the last failure's notice.
+/// action clears the last failure's notice; a mission gate is also marked
+/// in flight so its error (which carries no id) can be recognised.
 fn act(ws: Sender, mut state: Signal<BriefingState>, msg: FrontendMessage) {
-    state.write().notice = None;
+    match &msg {
+        FrontendMessage::ResolveGate { mission_id, gate_id, .. } => {
+            state.write().begin_gate(mission_id.clone(), gate_id.clone())
+        }
+        _ => state.write().begin_action(),
+    }
     ws.send(msg);
     ws.send(briefing_query());
 }
@@ -274,7 +353,7 @@ pub fn Logbook(
     let s = state();
     let now = now_unix();
     let (hour, _, today) = local_parts(now);
-    let date_line = String::from(js_sys::Date::new_0().to_date_string());
+    let date_line = today_line();
     let last_here = s
         .briefing
         .as_ref()
@@ -312,7 +391,15 @@ pub fn Logbook(
                 }
             }
             match &s.briefing {
-                None => rsx! { p { class: "label-tech", "Reading the record…" } },
+                None => rsx! {
+                    if let Some(n) = s.notice.clone() {
+                        p { class: "cc-notice", "{n}" }
+                    }
+                    if let Some(p) = pending() {
+                        ApprovalCard { p }
+                    }
+                    p { class: "label-tech", "Reading the record…" }
+                },
                 Some(b) => rsx! {
                     Sections { briefing: b.clone(), notice: s.notice.clone(), pending: pending(), view, today }
                 },
@@ -462,6 +549,65 @@ mod tests {
     fn more_line_only_when_something_was_left_out() {
         assert_eq!(more_line(0), None);
         assert_eq!(more_line(3).as_deref(), Some("and 3 more → Audit"));
+    }
+
+    fn some_briefing() -> Briefing {
+        Briefing { last_active_unix: Some(1), ..Default::default() }
+    }
+
+    #[test]
+    fn a_failed_mission_gate_lands_in_the_notice() {
+        let mut s = BriefingState::default();
+        s.begin_gate("m1".into(), "g1".into());
+        assert!(s.on_daemon_error("mission m1 not found".into()));
+        assert_eq!(s.notice.as_deref(), Some("mission m1 not found"));
+        assert_eq!(s.pending_gate, None);
+        // Without a gate in flight an error is not the Command Center's.
+        assert!(!s.on_daemon_error("some chat error".into()));
+        assert_eq!(s.notice.as_deref(), Some("mission m1 not found"));
+    }
+
+    #[test]
+    fn a_resolved_gate_clears_the_marker() {
+        let mut s = BriefingState::default();
+        s.begin_gate("m1".into(), "g1".into());
+        s.on_gate_resolved("m1", "g1");
+        assert_eq!(s.pending_gate, None);
+        assert!(!s.on_daemon_error("unrelated".into()));
+        assert_eq!(s.notice, None);
+    }
+
+    #[test]
+    fn a_new_action_clears_the_old_notice() {
+        let mut s = BriefingState::default();
+        s.on_action_error("That reminder couldn't be updated.".into());
+        s.begin_action();
+        assert_eq!(s.notice, None);
+    }
+
+    #[test]
+    fn the_refetch_keeps_an_action_failure_but_clears_a_briefing_failure() {
+        let mut s = BriefingState::default();
+        s.on_action_error("gate already resolved".into());
+        s.on_briefing(some_briefing(), 5.0);
+        assert_eq!(s.notice.as_deref(), Some("gate already resolved"));
+        assert_eq!(s.as_of_ms, 5.0);
+
+        let mut s = BriefingState::default();
+        s.on_briefing_error("audit chain unreadable".into());
+        assert_eq!(s.notice.as_deref(), Some("audit chain unreadable"));
+        s.on_briefing(some_briefing(), 6.0);
+        assert_eq!(s.notice, None);
+        assert!(s.briefing.is_some());
+    }
+
+    #[test]
+    fn an_action_failure_replaces_a_briefing_failure_and_stays() {
+        let mut s = BriefingState::default();
+        s.on_briefing_error("x".into());
+        s.on_action_error("y".into());
+        s.on_briefing(some_briefing(), 1.0);
+        assert_eq!(s.notice.as_deref(), Some("y"));
     }
 
     #[test]
