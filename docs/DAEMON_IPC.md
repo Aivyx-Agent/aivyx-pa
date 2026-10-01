@@ -471,7 +471,8 @@ returns them soonest first (`ReminderStore::list` sorts by `due_unix`, then
 secs: u64 }`** → both answered by `ReminderUpdated { id, ok, due_unix }`.
 `CompleteReminder` cancels the reminder (`due_unix: None` on success);
 `SnoozeReminder` cancels it and re-sets it with the same message and
-targets, due `secs` seconds from now (`due_unix: Some(new_time)`). An
+targets, due `secs` seconds after its due time — or after now, if it is
+already due — so a snooze never brings it earlier (`due_unix: Some(new_time)`). An
 unknown `id` gives `ok: false` for either. Both are **operator activity**
 (see below).
 

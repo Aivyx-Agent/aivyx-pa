@@ -852,7 +852,7 @@ pub enum QueryPayload {
     /// Mark a reminder done (removes it). Replies with
     /// [`QueryResponsePayload::ReminderUpdated`]; an unknown id → `ok: false`.
     CompleteReminder { id: String },
-    /// Move a reminder's due time to `now + secs`, keeping its message and
+    /// Move a reminder's due time to `max(due, now) + secs`, keeping its message and
     /// targets. Replies with [`QueryResponsePayload::ReminderUpdated`].
     SnoozeReminder { id: String, secs: u64 },
 }

@@ -8284,7 +8284,9 @@ async fn reminder_command(
             let Some(mut r) = all.into_iter().find(|r| r.id == id) else {
                 return failed(id);
             };
-            r.due_unix = now_unix.saturating_add(secs.min(i64::MAX as u64) as i64);
+            // From its due time (or now, if already due): snoozing never
+            // brings a reminder earlier than it was set.
+            r.due_unix = r.due_unix.max(now_unix).saturating_add(secs.min(i64::MAX as u64) as i64);
             match store.set(&r).await {
                 Ok(()) => QueryResponsePayload::ReminderUpdated { id, ok: true, due_unix: Some(r.due_unix) },
                 Err(_) => failed(id),
@@ -10164,6 +10166,23 @@ system_prompt = "You are a custom role."
         assert_eq!(left[0].due_unix, 4_600);
         assert_eq!(left[0].message, "msg r2");
         assert_eq!(left[0].notify_targets, vec!["telegram:1".to_string()]);
+
+        // A reminder that isn't due yet snoozes from its due time, never
+        // earlier than it was set.
+        store
+            .set(&crate::reminder_store::Reminder {
+                id: "r3".into(),
+                due_unix: 7_000,
+                message: "later".into(),
+                notify_targets: vec![],
+                created_unix: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            reminder_command(Some(&store), "r3".into(), Some(3_600), 1_000).await,
+            QueryResponsePayload::ReminderUpdated { id: "r3".into(), ok: true, due_unix: Some(10_600) }
+        );
     }
 
     #[tokio::test]
