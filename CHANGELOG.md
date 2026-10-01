@@ -5,6 +5,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- No tool can write (or delete) inside a `.git` directory any more —
+  `fs.write`, `fs.delete`, `workspace.write`, `workspace.delete`,
+  `workspace.note`, `data.xlsx.write`, and `data.pdf.write` all refuse a
+  `.git`-component path unconditionally, before any confirm-first logic.
+  This closes a path to redefining what `git` itself runs on a later
+  command (`core.fsmonitor`, a `filter.*.clean`/`.smudge` entry, a planted
+  hook) via the checkpointer's own unconfined `git add -A`. The `git.*`
+  tools additionally run every git invocation with `-c
+  core.fsmonitor=false` (plus `--no-ext-diff --no-textconv` on
+  `git.diff`), and the vendored `aivyx-checkpoint` dependency is bumped to
+  pick up the same hardening in its own `git add`.
+
 ## [0.14.2] — 2026-10-02
 
 ### Fixed

@@ -245,6 +245,32 @@ security failure:
   allow_sensitive_paths` opt-in. **`shell.exec` is now covered too** — the same
   scan refuses `echo … >> ~/.bashrc` / writes to `authorized_keys` / `crontab`
   before `sh` runs (best-effort, same obfuscation residual as the read guard).
+- **Git's own metadata can't be used to plant a program — guarded
+  unconditionally.** A write (or delete, or a move landing a file) anywhere
+  under a `.git` directory can redefine what `git` itself does on a *later*,
+  unrelated command: a `core.fsmonitor` or `filter.<name>.clean`/`.smudge`
+  entry in `.git/config` (paired with a `.gitattributes` line) makes the next
+  `git status`/`diff`/`add`/`commit` run an arbitrary program, and a file
+  dropped in `.git/hooks/` runs on the next `commit`/`checkout`/etc. This
+  matters more than it would in a generic sandbox because Aivyx PA
+  checkpoints the `fs` root and the `workspace` notebook through
+  `aivyx-checkpoint` whenever either is a git repo, and that checkpointer
+  runs `git add -A` **unconfined** (outside Landlock) before every mutating
+  tool call — so a `fs.write`/`workspace.write` into `.git/` would otherwise
+  turn "may write a file" into "may run any program." Every mutating
+  filesystem-shaped tool (`fs.write`, `fs.delete`, `workspace.write`,
+  `workspace.delete`, `workspace.note`, `data.xlsx.write`, `data.pdf.write`)
+  refuses a target whose path has a `.git` component — a plain
+  component-wise check (`.github/`, `.gitignore`, `.gitattributes` are
+  unaffected), applied right after path resolution and **before** any
+  confirm-first/escalation logic. Unlike Ward/Portcullis above, this is
+  *not* an `[access] allow_sensitive_paths`-style opt-out-able guard — it is
+  unconditional, because the risk is in git's own mechanism, not in the
+  operator's secret/persistence taxonomy. Defense in depth on top of that:
+  every git invocation the `git.*` tools and `aivyx-checkpoint` itself run
+  now forces `-c core.fsmonitor=false` (plus `--no-ext-diff --no-textconv`
+  on `git.diff`), so even a `core.fsmonitor`/filter entry that reached
+  `.git/config` by some other route can't fire through them.
 - **Capability ≠ competence (and the breakers prove it).** The ceiling is
   gated by the provider's reasoning quality. Small local models hallucinate
   and loop — the cycle breakers exist *because* they run away. Serious
