@@ -271,6 +271,8 @@ impl Tool for GitStatusTool {
 
         let mut command = tokio::process::Command::new("git");
         command
+            .arg("-c")
+            .arg("core.fsmonitor=false")
             .arg("-C")
             .arg(&repo)
             .arg("status")
@@ -393,7 +395,16 @@ impl Tool for GitDiffTool {
         let path = input.get("path").and_then(|v| v.as_str());
 
         let mut cmd = tokio::process::Command::new("git");
-        cmd.arg("-C").arg(&repo).arg("diff");
+        cmd.arg("-c")
+            .arg("core.fsmonitor=false")
+            .arg("-C")
+            .arg(&repo)
+            .arg("diff")
+            // Never shell out to a configured external diff/textconv driver —
+            // same "don't let a config value run a program" reasoning as
+            // `core.fsmonitor=false` above.
+            .arg("--no-ext-diff")
+            .arg("--no-textconv");
         if cached {
             cmd.arg("--cached");
         }
@@ -625,7 +636,13 @@ impl Tool for GitCommitTool {
 
         // Stage: `git -C <repo> add -- <paths...>`.
         let mut add_cmd = tokio::process::Command::new("git");
-        add_cmd.arg("-C").arg(&repo).arg("add").arg("--");
+        add_cmd
+            .arg("-c")
+            .arg("core.fsmonitor=false")
+            .arg("-C")
+            .arg(&repo)
+            .arg("add")
+            .arg("--");
         for p in &paths {
             add_cmd.arg(p);
         }
@@ -656,6 +673,8 @@ impl Tool for GitCommitTool {
         // as a manual commit.
         let mut commit_cmd = tokio::process::Command::new("git");
         commit_cmd
+            .arg("-c")
+            .arg("core.fsmonitor=false")
             .arg("-C")
             .arg(&repo)
             .arg("commit")
@@ -694,6 +713,8 @@ impl Tool for GitCommitTool {
         // Resolve the new HEAD so the caller gets the commit hash.
         let mut rev_parse_cmd = tokio::process::Command::new("git");
         rev_parse_cmd
+            .arg("-c")
+            .arg("core.fsmonitor=false")
             .arg("-C")
             .arg(&repo)
             .arg("rev-parse")
@@ -1712,6 +1733,157 @@ mod git_tests {
         assert!(
             refs.trim().is_empty(),
             "no checkpointer configured -- no checkpoint ref should exist"
+        );
+
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    /// Write a marker-writing `core.fsmonitor` hook into `repo`'s config and
+    /// return the marker path. The hook protocol doesn't matter here (git
+    /// invokes the configured program before the real command runs,
+    /// regardless of whether the response it writes back is well-formed) --
+    /// we only care whether the program ran at all.
+    fn install_marker_fsmonitor_hook(repo: &Path) -> PathBuf {
+        let marker = repo.join("fsmonitor-fired.marker");
+        let hook_path = repo.join("fsmonitor-hook.sh");
+        std::fs::write(
+            &hook_path,
+            format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // Installed directly via a raw `git config` call -- simulating a
+        // `core.fsmonitor` entry that somehow already made it into the
+        // repo's `.git/config` (the exact scenario the `.git`-write block
+        // elsewhere in this change now also prevents at the source).
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .arg("config")
+            .arg("core.fsmonitor")
+            .arg(&hook_path)
+            .output()
+            .expect("git config must run");
+        assert!(out.status.success(), "git config core.fsmonitor must succeed");
+        marker
+    }
+
+    #[tokio::test]
+    async fn git_status_does_not_fire_a_configured_fsmonitor_hook() {
+        let Some(repo) = init_temp_repo() else { return };
+        let marker = install_marker_fsmonitor_hook(&repo);
+
+        let (status_tool, _diff_tool) = GitReadToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = status_tool
+            .execute(json!({"repo": repo.display().to_string()}), &ctx)
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "status must still succeed with -c core.fsmonitor=false overriding \
+             the hostile config: {outcome:?}"
+        );
+        assert!(
+            !marker.exists(),
+            "the configured fsmonitor hook must NOT have fired through git.status"
+        );
+
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[tokio::test]
+    async fn git_diff_does_not_fire_a_configured_fsmonitor_hook() {
+        let Some(repo) = init_temp_repo() else { return };
+        std::fs::write(repo.join("tracked.txt"), b"a\n").unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .arg("add")
+                .arg("tracked.txt")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .arg("commit")
+                .arg("-m")
+                .arg("seed")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        std::fs::write(repo.join("tracked.txt"), b"b\n").unwrap();
+        let marker = install_marker_fsmonitor_hook(&repo);
+
+        let (_status_tool, diff_tool) = GitReadToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = diff_tool
+            .execute(json!({"repo": repo.display().to_string()}), &ctx)
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "diff must still succeed with -c core.fsmonitor=false overriding \
+             the hostile config: {outcome:?}"
+        );
+        assert!(
+            !marker.exists(),
+            "the configured fsmonitor hook must NOT have fired through git.diff"
+        );
+
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[tokio::test]
+    async fn git_commit_does_not_fire_a_configured_fsmonitor_hook() {
+        // Covers the add/commit/rev-parse argv chain in one pass -- all
+        // three now carry `-c core.fsmonitor=false`.
+        let Some(repo) = init_temp_repo() else { return };
+        std::fs::write(repo.join("c.txt"), b"c\n").unwrap();
+        let marker = install_marker_fsmonitor_hook(&repo);
+
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(
+                json!({
+                    "repo": repo.display().to_string(),
+                    "message": "c",
+                    "paths": ["c.txt"],
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "commit must still succeed with -c core.fsmonitor=false overriding \
+             the hostile config: {outcome:?}"
+        );
+        assert!(
+            !marker.exists(),
+            "the configured fsmonitor hook must NOT have fired through git.commit's \
+             add/commit/rev-parse chain"
         );
 
         std::fs::remove_dir_all(&repo).ok();

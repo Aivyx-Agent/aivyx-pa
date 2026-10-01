@@ -288,7 +288,15 @@ aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "f
 # MUST stay a public repo — see the aivyx-confine entry above for why;
 # this was the specific dependency whose private-repo auth failure was
 # traced and fixed in Phase 192 (Chapter N).
-aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "f3faa026bdedc3e6810e69035efc350675d1da90" }
+#
+# Pinned to 002d5918 (2026-10-02, the "never let a tool write git's own
+# metadata" hardening): `GitCheckpointer::run_git` now forces
+# `-c core.fsmonitor=false` on its own unconfined `git add -A`, so even if
+# a write somehow landed a `core.fsmonitor` entry in a checkpointed repo's
+# `.git/config`, the checkpointer's own git invocation won't run it.
+# Defense in depth alongside the tool-level `.git`-write block in
+# `aivyx-core::tools::fs::touches_git_metadata`.
+aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "002d5918e1fc3ce3ef6c79ab66f388d936546514" }
 
 # KV-cache persistence against a llama-server backend (LlmPlanner/
 # SpecialistFactory `with_kv_cache`), adopted from the sibling aivyx-coder
