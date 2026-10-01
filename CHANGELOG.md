@@ -5,6 +5,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- Command Center briefing polls are cheaper: the daemon caches the audit
+  walk across repeated `GetBriefing` polls, and the operator-activity clock
+  persists to disk only when it meaningfully changes, not on every action.
+
+### Fixed
+
+- A digest routine that fell back to a plain mission (no digest builder
+  configured) no longer counts twice in the Command Center log.
+- The 24 h spend instrument now says when it's a lower bound: if any model
+  used has no known price, Studio shows `$0.42+ · 24 h` instead of a total
+  that looks exact but isn't.
+
 ## [0.14.0] — 2026-10-01
 
 ### Changed

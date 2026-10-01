@@ -486,6 +486,7 @@ briefing.rs`):
 | `window_start_unix` | Where the log below starts. |
 | `window_capped` | `true` when the window was cut back to 7 days. |
 | `spend_24h_usd` | Rolling 24 h `LlmCost` spend; `None` if the audit chain couldn't be read. |
+| `spend_untracked` | `true` when some model priced into `spend_24h_usd` has no known rate (`Pricing::cost_of`'s `priced: false`), so the total is a lower bound, not the real spend. A genuinely free local model (`priced: true, usd: 0.0`) does not set this. |
 | `memory_topics` | Operator-visible memory topic count; `None` without a memory substrate. |
 | `needs_you` | `Vec<NeedsYouItem>` — approvals, proposals, failures (a routine that failed several times is one item, "failed N times") and reminders coming up in the next 2 hours (plus any already due the reminder driver hasn't fired yet; soonest first, `detail` = "due in 25 min" / "due in 1 h 10 min" / "due now"), each with a `NeedsYouAction` (`MissionGate`, `TeamGate`, `Review`, `Reminder`, or `Look`) and a `link` to the screen that owns it. |
 | `log` | `Vec<LogEntry>`, oldest first, capped at 12 (`briefing::LOG_CAP`). Each has `at_unix`, a first-person `sentence`, `warn` (show the time in the warn colour), and a `link`. |
