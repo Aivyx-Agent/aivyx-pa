@@ -117,7 +117,14 @@ jobs:
             echo "waiting for cargo-dist to create release $TAG… ($i)"
             sleep 20
           done
-          gh release upload "$TAG" \
-            "Aivyx-PA.wsl" \
-            "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz" \
-            --clobber --repo "${{ github.repository }}"
+          # cargo-dist can swap its draft release for the published one right
+          # after `view` first succeeds, so retry the upload itself too.
+          for i in $(seq 1 15); do
+            gh release upload "$TAG" \
+              "Aivyx-PA.wsl" \
+              "aivyx-wsl-rootfs-x86_64-${VERSION}.tar.gz" \
+              --clobber --repo "${{ github.repository }}" && exit 0
+            echo "upload attempt $i failed; retrying…"
+            sleep 20
+          done
+          exit 1
