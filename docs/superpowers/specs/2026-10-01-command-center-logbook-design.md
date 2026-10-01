@@ -241,3 +241,58 @@ Visual rules follow Stitch / Wick & Compass:
   receiving links.
 - Terminal (TUI) equivalent of the briefing. `GetBriefing` makes one
   possible later.
+
+## Refinements from planning (2026-10-01)
+
+Planning checked the design against the code. These refinements take
+precedence over anything earlier in this spec that disagrees.
+
+- **Reminder commands are queries.** Small daemon mutations already travel
+  as `QueryPayload` variants (`SetBudget`, `DeleteNotifyTarget`). So the new
+  commands are `QueryPayload::CompleteReminder { id }` and
+  `QueryPayload::SnoozeReminder { id, secs }`. Both are answered by
+  `QueryResponsePayload::ReminderUpdated { id, ok, due_unix }`, not by new
+  `FrontendMessage`s.
+- **"Last here" uses visits.** If the anchor were simply the newest action,
+  approving a card on the Command Center would empty its own log. Instead,
+  actions less than 30 minutes apart belong to one *visit*:
+  - The log window starts at the last action of the **previous** visit.
+  - Once 30 minutes have passed since the newest action, that action becomes
+    the anchor.
+  - The window is capped at 7 days, and the header then says "In the last 7
+    days".
+- **Which front ends count.** Only operator actions arriving over the daemon
+  socket count: the CLI chat, the TUI and the Studio. Telegram, Discord and
+  Slack run inside the daemon and are not counted in this version.
+- **Approvals in "Needs you"** come from three places:
+  - the Studio's own pending chat approval, which it already holds, rendered
+    with the existing `ApprovalCard`;
+  - pending mission gates, answered with `ResolveGate`;
+  - team-mission gates, answered with `ResolveTeamGate`.
+
+  A chat approval belongs to the connection that started the turn, so the
+  daemon cannot list approvals belonging to other connections.
+- **Dropped from version 1:**
+  - *Memory contradictions.* Detecting them needs a model pass, which is too
+    costly for a polled page; they stay on the Memory screen.
+  - *Model provider down.* The daemon tracks no provider health to read.
+  - *Context %.* No live context usage exists. The strip shows the model and
+    its context window, as the agent rail did.
+- **Spend is a rolling 24 hours.** It is summed from `LlmCost` audit entries
+  over the last 24 hours, the same window the day-budget gate enforces, and
+  is labelled "24 h".
+- **What the log says.** Log entries are:
+  - routine runs: wrapped routines carry their outcome; unwrapped routines
+    only say they ran;
+  - notifications sent or failed;
+  - one summary line of completed non-read-only tool calls, named with
+    counts ("I made 5 changes: fs.write ×3, calendar.create ×2.");
+  - one line of memories saved.
+
+  Finished team missions carry no timestamp, so they stay on Mission Control.
+- **Refresh.**
+  - The briefing polls every 10 s while the Command Center is open, not on
+    the 1.5 s live poll, because it walks the recent audit chain.
+  - After an action, the Studio sends the action and then `GetBriefing` on
+    the same connection, so the answer already reflects the action.
+  - A failed action shows one notice line above the cards.
