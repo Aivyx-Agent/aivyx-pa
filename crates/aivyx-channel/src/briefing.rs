@@ -403,8 +403,14 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
             Ok(records) => {
                 for m in records {
                     let updated = (m.updated_at / 1000) as i64;
-                    let label = trigger_label(&m.description);
-                    if let Some(g) = m.pending_gate() {
+                    // A mission only counts as a trigger/routine run when its
+                    // id carries the `trg-` prefix the trigger path actually
+                    // mints — a user mission whose description happens to
+                    // parse like a trigger label must not be mistaken for one.
+                    let label =
+                        if m.mission_id.starts_with("trg-") { trigger_label(&m.description) } else { None };
+                    let gate = m.pending_gate();
+                    if let Some(g) = gate {
                         f.mission_gates.push(GateFact {
                             mission_id: m.mission_id.clone(),
                             gate_id: g.gate_id.clone(),
@@ -412,16 +418,31 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
                         });
                     }
                     match (&label, m.state) {
-                        (Some(what), crate::mission::MissionState::Completed | crate::mission::MissionState::Failed)
-                            if updated >= window_start =>
+                        (
+                            Some(what),
+                            crate::mission::MissionState::Completed
+                            | crate::mission::MissionState::Failed
+                            | crate::mission::MissionState::Cancelled,
+                        ) if updated >= window_start =>
                         {
+                            // The trigger path ends an unsuccessful turn with
+                            // `cancel_mission` (→ `Cancelled`), not `Failed`;
+                            // a gate rejection is the other way a trigger
+                            // mission ends up `Failed`. Either reads as failed.
                             f.routine_runs.push(RoutineRun {
                                 what: what.clone(),
                                 at_unix: updated,
-                                failed: Some(m.state == crate::mission::MissionState::Failed),
+                                failed: Some(m.state != crate::mission::MissionState::Completed),
                             });
                         }
-                        (None, s) if !m.is_terminal() && s != crate::mission::MissionState::Created => {
+                        // A mission with a pending gate is surfaced via
+                        // `mission_gates` above, not also here — it belongs
+                        // only under "Needs you", not "Coming up" too.
+                        (None, s)
+                            if gate.is_none()
+                                && !m.is_terminal()
+                                && s != crate::mission::MissionState::Created =>
+                        {
                             f.in_progress.push(m.description.clone());
                         }
                         _ => {}
@@ -440,8 +461,11 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
                     if let Some(next) = r.next_fire_time() {
                         f.upcoming.push(UpcomingFact { name: name.clone(), at_unix: next.timestamp() });
                     }
-                    // Wrapped runs are already counted from their mission.
-                    if !r.wrap_mission
+                    // Wrapped runs are already counted from their mission,
+                    // except digest routines: `run_digest_report` runs them
+                    // without ever creating a mission, even when
+                    // `wrap_mission` is set, so they'd otherwise vanish.
+                    if (!r.wrap_mission || r.report_kind.as_deref() == Some("digest"))
                         && let Some(ms) = r.last_fired_at
                         && (ms / 1000) as i64 >= window_start
                     {
@@ -826,10 +850,22 @@ mod gather_tests {
         let now = crate::activity::now_unix();
         let missions = storage.domain(KeyDomain::Missions);
 
-        let mut failed = crate::mission::MissionRecord::new(
+        // The real trigger path ends an unsuccessful turn with
+        // `mission::cancel_mission` → `Cancelled`, never `Failed` directly;
+        // a gate rejection is the other way a trigger mission ends up
+        // `Failed`. Cover both.
+        let mut cancelled = crate::mission::MissionRecord::new(
             "trg-1".into(),
             "default".into(),
             "cron trigger cfg-trend-scan: scan".into(),
+        );
+        cancelled.state = crate::mission::MissionState::Cancelled;
+        crate::mission::create_mission(&missions, &cancelled).await.unwrap();
+
+        let mut failed = crate::mission::MissionRecord::new(
+            "trg-2".into(),
+            "default".into(),
+            "cron trigger cfg-nightly: run".into(),
         );
         failed.state = crate::mission::MissionState::Failed;
         crate::mission::create_mission(&missions, &failed).await.unwrap();
@@ -845,6 +881,16 @@ mod gather_tests {
             resolved_at: None,
         });
         crate::mission::create_mission(&missions, &gated).await.unwrap();
+
+        // A plain running mission: not a trigger, not gated — must still
+        // show up as in-progress work.
+        let mut running = crate::mission::MissionRecord::new(
+            "m-3".into(),
+            "default".into(),
+            "update the household budget".into(),
+        );
+        running.state = crate::mission::MissionState::Running;
+        crate::mission::create_mission(&missions, &running).await.unwrap();
 
         let reminders: crate::reminder_tool::SharedReminderStore =
             Arc::new(crate::reminder_store::ReminderStore::new(storage.domain(KeyDomain::Reminders)));
@@ -881,14 +927,20 @@ mod gather_tests {
             pricing: &pricing,
         };
         let f = gather(&src, Some(now - 3_600), now).await;
-        assert_eq!(f.routine_runs.len(), 1);
-        assert_eq!(f.routine_runs[0].what, "routine trend-scan");
-        assert_eq!(f.routine_runs[0].failed, Some(true));
+        assert_eq!(f.routine_runs.len(), 2);
+        let mut runs = f.routine_runs.clone();
+        runs.sort_by(|a, b| a.what.cmp(&b.what));
+        assert_eq!(runs[0].what, "routine nightly");
+        assert_eq!(runs[0].failed, Some(true));
+        assert_eq!(runs[1].what, "routine trend-scan");
+        assert_eq!(runs[1].failed, Some(true));
         assert_eq!(
             f.mission_gates,
             vec![GateFact { mission_id: "m-2".into(), gate_id: "g1".into(), reason: "send the weekly digest".into() }]
         );
-        assert_eq!(f.in_progress, vec!["write the report".to_string()]);
+        // The gated mission ("write the report") must not also appear as
+        // in-progress work — only the plain running one does.
+        assert_eq!(f.in_progress, vec!["update the household budget".to_string()]);
         assert_eq!(
             f.due_reminders,
             vec![ReminderFact { id: "due".into(), message: "call mom".into(), due_unix: now - 10 }]
@@ -896,6 +948,110 @@ mod gather_tests {
         assert!(f.source_errors.is_empty());
         assert_eq!(f.spend_24h_usd, None);
         assert_eq!(f.memory_topics, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A mission is only ever treated as a trigger/routine run when its id
+    /// has the `trg-` prefix the trigger path actually mints — not merely
+    /// because its (user-supplied) description happens to parse like a
+    /// trigger label.
+    #[tokio::test]
+    async fn a_user_mission_that_merely_mentions_trigger_is_not_mistaken_for_a_routine() {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let dir = std::env::temp_dir().join(format!("aivyx-briefing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage: Arc<dyn Storage> =
+            RedbStorage::open(StorageConfig::new(dir.join("store.redb")), MasterKey::from_raw([3u8; 32]))
+                .await
+                .unwrap();
+        let now = crate::activity::now_unix();
+        let missions = storage.domain(KeyDomain::Missions);
+
+        let mut running = crate::mission::MissionRecord::new(
+            "m-1".into(),
+            "default".into(),
+            "fix the webhook trigger handler: urgent".into(),
+        );
+        running.state = crate::mission::MissionState::Running;
+        crate::mission::create_mission(&missions, &running).await.unwrap();
+
+        let pricing = aivyx_cost::Pricing::new();
+        let src = BriefingSources {
+            mission_store: Some(&missions),
+            schedule_store: None,
+            audit_log: None,
+            persona_proposals: None,
+            team_missions: None,
+            reminders: None,
+            memory: None,
+            pricing: &pricing,
+        };
+        let f = gather(&src, Some(now - 3_600), now).await;
+        assert!(f.routine_runs.is_empty());
+        assert_eq!(f.in_progress, vec!["fix the webhook trigger handler: urgent".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `report_kind = "digest"` routine runs via `run_digest_report`
+    /// without ever creating a mission, even when `wrap_mission` is true —
+    /// so its firing must be counted straight from the schedule record, not
+    /// skipped on the assumption a mission will cover it.
+    #[tokio::test]
+    async fn a_fired_digest_schedule_is_counted_even_when_wrap_mission_is_set() {
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        let dir = std::env::temp_dir().join(format!("aivyx-briefing-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage: Arc<dyn Storage> =
+            RedbStorage::open(StorageConfig::new(dir.join("store.redb")), MasterKey::from_raw([3u8; 32]))
+                .await
+                .unwrap();
+        let now = crate::activity::now_unix();
+        let schedules = storage.domain(KeyDomain::Schedules);
+
+        let mut digest = crate::schedule::ScheduleRecord::new(
+            "cfg-digest".into(),
+            "0 0 3 * * *".into(),
+            "default".into(),
+            "send digest".into(),
+        )
+        .unwrap();
+        digest.wrap_mission = true;
+        digest.report_kind = Some("digest".into());
+        digest.last_fired_at = Some(((now - 100) * 1000) as u64);
+        crate::schedule::create_schedule(&schedules, &digest).await.unwrap();
+
+        let mut standup = crate::schedule::ScheduleRecord::new(
+            "cfg-standup".into(),
+            "0 0 9 * * *".into(),
+            "default".into(),
+            "standup".into(),
+        )
+        .unwrap();
+        standup.last_fired_at = None;
+        crate::schedule::create_schedule(&schedules, &standup).await.unwrap();
+
+        let pricing = aivyx_cost::Pricing::new();
+        let src = BriefingSources {
+            mission_store: None,
+            schedule_store: Some(&schedules),
+            audit_log: None,
+            persona_proposals: None,
+            team_missions: None,
+            reminders: None,
+            memory: None,
+            pricing: &pricing,
+        };
+        let f = gather(&src, Some(now - 3_600), now).await;
+        assert_eq!(
+            f.routine_runs,
+            vec![RoutineRun { what: "routine digest".into(), at_unix: now - 100, failed: None }]
+        );
+        // Both schedules are enabled, so both get an upcoming entry from
+        // their own future cron fire; the point under test is that the
+        // plain (non-digest) schedule produces one too.
+        assert!(f.upcoming.iter().any(|u| u.name == "standup"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
