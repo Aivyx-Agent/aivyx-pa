@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.14.3] — 2026-10-02
+
 ### Security
 
 - No tool can write (or delete) inside a `.git` directory any more —
