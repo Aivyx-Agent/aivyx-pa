@@ -270,7 +270,17 @@ security failure:
   every git invocation the `git.*` tools and `aivyx-checkpoint` itself run
   now forces `-c core.fsmonitor=false` (plus `--no-ext-diff --no-textconv`
   on `git.diff`), so even a `core.fsmonitor`/filter entry that reached
-  `.git/config` by some other route can't fire through them.
+  `.git/config` by some other route can't fire through them. The guard is
+  re-checked on the *canonical* (symlink-resolved) target at every one of
+  these call sites, not just the lexical input path, so a symlink alias
+  planted inside the sandbox (`<root>/link -> .git`, then a write to
+  `link/config`) can't reach `.git` by a path that never lexically spells
+  `.git`. The Studio's Documents browser (`document_browse`'s
+  write/delete/rename/make_dir, reached only via the daemon's
+  `WriteFile`/`DeleteFile`/`RenamePath`/`MakeDir` IPC queries) is **not**
+  covered by this guard — it is operator-driven through the Studio UI, not
+  a model-callable tool, so it is intentionally out of scope here the same
+  way `shell.exec` is.
 - **Capability ≠ competence (and the breakers prove it).** The ceiling is
   gated by the provider's reasoning quality. Small local models hallucinate
   and loop — the cycle breakers exist *because* they run away. Serious
