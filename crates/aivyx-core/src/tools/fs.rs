@@ -56,7 +56,6 @@
 //! any existing directory and then call `required_scope` with any
 //! input, no further I/O required.
 
-use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -242,9 +241,17 @@ pub fn lexical_resolve(sandbox_root: &Path, input_path: &Path) -> Option<PathBuf
 /// Matching is on path *components*, not a substring, so a legitimate
 /// `.github/workflow.yml` or `.gitignore` (which share the `.git` prefix
 /// as text but are different path components) are unaffected.
+///
+/// Compared case-insensitively (ASCII) unconditionally — not gated on the
+/// host OS — because macOS (a shipped target) and Windows both commonly
+/// run case-insensitive filesystems where `.GIT` and `.git` name the same
+/// directory; on a case-sensitive filesystem this is simply a stricter,
+/// harmless superset of the exact-case check.
 pub fn touches_git_metadata(path: &Path) -> bool {
-    path.components()
-        .any(|c| c == Component::Normal(OsStr::new(".git")))
+    path.components().any(|c| match c {
+        Component::Normal(seg) => seg.eq_ignore_ascii_case(".git"),
+        _ => false,
+    })
 }
 
 /// Shared refusal text for every tool that blocks a write/delete under
@@ -838,6 +845,23 @@ impl Tool for FsWriteTool {
         }
         let canonical_target = canonical_parent.join(&file_name);
 
+        // ---- git-metadata block, re-checked on the CANONICAL target ----
+        //
+        // The lexical check above only sees the input path as typed; a
+        // symlink alias (`<sandbox>/link -> .git`) lets `path: "link/config"`
+        // lexically resolve to a path with no `.git` component at all, while
+        // still landing at `<sandbox>/.git/config` once the parent is
+        // canonicalized through the symlink a few lines up. Re-running the
+        // same unconditional predicate on `canonical_target` (post-symlink-
+        // resolution, pre-mutation) closes that gap; the lexical check above
+        // stays as a cheap early refusal for the common (non-symlink) case.
+        if touches_git_metadata(&canonical_target) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: GIT_METADATA_WRITE_BLOCKED.to_string(),
+            });
+        }
+
         // ---- Chapter Portcullis — sensitive-write guard -----------
         //
         // Refuse writes to secret + persistence locations (shell rc files,
@@ -1263,6 +1287,16 @@ impl Tool for FsDeleteTool {
             });
         }
         let target = canonical_parent.join(&file_name);
+
+        // ---- git-metadata block, re-checked on the CANONICAL target ----
+        // Same symlink-alias gap as `FsWriteTool::execute` — see that
+        // call site's comment for the exploit shape.
+        if touches_git_metadata(&target) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: GIT_METADATA_WRITE_BLOCKED.to_string(),
+            });
+        }
 
         // ---- Chapter Portcullis — sensitive-write guard -----------
         //
@@ -1690,6 +1724,27 @@ mod tests {
     #[test]
     fn touches_git_metadata_false_for_dotgitattributes() {
         assert!(!touches_git_metadata(Path::new("/r/.gitattributes")));
+    }
+
+    #[test]
+    fn touches_git_metadata_true_for_uppercase_dotgit() {
+        // Case-insensitive filesystems (macOS, shipped) resolve `.GIT` and
+        // `.git` to the same directory — the component compare must not
+        // be case-sensitive.
+        assert!(touches_git_metadata(Path::new("/r/.GIT/config")));
+    }
+
+    #[test]
+    fn touches_git_metadata_true_for_mixed_case_dotgit() {
+        assert!(touches_git_metadata(Path::new("/r/.Git/hooks/x")));
+    }
+
+    #[test]
+    fn touches_git_metadata_false_for_dotgithub_uppercase_is_still_distinct() {
+        // `.GITHUB` must not collide with `.git` even case-insensitively —
+        // it's a different (7-char) component, not a case variant of the
+        // 4-char `.git`.
+        assert!(!touches_git_metadata(Path::new("/r/.GITHUB/w.yml")));
     }
 
     /// RAII temp directory — creates `$TMPDIR/aivyx-fs-test-<uuid>/root`
@@ -2252,6 +2307,39 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn write_refuses_dotgit_via_a_symlink_alias() {
+        // `<sandbox>/.git/` is a real dir; `<sandbox>/link -> .git` is a
+        // symlink alias. `path: "link/config"` lexically resolves to
+        // `<sandbox>/link/config` -- no `.git` *component* in the lexical
+        // path at all -- so the lexical-only check misses it, and the
+        // write lands at the canonical target `<sandbox>/.git/config`
+        // once the parent is canonicalized through the symlink.
+        use std::os::unix::fs::symlink;
+
+        let sandbox = SandboxDir::new();
+        std::fs::create_dir_all(sandbox.root.join(".git")).unwrap();
+        let link = sandbox.root.join("link");
+        symlink(sandbox.root.join(".git"), &link).expect("can create alias symlink");
+
+        let tool = build_write_tool(&sandbox);
+        let outcome = run_execute(
+            &tool,
+            json!({"path": "link/config", "content": "[core]\n\tfsmonitor = /tmp/x\n"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for link/config, got {other:?}"),
+        }
+        assert!(
+            !sandbox.root.join(".git/config").exists(),
+            ".git/config must not have been created via the symlink alias"
+        );
+    }
+
+    #[test]
     fn portcullis_refuses_writes_to_persistence_and_secret_paths() {
         use crate::sensitive_paths::SensitivePolicy;
         let sandbox = SandboxDir::new();
@@ -2733,6 +2821,35 @@ mod tests {
             run_execute(&tool, json!({"path": ".gitignore"})),
             ToolOutcome::Completed { .. }
         ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn delete_refuses_dotgit_via_a_symlink_alias() {
+        // Same symlink-alias bypass as `write_refuses_dotgit_via_a_symlink_alias`:
+        // `path: "link/config"` has no `.git` component lexically, but
+        // canonicalizes through `<sandbox>/link -> .git` to
+        // `<sandbox>/.git/config`.
+        use std::os::unix::fs::symlink;
+
+        let sandbox = SandboxDir::new();
+        std::fs::create_dir_all(sandbox.root.join(".git")).unwrap();
+        std::fs::write(sandbox.root.join(".git/config"), b"[core]\n").unwrap();
+        let link = sandbox.root.join("link");
+        symlink(sandbox.root.join(".git"), &link).expect("can create alias symlink");
+
+        let tool = build_delete_tool(&sandbox);
+        let outcome = run_execute(&tool, json!({"path": "link/config"}));
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for link/config, got {other:?}"),
+        }
+        assert!(
+            sandbox.root.join(".git/config").exists(),
+            ".git/config must not have been deleted via the symlink alias"
+        );
     }
 
     // ---- FsDeleteTool: required_scope (lexical layer) -------------

@@ -243,6 +243,15 @@ impl ReaderSandbox {
 
         let canonical_target = canonical_parent.join(&file_name);
 
+        // git-metadata block, re-checked on the CANONICAL target — a
+        // symlink alias (`<root>/link -> .git`) lets `path: "link/config"`
+        // lexically resolve with no `.git` component at all, while still
+        // landing inside `.git` once the parent is canonicalized above.
+        // See `touches_git_metadata`'s doc comment in `aivyx_core::tools::fs`.
+        if touches_git_metadata(&canonical_target) {
+            return Err(fail(tool, GIT_METADATA_WRITE_BLOCKED.to_string()));
+        }
+
         // Chapter Portcullis — refuse a sensitive write location even
         // inside the sandbox, matching fs.write's guard.
         if let Some(reason) = self.sensitive.classify_write(&canonical_target) {
@@ -484,5 +493,29 @@ mod tests {
         assert!(sb
             .resolve_write_target(&json!({"path": "report.xlsx"}), ToolId::new())
             .is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_write_target_refuses_dotgit_via_a_symlink_alias() {
+        // `<root>/.git/` is a real dir; `<root>/link -> .git` is a symlink
+        // alias. `path: "link/config"` has no `.git` *component* lexically,
+        // but canonicalizes through the symlink to `<root>/.git/config`.
+        use std::os::unix::fs::symlink;
+        let root = scratch_root();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        symlink(root.join(".git"), root.join("link")).expect("can create alias symlink");
+        let sb = ReaderSandbox::new(&root).unwrap();
+
+        let err = sb
+            .resolve_write_target(&json!({"path": "link/config"}), ToolId::new())
+            .expect_err("must refuse a write target reached via a symlink alias to .git");
+        match err {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected Failed(Tool), got {other:?}"),
+        }
+        assert!(!root.join(".git/config").exists());
     }
 }

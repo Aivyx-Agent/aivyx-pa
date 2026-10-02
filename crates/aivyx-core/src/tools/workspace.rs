@@ -431,6 +431,14 @@ impl Tool for WorkspaceWriteTool {
             Ok(p) => p,
             Err(e) => return tool_fail(self.id, e),
         };
+        // git-metadata block, re-checked on the CANONICAL target — a
+        // symlink alias (`<root>/link -> .git`) lets `path: "link/config"`
+        // lexically resolve with no `.git` component at all, while still
+        // landing inside `.git` once the parent is canonicalized through
+        // the symlink a few lines up. See `tools::fs::touches_git_metadata`.
+        if touches_git_metadata(&abs) {
+            return tool_fail(self.id, GIT_METADATA_WRITE_BLOCKED);
+        }
         // A pre-existing symlink at the write target is refused outright —
         // checked via `is_symlink` (an `lstat`, not `stat`), not `exists()`,
         // so a *dangling* symlink (pointing at a destination that doesn't
@@ -563,6 +571,11 @@ impl Tool for WorkspaceDeleteTool {
             Ok(p) => p,
             Err(e) => return tool_fail(self.id, e),
         };
+        // git-metadata block, re-checked on the CANONICAL target — same
+        // symlink-alias gap as `WorkspaceWriteTool::execute`.
+        if touches_git_metadata(&abs) {
+            return tool_fail(self.id, GIT_METADATA_WRITE_BLOCKED);
+        }
         let md = match std::fs::symlink_metadata(&abs) {
             Ok(m) => m,
             Err(e) => return tool_fail(self.id, format!("cannot stat {path:?}: {e}")),
@@ -642,6 +655,13 @@ impl Tool for WorkspaceNoteTool {
             Ok(p) => p,
             Err(e) => return tool_fail(self.id, e),
         };
+        // git-metadata block, re-checked on the CANONICAL target — covers
+        // a `category` that is itself an existing symlink alias to `.git`
+        // (e.g. `<root>/link -> .git`, `category: "link"`), which the
+        // lexical check above cannot see.
+        if touches_git_metadata(&abs) {
+            return tool_fail(self.id, GIT_METADATA_WRITE_BLOCKED);
+        }
         // A pre-existing symlink at the journal path is refused outright —
         // checked via `is_symlink` so a *dangling* symlink is caught too
         // (see `WorkspaceWriteTool`'s identical check for why `exists()`
@@ -896,6 +916,35 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn write_refuses_dotgit_via_a_symlink_alias() {
+        // `<root>/.git/` is a real dir; `<root>/link -> .git` is a symlink
+        // alias. `path: "link/config"` lexically resolves with no `.git`
+        // *component* at all, but canonicalizes through the symlink to
+        // `<root>/.git/config` once the parent is resolved.
+        use std::os::unix::fs::symlink;
+        let (root, tools) = tools_at("write-dotgit-symlink");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        symlink(root.join(".git"), root.join("link")).expect("can create alias symlink");
+
+        let outcome = run_execute(
+            named(&tools, "workspace.write"),
+            json!({"path": "link/config", "content": "[core]\n\tfsmonitor = /tmp/x\n"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for link/config, got {other:?}"),
+        }
+        assert!(
+            !root.join(".git/config").exists(),
+            ".git/config must not have been created via the symlink alias"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn delete_refuses_dotgit_config() {
         let (root, tools) = tools_at("delete-dotgit");
         std::fs::create_dir_all(root.join(".git")).unwrap();
@@ -912,6 +961,62 @@ mod tests {
             other => panic!("expected refusal for .git/config, got {other:?}"),
         }
         assert!(root.join(".git/config").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn delete_refuses_dotgit_via_a_symlink_alias() {
+        use std::os::unix::fs::symlink;
+        let (root, tools) = tools_at("delete-dotgit-symlink");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join(".git/config"), b"[core]\n").unwrap();
+        symlink(root.join(".git"), root.join("link")).expect("can create alias symlink");
+
+        let outcome = run_execute(
+            named(&tools, "workspace.delete"),
+            json!({"path": "link/config"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for link/config, got {other:?}"),
+        }
+        assert!(
+            root.join(".git/config").exists(),
+            ".git/config must not have been deleted via the symlink alias"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn note_refuses_a_category_that_is_a_symlink_alias_to_dotgit() {
+        // `category` sanitizes to a bare path component (no `/` survives a
+        // *single*-component category — this targets the case where the
+        // category itself IS an existing symlink pointing at `.git`, so
+        // `rel = "<category>/<date>.md"` canonicalizes through it).
+        use std::os::unix::fs::symlink;
+        let (root, tools) = tools_at("note-dotgit-symlink");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        symlink(root.join(".git"), root.join("link")).expect("can create alias symlink");
+
+        let outcome = run_execute(
+            named(&tools, "workspace.note"),
+            json!({"content": "pwned", "category": "link"}),
+        );
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("Writing inside .git is blocked"), "{detail}");
+            }
+            other => panic!("expected refusal for a symlink-aliased category, got {other:?}"),
+        }
+        let leaked = std::fs::read_dir(root.join(".git"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().ends_with(".md"));
+        assert!(!leaked, "no .md journal file must have landed inside .git");
         std::fs::remove_dir_all(&root).ok();
     }
 
