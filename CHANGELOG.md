@@ -5,6 +5,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.14.4] — 2026-10-03
+
+### Security
+
+- Checkpoint snapshots and `/undo`-style restores no longer run any program
+  a project's own git configuration names. The vendored `aivyx-checkpoint`
+  dependency (bumped to `b3aef65`) now runs its git commands with
+  repository-configured `clean`/`smudge`/`process` filters switched off,
+  hooks disabled (including `reference-transaction`, which `update-ref`
+  fires), fsmonitor off and commit signing off. Filters configured in your
+  own global git config (such as git-lfs) still apply.
+
 ## [0.14.3] — 2026-10-02
 
 ### Security
