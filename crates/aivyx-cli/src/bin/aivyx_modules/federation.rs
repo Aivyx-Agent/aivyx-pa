@@ -394,7 +394,7 @@ pub fn run_yubikey_init(
     // (`card`) now that all real card I/O for this provisioning attempt
     // is done -- BEFORE the verification pass below opens a *second*,
     // independent PC/SC connection to the same physical reader via
-    // `YubiKeySigner::new`. `SCardBeginTransaction` (what that second
+    // `YubiKeySigner::new_for_serial`. `SCardBeginTransaction` (what that second
     // connection's own transaction call performs internally) blocks
     // indefinitely -- it does not fail fast -- if another exclusive
     // transaction is still held on the same reader. Without this, the
@@ -431,38 +431,46 @@ pub fn run_yubikey_init(
     // (Finding C-1), so no exclusive transaction is still held on this
     // reader.
     //
-    // `YubiKeySigner::new` now refuses an empty User PIN at construction
-    // (`YubiError::EmptyPin`) rather than only on the first `sign()` call
-    // -- this verification pass never calls `sign()` itself, but must
-    // still supply a real, non-empty PIN to construct the signer at all.
-    // Prompted hidden, same as the Admin PIN above.
+    // `from_open_card` (which both `new` and `new_for_serial` below share)
+    // now refuses an empty User PIN at construction (`YubiError::EmptyPin`)
+    // rather than only on the first `sign()` call -- this verification
+    // pass never calls `sign()` itself, but must still supply a real,
+    // non-empty PIN to construct the signer at all. Prompted hidden, same
+    // as the Admin PIN above.
     let user_pin = rpassword::prompt_password(
         "User PIN (input hidden, for post-provisioning verification): ",
     )
     .map_err(|e| format!("aivyx-pa federation yubikey-init: failed to read User PIN: {e}"))?;
-    // Bound by serial to the card just provisioned, so another attached
-    // OpenPGP card can never be the one verified.
+    // `new_for_serial` (not plain `new`) -- binds this verification pass
+    // to the exact card just provisioned (`card_serial`) by serial, rather
+    // than whichever attached OpenPGP card `discover_real_card`/`new`
+    // would have enumerated first. Matters whenever more than one card is
+    // attached: without this, this closing check could silently verify a
+    // *different* card than the one `generate_signature_key[_overwriting]`
+    // above just re-keyed.
     let verifying_signer =
         YubiKeySigner::new_for_serial(SecretString::from(user_pin), &card_serial).map_err(|e| {
-        format!(
-            "aivyx-pa federation yubikey-init: wrote {} but a fresh re-discovery for verification \
-             failed: {e}",
-            key_binding_path.display(),
-        )
-    })?;
+            format!(
+                "aivyx-pa federation yubikey-init: wrote {} but a fresh re-discovery for \
+                 verification failed: {e}",
+                key_binding_path.display(),
+            )
+        })?;
     // NB (Finding I-1): `load_hardware`'s serial check compares the
     // freshly re-discovered card's serial against `card_serial` -- which
     // was itself just read from this exact same card, seconds earlier, in
-    // this exact same run. That comparison can never meaningfully fail in
-    // this flow; it isn't a "wrong card" check here (unlike in `sign()`'s
-    // long-lived-signer use case where it genuinely guards against a card
-    // swap). What this whole pass *does* meaningfully confirm is narrower:
-    // the card is discoverable again, its serial and public key match what
-    // provisioning itself just reported, and `Identity::load_hardware`
-    // (the real production load path) accepts all of it end to end. It
-    // does NOT confirm the touch policy set in step 6 is being enforced
-    // live -- see the success message below for the honest, non-
-    // overclaiming summary of what was and wasn't checked.
+    // this exact same run, and which `new_for_serial` above already
+    // insisted on reopening by that exact serial. That comparison can
+    // never meaningfully fail in this flow; it isn't a "wrong card" check
+    // here (unlike in `sign()`'s long-lived-signer use case where it
+    // genuinely guards against a card swap between construction and a
+    // much later call). What this whole pass *does* meaningfully confirm
+    // is narrower: the card is discoverable again, its serial and public
+    // key match what provisioning itself just reported, and
+    // `Identity::load_hardware` (the real production load path) accepts
+    // all of it end to end. It does NOT confirm the touch policy set in
+    // step 6 is being enforced live -- see the success message below for
+    // the honest, non-overclaiming summary of what was and wasn't checked.
     let identity = aivyx_federation::identity::Identity::load_hardware(
         instance_id.to_string(),
         verifying_signer,
