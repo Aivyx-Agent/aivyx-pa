@@ -1025,7 +1025,14 @@ fn run() -> Result<(), String> {
                 FederationSubcommand::YubikeyInit {
                     instance_id,
                     key_binding_path,
-                } => federation::run_yubikey_init(&instance_id, &key_binding_path),
+                    card_serial,
+                    overwrite_existing_key,
+                } => federation::run_yubikey_init(
+                    &instance_id,
+                    &key_binding_path,
+                    card_serial.as_deref(),
+                    overwrite_existing_key,
+                ),
             };
         }
         #[cfg(not(feature = "yubikey"))]
@@ -2525,15 +2532,28 @@ enum IdentitySubcommand {
 /// fields only) — see [`CliMode::Federation`]'s doc comment for why.
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum FederationSubcommand {
-    /// `aivyx-pa federation yubikey-init <instance-id> <key-binding-path>` —
-    /// provision a YubiKey's OpenPGP card Signature slot as `instance-id`'s
+    /// `aivyx-pa federation yubikey-init <instance-id> <key-binding-path>
+    /// [--card <serial>] [--overwrite-existing-key]` — provision a
+    /// YubiKey's OpenPGP card Signature slot as `instance-id`'s
     /// hardware-backed federation identity, then write the resulting
     /// `{instance_id, card_serial, public_key_base64}` binding record to
     /// `key-binding-path`. Requires the binary built with `--features
     /// yubikey` and `pcscd` running; see `docs/INSTALL.md`.
+    ///
+    /// `--card <serial>` picks which attached YubiKey to use when more
+    /// than one is present (required in that case; optional, but still
+    /// honored, with exactly one attached). `--overwrite-existing-key`
+    /// opts into destroying a key already in the chosen card's Signature
+    /// slot — refused without it, per `aivyx-yubi`'s
+    /// `provision::generate_signature_key` (`YubiError::
+    /// SignatureSlotOccupied`) — and still requires typing the card's
+    /// serial back interactively to confirm; see `federation.rs`'s own
+    /// doc comment for the full flow.
     YubikeyInit {
         instance_id: String,
         key_binding_path: PathBuf,
+        card_serial: Option<String>,
+        overwrite_existing_key: bool,
     },
 }
 
@@ -3116,24 +3136,61 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             "yubikey-init" => {
                 let instance_id = args.get(2).ok_or_else(|| {
                     "`aivyx-pa federation yubikey-init` requires an instance id. Usage: `aivyx-pa \
-                     federation yubikey-init <instance-id> <key-binding-path>`"
+                     federation yubikey-init <instance-id> <key-binding-path> [--card <serial>] \
+                     [--overwrite-existing-key]`"
                         .to_string()
                 })?;
                 let key_binding_path = args.get(3).ok_or_else(|| {
                     "`aivyx-pa federation yubikey-init` requires a key-binding output path. Usage: \
-                     `aivyx-pa federation yubikey-init <instance-id> <key-binding-path>`"
+                     `aivyx-pa federation yubikey-init <instance-id> <key-binding-path> [--card \
+                     <serial>] [--overwrite-existing-key]`"
                         .to_string()
                 })?;
-                if args.len() > 4 {
-                    return Err(format!(
-                        "`aivyx-pa federation yubikey-init` accepts exactly an instance id and an \
-                         output path. Got extra args: `{}`",
-                        args[4..].join(" ")
-                    ));
+                // Trailing optional flags: `--card <serial>` and
+                // `--overwrite-existing-key`, in either order, each at
+                // most once.
+                let mut card_serial: Option<String> = None;
+                let mut overwrite_existing_key = false;
+                let mut i = 4;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--card" => {
+                            let serial = args.get(i + 1).ok_or_else(|| {
+                                "`--card` requires a serial argument. Usage: `aivyx-pa federation \
+                                 yubikey-init <instance-id> <key-binding-path> [--card <serial>] \
+                                 [--overwrite-existing-key]`"
+                                    .to_string()
+                            })?;
+                            if card_serial.is_some() {
+                                return Err("`--card` specified more than once".to_string());
+                            }
+                            card_serial = Some(serial.clone());
+                            i += 2;
+                        }
+                        "--overwrite-existing-key" => {
+                            if overwrite_existing_key {
+                                return Err(
+                                    "`--overwrite-existing-key` specified more than once"
+                                        .to_string(),
+                                );
+                            }
+                            overwrite_existing_key = true;
+                            i += 1;
+                        }
+                        other => {
+                            return Err(format!(
+                                "`aivyx-pa federation yubikey-init` accepts an instance id, a \
+                                 key-binding output path, and optional --card <serial> / \
+                                 --overwrite-existing-key. Got unexpected arg: `{other}`"
+                            ));
+                        }
+                    }
                 }
                 FederationSubcommand::YubikeyInit {
                     instance_id: instance_id.clone(),
                     key_binding_path: PathBuf::from(key_binding_path),
+                    card_serial,
+                    overwrite_existing_key,
                 }
             }
             other => {
@@ -15275,8 +15332,99 @@ mod tests {
             CliMode::Federation(FederationSubcommand::YubikeyInit {
                 instance_id: "my-node".to_string(),
                 key_binding_path: PathBuf::from("/tmp/b.json"),
+                card_serial: None,
+                overwrite_existing_key: false,
             })
         );
+    }
+
+    #[test]
+    fn federation_yubikey_init_parses_with_card_and_overwrite_flags() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "federation",
+            "yubikey-init",
+            "my-node",
+            "/tmp/b.json",
+            "--card",
+            "0006:00112233",
+            "--overwrite-existing-key",
+        ]))
+        .expect("`--card <serial> --overwrite-existing-key` must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Federation(FederationSubcommand::YubikeyInit {
+                instance_id: "my-node".to_string(),
+                key_binding_path: PathBuf::from("/tmp/b.json"),
+                card_serial: Some("0006:00112233".to_string()),
+                overwrite_existing_key: true,
+            })
+        );
+    }
+
+    #[test]
+    fn federation_yubikey_init_parses_the_flags_in_either_order() {
+        let parsed = parse_cli_args_from(&argv(&[
+            "federation",
+            "yubikey-init",
+            "my-node",
+            "/tmp/b.json",
+            "--overwrite-existing-key",
+            "--card",
+            "0006:00112233",
+        ]))
+        .expect("flags in either order must parse");
+        assert_eq!(
+            parsed.mode,
+            CliMode::Federation(FederationSubcommand::YubikeyInit {
+                instance_id: "my-node".to_string(),
+                key_binding_path: PathBuf::from("/tmp/b.json"),
+                card_serial: Some("0006:00112233".to_string()),
+                overwrite_existing_key: true,
+            })
+        );
+    }
+
+    #[test]
+    fn federation_yubikey_init_card_flag_without_a_serial_is_an_error() {
+        let err = parse_cli_args_from(&argv(&[
+            "federation",
+            "yubikey-init",
+            "my-node",
+            "/tmp/b.json",
+            "--card",
+        ]))
+        .expect_err("`--card` without a serial must error");
+        assert!(err.contains("requires a serial argument"), "error: {err}");
+    }
+
+    #[test]
+    fn federation_yubikey_init_rejects_duplicate_card_flag() {
+        let err = parse_cli_args_from(&argv(&[
+            "federation",
+            "yubikey-init",
+            "my-node",
+            "/tmp/b.json",
+            "--card",
+            "0006:00112233",
+            "--card",
+            "0006:00112244",
+        ]))
+        .expect_err("a duplicate --card must error");
+        assert!(err.contains("more than once"), "error: {err}");
+    }
+
+    #[test]
+    fn federation_yubikey_init_rejects_duplicate_overwrite_flag() {
+        let err = parse_cli_args_from(&argv(&[
+            "federation",
+            "yubikey-init",
+            "my-node",
+            "/tmp/b.json",
+            "--overwrite-existing-key",
+            "--overwrite-existing-key",
+        ]))
+        .expect_err("a duplicate --overwrite-existing-key must error");
+        assert!(err.contains("more than once"), "error: {err}");
     }
 
     #[test]
@@ -15313,7 +15461,7 @@ mod tests {
             "--bogus",
         ]))
         .expect_err("extra args must error");
-        assert!(err.contains("extra args"), "error: {err}");
+        assert!(err.contains("unexpected arg"), "error: {err}");
     }
 
     #[test]

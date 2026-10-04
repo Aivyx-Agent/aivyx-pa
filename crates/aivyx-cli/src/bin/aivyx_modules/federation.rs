@@ -13,48 +13,77 @@
 //!
 //! # Provisioning flow (`run_yubikey_init`)
 //!
-//! 1. Discover the connected YubiKey's OpenPGP card
-//!    (`aivyx_yubi::discovery::discover_real_card`). Requires `pcscd`
-//!    running and a card inserted.
-//! 2. Refuse if the card's User and/or Admin PIN is still the OpenPGP-card
+//! 1. List every attached, OpenPGP-capable card
+//!    (`aivyx_yubi::discovery::list_cards`) and print each one's serial
+//!    and whether its Signature slot already holds a key. Requires
+//!    `pcscd` running and a card inserted; zero attached cards fails with
+//!    that same guidance. Exactly one attached card is used automatically;
+//!    with several, the operator must pass `--card <serial>` to pick one
+//!    (`choose_card`, a pure helper — see its own doc comment). The chosen
+//!    card is then opened by serial
+//!    (`aivyx_yubi::discovery::discover_real_card_by_serial`), not just
+//!    "the first one `card_backends()` happens to enumerate" — the same
+//!    serial just shown to the operator in the listing above.
+//! 2. If the chosen card's Signature slot already holds a key, stop
+//!    before asking for any PIN and explain, unless the operator passed
+//!    `--overwrite-existing-key` — many YubiKey owners keep a real GPG
+//!    signing key in that slot, and `aivyx_yubi::provision::
+//!    generate_signature_key` now refuses an occupied slot
+//!    (`YubiError::SignatureSlotOccupied`) for exactly that reason. With
+//!    `--overwrite-existing-key`, the card's serial is shown again and the
+//!    operator must type it back exactly to confirm
+//!    (`typed_serial_confirms_overwrite`, a pure helper) before this
+//!    command calls `provision::generate_signature_key_overwriting`
+//!    instead. Without a real terminal on stdin, this refuses rather than
+//!    prompting — there's no safe way to "confirm" non-interactively.
+//! 3. Refuse if the card's User and/or Admin PIN is still the OpenPGP-card
 //!    factory default (`aivyx_yubi::pin::require_pin_changed`). This
 //!    command **never** changes a PIN on the operator's behalf — Chapter
 //!    Passport's design spec's Global Constraints require refusing to
 //!    proceed instead, and `pin::require_pin_changed` must only be called
 //!    once per attempt (see its own doc comment on why: repeated calls
 //!    burn real PIN retry attempts, and the Admin PIN has no self-recovery
-//!    once blocked).
-//! 3. Verify the (already-changed) Admin PIN, prompted interactively via
+//!    once blocked). `require_pin_changed` can also now fail with
+//!    `YubiError::PinRetriesReduced` (some PIN's retry counter was already
+//!    below maximum before this command touched the card at all) — that
+//!    case gets its own guidance pointing at `gpg --card-status` instead
+//!    of the factory-default-PIN-change instructions, which would be the
+//!    wrong advice for it.
+//! 4. Verify the (already-changed) Admin PIN, prompted interactively via
 //!    `rpassword` (input hidden, never passed as a CLI argument or
 //!    logged).
-//! 4. Generate a fresh Ed25519 keypair in the Signature slot
-//!    (`aivyx_yubi::provision::generate_signature_key`) — **destructive**
-//!    if the slot already holds a key; see that function's own doc
-//!    comment. This command assumes a freshly-reset or never-before-
-//!    provisioned card, per the design spec.
-//! 5. Set the Signature slot's touch-policy to `Fixed`
+//! 5. Generate a fresh Ed25519 keypair in the Signature slot
+//!    (`aivyx_yubi::provision::generate_signature_key`, or
+//!    `generate_signature_key_overwriting` after step 2's confirmation) —
+//!    **destructive** if the slot already holds a key; see those
+//!    functions' own doc comments. Step 2 above is what makes that safe to
+//!    call unconditionally here: by this point either the slot was empty,
+//!    or the operator explicitly confirmed overwriting it.
+//! 6. Set the Signature slot's touch-policy to `Fixed`
 //!    (`aivyx_yubi::provision::set_signature_touch_policy_fixed`) — every
 //!    future signature requires a physical touch, with no PIN-only
 //!    fast-path.
-//! 6. Build the binding record (`{instance_id, card_serial,
+//! 7. Build the binding record (`{instance_id, card_serial,
 //!    public_key_base64}`) from data already in hand and write it to
 //!    `key_binding_path` as plain (non-secret) JSON.
-//! 7. As a closing sanity check, round-trip through
+//! 8. As a closing sanity check, round-trip through
 //!    `aivyx_federation::Identity::load_hardware` — the exact production
 //!    load path a daemon will use later — confirming the freshly
 //!    provisioned card's public key and serial are accepted by
 //!    `aivyx-federation`'s own validation. This re-discovers the card via
-//!    a fresh `aivyx_yubi::YubiKeySigner::new`, which never presents a PIN
-//!    to the card at construction time (only a later `sign()` call would
-//!    — see that type's own doc comment), so an empty placeholder PIN is
-//!    used here and is never sent to the card. The binding record file
-//!    from step 6 is already written by this point — a failure here is
-//!    reported as an error, but does not un-write it (provisioning is
-//!    already real and irreversible on the card by this point).
+//!    a fresh `aivyx_yubi::YubiKeySigner::new`, which now refuses an empty
+//!    User PIN at construction (`YubiError::EmptyPin`) rather than
+//!    deferring that to the first `sign()` call — so this step prompts for
+//!    the real User PIN (hidden, like the Admin PIN prompt in step 4) and
+//!    passes it, even though this verification pass never itself calls
+//!    `sign()`. The binding record file from step 7 is already written by
+//!    this point — a failure here is reported as an error, but does not
+//!    un-write it (provisioning is already real and irreversible on the
+//!    card by this point).
 //!
 //!    **This step opens a second, independent PC/SC connection to the same
 //!    physical reader.** The provisioning transaction and card handle from
-//!    steps 1-6 are explicitly `drop`ped before this step runs (Finding
+//!    steps 3-7 are explicitly `drop`ped before this step runs (Finding
 //!    C-1) — `SCardBeginTransaction` blocks indefinitely (it does not fail
 //!    fast) if another exclusive transaction is still held on the same
 //!    reader, so failing to release the first transaction first would hang
@@ -62,13 +91,14 @@
 //!    irreversibly re-keyed.
 //!
 //!    **What this step does NOT verify**: whether the touch-policy setting
-//!    from step 5 actually took effect live on the card. `YubiKeySigner::
+//!    from step 6 actually took effect live on the card. `YubiKeySigner::
 //!    sign` hard-refuses if the live touch policy isn't `Fixed`, but doing
-//!    that check here would require collecting the User PIN and a real
-//!    physical touch, which isn't this provisioning command's job (Finding
-//!    I-1) — see this step's own user-facing message for the accurate,
-//!    non-overclaiming description of what was and wasn't confirmed.
+//!    that check here would require a real physical touch, which isn't
+//!    this provisioning command's job (Finding I-1) — see this step's own
+//!    user-facing message for the accurate, non-overclaiming description
+//!    of what was and wasn't confirmed.
 
+use std::io::{self, IsTerminal, Write as _};
 use std::path::Path;
 
 use aivyx_yubi::{SecretString, YubiError, YubiKeySigner, discovery, pin, provision};
@@ -86,9 +116,87 @@ struct KeyBindingRecord {
     public_key_base64: String,
 }
 
+/// Choose which attached card `yubikey-init` should operate on, given
+/// `discovery::list_cards()`'s enumeration (already printed to the
+/// operator by the caller) and an optional `--card <serial>`. Pure: takes
+/// a plain slice of `discovery::CardSummary` (a hardware-free struct) and
+/// returns a reference into it or a descriptive error — no card I/O, so
+/// it's directly unit-testable without a YubiKey attached.
+///
+/// - `requested_serial = Some(s)`: the card whose serial exactly matches
+///   `s`, or an error naming what *is* attached if none does.
+/// - `requested_serial = None`, zero cards: refuses — nothing is attached.
+/// - `requested_serial = None`, exactly one card: that card.
+/// - `requested_serial = None`, several cards: refuses, asking for
+///   `--card <serial>`.
+fn choose_card<'a>(
+    cards: &'a [discovery::CardSummary],
+    requested_serial: Option<&str>,
+) -> Result<&'a discovery::CardSummary, String> {
+    if let Some(serial) = requested_serial {
+        return cards.iter().find(|c| c.serial == serial).ok_or_else(|| {
+            format!(
+                "no attached YubiKey has serial `{serial}` -- attached: {}",
+                describe_cards(cards)
+            )
+        });
+    }
+    match cards.len() {
+        0 => Err(
+            "no YubiKey found -- ensure pcscd is running and a YubiKey is inserted, then retry"
+                .to_string(),
+        ),
+        1 => Ok(&cards[0]),
+        _ => Err(format!(
+            "multiple YubiKeys attached ({}) -- pass --card <serial> to choose one",
+            describe_cards(cards)
+        )),
+    }
+}
+
+/// Render `cards` as a short, human-readable list (`"<serial> (<slot
+/// state>), ..."`) for `choose_card`'s error messages and the startup
+/// listing.
+fn describe_cards(cards: &[discovery::CardSummary]) -> String {
+    if cards.is_empty() {
+        return "none".to_string();
+    }
+    cards
+        .iter()
+        .map(|c| {
+            format!(
+                "{} ({})",
+                c.serial,
+                if c.has_signature_key {
+                    "Signature slot occupied"
+                } else {
+                    "Signature slot empty"
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `--overwrite-existing-key`'s confirmation check: the operator must type
+/// the card's serial back exactly (leading/trailing whitespace trimmed,
+/// e.g. the trailing newline a terminal `read_line` leaves in) to confirm
+/// they intend to destroy its existing Signature-slot key. Pure string
+/// comparison -- no I/O -- so it's unit-testable without a terminal or
+/// hardware; the actual stdin read lives in `run_yubikey_init` itself.
+fn typed_serial_confirms_overwrite(expected_serial: &str, typed: &str) -> bool {
+    typed.trim() == expected_serial
+}
+
 /// Entry point for `aivyx-pa federation yubikey-init <instance-id>
-/// <key-binding-path>`. See this module's doc comment for the full flow.
-pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<(), String> {
+/// <key-binding-path> [--card <serial>] [--overwrite-existing-key]`. See
+/// this module's doc comment for the full flow.
+pub fn run_yubikey_init(
+    instance_id: &str,
+    key_binding_path: &Path,
+    card_serial: Option<&str>,
+    overwrite_existing_key: bool,
+) -> Result<(), String> {
     // Fail fast on an invalid instance id before touching the card at all
     // (card discovery + the PIN-factory-default check below both cost
     // real, limited PIN retry attempts on a card whose PINs are already
@@ -98,12 +206,75 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     // directly (Finding I-2) rather than duplicating its character-class
     // rule inline, so this early check can never drift out of sync with
     // the authoritative rule `Identity::load_hardware` re-applies at the
-    // end regardless (step 7).
+    // end regardless (step 8).
     aivyx_federation::identity::validate_instance_id(instance_id)
         .map_err(|e| format!("aivyx-pa federation yubikey-init: {e}"))?;
 
-    eprintln!("aivyx-pa federation yubikey-init: discovering YubiKey (requires pcscd running)...");
-    let mut card = discovery::discover_real_card()
+    eprintln!(
+        "aivyx-pa federation yubikey-init: listing attached YubiKeys (requires pcscd running)..."
+    );
+    let cards = discovery::list_cards().map_err(|e| format!("aivyx-pa federation yubikey-init: {e}"))?;
+    for card in &cards {
+        eprintln!(
+            "aivyx-pa federation yubikey-init:   found card {} ({})",
+            card.serial,
+            if card.has_signature_key {
+                "Signature slot occupied"
+            } else {
+                "Signature slot empty"
+            }
+        );
+    }
+    let chosen = choose_card(&cards, card_serial)
+        .map_err(|e| format!("aivyx-pa federation yubikey-init: {e}"))?;
+    let chosen_serial = chosen.serial.clone();
+    let chosen_has_key = chosen.has_signature_key;
+    eprintln!("aivyx-pa federation yubikey-init: using card {chosen_serial}");
+
+    // Refuse to overwrite an occupied Signature slot without explicit,
+    // interactively-confirmed operator consent (step 2 in this module's
+    // doc comment) -- mirrors `provision::generate_signature_key`'s own
+    // refusal (`YubiError::SignatureSlotOccupied`), but checked here too
+    // so the operator never gets as far as typing a PIN for a run that's
+    // going to be refused anyway.
+    if chosen_has_key {
+        if !overwrite_existing_key {
+            return Err(format!(
+                "aivyx-pa federation yubikey-init: card {chosen_serial} already holds a \
+                 Signature-slot key -- refusing to overwrite it (many YubiKey owners keep a \
+                 real GPG signing key there). Re-run with --overwrite-existing-key once you \
+                 have confirmed losing the existing key is intended."
+            ));
+        }
+        if !io::stdin().is_terminal() {
+            return Err(
+                "aivyx-pa federation yubikey-init: --overwrite-existing-key requires an \
+                 interactive terminal to confirm the card's serial -- refusing to proceed \
+                 without one"
+                    .to_string(),
+            );
+        }
+        eprint!(
+            "aivyx-pa federation yubikey-init: this will PERMANENTLY DESTROY the existing \
+             Signature-slot key on card {chosen_serial}. Type the card's serial to confirm: "
+        );
+        io::stderr()
+            .flush()
+            .map_err(|e| format!("aivyx-pa federation yubikey-init: failed to flush prompt: {e}"))?;
+        let mut typed = String::new();
+        io::stdin().read_line(&mut typed).map_err(|e| {
+            format!("aivyx-pa federation yubikey-init: failed to read confirmation: {e}")
+        })?;
+        if !typed_serial_confirms_overwrite(&chosen_serial, &typed) {
+            return Err(
+                "aivyx-pa federation yubikey-init: confirmation did not match the card's \
+                 serial -- aborting without touching the card"
+                    .to_string(),
+            );
+        }
+    }
+
+    let mut card = discovery::discover_real_card_by_serial(&chosen_serial)
         .map_err(|e| format!("aivyx-pa federation yubikey-init: {e}"))?;
 
     let mut tx = card.transaction().map_err(YubiError::from).map_err(|e| {
@@ -111,17 +282,29 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     })?;
 
     // Refuse on a still-factory-default PIN rather than changing it
-    // ourselves — see this module's doc comment (step 2) and
+    // ourselves — see this module's doc comment (step 3) and
     // `pin::require_pin_changed`'s own doc comment for why this is called
-    // exactly once here, not in a retry loop.
+    // exactly once here, not in a retry loop. `PinRetriesReduced` (some
+    // PIN's retry counter was already below maximum before this command
+    // did anything PIN-related) gets its own guidance: the factory-
+    // default-PIN wording below would be actively misleading for it --
+    // the fix there isn't "change your PIN", it's "stop and check the
+    // card's retry counters first".
     pin::require_pin_changed(&mut tx).map_err(|e| {
-        format!(
-            "aivyx-pa federation yubikey-init: {e}\n\n\
-             This command never changes a PIN on your behalf — change both the \
-             User and Admin PIN first via the standard OpenPGP-card PIN-change \
-             command (e.g. `gpg --card-edit`, then `admin`, then `passwd`), then \
-             retry `aivyx-pa federation yubikey-init`."
-        )
+        let guidance = match &e {
+            YubiError::PinRetriesReduced { .. } => {
+                "Check the card's current retry counters with `gpg --card-status` before doing \
+                 anything else -- this command does not try to recover a reduced retry counter \
+                 on your behalf."
+            }
+            _ => {
+                "This command never changes a PIN on your behalf — change both the \
+                 User and Admin PIN first via the standard OpenPGP-card PIN-change \
+                 command (e.g. `gpg --card-edit`, then `admin`, then `passwd`), then \
+                 retry `aivyx-pa federation yubikey-init`."
+            }
+        };
+        format!("aivyx-pa federation yubikey-init: {e}\n\n{guidance}")
     })?;
 
     let admin_pin = rpassword::prompt_password("Admin PIN (input hidden): ")
@@ -168,11 +351,25 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
             )
         })?;
 
+    // By this point either the slot was empty, or the operator already
+    // typed the card's serial back to confirm overwriting it (above) --
+    // so it's safe to call the destructive variant unconditionally here
+    // rather than racing `generate_signature_key`'s own occupancy check
+    // against the confirmation the operator already gave.
     eprintln!(
-        "aivyx-pa federation yubikey-init: generating an Ed25519 keypair in the Signature slot \
-         (this overwrites any existing key in that slot)..."
+        "aivyx-pa federation yubikey-init: generating an Ed25519 keypair in the Signature slot{}...",
+        if chosen_has_key {
+            " (overwriting the existing key, as confirmed above)"
+        } else {
+            ""
+        }
     );
-    let public_key = provision::generate_signature_key(&mut admin).map_err(|e| {
+    let public_key = if chosen_has_key {
+        provision::generate_signature_key_overwriting(&mut admin)
+    } else {
+        provision::generate_signature_key(&mut admin)
+    }
+    .map_err(|e| {
         format!("aivyx-pa federation yubikey-init: Signature-slot key generation failed: {e}")
     })?;
 
@@ -225,7 +422,7 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
         key_binding_path.display(),
     );
 
-    // Closing sanity check (step 7 in this module's doc comment): confirm
+    // Closing sanity check (step 8 in this module's doc comment): confirm
     // the exact production load path (`Identity::load_hardware`) accepts
     // what we just provisioned. The binding record above is already
     // written by this point regardless of this check's outcome — the
@@ -233,7 +430,17 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     // PC/SC connection here: `tx`/`card` were already dropped above
     // (Finding C-1), so no exclusive transaction is still held on this
     // reader.
-    let verifying_signer = YubiKeySigner::new(SecretString::from(String::new())).map_err(|e| {
+    //
+    // `YubiKeySigner::new` now refuses an empty User PIN at construction
+    // (`YubiError::EmptyPin`) rather than only on the first `sign()` call
+    // -- this verification pass never calls `sign()` itself, but must
+    // still supply a real, non-empty PIN to construct the signer at all.
+    // Prompted hidden, same as the Admin PIN above.
+    let user_pin = rpassword::prompt_password(
+        "User PIN (input hidden, for post-provisioning verification): ",
+    )
+    .map_err(|e| format!("aivyx-pa federation yubikey-init: failed to read User PIN: {e}"))?;
+    let verifying_signer = YubiKeySigner::new(SecretString::from(user_pin)).map_err(|e| {
         format!(
             "aivyx-pa federation yubikey-init: wrote {} but a fresh re-discovery for verification \
              failed: {e}",
@@ -250,7 +457,7 @@ pub fn run_yubikey_init(instance_id: &str, key_binding_path: &Path) -> Result<()
     // the card is discoverable again, its serial and public key match what
     // provisioning itself just reported, and `Identity::load_hardware`
     // (the real production load path) accepts all of it end to end. It
-    // does NOT confirm the touch policy set in step 5 is being enforced
+    // does NOT confirm the touch policy set in step 6 is being enforced
     // live -- see the success message below for the honest, non-
     // overclaiming summary of what was and wasn't checked.
     let identity = aivyx_federation::identity::Identity::load_hardware(
@@ -340,7 +547,8 @@ mod tests {
             "aivyx-federation-cli-test-{}.json",
             uuid::Uuid::new_v4()
         ));
-        let err = run_yubikey_init("", &path).expect_err("an empty instance id must be rejected");
+        let err = run_yubikey_init("", &path, None, false)
+            .expect_err("an empty instance id must be rejected");
         assert!(err.contains("must not be empty"), "error: {err}");
         // Must not have written anything -- the instance-id check runs
         // before any card I/O or file write (Finding I-2).
@@ -357,11 +565,117 @@ mod tests {
             "aivyx-federation-cli-test-{}.json",
             uuid::Uuid::new_v4()
         ));
-        let err = run_yubikey_init("bad id with spaces", &path)
+        let err = run_yubikey_init("bad id with spaces", &path, None, false)
             .expect_err("an instance id with invalid characters must be rejected");
         assert!(err.contains("invalid characters"), "error: {err}");
         // Must not have written anything -- the instance-id check runs
         // before any card I/O or file write.
         assert!(!path.exists());
+    }
+
+    // --- `choose_card`: pure card-selection logic, no hardware needed ---
+
+    fn card(serial: &str, has_signature_key: bool) -> discovery::CardSummary {
+        discovery::CardSummary {
+            serial: serial.to_string(),
+            has_signature_key,
+        }
+    }
+
+    #[test]
+    fn choose_card_refuses_when_none_are_attached() {
+        let cards: Vec<discovery::CardSummary> = vec![];
+        let err = choose_card(&cards, None).expect_err("no attached cards must be refused");
+        assert!(err.contains("no YubiKey found"), "error: {err}");
+    }
+
+    #[test]
+    fn choose_card_uses_the_only_attached_card_without_a_card_flag() {
+        let cards = vec![card("0006:00112233", false)];
+        let chosen = choose_card(&cards, None).expect("the single card should be chosen");
+        assert_eq!(chosen.serial, "0006:00112233");
+    }
+
+    #[test]
+    fn choose_card_requires_the_card_flag_when_several_are_attached() {
+        let cards = vec![card("0006:00112233", false), card("0006:00112244", true)];
+        let err = choose_card(&cards, None)
+            .expect_err("several attached cards without --card must be refused");
+        assert!(err.contains("--card <serial>"), "error: {err}");
+        // Both serials should be named so the operator knows what to pass.
+        assert!(err.contains("0006:00112233"), "error: {err}");
+        assert!(err.contains("0006:00112244"), "error: {err}");
+    }
+
+    #[test]
+    fn choose_card_picks_the_requested_serial_among_several() {
+        let cards = vec![card("0006:00112233", false), card("0006:00112244", true)];
+        let chosen = choose_card(&cards, Some("0006:00112244"))
+            .expect("the requested serial should be found");
+        assert_eq!(chosen.serial, "0006:00112244");
+        assert!(chosen.has_signature_key);
+    }
+
+    #[test]
+    fn choose_card_reports_an_unknown_requested_serial() {
+        let cards = vec![card("0006:00112233", false)];
+        let err = choose_card(&cards, Some("0006:99999999"))
+            .expect_err("an unknown --card serial must be refused");
+        assert!(err.contains("0006:99999999"), "error: {err}");
+        assert!(err.contains("0006:00112233"), "error: {err}");
+    }
+
+    #[test]
+    fn choose_card_honors_the_card_flag_even_with_only_one_attached() {
+        // A --card that matches the only attached card should still work
+        // (not just be tolerated as redundant).
+        let cards = vec![card("0006:00112233", false)];
+        let chosen = choose_card(&cards, Some("0006:00112233"))
+            .expect("a matching --card should be accepted even with one card attached");
+        assert_eq!(chosen.serial, "0006:00112233");
+    }
+
+    // --- `typed_serial_confirms_overwrite`: pure string comparison ---
+
+    #[test]
+    fn typed_serial_confirms_overwrite_accepts_an_exact_match() {
+        assert!(typed_serial_confirms_overwrite(
+            "0006:00112233",
+            "0006:00112233"
+        ));
+    }
+
+    #[test]
+    fn typed_serial_confirms_overwrite_trims_surrounding_whitespace() {
+        // A real terminal `read_line` leaves a trailing newline (and an
+        // operator might add leading/trailing spaces) -- that must not
+        // itself cause a correct answer to be rejected.
+        assert!(typed_serial_confirms_overwrite(
+            "0006:00112233",
+            "  0006:00112233\n"
+        ));
+    }
+
+    #[test]
+    fn typed_serial_confirms_overwrite_rejects_a_mismatch() {
+        assert!(!typed_serial_confirms_overwrite(
+            "0006:00112233",
+            "0006:00112244"
+        ));
+    }
+
+    #[test]
+    fn typed_serial_confirms_overwrite_rejects_an_empty_answer() {
+        assert!(!typed_serial_confirms_overwrite("0006:00112233", "\n"));
+    }
+
+    #[test]
+    fn typed_serial_confirms_overwrite_is_case_sensitive() {
+        // Serials are rendered uppercase-hex by `discovery::read_serial`;
+        // a case-insensitive match would accept a typo-prone near-miss.
+        assert!(!typed_serial_confirms_overwrite(
+            "0006:00112233",
+            "0006:AABBCCDD"
+        ));
     }
 }

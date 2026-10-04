@@ -321,7 +321,10 @@ pub const COMMANDS: &[CommandHelp] = &[
         name: "federation",
         group: Group::Inspection,
         summary: "Bind a hardware-backed federation key (YubiKey)",
-        usage: &["aivyx-pa federation yubikey-init <instance-id> <key-binding-path>"],
+        usage: &[
+            "aivyx-pa federation yubikey-init <instance-id> <key-binding-path>",
+            "    [--card <serial>] [--overwrite-existing-key]",
+        ],
     },
     CommandHelp {
         name: "tool-relevance",

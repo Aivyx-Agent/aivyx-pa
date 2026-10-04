@@ -4746,21 +4746,45 @@ pre-configured Reset Code can otherwise recover it). Check your retry
 counter (e.g. `gpg --card-status`) before retrying a failed
 `yubikey-init` run.
 
+**If more than one YubiKey is attached**, `yubikey-init` lists every one
+it finds (serial + whether its Signature slot already holds a key) and
+requires `--card <serial>` to pick one — with exactly one attached, that
+card is used automatically. **If the chosen card's Signature slot already
+holds a key** (e.g. a real GPG signing key, or a previous run of this
+command), `yubikey-init` now refuses before asking for any PIN — pass
+`--overwrite-existing-key` and type the card's serial back when prompted
+to confirm you intend to destroy it.
+
 ```sh
 aivyx-pa federation yubikey-init my-instance-id ~/.config/aivyx-pa/federation-hardware-binding.json
-# aivyx-pa federation yubikey-init: discovering YubiKey (requires pcscd running)...
+# aivyx-pa federation yubikey-init: listing attached YubiKeys (requires pcscd running)...
+# aivyx-pa federation yubikey-init:   found card 0006:00112233 (Signature slot empty)
+# aivyx-pa federation yubikey-init: using card 0006:00112233
 # Admin PIN (input hidden):
-# aivyx-pa federation yubikey-init: generating an Ed25519 keypair in the Signature slot
-#   (this overwrites any existing key in that slot)...
+# aivyx-pa federation yubikey-init: generating an Ed25519 keypair in the Signature slot...
 # aivyx-pa federation yubikey-init: setting the Signature slot's touch policy to fixed
 #   (every future signature will require a physical touch)...
 # aivyx-pa federation yubikey-init: wrote binding record (...) to ~/.config/aivyx-pa/federation-hardware-binding.json
+# User PIN (input hidden, for post-provisioning verification):
 # aivyx-pa federation yubikey-init: post-provisioning check passed — a fresh re-discovery of
 #   card ... confirms its serial and Signature-slot public key match what provisioning just
 #   wrote for instance `my-instance-id`, and aivyx-federation's own Identity::load_hardware
 #   (the real production load path) accepts them. This does NOT confirm the touch policy is
 #   being enforced live on the card -- that is confirmed the first time this identity actually
 #   signs a real federation request, not by this init command.
+```
+
+```sh
+# Several cards attached, and overwriting an already-provisioned one:
+aivyx-pa federation yubikey-init my-instance-id ~/.config/aivyx-pa/federation-hardware-binding.json \
+  --card 0006:00112233 --overwrite-existing-key
+# aivyx-pa federation yubikey-init: listing attached YubiKeys (requires pcscd running)...
+# aivyx-pa federation yubikey-init:   found card 0006:00112233 (Signature slot occupied)
+# aivyx-pa federation yubikey-init:   found card 0006:00998877 (Signature slot empty)
+# aivyx-pa federation yubikey-init: using card 0006:00112233
+# aivyx-pa federation yubikey-init: this will PERMANENTLY DESTROY the existing Signature-slot
+#   key on card 0006:00112233. Type the card's serial to confirm: 0006:00112233
+# ...
 ```
 
 This is **destructive** if the card's Signature slot already holds a
