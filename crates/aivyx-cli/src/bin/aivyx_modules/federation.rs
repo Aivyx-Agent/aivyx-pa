@@ -440,7 +440,10 @@ pub fn run_yubikey_init(
         "User PIN (input hidden, for post-provisioning verification): ",
     )
     .map_err(|e| format!("aivyx-pa federation yubikey-init: failed to read User PIN: {e}"))?;
-    let verifying_signer = YubiKeySigner::new(SecretString::from(user_pin)).map_err(|e| {
+    // Bound by serial to the card just provisioned, so another attached
+    // OpenPGP card can never be the one verified.
+    let verifying_signer =
+        YubiKeySigner::new_for_serial(SecretString::from(user_pin), &card_serial).map_err(|e| {
         format!(
             "aivyx-pa federation yubikey-init: wrote {} but a fresh re-discovery for verification \
              failed: {e}",
