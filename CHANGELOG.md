@@ -5,6 +5,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.14.6] — 2026-10-05
+
+### Fixed
+
+- The prompt-injection check (`aivyx-injection-guard` `a0b0e7a`) now
+  catches phrases broken up by line breaks, extra spaces, JSON escapes or
+  invisible characters, and scans the whole of a fetched page or file
+  instead of only its first 64 KB.
+- Ordinary text such as "you are now ready" or licence wording no longer
+  trips it.
+
 ## [0.14.5] — 2026-10-04
 
 ### Fixed
