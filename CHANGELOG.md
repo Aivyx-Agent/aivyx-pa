@@ -5,6 +5,21 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.14.5] — 2026-10-04
+
+### Fixed
+
+- Checkpointing no longer switches itself off for good after a cancelled
+  or timed-out snapshot: the stale lock git leaves on the checkpointer's
+  private index is cleared on the next run (`aivyx-checkpoint` `0711690`).
+- Files matched by a bare deny pattern (`.env`, `.env.*`, `*.pem`, …) are
+  now excluded from checkpoint snapshots and left alone by a restore.
+- A git configuration check that fails for a real reason now stops the git
+  command instead of letting it run without its usual protections.
+- Skill files (`SKILL.md`) are read only when they are regular files, up to
+  a size cap, so an unusual file can no longer stall or exhaust memory
+  (`aivyx-skills` `4ee706e`).
+
 ## [0.14.4] — 2026-10-03
 
 ### Security
