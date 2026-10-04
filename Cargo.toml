@@ -306,7 +306,7 @@ aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", re
 # 2026-08-27 — previously duplicated verbatim across aivyx-core, aivyx-team,
 # aivyx-cli, and aivyx-channel's own Cargo.toml files.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "02d96f05aa3a5655a7e59b92d17c1ca19b27c4cb" }
+aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "a6e7ed96094f13f4fb63c8026cd5d2b9f75df3a9" }
 
 # Hardware-backed Ed25519 signing via a YubiKey's OpenPGP card applet
 # (Chapter Passport's optional hardware-identity backend, aivyx-federation's
@@ -348,9 +348,9 @@ aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "2cd35
 # out of lockstep with each other. No platform-specific backend, so no
 # target-gating needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "1a09b6a1d978ae789edb5a25523fa7580fa80714" }
-aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "1a09b6a1d978ae789edb5a25523fa7580fa80714" }
-aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "1a09b6a1d978ae789edb5a25523fa7580fa80714" }
+aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "825662152ffaf2bdcb54360eaa8f4ece0dce9478" }
+aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "825662152ffaf2bdcb54360eaa8f4ece0dce9478" }
+aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "825662152ffaf2bdcb54360eaa8f4ece0dce9478" }
 
 # The profile that 'dist' will build with
 [profile.dist]

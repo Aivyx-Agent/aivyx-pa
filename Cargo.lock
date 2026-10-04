@@ -533,7 +533,7 @@ dependencies = [
 [[package]]
 name = "aivyx-kvcache"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-kvcache?rev=02d96f05aa3a5655a7e59b92d17c1ca19b27c4cb#02d96f05aa3a5655a7e59b92d17c1ca19b27c4cb"
+source = "git+https://github.com/Aivyx-Agent/aivyx-kvcache?rev=a6e7ed96094f13f4fb63c8026cd5d2b9f75df3a9#a6e7ed96094f13f4fb63c8026cd5d2b9f75df3a9"
 dependencies = [
  "async-trait",
  "clap",
@@ -847,7 +847,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-core"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=1a09b6a1d978ae789edb5a25523fa7580fa80714#1a09b6a1d978ae789edb5a25523fa7580fa80714"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=825662152ffaf2bdcb54360eaa8f4ece0dce9478#825662152ffaf2bdcb54360eaa8f4ece0dce9478"
 dependencies = [
  "async-trait",
  "thiserror 2.0.18",
@@ -856,7 +856,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-mold"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=1a09b6a1d978ae789edb5a25523fa7580fa80714#1a09b6a1d978ae789edb5a25523fa7580fa80714"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=825662152ffaf2bdcb54360eaa8f4ece0dce9478#825662152ffaf2bdcb54360eaa8f4ece0dce9478"
 dependencies = [
  "aivyx-vision-core",
  "async-trait",
@@ -873,7 +873,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-svg"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=1a09b6a1d978ae789edb5a25523fa7580fa80714#1a09b6a1d978ae789edb5a25523fa7580fa80714"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=825662152ffaf2bdcb54360eaa8f4ece0dce9478#825662152ffaf2bdcb54360eaa8f4ece0dce9478"
 dependencies = [
  "async-trait",
  "svg-hush",
