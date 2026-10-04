@@ -5,6 +5,29 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- `aivyx-pa federation yubikey-init` (behind the optional `yubikey`
+  feature) is safer against hardware mistakes (`aivyx-yubi` bumped to
+  `fd93451`):
+  - Lists every attached YubiKey (serial + Signature-slot occupancy)
+    before touching any of them; with more than one attached, a new
+    `--card <serial>` option is now required to pick which one.
+  - Refuses to overwrite a Signature slot that already holds a key
+    (e.g. a real GPG signing key) unless a new
+    `--overwrite-existing-key` flag is passed, and even then requires
+    typing the card's serial back at an interactive prompt to confirm
+    — previously this command silently destroyed an existing key on
+    every run.
+  - Surfaces a reduced PIN retry counter (found before this command
+    touched the card at all) with guidance to check `gpg --card-status`
+    first, instead of the (wrong, in that case) factory-default-PIN
+    instructions.
+  - The closing post-provisioning verification pass now prompts for the
+    real User PIN (hidden) instead of constructing a throwaway signer
+    with an empty one, which the bumped `aivyx-yubi` now rejects
+    outright at construction.
+
 ## [0.14.6] — 2026-10-05
 
 ### Fixed
