@@ -328,7 +328,7 @@ aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "b99159d
 # aivyx-confine/aivyx-kvcache above. No platform-specific backend, so no
 # default-features/target-gating split is needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "bcd98e98f3b6aaa4c09dee50c56b2d00230d0e4a" }
+aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "a0b0e7a55d0a7a5d07108a285a76101c12a45f21" }
 aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "4ee706e7b378f8da1792d320908f557fea270747" }
 
 # Task-aware model routing (capability matching, tiering, discovery),
