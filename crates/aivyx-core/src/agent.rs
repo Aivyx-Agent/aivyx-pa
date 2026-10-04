@@ -2057,12 +2057,11 @@ impl ConcreteAgent {
 /// the *next* step once the true, fenced outcome has already been
 /// recorded.
 ///
-/// Known follow-up: the marker list has since diverged from
-/// aivyx-coder's own copy (this crate's pin now carries a larger list,
-/// deliberately not synced back) and still hasn't been evaluated
-/// end-to-end against non-file/non-web content (Gmail/Calendar/other MCP
-/// tool output), beyond the two markers narrowed by this phase's own
-/// final-review pass. A config knob to disable or exempt the tripwire
+/// The marker list is `aivyx-injection-guard`'s, the same one aivyx-coder
+/// uses: matching normalises whitespace, JSON escapes and zero-width
+/// characters, and scans the whole serialised output. It still hasn't
+/// been evaluated end-to-end against non-file/non-web content
+/// (Gmail/Calendar/other MCP tool output). A config knob to disable or exempt the tripwire
 /// per-tool does exist today (`injection_scan_enabled` /
 /// `injection_scan_exempt` on this struct), so a false positive there is
 /// no longer an unconditional hard-stop with no escape hatch.
