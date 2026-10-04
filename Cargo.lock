@@ -924,7 +924,7 @@ dependencies = [
 [[package]]
 name = "aivyx-yubi"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-yubi?rev=b99159d7a9e7b36950e9ddfe50ae13001069af35#b99159d7a9e7b36950e9ddfe50ae13001069af35"
+source = "git+https://github.com/Aivyx-Agent/aivyx-yubi?rev=fd934513b73a4fa875d2e190267068ded5ff98fb#fd934513b73a4fa875d2e190267068ded5ff98fb"
 dependencies = [
  "card-backend",
  "card-backend-pcsc",
