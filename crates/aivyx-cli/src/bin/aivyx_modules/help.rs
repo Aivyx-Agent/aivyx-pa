@@ -78,6 +78,16 @@ pub const COMMANDS: &[CommandHelp] = &[
     },
     // ---- Daemon -------------------------------------------------------
     CommandHelp {
+        name: "instances",
+        group: Group::Setup,
+        summary: "List, create, or remove named instances (separate agents)",
+        usage: &[
+            "aivyx-pa instances list",
+            "aivyx-pa instances create <name>",
+            "aivyx-pa instances remove <name>",
+        ],
+    },
+    CommandHelp {
         name: "daemon",
         group: Group::Daemon,
         summary: "Run, check, stop, install, or uninstall the daemon",

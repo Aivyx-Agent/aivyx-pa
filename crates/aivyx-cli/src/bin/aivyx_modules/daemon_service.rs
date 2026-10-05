@@ -352,12 +352,18 @@ pub fn run_uninstall() -> Result<(), String> {
 /// The installed unit/plist path, if the service is installed on this host.
 /// `None` when not installed (or unsupported platform). Used by `aivyx-pa doctor`.
 pub fn installed_unit_path() -> Option<PathBuf> {
+    installed_unit_path_for(&selected_instance())
+}
+
+/// [`installed_unit_path`] for a specific instance (used by
+/// `instances remove`, which acts on an instance other than its own).
+pub fn installed_unit_path_for(paths: &aivyx_instance::InstancePaths) -> Option<PathBuf> {
     let path = match Platform::detect() {
         Platform::Linux => user_config_dir()
             .ok()?
             .join("systemd/user")
-            .join(systemd_unit_for(&selected_instance())),
-        Platform::MacOs => macos_plist_path().ok()?,
+            .join(systemd_unit_for(paths)),
+        Platform::MacOs => macos_plist_path_for(paths).ok()?,
         Platform::Unsupported => return None,
     };
     path.exists().then_some(path)
@@ -574,10 +580,14 @@ fn xml_escape(s: &str) -> String {
 }
 
 fn macos_plist_path() -> Result<PathBuf, String> {
+    macos_plist_path_for(&selected_instance())
+}
+
+fn macos_plist_path_for(paths: &aivyx_instance::InstancePaths) -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
     Ok(PathBuf::from(home)
         .join("Library/LaunchAgents")
-        .join(format!("{}.plist", launchd_label_for(&selected_instance()))))
+        .join(format!("{}.plist", launchd_label_for(paths))))
 }
 
 fn install_macos(web_ui: bool, start: bool, known: Option<String>) -> Result<(), String> {

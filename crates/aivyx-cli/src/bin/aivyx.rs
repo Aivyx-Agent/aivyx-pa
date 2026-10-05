@@ -132,6 +132,8 @@ mod help;
 mod identity;
 #[path = "aivyx_modules/init.rs"]
 mod init;
+#[path = "aivyx_modules/instances.rs"]
+mod instances;
 #[path = "aivyx_modules/init_templates.rs"]
 mod init_templates;
 #[path = "aivyx_modules/learning.rs"]
@@ -542,6 +544,17 @@ fn main() -> ExitCode {
     // Store stripped args in the static for use by parse_cli_args().
     let _ = CLI_ARGS.set(stripped_args.clone());
 
+    // A stray ./aivyx-pa.toml would otherwise silently take over a named
+    // instance's config (it outranks the instance's own file).
+    if let Ok(instance) = aivyx_instance::InstanceName::from_env() {
+        let has_override = std::env::var_os(aivyx_config::ENV_CONFIG_PATH)
+            .is_some_and(|v| !v.is_empty());
+        let local = std::path::Path::new(aivyx_config::CONFIG_FILE_NAME).exists();
+        if let Some(notice) = local_config_notice(&instance, has_override, local) {
+            eprintln!("{notice}");
+        }
+    }
+
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -653,6 +666,29 @@ fn run() -> Result<(), String> {
                 return rt.block_on(init::run_init_wizard(Some(&template)));
             }
         }
+    }
+
+    // ---- Named instances ---------------------------------------------------
+    if let CliMode::Instances(ref cmd) = mode {
+        if let InstancesCmd::Create(name) = cmd {
+            // `create` runs the setup wizard *for the new instance*, so select
+            // it as this process's instance first.
+            // SAFETY: no runtime or other thread exists yet in this process
+            // (the tokio runtime is built just below), so nothing can be
+            // reading the environment concurrently.
+            unsafe { std::env::set_var(aivyx_instance::ENV_INSTANCE, name.as_str()) }
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async {
+            match cmd {
+                InstancesCmd::List => instances::run_list().await,
+                InstancesCmd::Create(name) => instances::run_create(name).await,
+                InstancesCmd::Remove(name) => instances::run_remove(name).await,
+            }
+        });
     }
 
     // ---- Phase 182: guided credential onboarding ------------------------
@@ -2165,6 +2201,9 @@ enum CliMode {
     /// connectable services + status; `Some(service)` runs the
     /// guided OAuth flow.
     Connect(Option<String>),
+    /// `aivyx-pa instances list | create <name> | remove <name>`: named
+    /// instances (several separate agents for one OS user).
+    Instances(InstancesCmd),
     /// `aivyx-pa mcp-server <name>`: bundled MCP server (Phase 46).
     McpServer(String),
     /// `aivyx-pa profile <subcommand>`: Profile inspection / edit
@@ -2322,6 +2361,14 @@ enum CliMode {
     /// prints the candidates; `explain [--limit N]` lists the audit chain's
     /// `ModelRouted` decisions, newest first (cold-start like `cost`).
     Routing(RoutingSubcommand),
+}
+
+/// `aivyx-pa instances …` subcommands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InstancesCmd {
+    List,
+    Create(aivyx_instance::InstanceName),
+    Remove(aivyx_instance::InstanceName),
 }
 
 /// Model routing Part 3a — `aivyx-pa routing <subcommand>`.
@@ -2812,6 +2859,21 @@ struct CliMcpServer {
 struct CliMcpSse {
     name: String,
     url: String,
+}
+
+/// The one-line notice printed when a named instance is about to read
+/// `./aivyx-pa.toml` from the current directory instead of its own config.
+fn local_config_notice(
+    instance: &aivyx_instance::InstanceName,
+    has_config_override: bool,
+    local_config_exists: bool,
+) -> Option<String> {
+    (!instance.is_default() && !has_config_override && local_config_exists).then(|| {
+        format!(
+            "aivyx-pa: using ./{} from the current directory for instance `{instance}`",
+            aivyx_config::CONFIG_FILE_NAME
+        )
+    })
 }
 
 /// Extract and validate the `--instance` flag from args.
@@ -3587,6 +3649,31 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Learning { window_secs },
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Named instances — `aivyx-pa instances list | create <n> | remove <n>`.
+    if !args.is_empty() && args[0] == "instances" {
+        let usage = "usage: aivyx-pa instances list | create <name> | remove <name>";
+        let cmd = match (args.get(1).map(String::as_str), args.get(2), args.len()) {
+            (None, _, _) | (Some("list"), None, 2) => InstancesCmd::List,
+            (Some("create"), Some(n), 3) => {
+                InstancesCmd::Create(aivyx_instance::InstanceName::parse(n)?)
+            }
+            (Some("remove"), Some(n), 3) => {
+                InstancesCmd::Remove(aivyx_instance::InstanceName::parse(n)?)
+            }
+            _ => return Err(usage.into()),
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Instances(cmd),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -14232,6 +14319,39 @@ mod tests {
     fn parse_version_long_flag() {
         let parsed = parse_cli_args_from(&argv(&["--version"])).expect("--version must parse");
         assert_eq!(parsed.mode, CliMode::Version);
+    }
+
+    #[test]
+    fn instances_subcommands_parse() {
+        let mode = |v: &[&str]| parse_cli_args_from(&argv(v)).map(|a| a.mode);
+        assert_eq!(mode(&["instances"]).unwrap(), CliMode::Instances(InstancesCmd::List));
+        assert_eq!(mode(&["instances", "list"]).unwrap(), CliMode::Instances(InstancesCmd::List));
+        assert_eq!(
+            mode(&["instances", "create", "research"]).unwrap(),
+            CliMode::Instances(InstancesCmd::Create(
+                aivyx_instance::InstanceName::parse("research").unwrap()
+            ))
+        );
+        assert_eq!(
+            mode(&["instances", "remove", "research"]).unwrap(),
+            CliMode::Instances(InstancesCmd::Remove(
+                aivyx_instance::InstanceName::parse("research").unwrap()
+            ))
+        );
+        assert!(mode(&["instances", "create"]).is_err());
+        assert!(mode(&["instances", "create", "Bad_Name"]).is_err());
+        assert!(mode(&["instances", "frobnicate"]).is_err());
+        assert!(mode(&["instances", "list", "extra"]).is_err());
+    }
+
+    #[test]
+    fn local_config_notice_only_for_a_named_instance_without_an_override() {
+        let named = aivyx_instance::InstanceName::parse("research").unwrap();
+        let default = aivyx_instance::InstanceName::default_instance();
+        assert!(local_config_notice(&named, false, true).is_some());
+        assert!(local_config_notice(&named, true, true).is_none()); // AIVYX_PA_CONFIG_PATH wins
+        assert!(local_config_notice(&named, false, false).is_none()); // no ./aivyx-pa.toml
+        assert!(local_config_notice(&default, false, true).is_none());
     }
 
     #[test]
