@@ -16,6 +16,7 @@
 //! the daemon's own group.
 
 use std::process::Output;
+use std::time::Duration;
 
 use tokio::process::{Child, Command};
 
@@ -84,21 +85,124 @@ impl Drop for ProcessGroupGuard {
     }
 }
 
-/// `Command::output()` for a confined command, with the process-group
-/// contract applied: the command leads its own group, stdout/stderr are
-/// captured, and the whole group is killed once the command has finished
-/// — or as soon as this future is dropped, if the call is cancelled.
-pub(crate) async fn confined_output(mut command: Command) -> std::io::Result<Output> {
+/// How [`run_in_own_group`] ended.
+#[derive(Debug)]
+pub(crate) enum GroupRun {
+    /// The command exited; its status and everything it wrote.
+    Finished(Output),
+    /// The timeout fired first. The group has been sent SIGTERM and gets
+    /// SIGKILL two seconds later; nothing that was written is returned.
+    TimedOut,
+}
+
+/// Why [`run_in_own_group`] failed.
+#[derive(Debug)]
+pub(crate) enum RunError {
+    Spawn(std::io::Error),
+    Wait(std::io::Error),
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunError::Spawn(e) => write!(f, "spawn failed: {e}"),
+            RunError::Wait(e) => write!(f, "wait failed: {e}"),
+        }
+    }
+}
+
+/// Run an (already confined) command under the process-group contract
+/// and capture its output. Shared by `shell.exec` and the `git.*` tools.
+///
+/// The command leads its own group (`process_group(0)`). The call ends
+/// when the command itself exits, not when its pipes reach EOF: the
+/// group is killed first, which closes any pipe a background job (`cmd
+/// &`, a git hook's detached child) still holds, and then the pipes are
+/// drained. The group is also killed if this future is dropped (a
+/// cancelled turn). With `timeout`, a command still running when it
+/// fires gets SIGTERM on its whole group, then SIGKILL two seconds later.
+pub(crate) async fn run_in_own_group(
+    mut command: Command,
+    timeout: Option<Duration>,
+) -> Result<GroupRun, RunError> {
     command
-        .stdin(std::process::Stdio::null())
+        .process_group(0)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let child = command.spawn()?;
-    let mut guard = ProcessGroupGuard::new(&child);
-    let output = child.wait_with_output().await;
-    guard.kill_now();
-    output
+    let mut child = command.spawn().map_err(RunError::Spawn)?;
+    let mut group = ProcessGroupGuard::new(&child);
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+
+    let run = async {
+        let (status, stdout, stderr) = tokio::join!(
+            async {
+                let status = child.wait().await;
+                group.kill_now();
+                status
+            },
+            read_pipe(stdout_pipe.as_mut()),
+            read_pipe(stderr_pipe.as_mut()),
+        );
+        status.map(|status| Output {
+            status,
+            stdout,
+            stderr,
+        })
+    };
+    let finished = match timeout {
+        Some(limit) => match tokio::time::timeout(limit, run).await {
+            Ok(result) => Some(result),
+            Err(_elapsed) => None,
+        },
+        None => Some(run.await),
+    };
+    match finished {
+        Some(result) => result.map(GroupRun::Finished).map_err(RunError::Wait),
+        None => {
+            // Graceful shutdown: SIGTERM the group so processes can flush
+            // and clean up, SIGKILL it two seconds later. The guard is
+            // disarmed so it doesn't SIGKILL straight away on return.
+            if let Some(pgid) = group.disarm() {
+                if let Ok(raw) = libc::pid_t::try_from(pgid) {
+                    // SAFETY: killpg with a positive group id. A group that
+                    // already exited returns ESRCH, ignored.
+                    unsafe {
+                        libc::killpg(raw, libc::SIGTERM);
+                    }
+                }
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    let _ = kill_group(pgid);
+                });
+            }
+            Ok(GroupRun::TimedOut)
+        }
+    }
+}
+
+/// [`run_in_own_group`] without a timeout, as an `io::Result<Output>`
+/// like `Command::output()`. stdin is `/dev/null`.
+pub(crate) async fn confined_output(mut command: Command) -> std::io::Result<Output> {
+    command.stdin(std::process::Stdio::null());
+    match run_in_own_group(command, None).await {
+        Ok(GroupRun::Finished(output)) => Ok(output),
+        Ok(GroupRun::TimedOut) => unreachable!("no timeout was set"),
+        Err(RunError::Spawn(e) | RunError::Wait(e)) => Err(e),
+    }
+}
+
+/// Read a child's captured pipe to EOF. A read error ends the capture
+/// early with what was read so far — the command's own exit status is
+/// what the caller acts on, not a broken pipe.
+async fn read_pipe<R: tokio::io::AsyncRead + Unpin>(pipe: Option<&mut R>) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    if let Some(pipe) = pipe {
+        let _ = pipe.read_to_end(&mut buf).await;
+    }
+    buf
 }
 
 #[cfg(test)]

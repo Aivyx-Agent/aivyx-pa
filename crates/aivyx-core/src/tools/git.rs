@@ -789,15 +789,27 @@ impl Tool for GitCommitTool {
 
 /// Confine `command` and run it to completion under the process-group
 /// contract (see `tools::process_group`): it leads its own group, which is
-/// killed when the command finishes or this future is dropped, so a hook's
-/// background job can't outlive the git call. `process_group(0)` is set
-/// here too, not only by the confiner, so the kill is safe under
-/// `NoopConfiner` as well.
+/// killed as soon as git exits (before its pipes are drained) or this
+/// future is dropped, so a hook's background job can neither outlive the
+/// git call nor stall it by holding git's stderr. `process_group(0)` is
+/// set here too, not only by the confiner, so the kill is safe whatever
+/// confiner is in use. The environment is cleared to `shell.exec`'s
+/// allowlist.
 async fn run_confined(
     confiner: &dyn ExecutionConfiner,
     mut command: tokio::process::Command,
 ) -> std::io::Result<std::process::Output> {
     command.process_group(0);
+    // Same environment policy as `shell.exec`: hooks and git itself must
+    // not see the daemon's secrets (`AIVYX_PA_PASSPHRASE`, provider API
+    // keys) or the operator's `GIT_DIR`/`GIT_CONFIG_*`. HOME stays so git
+    // still reads the global user.name/user.email.
+    command.env_clear();
+    for &var in crate::tools::shell::SAFE_ENV_DEFAULTS {
+        if let Some(val) = std::env::var_os(var) {
+            command.env(var, val);
+        }
+    }
     confined_output(confiner.confine(command)).await
 }
 
@@ -1506,6 +1518,7 @@ mod git_tests {
     }
 
     /// A hook's background job must not outlive the `git.commit` call.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn git_commit_kills_a_hooks_background_job_when_the_call_finishes() {
         let Some(repo) = init_temp_repo() else { return };
@@ -1545,8 +1558,126 @@ mod git_tests {
         );
     }
 
+    /// A hook's background job that keeps git's stderr open (no
+    /// redirect) must not stall the call: it ends when git exits, and the
+    /// job is killed then.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn git_commit_returns_when_git_exits_even_if_a_hook_job_holds_stderr() {
+        let Some(repo) = init_temp_repo() else { return };
+        write_hook(&repo, "post-commit", "sleep 300 & echo $! > .git/bg.pid");
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let started = std::time::Instant::now();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            tool.execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["a.txt"] }),
+                &ctx,
+            ),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        let pid: Option<u32> = std::fs::read_to_string(repo.join(".git/bg.pid"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+        let gone = pid.map(wait_until_gone);
+        if let Some(pid) = pid {
+            cleanup(pid);
+        }
+        std::fs::remove_dir_all(&repo).ok();
+        let outcome = outcome.expect("git.commit stalled on the hook's background job");
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "git.commit should succeed; got {outcome:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "git.commit took {elapsed:?}"
+        );
+        assert_eq!(gone, Some(true), "hook background job survived the call");
+    }
+
+    /// Variables a hook may legitimately see: the allowlist `run_confined`
+    /// passes through, what aivyx-confine sets, what `sh` sets itself, and
+    /// git's own `GIT_*` hook variables.
+    fn hook_env_var_is_allowed(name: &str) -> bool {
+        crate::tools::shell::SAFE_ENV_DEFAULTS.contains(&name)
+            || matches!(name, "TMPDIR" | "PWD" | "OLDPWD" | "SHLVL" | "_")
+            || name.starts_with("GIT_")
+    }
+
+    /// Run by `git_hooks_do_not_inherit_the_daemons_secrets` in a child
+    /// test process whose environment holds fake secrets. Also meaningful
+    /// on its own: cargo sets `CARGO_*` variables a hook must not see.
+    #[tokio::test]
+    #[ignore = "run via git_hooks_do_not_inherit_the_daemons_secrets"]
+    async fn git_hook_environment_holds_only_the_allowlist() {
+        let Some(repo) = init_temp_repo() else { return };
+        write_hook(&repo, "post-commit", "env > .git/hook-env.txt");
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["a.txt"] }),
+                &ctx,
+            )
+            .await;
+        let env = std::fs::read_to_string(repo.join(".git/hook-env.txt"));
+        std::fs::remove_dir_all(&repo).ok();
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "git.commit should succeed; got {outcome:?}"
+        );
+        let env = env.expect("the hook ran and wrote its environment");
+        assert!(!env.contains("AIVYX_PA_PASSPHRASE"), "{env}");
+        assert!(!env.contains("sk-fake-secret"), "{env}");
+        let leaked: Vec<&str> = env
+            .lines()
+            .filter_map(|l| l.split_once('=').map(|(k, _)| k))
+            .filter(|k| !k.is_empty() && !hook_env_var_is_allowed(k))
+            .collect();
+        assert!(leaked.is_empty(), "hook saw non-allowlisted vars: {leaked:?}");
+    }
+
+    /// git.* hooks must not see the daemon's secrets (the master
+    /// passphrase, provider keys). Re-runs the ignored test above in a
+    /// child process with fake secrets set, so this process's own
+    /// environment is never mutated.
+    #[test]
+    fn git_hooks_do_not_inherit_the_daemons_secrets() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tools::git::git_tests::git_hook_environment_holds_only_the_allowlist",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("AIVYX_PA_PASSPHRASE", "fake-passphrase")
+            .env("ANTHROPIC_API_KEY", "sk-fake-secret")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     /// Dropping the `git.commit` future mid-hook (a cancelled turn) kills
     /// the hook and everything it started.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn cancelling_git_commit_kills_the_process_group() {
         let Some(repo) = init_temp_repo() else { return };

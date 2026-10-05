@@ -99,7 +99,7 @@ use tokio::process::Command;
 
 use aivyx_capability::Scope;
 
-use crate::tools::process_group::{ProcessGroupGuard, kill_group};
+use crate::tools::process_group::{GroupRun, run_in_own_group};
 use crate::{
     AivyxError, ConfineOptions, ExecutionConfiner, Tool, ToolContext, ToolId, ToolOutcome,
     Verification, default_confiner_with_options,
@@ -345,7 +345,7 @@ fn deny_scope() -> Scope {
 /// well-behaved Unix commands (locale, terminal, path lookup).
 /// All other env vars from the daemon process are stripped via
 /// `env_clear()`. Phase 42.
-const SAFE_ENV_DEFAULTS: &[&str] = &["PATH", "HOME", "USER", "LANG", "TERM"];
+pub(crate) const SAFE_ENV_DEFAULTS: &[&str] = &["PATH", "HOME", "USER", "LANG", "TERM"];
 
 fn shell_exec_input_schema_value() -> Value {
     json!({
@@ -616,73 +616,16 @@ impl Tool for ShellExecTool {
         // group on every exit path.
         command.kill_on_drop(true);
 
-        let mut command = self.confiner.confine(command);
+        let command = self.confiner.confine(command);
 
-        let mut child = match command.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                return ToolOutcome::Failed(AivyxError::Tool {
-                    tool: self.id,
-                    detail: format!("spawn failed: {e}"),
-                });
-            }
-        };
-
-        // The child leads its own process group (`process_group(0)`
-        // above, and aivyx-confine refuses `setsid`/`setpgid` inside the
-        // sandbox), so its pid is the group id. The guard kills the whole
-        // group when this call ends for any reason — including the
-        // `execute` future being dropped by a cancelled turn — so no
-        // background job (`cmd &`) outlives the call.
-        let mut group = ProcessGroupGuard::new(&child);
-        let mut stdout_pipe = child.stdout.take();
-        let mut stderr_pipe = child.stderr.take();
-
-        // Wait for `sh` itself, then kill the group so any background job
-        // still holding the pipes closes them, then finish reading. Ending
-        // the call on `sh`'s exit (rather than on EOF, as
-        // `wait_with_output` does) keeps `sleep 300 &` from stalling the
-        // call until its timeout.
-        let run = async {
-            let (status, stdout, stderr) = tokio::join!(
-                async {
-                    let status = child.wait().await;
-                    group.kill_now();
-                    status
-                },
-                read_pipe(stdout_pipe.as_mut()),
-                read_pipe(stderr_pipe.as_mut()),
-            );
-            status.map(|status| (status, stdout, stderr))
-        };
-        let output = match tokio::time::timeout(Duration::from_millis(timeout_ms), run).await {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => {
-                return ToolOutcome::Failed(AivyxError::Tool {
-                    tool: self.id,
-                    detail: format!("wait failed: {e}"),
-                });
-            }
-            Err(_elapsed) => {
-                // Phase 42 — graceful process-group shutdown: SIGTERM the
-                // whole group so processes can flush and clean up, then
-                // SIGKILL it two seconds later. The guard is disarmed so
-                // it doesn't SIGKILL straight away on return; the
-                // background task takes over the group's lifetime.
-                if let Some(pgid) = group.disarm() {
-                    if let Ok(raw) = libc::pid_t::try_from(pgid) {
-                        // SAFETY: killpg with a positive group id. A group
-                        // that already exited returns ESRCH, ignored.
-                        unsafe {
-                            libc::killpg(raw, libc::SIGTERM);
-                        }
-                    }
-                    tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                        let _ = kill_group(pgid);
-                    });
-                }
-
+        // `run_in_own_group` keeps the process-group contract: the call
+        // ends when `sh` exits, the whole group is killed then (or when
+        // this future is dropped by a cancelled turn), and on timeout the
+        // group gets SIGTERM, then SIGKILL.
+        let output = match run_in_own_group(command, Some(Duration::from_millis(timeout_ms))).await
+        {
+            Ok(GroupRun::Finished(output)) => output,
+            Ok(GroupRun::TimedOut) => {
                 return ToolOutcome::Completed {
                     output: json!({
                         "cmd": cmd,
@@ -696,8 +639,14 @@ impl Tool for ShellExecTool {
                     verified: Verification::NotApplicable,
                 };
             }
+            Err(e) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: e.to_string(),
+                });
+            }
         };
-        let (status, stdout, stderr) = output;
+        let (status, stdout, stderr) = (output.status, output.stdout, output.stderr);
 
         let stdout = String::from_utf8_lossy(&stdout).into_owned();
         let stderr = String::from_utf8_lossy(&stderr).into_owned();
@@ -720,18 +669,6 @@ impl Tool for ShellExecTool {
             verified: Verification::NotApplicable,
         }
     }
-}
-
-/// Read a child's captured pipe to EOF. A read error ends the capture
-/// early with what was read so far — the command's own exit status is
-/// what the agent acts on, not a broken pipe.
-async fn read_pipe<R: tokio::io::AsyncRead + Unpin>(pipe: Option<&mut R>) -> Vec<u8> {
-    use tokio::io::AsyncReadExt;
-    let mut buf = Vec::new();
-    if let Some(pipe) = pipe {
-        let _ = pipe.read_to_end(&mut buf).await;
-    }
-    buf
 }
 
 // ---------------------------------------------------------------------------
@@ -1416,6 +1353,7 @@ mod tests {
     }
 
     /// A background job the command started must not outlive the call.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn execute_kills_a_background_job_when_the_call_finishes() {
         let scratch = Scratch::new();
@@ -1440,6 +1378,7 @@ mod tests {
 
     /// A background job still holding the stdout pipe must not stall the
     /// call until its timeout: the call ends when `sh` exits.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn execute_returns_when_sh_exits_even_if_a_background_job_holds_stdout() {
         let scratch = Scratch::new();
@@ -1473,6 +1412,7 @@ mod tests {
 
     /// Dropping the `execute` future (a cancelled turn) kills the whole
     /// group, not just `sh`.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn cancelling_execute_kills_the_process_group() {
         let scratch = Scratch::new();
