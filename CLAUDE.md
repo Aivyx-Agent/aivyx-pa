@@ -92,6 +92,7 @@ socket is the operator").
 | `aivyx-storage` | redb-backed encrypted store, keyed storage domains |
 | `aivyx-audit` | HMAC-chained audit log + offline verification |
 | `aivyx-config` | TOML + env config loader with source provenance |
+| `aivyx-instance` | Named instances: `InstanceName` + `InstancePaths`, the **only** place an aivyx-pa path or per-instance name (socket, store, config, working dirs, sandbox, keyring account, service names) is built — a guard test fails any other crate that builds one (`// instance-paths: ok — <reason>` marks a deliberate exception). The default instance resolves exactly to the historical paths |
 | `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama implementations; `RoutedProvider` (opt-in `[routing]` per-call model routing over the shared `aivyx-route` router) |
 | `aivyx-memory` | `memory.{read,write,forget,gc}` + redb-backed substrate |
 | `aivyx-channel` | Daemon server/client, missions, scheduling, reflection, the autonomous loop, memory recall/graph/wiki machinery — the largest crate; most feature "chapters" land here |

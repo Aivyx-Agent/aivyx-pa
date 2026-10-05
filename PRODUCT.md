@@ -94,6 +94,13 @@ required to surface the drift as an amendment, not absorb it silently.
 - **It does not say what happens when a mission outlives the
   operator's session at the keyboard.** That's **P5**'s territory.
 
+> *See amendment
+> [`2026-10-05-named-instances.md`](docs/amendments/2026-10-05-named-instances.md)
+> (A17) — one operator may run several named instances side by side
+> (`--instance <name>`); each is a complete instance with exactly one
+> primary agent, and instances share nothing. P1 holds per instance;
+> P6 unchanged.*
+
 ---
 
 ## Product Commitment 2 — Session Legibility and Two Success Modes (LOCKED 2026-04-15)

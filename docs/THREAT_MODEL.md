@@ -192,6 +192,17 @@ The store file is `chmod 0600` on every cold open
 (`aivyx-v1-storage`) so a future key-schedule migration can produce
 entirely different subkeys from the same master.
 
+**Named instances (A17).** Several instances for one OS user each have
+their own store under their own passphrase; nothing is shared. They are
+separated by file layout and Ward, not by the operating system: every
+instance runs as the same user, so OS permissions don't keep one
+daemon's process out of another's files. Ward denies every `*.redb`
+store and every `daemon.env` to the agent's tools by name, so one
+instance's agent cannot read another instance's store or saved
+passphrase through `fs.*`/`shell.exec`, even at `home`/`full` access —
+but a process the operator runs outside Aivyx PA can, exactly as it can
+for a single instance.
+
 ### 4.3 The audit log is tampered with on disk
 
 **Mitigation:** Every `SignedEntry` carries an HMAC-SHA256 tag over

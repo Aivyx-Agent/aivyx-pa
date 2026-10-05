@@ -396,6 +396,58 @@ phase); until then `docker compose up --build` builds it locally from source.
 | Daemon socket, PID file, log | `$XDG_RUNTIME_DIR/aivyx-pa/daemon.{sock,pid,log}` (else `~/.local/share/aivyx-pa/`) | No |
 | Studio (web UI) | `127.0.0.1:7843` | Yes — TOML `[daemon] web_ui_port` or `--web-ui-port <N>` |
 
+## Running several agents (named instances)
+
+One OS user can run several fully separate agents side by side — say a
+`research` agent and a `household` agent next to your usual one. Each is
+a complete Aivyx PA install with its own roles, Profile, Persona,
+memory, audit log, passphrase and Studio. They share nothing.
+
+```sh
+aivyx-pa instances create research      # picks a Studio port, runs setup for it
+aivyx-pa instances list                 # every instance: running?, Studio port, config
+aivyx-pa --instance research daemon run --web-ui
+aivyx-pa --instance research            # chat with it
+aivyx-pa --instance research daemon install   # its own background service
+aivyx-pa instances remove research      # asks you to type the name back
+```
+
+Every command takes `--instance <name>`, or set `AIVYX_PA_INSTANCE=<name>`
+(the flag wins). Without either you get the `default` instance — exactly
+the paths in the table above, so an existing install is unaffected.
+Names are 1–32 characters of `a-z`, `0-9` and `-`.
+
+Where a named instance's files go:
+
+| File | Named instance `<n>` |
+|---|---|
+| Config | `~/.config/aivyx-pa/instances/<n>/aivyx-pa.toml` |
+| Encrypted store, Studio token, caches | `~/.local/share/aivyx-pa/instances/<n>/` |
+| Saved passphrase (no OS keyring) | `~/.config/aivyx-pa/instances/<n>/daemon.env` |
+| Your files at `sandbox` access | `~/aivyx-pa-sandbox-<n>` |
+| Notebook, tool-process configs | `~/.aivyx-pa/instances/<n>/` |
+| Daemon socket and PID file | `$XDG_RUNTIME_DIR/aivyx-pa/instances/<n>/` |
+| Background service | `aivyx-pa-daemon-<n>.service` (macOS: `com.aivyx-pa.daemon.<n>`) |
+| Studio | the port `instances create` chose (`[daemon] web_ui_port`), from 7844 up |
+
+Good to know:
+
+- **Ports must differ.** `instances create` picks a free one and writes it
+  into the instance's config; if you set `web_ui_port` by hand, keep it
+  unique. Each Studio shows its instance name in the tab title.
+- **`remove` refuses** the `default` instance, a running instance, and
+  one with an installed service — stop it and run
+  `aivyx-pa --instance <n> daemon uninstall` first.
+- **A `./aivyx-pa.toml` still wins.** If the current directory has one,
+  every instance started there reads it; a named instance says so when
+  that happens. `AIVYX_PA_CONFIG_PATH` also overrides as before.
+- **Same OS user, separate files.** Instances are kept apart by Aivyx PA,
+  not by the operating system. Ward never lets an agent read a `*.redb`
+  store or a `daemon.env`, so one instance's agent can't read another's
+  store or saved passphrase even at `home`/`full` access.
+- **Not yet per-instance:** the desktop app and the Telegram, Discord,
+  Slack and voice channels use the `default` instance.
+
 ## First-run checklist
 
 After install:
