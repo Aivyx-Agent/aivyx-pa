@@ -112,7 +112,7 @@ impl Tool for NotifySendTool {
 
     fn description(&self) -> &str {
         "Push a notification message to an operator-configured \
-         target (Telegram chat or generic webhook). Input is a \
+         target (Telegram chat, generic webhook, or email). Input is a \
          JSON object with `target` (the name of a configured \
          notify_target), `message` (the body to send), and an \
          optional `subject`. Returns a JSON result with `success` \

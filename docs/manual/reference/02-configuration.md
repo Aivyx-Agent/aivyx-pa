@@ -62,7 +62,7 @@ OpenAI, or any OpenAI-compatible server (llama.cpp, LM Studio, vLLM, Jan, Lemona
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `api_key` | string | `"sk-..."` | API key for the server. Not needed for a local server. Prefer the encrypted store or `OPENAI_API_KEY`. |
+| `api_key` | string | `"sk-..."` | API key for the server. Not needed for a local server. Prefer the encrypted store or `AIVYX_PA_OPENAI_API_KEY`. |
 | `base_url` | string | `"https://api.openai.com"` | The server's URL. Default `https://api.openai.com`; point it at a local server for llama.cpp, Jan, LM Studio and the like. |
 | `constrain_tool_calls` | bool |  | Grammar-constrained tool-calling for the llama.cpp-family OpenAI-compat servers (`provider = "llamacpp"` / `"jan"`). Unset → off. |
 

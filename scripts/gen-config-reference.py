@@ -158,7 +158,7 @@ MEANINGS = {
     "*.wrap_mission": "Record each run as a mission (visible in missions and the Studio).",
     "*.auto_accept_confidence_threshold": "Apply a proposal without asking when the judge's confidence is at least this (0–1).",
     "anthropic.api_key": "Your Anthropic API key. Prefer the encrypted store (`aivyx-pa init` or the Studio) or `ANTHROPIC_API_KEY`.",
-    "openai.api_key": "API key for the server. Not needed for a local server. Prefer the encrypted store or `OPENAI_API_KEY`.",
+    "openai.api_key": "API key for the server. Not needed for a local server. Prefer the encrypted store or `AIVYX_PA_OPENAI_API_KEY`.",
     "agent.model": "The model id, as the provider names it (e.g. `qwen3:14b`, `claude-sonnet-5`).",
     "agent.system_prompt": "Extra instructions added to the agent's system prompt.",
     "agent.provider": "Which backend serves the model.",
