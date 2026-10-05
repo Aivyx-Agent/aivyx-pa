@@ -142,7 +142,7 @@ upstream MCP-server tool description steers the LLM into emitting
    kernel denies the deletions regardless of what the capability/
    allowlist layers above did or didn't catch. The same layer also
    closes the routes *around* the filesystem grant (aivyx-confine
-   `061768f`):
+   `671e0bd`):
    - **No local daemons.** `socket(AF_UNIX)` fails with `EPERM` and the
      session IPC variables (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`,
      `XDG_RUNTIME_DIR`, ...) are removed, because Landlock does not
@@ -158,8 +158,9 @@ upstream MCP-server tool description steers the LLM into emitting
    - **Process groups** as in item 3: `setsid`/`setpgid` are blocked,
      so git's background auto-maintenance prints `fatal: setsid failed`
      and skips that run (the git command itself still succeeds).
-   - **Credential stores.** `~/.cargo/credentials(.toml)` and
-     `~/.config/git/credentials` are always unreadable. When
+   - **Credential stores.** `~/.cargo/credentials(.toml)`,
+     `~/.config/git/credentials` and `~/.git-credentials` are always
+     unreadable. When
      `cwd_root` contains one of them (access level `home` or `full`),
      every directory on the path to it — `$HOME` itself included — is
      *carved*: `ls`, `touch` and `mkdir` still work there, but `rm`

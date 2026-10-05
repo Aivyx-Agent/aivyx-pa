@@ -277,7 +277,7 @@ crossterm = "0.29"
 # outright (E0425). The only one of the four shipped targets
 # aivyx-confine had never actually been cross-compiled for before --
 # it wasn't adopted until 2026-08-17, after aivyx's last real release.
-aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "061768fa23e3117f954a2e9a8f5dfb34dace78ae", default-features = false }
+aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "671e0bdff885f584b99bca19918ecdcc567eb4ec", default-features = false }
 
 # Shared git-ref checkpoint/rollback for fs_root's mutating tools
 # (fs.write, fs.delete, shell.exec), adopted from the sibling aivyx-coder

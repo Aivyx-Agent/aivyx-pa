@@ -59,7 +59,7 @@ All notable changes to Aivyx are recorded here. This project adheres to
 ### Security
 
 - `shell.exec` and `git.*` run under a stricter sandbox (`aivyx-confine`
-  bumped to `061768f`, which fixes the 2026-10-04 subsystem-audit
+  bumped to `671e0bd`, which fixes the 2026-10-04 subsystem-audit
   findings). What a confined command notices:
   - **No local daemons.** Unix sockets can't be opened and the session
     IPC variables are removed, so ssh-agent (`git push` over ssh),
@@ -76,7 +76,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
     groups. Git's background auto-maintenance prints `fatal: setsid
     failed` and skips that run; the git command itself still succeeds.
   - **Carved directories.** Under the `home`/`full` access levels, when
-    `~/.cargo/credentials(.toml)` or `~/.config/git/credentials` exists
+    `~/.cargo/credentials(.toml)`, `~/.config/git/credentials` or
+    `~/.git-credentials` (git's default credential store) exists
     (now always unreadable), `rm`/`mv` of entries directly in `$HOME`
     (and the other directories on the path to that file) fail, and a
     file created there can't be written until the next call. Deeper
