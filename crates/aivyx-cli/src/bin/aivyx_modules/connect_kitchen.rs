@@ -40,7 +40,9 @@ fn config_path_for(instance: &InstancePaths) -> Option<PathBuf> {
 /// `~/.aivyx-pa/tool-processes/kitchen/`. Kept for test compatibility.
 #[allow(dead_code)]
 fn process_dir(home: &Path) -> PathBuf {
-    home.join(".aivyx-pa").join("tool-processes").join("kitchen")
+    InstancePaths::with_home_or_default(home)
+        .tool_process_dir("kitchen")
+        .unwrap_or_else(|| home.to_path_buf())
 }
 
 #[allow(dead_code)]

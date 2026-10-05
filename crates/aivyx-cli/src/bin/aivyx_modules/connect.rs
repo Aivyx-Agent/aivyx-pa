@@ -100,7 +100,9 @@ impl ConnectService {
     /// preset use). Kept for test compatibility.
     #[allow(dead_code)]
     pub fn process_dir(&self, home: &Path) -> PathBuf {
-        home.join(".aivyx-pa").join("tool-processes").join(self.key)
+        InstancePaths::with_home_or_default(home)
+            .tool_process_dir(self.key)
+            .unwrap_or_else(|| home.to_path_buf())
     }
 
     #[allow(dead_code)]

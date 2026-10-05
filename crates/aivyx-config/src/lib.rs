@@ -6084,13 +6084,17 @@ pub fn resolve_config_path_from(
             return local;
         }
     }
-    let config_home = set(xdg_config_home)
-        .map(PathBuf::from)
-        .or_else(|| set(home).map(|h| Path::new(h).join(".config")));
-    match config_home {
-        Some(dir) => dir.join("aivyx-pa").join(CONFIG_FILE_NAME),
-        None => PathBuf::from(CONFIG_FILE_NAME),
-    }
+    aivyx_instance::InstancePaths::new(
+        aivyx_instance::InstanceName::default_instance(),
+        aivyx_instance::BaseDirs {
+            home: set(home).map(PathBuf::from),
+            xdg_config_home: set(xdg_config_home).map(PathBuf::from),
+            xdg_data_home: None,
+            xdg_runtime_dir: None,
+        },
+    )
+    .config_file()
+    .unwrap_or_else(|| PathBuf::from(CONFIG_FILE_NAME))
 }
 const ENV_MEMORY_MAX_PER_TOPIC: &str = "AIVYX_PA_MEMORY_MAX_PER_TOPIC";
 const ENV_MEMORY_TTL_SECS: &str = "AIVYX_PA_MEMORY_TTL_SECS";

@@ -62,25 +62,54 @@ impl Platform {
     }
 }
 
-/// The unit / plist name (stable across platforms for `status`/`uninstall`).
-pub const SERVICE_UNIT: &str = "aivyx-pa-daemon.service";
-/// The launchd label (macOS, AN.2).
-pub const LAUNCHD_LABEL: &str = "com.aivyx-pa.daemon";
+/// The default instance's systemd unit name. Runtime code takes the
+/// selected instance's name from [`selected_instance`] instead.
+#[cfg(test)]
+pub const SERVICE_UNIT: &str = "aivyx-pa-daemon.service"; // instance-paths: ok — default instance's name, asserted equal to InstancePaths in tests
+/// The default instance's launchd label (macOS, AN.2).
+#[cfg(test)]
+pub const LAUNCHD_LABEL: &str = "com.aivyx-pa.daemon"; // instance-paths: ok — default instance's label, asserted equal to InstancePaths in tests
+
+/// The instance this process serves (validated at startup in `main`).
+fn selected_instance() -> aivyx_instance::InstancePaths {
+    aivyx_instance::InstancePaths::current().unwrap_or_else(|_| default_instance())
+}
+
+fn default_instance() -> aivyx_instance::InstancePaths {
+    aivyx_instance::InstancePaths::new(
+        aivyx_instance::InstanceName::default_instance(),
+        aivyx_instance::BaseDirs::from_process(),
+    )
+}
+
+/// The `daemon.env` for `paths`, under the user config dir `config_dir`:
+/// `<config_dir>/aivyx-pa/daemon.env` for the default instance (unchanged),
+/// `<config_dir>/aivyx-pa/instances/<n>/daemon.env` otherwise.
+fn env_file_path_in(config_dir: &Path, paths: &aivyx_instance::InstancePaths) -> PathBuf {
+    aivyx_instance::InstancePaths::new(
+        paths.name().clone(),
+        aivyx_instance::BaseDirs {
+            home: None,
+            xdg_config_home: Some(config_dir.to_path_buf()),
+            xdg_data_home: None,
+            xdg_runtime_dir: None,
+        },
+    )
+    .config_dir()
+    .map(|d| d.join("daemon.env"))
+    .unwrap_or_else(|| config_dir.join(ENV_FILE_REL))
+}
 
 /// Where the secret env file lives (referenced by the unit, written 0o600 by
 /// `install`). Relative to the user's config dir.
 pub const ENV_FILE_REL: &str = "aivyx-pa/daemon.env";
 
 /// Compute the systemd unit name for a given instance.
-/// Task 3: unit names are instance-aware.
-#[allow(dead_code)]
 pub fn systemd_unit_for(paths: &aivyx_instance::InstancePaths) -> String {
     paths.systemd_unit()
 }
 
 /// Compute the launchd label for a given instance.
-/// Task 3: launchd labels are instance-aware.
-#[allow(dead_code)]
 pub fn launchd_label_for(paths: &aivyx_instance::InstancePaths) -> String {
     paths.launchd_label()
 }
@@ -136,6 +165,7 @@ pub fn render_systemd_unit_for(
     )
 }
 
+#[cfg(test)]
 pub fn render_systemd_unit(
     bin_path: &str,
     web_ui: bool,
@@ -181,7 +211,7 @@ fn write_env_file_secure(path: &Path, passphrase: &str) -> std::io::Result<()> {
 /// same `0600` file the service unit reads, so `aivyx-pa`, a daemon it
 /// starts, and the installed service all find it.
 pub fn passphrase_file_path() -> Result<PathBuf, String> {
-    Ok(user_config_dir()?.join(ENV_FILE_REL))
+    Ok(env_file_path_in(&user_config_dir()?, &selected_instance()))
 }
 
 /// Save the passphrase to [`passphrase_file_path`] (owner-only from the
@@ -251,19 +281,33 @@ pub const NO_SERVICE_MANAGER: &str = "there's no systemd user session here (comm
 /// Compute the concrete Linux install plan — pure over its inputs so the paths
 /// and unit contents are testable without touching the real home or running any
 /// command.
+#[cfg(test)]
 pub fn plan_linux(
     config_dir: &Path,
     bin_path: &str,
     working_dir: &str,
     web_ui: bool,
 ) -> ServicePlan {
-    let unit_path = config_dir.join("systemd/user").join(SERVICE_UNIT);
-    let env_file_path = config_dir.join(ENV_FILE_REL);
-    let unit_contents = render_systemd_unit(
+    plan_linux_for(config_dir, bin_path, working_dir, web_ui, &default_instance())
+}
+
+/// [`plan_linux`] for a specific instance: its own unit name, its own
+/// `daemon.env`, and `--instance <n>` in `ExecStart` for a named instance.
+pub fn plan_linux_for(
+    config_dir: &Path,
+    bin_path: &str,
+    working_dir: &str,
+    web_ui: bool,
+    paths: &aivyx_instance::InstancePaths,
+) -> ServicePlan {
+    let unit_path = config_dir.join("systemd/user").join(systemd_unit_for(paths));
+    let env_file_path = env_file_path_in(config_dir, paths);
+    let unit_contents = render_systemd_unit_for(
         bin_path,
         web_ui,
         &env_file_path.display().to_string(),
         working_dir,
+        paths,
     );
     ServicePlan {
         unit_path,
@@ -312,7 +356,7 @@ pub fn installed_unit_path() -> Option<PathBuf> {
         Platform::Linux => user_config_dir()
             .ok()?
             .join("systemd/user")
-            .join(SERVICE_UNIT),
+            .join(systemd_unit_for(&selected_instance())),
         Platform::MacOs => macos_plist_path().ok()?,
         Platform::Unsupported => return None,
     };
@@ -325,7 +369,7 @@ pub fn is_active() -> Option<bool> {
     match Platform::detect() {
         Platform::Linux => {
             let out = Command::new("systemctl")
-                .args(["--user", "is-active", SERVICE_UNIT])
+                .args(["--user", "is-active", &systemd_unit_for(&selected_instance())])
                 .output()
                 .ok()?;
             Some(String::from_utf8_lossy(&out.stdout).trim() == "active")
@@ -333,7 +377,10 @@ pub fn is_active() -> Option<bool> {
         Platform::MacOs => {
             let uid = current_uid().ok()?;
             let out = Command::new("launchctl")
-                .args(["print", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
+                .args([
+                    "print",
+                    &format!("gui/{uid}/{}", launchd_label_for(&selected_instance())),
+                ])
                 .output()
                 .ok()?;
             Some(out.status.success())
@@ -351,7 +398,10 @@ fn install_linux(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
     let bin = current_exe_path()?;
     let config_dir = user_config_dir()?;
     let working_dir = install_working_dir();
-    let plan = plan_linux(&config_dir, &bin, &working_dir, web_ui);
+    let instance = selected_instance();
+    let unit = systemd_unit_for(&instance);
+    let unit_stem = unit.trim_end_matches(".service").to_string();
+    let plan = plan_linux_for(&config_dir, &bin, &working_dir, web_ui, &instance);
 
     // The passphrase: env first (the established policy), else a no-echo prompt.
     let passphrase = match known {
@@ -380,17 +430,17 @@ fn install_linux(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
         // Linger so the service runs without an active login session (runs-for-days).
         run_cmd("loginctl", &["enable-linger", &current_user()])?;
         run_cmd("systemctl", &["--user", "daemon-reload"])?;
-        run_cmd("systemctl", &["--user", "enable", SERVICE_UNIT])?;
+        run_cmd("systemctl", &["--user", "enable", &unit])?;
         if start {
             // restart (not just start) so a re-install picks up the new unit/env.
-            run_cmd("systemctl", &["--user", "restart", SERVICE_UNIT])?;
+            run_cmd("systemctl", &["--user", "restart", &unit])?;
         }
         Ok(())
     };
     if let Err(e) = activate() {
         // Take back what this attempt wrote, so a failed install leaves
         // neither a dead unit nor a stray copy of the passphrase.
-        let _ = run_cmd("systemctl", &["--user", "disable", SERVICE_UNIT]);
+        let _ = run_cmd("systemctl", &["--user", "disable", &unit]);
         let _ = std::fs::remove_file(&plan.unit_path);
         if !env_file_existed {
             let _ = std::fs::remove_file(&plan.env_file_path);
@@ -403,14 +453,14 @@ fn install_linux(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
         "aivyx-pa daemon: installed as a user service.\n  \
          unit:   {}\n  \
          env:    {} (0600)\n  \
-         status: systemctl --user status aivyx-pa-daemon\n  \
-         logs:   journalctl --user -u aivyx-pa-daemon -f{}",
+         status: systemctl --user status {unit_stem}\n  \
+         logs:   journalctl --user -u {unit_stem} -f{}",
         plan.unit_path.display(),
         plan.env_file_path.display(),
         if start {
-            "\n  (started; runs across reboots via linger)"
+            "\n  (started; runs across reboots via linger)".to_string()
         } else {
-            "\n  (enabled; start with `systemctl --user start aivyx-pa-daemon`)"
+            format!("\n  (enabled; start with `systemctl --user start {unit_stem}`)")
         },
     );
     Ok(())
@@ -418,11 +468,13 @@ fn install_linux(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
 
 fn uninstall_linux() -> Result<(), String> {
     let config_dir = user_config_dir()?;
-    let unit_path = config_dir.join("systemd/user").join(SERVICE_UNIT);
-    let env_file_path = config_dir.join(ENV_FILE_REL);
+    let instance = selected_instance();
+    let unit = systemd_unit_for(&instance);
+    let unit_path = config_dir.join("systemd/user").join(&unit);
+    let env_file_path = env_file_path_in(&config_dir, &instance);
 
     // Stop + disable; ignore failures (the unit may already be gone/stopped).
-    let _ = run_cmd("systemctl", &["--user", "disable", "--now", SERVICE_UNIT]);
+    let _ = run_cmd("systemctl", &["--user", "disable", "--now", &unit]);
 
     let mut removed = false;
     if unit_path.exists() {
@@ -459,16 +511,35 @@ fn uninstall_linux() -> Result<(), String> {
 /// XML-escaped so a `&`/`<` in a path or passphrase can't break the plist.
 /// `KeepAlive`/`SuccessfulExit=false` mirrors systemd's `Restart=on-failure`
 /// (restart on crash, but honor a clean `daemon stop`).
+#[cfg(test)]
 pub fn render_launchd_plist(
     bin_path: &str,
     web_ui: bool,
     working_dir: &str,
     passphrase: &str,
 ) -> String {
+    render_launchd_plist_for(bin_path, web_ui, working_dir, passphrase, &default_instance())
+}
+
+/// [`render_launchd_plist`] for a specific instance: its own label, and
+/// `--instance <n>` in the program arguments for a named instance.
+pub fn render_launchd_plist_for(
+    bin_path: &str,
+    web_ui: bool,
+    working_dir: &str,
+    passphrase: &str,
+    paths: &aivyx_instance::InstancePaths,
+) -> String {
     let mut program_args = format!(
         "        <string>{}</string>\n        <string>daemon</string>\n        <string>run</string>\n",
         xml_escape(bin_path),
     );
+    if !paths.name().is_default() {
+        program_args.push_str(&format!(
+            "        <string>--instance</string>\n        <string>{}</string>\n",
+            xml_escape(paths.name().as_str()),
+        ));
+    }
     if web_ui {
         program_args.push_str("        <string>--web-ui</string>\n");
     }
@@ -487,7 +558,7 @@ pub fn render_launchd_plist(
          \x20   <key>KeepAlive</key>\n    <dict>\n        <key>SuccessfulExit</key>\n        <false/>\n    </dict>\n\
          </dict>\n\
          </plist>\n",
-        label = LAUNCHD_LABEL,
+        label = xml_escape(&launchd_label_for(paths)),
         workdir = xml_escape(working_dir),
         pass = xml_escape(passphrase),
     )
@@ -506,7 +577,7 @@ fn macos_plist_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
     Ok(PathBuf::from(home)
         .join("Library/LaunchAgents")
-        .join(format!("{LAUNCHD_LABEL}.plist")))
+        .join(format!("{}.plist", launchd_label_for(&selected_instance()))))
 }
 
 fn install_macos(web_ui: bool, start: bool, known: Option<String>) -> Result<(), String> {
@@ -523,7 +594,8 @@ fn install_macos(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
     }
     crate::connect::write_file_at_0600(
         &plist_path,
-        render_launchd_plist(&bin, web_ui, &working_dir, &passphrase).as_bytes(),
+        render_launchd_plist_for(&bin, web_ui, &working_dir, &passphrase, &selected_instance())
+            .as_bytes(),
     )
     .map_err(|e| format!("write plist {}: {e}", plist_path.display()))?;
 
@@ -535,7 +607,7 @@ fn install_macos(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
         // ignore the error when nothing is loaded yet.
         let _ = run_cmd(
             "launchctl",
-            &["bootout", &format!("{domain}/{LAUNCHD_LABEL}")],
+            &["bootout", &format!("{domain}/{}", launchd_label_for(&selected_instance()))],
         );
         if let Err(e) = run_cmd("launchctl", &["bootstrap", &domain, &plist]) {
             // The plist carries the passphrase: don't leave it behind for an
@@ -545,7 +617,7 @@ fn install_macos(web_ui: bool, start: bool, known: Option<String>) -> Result<(),
         }
         let _ = run_cmd(
             "launchctl",
-            &["enable", &format!("{domain}/{LAUNCHD_LABEL}")],
+            &["enable", &format!("{domain}/{}", launchd_label_for(&selected_instance()))],
         );
     }
 
@@ -568,7 +640,7 @@ fn uninstall_macos() -> Result<(), String> {
     if let Ok(uid) = current_uid() {
         let _ = run_cmd(
             "launchctl",
-            &["bootout", &format!("gui/{uid}/{LAUNCHD_LABEL}")],
+            &["bootout", &format!("gui/{uid}/{}", launchd_label_for(&selected_instance()))],
         );
     }
     let mut removed = false;
@@ -887,6 +959,60 @@ mod tests {
         // would hang or misbehave under `cargo test`'s non-interactive
         // environment. The env-var short-circuit above and this keyring-hit
         // case are what's safely testable without a real TTY.
+    }
+
+    fn research() -> aivyx_instance::InstancePaths {
+        aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::parse("research").unwrap(),
+            aivyx_instance::BaseDirs {
+                home: Some("/home/u".into()),
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: None,
+            },
+        )
+    }
+
+    #[test]
+    fn named_instance_plan_has_its_own_unit_env_file_and_flag() {
+        let plan = plan_linux_for(
+            Path::new("/home/u/.config"),
+            "/b/aivyx-pa",
+            "/w",
+            false,
+            &research(),
+        );
+        assert_eq!(
+            plan.unit_path,
+            PathBuf::from("/home/u/.config/systemd/user/aivyx-pa-daemon-research.service")
+        );
+        assert_eq!(
+            plan.env_file_path,
+            PathBuf::from("/home/u/.config/aivyx-pa/instances/research/daemon.env")
+        );
+        assert!(plan.unit_contents.contains("ExecStart=/b/aivyx-pa daemon run --instance research\n"));
+        assert!(plan.unit_contents.contains(
+            "EnvironmentFile=-/home/u/.config/aivyx-pa/instances/research/daemon.env"
+        ));
+    }
+
+    #[test]
+    fn default_env_file_path_is_unchanged() {
+        assert_eq!(
+            env_file_path_in(Path::new("/home/u/.config"), &default_instance()),
+            PathBuf::from("/home/u/.config/aivyx-pa/daemon.env")
+        );
+    }
+
+    #[test]
+    fn named_instance_plist_has_its_label_and_flag() {
+        let plist = render_launchd_plist_for("/b/aivyx-pa", false, "/w", "pw", &research());
+        assert!(plist.contains("<string>com.aivyx-pa.daemon.research</string>"), "{plist}");
+        assert!(plist.contains(
+            "<string>run</string>\n        <string>--instance</string>\n        <string>research</string>"
+        ), "{plist}");
+        let default = render_launchd_plist("/b/aivyx-pa", false, "/w", "pw");
+        assert!(!default.contains("--instance"));
     }
 
     #[test]

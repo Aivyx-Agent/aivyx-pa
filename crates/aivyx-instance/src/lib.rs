@@ -132,6 +132,24 @@ impl InstancePaths {
         Ok(paths)
     }
 
+    /// [`InstancePaths::with_home`], falling back to the default instance if
+    /// `AIVYX_PA_INSTANCE` is invalid (`main` rejects that at startup, so
+    /// this only matters to code called outside the CLI). Home-based paths
+    /// (`home_dir`, `tool_process_dir`, `sandbox_dir`) are then always `Some`.
+    pub fn with_home_or_default(home: &std::path::Path) -> Self {
+        Self::with_home(home).unwrap_or_else(|_| {
+            Self::new(
+                InstanceName::default_instance(),
+                BaseDirs {
+                    home: Some(home.to_path_buf()),
+                    xdg_config_home: None,
+                    xdg_data_home: None,
+                    xdg_runtime_dir: None,
+                },
+            )
+        })
+    }
+
     /// Get the instance name.
     pub fn name(&self) -> &InstanceName {
         &self.name

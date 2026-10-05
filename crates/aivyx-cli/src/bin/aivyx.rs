@@ -6344,7 +6344,7 @@ fn effective_kvcache_store_path(config: &aivyx_config::AivyxConfig) -> std::path
             // under it.
             let base = match directories::ProjectDirs::from("", "", "aivyx-pa") {
                 Some(dirs) => dirs.data_local_dir().to_path_buf(),
-                None => std::env::temp_dir().join("aivyx-pa"),
+                None => std::env::temp_dir().join("aivyx-pa"), // instance-paths: ok — kvcache base when no ProjectDirs; named instances nest under it
             };
             kvcache_dir_for_instance(&base, &current_instance_name())
         }

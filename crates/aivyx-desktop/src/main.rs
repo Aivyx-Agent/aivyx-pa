@@ -93,7 +93,7 @@ fn auto_launch() -> Option<auto_launch::AutoLaunch> {
 fn aivyx_bin() -> String {
     let sibling = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("aivyx-pa")))
+        .and_then(|exe| exe.parent().map(|dir| dir.join("aivyx-pa"))) // instance-paths: ok — the aivyx-pa binary beside this one, not a data path
         .filter(|p| p.is_file());
     first_run::pick_aivyx_bin(std::env::var("AIVYX_PA_BIN").ok(), sibling)
 }
