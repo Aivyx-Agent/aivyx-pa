@@ -2076,8 +2076,9 @@ pub struct ReflectionScheduleConfig {
     /// Operator-chosen name, unique across reflection schedules
     /// and across regular `[[schedule]]` entries.
     pub name: String,
-    /// Standard 5- or 6-field cron pattern, parsed by the same
-    /// cron implementation `[[schedule]]` uses.
+    /// 6- or 7-field cron pattern (seconds first; a 5-field one is
+    /// rejected), parsed by the same cron implementation `[[schedule]]`
+    /// uses.
     pub cron: String,
     /// How far back to look when summarizing turn outcomes for
     /// the reflection prompt. Minimum 60 seconds, maximum 30

@@ -2235,7 +2235,7 @@ parent_role = "researcher"
 #
 # [[role]]
 # name = "researcher-with-skills"
-# parents = ["researcher"]
+# parent_role = "researcher"
 # capability_scopes = [
 #     "reflection.propose",
 #     "reflection.apply",
