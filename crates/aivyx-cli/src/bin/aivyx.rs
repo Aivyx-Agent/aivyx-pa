@@ -6310,6 +6310,25 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
     }
 }
 
+/// The kvcache directory under `base` for `instance`: `base/kvcache` for
+/// the default instance (unchanged), `base/instances/<n>/kvcache` otherwise.
+fn kvcache_dir_for_instance(
+    base: &std::path::Path,
+    instance: &aivyx_instance::InstanceName,
+) -> std::path::PathBuf {
+    if instance.is_default() {
+        base.join("kvcache")
+    } else {
+        base.join("instances").join(instance.as_str()).join("kvcache")
+    }
+}
+
+/// The selected instance (validated at startup in `main`).
+fn current_instance_name() -> aivyx_instance::InstanceName {
+    aivyx_instance::InstanceName::from_env()
+        .unwrap_or_else(|_| aivyx_instance::InstanceName::default_instance())
+}
+
 /// The kvcache store directory this run actually uses: the configured
 /// override, or the historical `ProjectDirs`-derived default when
 /// unset. Single source of truth reused by both the real kvcache
@@ -6319,14 +6338,15 @@ fn effective_kvcache_store_path(config: &aivyx_config::AivyxConfig) -> std::path
     let raw = match &config.kvcache_store_path {
         Some(sourced) => sourced.value.clone(),
         None => {
-            // Task 3: use InstancePaths for the default branch, keeping temp_dir fallback
-            let paths = aivyx_instance::InstancePaths::current()
-                .ok()
-                .and_then(|p| p.data_dir());
-            match paths {
-                Some(data_dir) => data_dir.join("kvcache"),
-                None => std::env::temp_dir().join("aivyx-pa").join("kvcache"),
-            }
+            // The historical ProjectDirs base (on macOS that's
+            // ~/Library/Application Support, not ~/.local/share), so the
+            // default instance's cache never moves; named instances nest
+            // under it.
+            let base = match directories::ProjectDirs::from("", "", "aivyx-pa") {
+                Some(dirs) => dirs.data_local_dir().to_path_buf(),
+                None => std::env::temp_dir().join("aivyx-pa"),
+            };
+            kvcache_dir_for_instance(&base, &current_instance_name())
         }
     };
     std::fs::canonicalize(&raw).unwrap_or(raw)
@@ -15882,6 +15902,18 @@ mod tests {
             path.to_string_lossy()
                 .contains(".local/share/aivyx-pa/kvcache"),
             "default kvcache path must be unchanged when no override is configured, got {path:?}"
+        );
+    }
+
+    #[test]
+    fn kvcache_dir_nests_named_instances_and_keeps_the_default() {
+        let base = PathBuf::from("/b/aivyx-pa");
+        let default = aivyx_instance::InstanceName::default_instance();
+        let research = aivyx_instance::InstanceName::parse("research").unwrap();
+        assert_eq!(kvcache_dir_for_instance(&base, &default), PathBuf::from("/b/aivyx-pa/kvcache"));
+        assert_eq!(
+            kvcache_dir_for_instance(&base, &research),
+            PathBuf::from("/b/aivyx-pa/instances/research/kvcache")
         );
     }
 
