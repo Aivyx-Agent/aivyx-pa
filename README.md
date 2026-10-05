@@ -137,6 +137,10 @@ For a hand-written config (every section, commented), see
 adapter, see [`examples/aivyx-semitrusted.toml`](examples/aivyx-semitrusted.toml).
 For the full install matrix, see [`docs/INSTALL.md`](docs/INSTALL.md).
 
+**The manual** — [`docs/manual/`](docs/manual/README.md): the user guide
+(also built into the Studio), a reference for every command, config key,
+tool and file, and a developer part.
+
 ## Highlights
 
 - **Runs on your hardware, no API key.** The headline path is local inference —
@@ -315,6 +319,8 @@ OAuth substrate.
 ## Where to look next
 
 **For operators** wanting to use Aivyx PA:
+- [`docs/manual/`](docs/manual/README.md) — the manual: guide,
+  reference, developer.
 - [`docs/ONBOARDING.md`](docs/ONBOARDING.md) — creating your agent:
   the guided Profile → Persona → access flow, shared by `aivyx-pa init`
   and the Studio's **Create** screen.
