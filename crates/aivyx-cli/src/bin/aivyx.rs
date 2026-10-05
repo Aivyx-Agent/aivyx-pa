@@ -6318,10 +6318,16 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
 fn effective_kvcache_store_path(config: &aivyx_config::AivyxConfig) -> std::path::PathBuf {
     let raw = match &config.kvcache_store_path {
         Some(sourced) => sourced.value.clone(),
-        None => match directories::ProjectDirs::from("", "", "aivyx-pa") {
-            Some(dirs) => dirs.data_local_dir().join("kvcache"),
-            None => std::env::temp_dir().join("aivyx-pa").join("kvcache"),
-        },
+        None => {
+            // Task 3: use InstancePaths for the default branch, keeping temp_dir fallback
+            let paths = aivyx_instance::InstancePaths::current()
+                .ok()
+                .and_then(|p| p.data_dir());
+            match paths {
+                Some(data_dir) => data_dir.join("kvcache"),
+                None => std::env::temp_dir().join("aivyx-pa").join("kvcache"),
+            }
+        }
     };
     std::fs::canonicalize(&raw).unwrap_or(raw)
 }
@@ -8951,15 +8957,11 @@ async fn run_async(
             .parent()
             .map(|p| vec![p.to_path_buf()])
             .unwrap_or_default();
-        let writable: Vec<std::path::PathBuf> = std::env::var_os("HOME")
-            .map(|home| {
-                vec![
-                    std::path::PathBuf::from(home)
-                        .join(".aivyx-pa")
-                        .join("tool-processes")
-                        .join(&tp_cfg.name),
-                ]
-            })
+        // Task 3: use InstancePaths for tool-processes directory
+        let writable: Vec<std::path::PathBuf> = aivyx_instance::InstancePaths::current()
+            .ok()
+            .and_then(|paths| paths.tool_process_dir(&tp_cfg.name))
+            .map(|p| vec![p])
             .unwrap_or_default();
         let spawn_sandbox = aivyx_tool::resolve_sandbox(
             explicit,
