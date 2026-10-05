@@ -226,6 +226,7 @@ tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
 # LocalChannel unit tests exercise the async ChannelContext surface
 # against an in-memory Vec<u8> sink; tokio drives #[tokio::test] and
 # serde_json builds the tool-call inputs the tests feed in.
