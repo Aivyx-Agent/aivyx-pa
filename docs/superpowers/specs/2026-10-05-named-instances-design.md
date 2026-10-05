@@ -54,6 +54,7 @@ base directory, or uses the fixed service/keyring names, takes these from
 | Data dir (store, kvcache, templates, …) | `$XDG_DATA_HOME/aivyx-pa/` | `$XDG_DATA_HOME/aivyx-pa/instances/<n>/` |
 | Socket / pid | `$XDG_RUNTIME_DIR/aivyx-pa/daemon.{sock,pid}` | `$XDG_RUNTIME_DIR/aivyx-pa/instances/<n>/daemon.{sock,pid}` |
 | Home working dir (sandbox, workspace, tool processes) | `~/.aivyx-pa/` | `~/.aivyx-pa/instances/<n>/` |
+| Access sandbox folder | `~/aivyx-pa-sandbox` | `~/aivyx-pa-sandbox-<n>` |
 | Keyring entry | today's service + account | same service, account suffixed `:<n>` |
 | systemd user unit | `aivyx-pa-daemon.service` | `aivyx-pa-daemon-<n>.service` |
 | launchd plist | `com.aivyx-pa.daemon.plist` | `com.aivyx-pa.daemon.<n>.plist` |
