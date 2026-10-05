@@ -8377,6 +8377,17 @@ async fn run_async(
         // construct one scope per canonical path so the
         // operator-held capability set includes them all.
         let canonical_repos: Vec<std::path::PathBuf> = git_status.repos().to_vec();
+        // A worktree/submodule entry builds fine but every git.* call
+        // refuses it (its gitdir is out of the sandbox's reach) — say so
+        // now rather than at the first refused call.
+        for repo in aivyx_core::gitfile_repos(&canonical_repos) {
+            eprintln!(
+                "aivyx-pa: warning: [git] repos entry {} has a .git file (a worktree or \
+                 submodule), not a .git directory; git.status/git.diff/git.commit will \
+                 refuse it",
+                repo.display()
+            );
+        }
         tool_list.push(Arc::new(git_status) as Arc<dyn Tool>);
         tool_list.push(Arc::new(git_diff) as Arc<dyn Tool>);
 

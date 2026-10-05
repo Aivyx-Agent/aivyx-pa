@@ -846,6 +846,18 @@ fn confiner_for(
     ))
 }
 
+/// The `[git] repos` entries whose `.git` is a file (a linked worktree or
+/// submodule). Every `git.*` call refuses them (`confiner_for`); the
+/// binary warns about them at startup so the operator learns before the
+/// first refused call.
+pub fn gitfile_repos(repos: &[PathBuf]) -> Vec<PathBuf> {
+    repos
+        .iter()
+        .filter(|repo| repo.join(".git").is_file())
+        .cloned()
+        .collect()
+}
+
 /// Canonicalize an operator repo allow-set: each entry must
 /// canonicalize, be a directory, and contain a `.git/` entry.
 /// Shared by [`GitReadToolConfig`] and [`GitWriteToolConfig`] so the
@@ -1817,6 +1829,16 @@ mod git_tests {
             assert!(detail.contains(".git is a file"), "{detail}");
         }
         std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn gitfile_repos_lists_entries_whose_git_is_a_file() {
+        let plain = tempfile::tempdir().unwrap();
+        std::fs::create_dir(plain.path().join(".git")).unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        std::fs::write(worktree.path().join(".git"), "gitdir: /elsewhere").unwrap();
+        let repos = vec![plain.path().to_path_buf(), worktree.path().to_path_buf()];
+        assert_eq!(gitfile_repos(&repos), vec![worktree.path().to_path_buf()]);
     }
 
     // ---- confiner_for: gitfile refusal --------------------------------

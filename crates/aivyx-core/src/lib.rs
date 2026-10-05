@@ -60,7 +60,7 @@ pub use tools::{
     RoutingStatusTool, ShellExecTool, ShellExecToolConfig, SkillDefaultsListTool,
     SkillDefaultsReadTool, SkillReader, SkillsInvokeTool, SkillsListTool, WebExtractTool,
     WebExtractToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
-    render_default_skills_section,
+    carved_home_notice, gitfile_repos, render_default_skills_section,
 };
 // Routing visibility B1 — the router state shared by `routing.status` and
 // the daemon's `GetRoutingStatus` query, and `/model`-style id resolution.

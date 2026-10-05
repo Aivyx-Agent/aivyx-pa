@@ -468,7 +468,10 @@ impl Tool for ShellExecTool {
          max 600000) sets a wall-clock timeout. Output is bundled \
          into one result — no streaming. Anything the command starts \
          in the background is killed when it exits. Put scratch files \
-         under $TMPDIR, not /tmp, which is usually not writable."
+         under $TMPDIR, not /tmp, which is usually not writable. In \
+         your home directory's top level, `rm`, `mv` and `>` into a new \
+         file can fail with Permission denied; use fs.write/fs.delete \
+         there, or work in a subdirectory."
     }
 
     fn input_schema(&self) -> &Value {
@@ -669,6 +672,47 @@ impl Tool for ShellExecTool {
             verified: Verification::NotApplicable,
         }
     }
+}
+
+/// Credential stores under `$HOME` that aivyx-confine always keeps
+/// unreadable to confined commands (`HomePaths` in aivyx-confine).
+const CONFINE_DENIED_HOME_FILES: &[&str] = &[
+    ".cargo/credentials.toml",
+    ".cargo/credentials",
+    ".config/git/credentials",
+];
+
+/// An operator-facing notice when `shell.exec` rooted at `fs_root` will
+/// hit aivyx-confine's carved-directory limit: if one of the always-denied
+/// credential stores under `home` lies inside `fs_root` (access levels
+/// `home` and `full`), every directory on the path to it — `home` itself
+/// included — keeps only list/create rights, so `rm`/`mv` of entries
+/// directly in it fail and a file just created there can't be written
+/// until the next command. `None` when no such file is in reach. Printed
+/// by `aivyx-pa doctor` and `aivyx-pa access show`.
+pub fn carved_home_notice(fs_root: &Path, home: &Path) -> Option<String> {
+    let fs_root = std::fs::canonicalize(fs_root).unwrap_or_else(|_| fs_root.to_path_buf());
+    let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    let found: Vec<String> = CONFINE_DENIED_HOME_FILES
+        .iter()
+        .map(|rel| home.join(rel))
+        .filter(|path| path.symlink_metadata().is_ok() && path.starts_with(&fs_root))
+        .map(|path| path.display().to_string())
+        .collect();
+    if found.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "shell.exec can't rm/mv files directly in {home}, or in the other \
+         folders on the way from {root} to {}, and a file it creates directly \
+         in one of them stays empty until its next command: those files must \
+         stay unreadable to the sandbox. Other subfolders (~/Documents, ...) \
+         are unaffected, and the agent's fs.write/fs.delete tools still work \
+         in {home}.",
+        found.join(", "),
+        home = home.display(),
+        root = fs_root.display(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1341,6 +1385,34 @@ mod tests {
                  redirect fails inside it), got {other:?}"
             ),
         }
+    }
+
+    // ---- Carved home notice -------------------------------------------
+
+    #[test]
+    fn carved_home_notice_names_a_credential_store_under_the_shell_root() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".cargo")).unwrap();
+        std::fs::write(home.path().join(".cargo/credentials.toml"), "t").unwrap();
+        let notice = carved_home_notice(home.path(), home.path())
+            .expect("a credential store under fs_root carves the home root");
+        assert!(notice.contains(".cargo/credentials.toml"), "{notice}");
+        assert!(notice.contains("rm"), "{notice}");
+        // `full`: fs_root = / is an ancestor of home, same effect.
+        assert!(carved_home_notice(Path::new("/"), home.path()).is_some());
+    }
+
+    #[test]
+    fn carved_home_notice_is_silent_without_a_credential_store_in_reach() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(carved_home_notice(home.path(), home.path()).is_none());
+        std::fs::create_dir_all(home.path().join(".config/git")).unwrap();
+        std::fs::write(home.path().join(".config/git/credentials"), "t").unwrap();
+        // `sandbox`/`workspace`: fs_root is a subdirectory of home.
+        let sandbox = home.path().join("aivyx-pa-sandbox");
+        std::fs::create_dir_all(&sandbox).unwrap();
+        assert!(carved_home_notice(&sandbox, home.path()).is_none());
+        assert!(carved_home_notice(home.path(), home.path()).is_some());
     }
 
     // ---- Process-group lifetime (aivyx-confine 061768f) ------------

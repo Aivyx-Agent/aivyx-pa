@@ -89,6 +89,15 @@ pub async fn run_doctor() -> Result<(), String> {
     // never fails the doctor.
     check_gatehouse(&cfg);
 
+    // aivyx-confine's carved-home limit — informational, never fails the
+    // doctor; printed only when it applies.
+    if let Some(home) = std::env::var_os("HOME")
+        && let Some(notice) = aivyx_core::carved_home_notice(&cfg.fs_root.value, &PathBuf::from(home))
+    {
+        println!("\nSandbox:");
+        println!("  \u{26a0} {notice}");
+    }
+
     println!();
     if all_ok {
         println!("✓ Looks good — your agent is ready. Run `aivyx-pa` to start.");
