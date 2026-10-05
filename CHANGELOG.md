@@ -11,7 +11,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
   (`aivyx-route` bumped to `d387a52`):
   - A `[routing.endpoints.*]` entry of a non-cloud kind (`openai_compat`,
     `ollama`, `llama_router`, `lemonade`) at a hosted address — e.g.
-    `https://api.groq.com/openai/v1` — or with no `base_url` now counts
+    `https://api.groq.com/openai/v1` — or an `openai_compat` one with no
+    `base_url` now counts
     as cloud: it is rejected under `[routing.escalation] mode = "never"`
     (the error says why), turns escalation on otherwise, and is reachable
     only through the escalation gate, never as an ordinary candidate.

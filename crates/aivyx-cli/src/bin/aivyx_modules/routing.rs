@@ -127,7 +127,7 @@ pub(crate) fn config_issues(config: &RoutingConfig, default: &DefaultEndpoint) -
                 Some(format!(
                     "the [agent] backend at `{host}` is not a local address, so routing counts \
                      its models as cloud (cloud-tagged [[routing.models]] entries on it may be \
-                     chosen)"
+                     chosen) — expected if it is your own server with a public-looking name"
                 ))
             }
             issue => Some(issue.to_string()),
@@ -218,10 +218,19 @@ fn why_cloud(endpoint: &EndpointConfig) -> String {
         _ if endpoint.locality == Some(Locality::Cloud) => " (marked locality = \"cloud\")".into(),
         None => " (it has no base_url, so it counts as cloud)".into(),
         Some(url) => format!(
-            " (`{url}` is not a local address — set locality = \"local\" on it if it is on \
-             your own network)"
+            " (`{host}` is not a local address — set locality = \"local\" on it if it is on \
+             your own network)",
+            host = url_host(url),
         ),
     }
+}
+
+/// The host (and port) of `url`, without scheme, credentials, path or
+/// query, so an error can name the address without echoing a secret.
+fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    authority.rsplit_once('@').map_or(authority, |(_, host)| host)
 }
 
 /// Model routing Part 3b — cloud escalation is live: `[routing]` is
@@ -1306,6 +1315,19 @@ mod tests {
     }
 
     #[test]
+    fn the_cloud_endpoint_error_names_only_the_host() {
+        let cfg = parse(
+            "[routing]\nenabled = true\n[routing.endpoints.gw]\nkind = \"openai_compat\"\n\
+             base_url = \"https://user:s3cret@api.example.com/v1?key=abc\"\n",
+        );
+        let err = check_routing_config(&cfg, &escalation(EscalationMode::Never)).unwrap_err();
+        assert!(err.contains("`api.example.com`"), "{err}");
+        for leaked in ["s3cret", "user", "key=abc", "/v1"] {
+            assert!(!err.contains(leaked), "{leaked} leaked: {err}");
+        }
+    }
+
+    #[test]
     fn the_operators_own_backend_is_probed_whatever_its_address() {
         let backend =
             operator_backend(EndpointKind::Lemonade, "https://lemonade.example.com/api".into());
@@ -2011,6 +2033,7 @@ mod tests {
             Ok(key("default", "claude-big"))
         );
     }
+
     #[test]
     fn render_status_prints_one_line_per_candidate_and_marks_the_default() {
         use Capability::{Completion, Tools, Vision};

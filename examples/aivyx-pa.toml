@@ -1659,7 +1659,8 @@ parent_role = "researcher"
 #     `localhost`, has no dots, or ends in .local / .lan / .internal /
 #     .home.arpa). So an "openai_compat" endpoint at
 #     https://api.groq.com/openai/v1, or an "ollama" one on a public
-#     host, is cloud; so is one with no base_url. A box on your own
+#     host, is cloud; so is an "openai_compat" one with no base_url
+#     (ollama / llama_router / lemonade default to localhost). A box on your own
 #     network with a public-looking DNS name: add `locality = "local"` to
 #     its [routing.endpoints.*] table (`locality = "cloud"` forces cloud).
 #   * A cloud [routing.endpoints.*] entry is an ESCALATION target, never
@@ -1673,13 +1674,13 @@ parent_role = "researcher"
 #     is never chosen. (provider = "openai" with a local base_url counts
 #     as a local OpenAI-compatible server; mistral.rs runs in-process and
 #     is always local.)
-#   * No API key is ever sent to a routing endpoint.
+#   * No API key is ever sent to a routing endpoint — so a hosted
+#     "openai_compat" escalation target only works through a gateway
+#     that needs no key; one that requires a key fails authentication
+#     (after the consented request has left this machine).
 #   * Routed Ollama / OpenAI-compatible endpoints use the provider's
 #     DEFAULT settings — your [ollama] tuning (e.g. num_ctx) applies
 #     only to the `default` endpoint.
-#   * "Local" means the endpoint KIND: an "openai_compat" base_url
-#     that points at a remote host is your own choice and is treated
-#     as local.
 #   * Don't point a routing endpoint at the llama-server that
 #     aivyx-broker fronts — routed requests go straight to it and
 #     bypass the broker's slot coordination.
