@@ -1630,8 +1630,13 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
                     .pid
                     .map(|p| format!("  pid: {p}\n"))
                     .unwrap_or_default();
+                let instance_str = aivyx_instance::InstanceName::from_env()
+                    .ok()
+                    .filter(|n| !n.is_default())
+                    .map(|n| format!("  instance: {n}\n"))
+                    .unwrap_or_default();
                 eprintln!(
-                    "aivyx-pa daemon: running (protocol {version})\n  socket: {}\n{pid_str}",
+                    "aivyx-pa daemon: running (protocol {version})\n{instance_str}  socket: {}\n{pid_str}",
                     socket_path.display(),
                 );
             } else {

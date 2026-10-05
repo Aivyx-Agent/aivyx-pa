@@ -3390,6 +3390,11 @@ pub enum DaemonEnvelope {
     /// and hints that a reload will pick up the newer bundle.
     ServerInfo {
         boot_id: String,
+        /// The named instance this daemon serves (`None` for the default
+        /// instance, and from daemons that predate named instances), so
+        /// Studio can label the tab.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
     },
     StreamEvent {
         session_id: String,
@@ -5252,11 +5257,26 @@ mod tests {
     fn server_info_round_trips() {
         let msg = DaemonEnvelope::ServerInfo {
             boot_id: "test-boot-id".to_string(),
+            instance: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"ServerInfo\""));
+        assert!(!json.contains("instance"), "{json}");
         let back: DaemonEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn server_info_carries_a_named_instance_and_old_json_still_parses() {
+        let named = DaemonEnvelope::ServerInfo {
+            boot_id: "b".to_string(),
+            instance: Some("research".to_string()),
+        };
+        let json = serde_json::to_string(&named).unwrap();
+        assert_eq!(serde_json::from_str::<DaemonEnvelope>(&json).unwrap(), named);
+        let old: DaemonEnvelope =
+            serde_json::from_str(r#"{"type":"ServerInfo","boot_id":"b"}"#).unwrap();
+        assert_eq!(old, DaemonEnvelope::ServerInfo { boot_id: "b".to_string(), instance: None });
     }
 
     #[test]
