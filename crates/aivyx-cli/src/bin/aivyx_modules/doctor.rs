@@ -498,10 +498,10 @@ async fn check_lemonade(cfg: &AivyxConfig) -> bool {
 async fn check_lemonade_at(base_url: &str, model: &str) -> bool {
     let client = aivyx_route::discovery::reqwest::Client::new();
     let endpoint = aivyx_route::EndpointRef::new("default");
-    let config = aivyx_route::EndpointConfig {
-        kind: aivyx_route::EndpointKind::Lemonade,
-        base_url: Some(base_url.to_string()),
-    };
+    let config = crate::routing::operator_backend(
+        aivyx_route::EndpointKind::Lemonade,
+        base_url.to_string(),
+    );
     let report = aivyx_route::discovery::discover(&endpoint, &config, &client).await;
     let residency =
         aivyx_route::discovery::residency::collect(&[(endpoint, config)], None, None, &client)

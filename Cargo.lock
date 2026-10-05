@@ -664,11 +664,14 @@ dependencies = [
 [[package]]
 name = "aivyx-route"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=2cd3587b4da442d293d5c75f956194e1e38c5236#2cd3587b4da442d293d5c75f956194e1e38c5236"
+source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=d387a52bbcc3925064cab17c4e6b1964d044a66f#d387a52bbcc3925064cab17c4e6b1964d044a66f"
 dependencies = [
+ "futures-util",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]

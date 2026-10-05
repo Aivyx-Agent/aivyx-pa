@@ -128,7 +128,7 @@ pub fn in_process_cloud_warning(routing: Option<&aivyx_route::RoutingConfig>) ->
     let cloud: Vec<&str> = routing
         .endpoints
         .iter()
-        .filter(|(_, ep)| ep.kind.locality() == aivyx_route::Locality::Cloud)
+        .filter(|(_, ep)| ep.effective_locality() == aivyx_route::Locality::Cloud)
         .map(|(name, _)| name.as_str())
         .collect();
     if cloud.is_empty() {
@@ -431,5 +431,22 @@ mod tests {
         let mut off = routing_with(&[("claude", "anthropic")]);
         off.enabled = false;
         assert_eq!(in_process_cloud_warning(Some(&off)), None, "routing off: nothing to warn about");
+    }
+
+    #[test]
+    fn cloud_warning_for_a_local_kind_at_a_hosted_address() {
+        let hosted: aivyx_route::RoutingConfig = toml::from_str(
+            "enabled = true\n[endpoints.groq]\nkind = \"openai_compat\"\n\
+             base_url = \"https://api.groq.com/openai/v1\"\n",
+        )
+        .expect("routing snippet parses");
+        let w = in_process_cloud_warning(Some(&hosted)).expect("a hosted endpoint is cloud");
+        assert!(w.contains("groq"), "{w}");
+        let lan: aivyx_route::RoutingConfig = toml::from_str(
+            "enabled = true\n[endpoints.box]\nkind = \"openai_compat\"\n\
+             base_url = \"http://192.168.1.5:8000/v1\"\n",
+        )
+        .expect("routing snippet parses");
+        assert_eq!(in_process_cloud_warning(Some(&lan)), None);
     }
 }

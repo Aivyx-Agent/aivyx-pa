@@ -335,7 +335,7 @@ aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "4ee
 # shared by `aivyx-pa` and `aivyx-coder`. Not on crates.io — pinned by
 # commit SHA, same pattern as aivyx-checkpoint/aivyx-confine/aivyx-kvcache/
 # aivyx-injection-guard/aivyx-skills above.
-aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "2cd3587b4da442d293d5c75f956194e1e38c5236" }
+aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "d387a52bbcc3925064cab17c4e6b1964d044a66f" }
 
 # Standalone generation backends for the aivyx-vision tool process's
 # vision.generate_svg / vision.generate_image / vision.generate_3d

@@ -1237,7 +1237,7 @@ fn prompt_server_base_url(
 /// llama.cpp router-mode server via `/models`), and the broker via
 /// OpenAI-compatible against `{base}/v1`.
 async fn list_server_models(provider: Provider, base: &str) -> Result<Vec<String>, String> {
-    use aivyx_route::{DiscoveryOutcome, EndpointConfig, EndpointKind, EndpointRef};
+    use aivyx_route::{DiscoveryOutcome, EndpointKind, EndpointRef};
     let client = aivyx_route::discovery::reqwest::Client::new();
     let endpoint = EndpointRef::new("default");
     let attempts: Vec<(EndpointKind, String)> = match provider {
@@ -1252,10 +1252,7 @@ async fn list_server_models(provider: Provider, base: &str) -> Result<Vec<String
     };
     let mut why = String::new();
     for (kind, base_url) in attempts {
-        let config = EndpointConfig {
-            kind,
-            base_url: Some(base_url),
-        };
+        let config = crate::routing::operator_backend(kind, base_url);
         let report = aivyx_route::discovery::discover(&endpoint, &config, &client).await;
         match report.outcome {
             DiscoveryOutcome::Reached(models) if !models.is_empty() => {

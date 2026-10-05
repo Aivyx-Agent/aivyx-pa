@@ -449,9 +449,14 @@ memories is sent to a cloud model — silently, or by a model or a remote
 sender steering it there.
 
 **Mitigation:** escalation is off unless the operator configures a
-cloud `[routing.endpoints.*]` entry, and then passes a gate
-(`aivyx_llm::escalation::decide_escalation`, dispatched by
-`RoutedProvider`):
+cloud `[routing.endpoints.*]` entry, and then passes a gate. "Cloud" is
+aivyx-route's effective locality, decided by the address and not just
+the kind: `anthropic`/`openai` always, and any other kind (an
+`openai_compat` gateway, a remote Ollama) whose `base_url` host isn't a
+local address or that has none — so a hosted OpenAI-compatible API can't
+pass as local under `mode = "never"`. The gate is
+`aivyx_llm::escalation::decide_escalation`, dispatched by
+`RoutedProvider`:
 
 - **Taint wins over everything.** A conversation is marked tainted —
   write-once, persisted in its own `KeyDomain::RoutingTaint` so it

@@ -7,6 +7,30 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Changed
 
+- Model routing decides local or cloud by address, not just by kind
+  (`aivyx-route` bumped to `d387a52`):
+  - A `[routing.endpoints.*]` entry of a non-cloud kind (`openai_compat`,
+    `ollama`, `llama_router`, `lemonade`) at a hosted address — e.g.
+    `https://api.groq.com/openai/v1` — or an `openai_compat` one with no
+    `base_url` now counts
+    as cloud: it is rejected under `[routing.escalation] mode = "never"`
+    (the error says why), turns escalation on otherwise, and is reachable
+    only through the escalation gate, never as an ordinary candidate.
+    Previously it counted as local and bypassed `mode = "never"` and the
+    sensitivity taint. Mark a box on your own network with a
+    public-looking name `locality = "local"`.
+  - The `[agent]` backend is judged by its real address (the configured
+    `base_url`, `[broker] base_url` for the broker, else the provider's
+    default): an Ollama/llama.cpp/Jan/Lemonade/broker backend on a public
+    host counts as cloud, so cloud-tagged roster entries on it may be
+    chosen, and `routing` warns at startup. `provider = "openai"` with
+    any local `base_url` (not just loopback) counts as a local
+    OpenAI-compatible server; mistral.rs is always local.
+  - `aivyx-pa doctor`, `aivyx-pa init` and residency polling still read
+    your own `[agent]` backend whatever its address. Discovery now runs
+    concurrently under a 15 s deadline, and never probes or polls a cloud
+    endpoint.
+
 - `aivyx-pa federation yubikey-init` (behind the optional `yubikey`
   feature) is safer against hardware mistakes (`aivyx-yubi` bumped to
   `fd93451`):

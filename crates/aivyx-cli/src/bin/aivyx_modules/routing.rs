@@ -3,11 +3,13 @@
 //! `wrap_with_routing` hands back the configured provider untouched.
 //!
 //! The default endpoint (`default`) is `[agent] provider` + `model`. Extra
-//! `[routing.endpoints.*]` may be cloud (`anthropic`/`openai`) only when
-//! `[routing.escalation] mode` isn't `never` (Part 3b), and then only with
-//! the operator's own API key for that kind. Their models are kept out of
-//! the local router: cloud candidates there stay limited to the default
-//! endpoint, and only when the configured provider itself is cloud.
+//! `[routing.endpoints.*]` may be cloud (aivyx-route's effective locality:
+//! `anthropic`/`openai`, or any kind at a non-local address) only when
+//! `[routing.escalation] mode` isn't `never` (Part 3b); an `anthropic` or
+//! `openai` one also needs the operator's own API key for that kind. Their
+//! models are kept out of the local router: cloud candidates there stay
+//! limited to the default endpoint, and only when the `[agent]` backend is
+//! itself cloud by the same rule.
 //!
 //! Also the offline `aivyx-pa routing status|explain` subcommand: `status`
 //! runs the same discovery + merge without a daemon; `explain` scans the
@@ -25,7 +27,7 @@ use aivyx_llm::{
     ClassifierSetup, LlmProvider, ProfileRefresher, ProviderFactory, RouteObserver, RoutedProvider,
 };
 use aivyx_route::{
-    Availability, Capability, DefaultEndpoint, EndpointConfig, EndpointKind, EndpointRef, Locality,
+    Availability, Capability, ConfigIssue, DefaultEndpoint, EndpointConfig, EndpointKind, EndpointRef, Locality,
     ModelKey, ModelProfile, ResidencyNote, ResidencySnapshot, RosterEntry, Router,
     RoutingConfig, find, merge,
 };
@@ -35,13 +37,29 @@ use secrecy::SecretString;
 /// The `[agent] provider` + `model`, as a routing endpoint name.
 pub(crate) const DEFAULT_ENDPOINT: &str = "default";
 
-/// The default endpoint's kind, from `[agent] provider`. It decides the
-/// locality of every roster entry without an `endpoint`, and whether
-/// routing may choose cloud models at all.
+/// The default endpoint: `[agent] provider` as an aivyx-route kind, with
+/// the address the provider actually talks to. `base_url` is the
+/// configured backend URL — `[openai] base_url`, or `[broker] base_url` for
+/// the broker — and `None` falls back to the provider's own default. Its
+/// locality follows aivyx-route's one rule
+/// ([`DefaultEndpoint::effective_locality`]): cloud providers are cloud, a
+/// local provider is local only at a local address, and the in-process
+/// mistral.rs backend (no address at all) is marked local. That locality
+/// decides every roster entry without an `endpoint`, and whether routing
+/// may choose cloud models at all.
 pub(crate) fn default_endpoint(kind: ProviderKind, base_url: Option<&str>) -> DefaultEndpoint {
-    let kind = match kind {
+    let url = backend_url(kind, base_url);
+    let endpoint_kind = match kind {
         ProviderKind::Anthropic => EndpointKind::Anthropic,
-        ProviderKind::OpenAi if base_url.is_some_and(is_loopback_url) => EndpointKind::OpenaiCompat,
+        // `provider = "openai"` pointed at a server on this machine or
+        // network is an OpenAI-compatible local server, not the OpenAI API.
+        ProviderKind::OpenAi
+            if url
+                .as_deref()
+                .is_some_and(|u| aivyx_route::url_locality(u) == Locality::Local) =>
+        {
+            EndpointKind::OpenaiCompat
+        }
         ProviderKind::OpenAi => EndpointKind::Openai,
         ProviderKind::Ollama => EndpointKind::Ollama,
         ProviderKind::Lemonade => EndpointKind::Lemonade,
@@ -50,18 +68,83 @@ pub(crate) fn default_endpoint(kind: ProviderKind, base_url: Option<&str>) -> De
         | ProviderKind::MistralRs
         | ProviderKind::Broker => EndpointKind::OpenaiCompat,
     };
-    DefaultEndpoint {
-        name: EndpointRef::new(DEFAULT_ENDPOINT),
-        kind,
+    let mut default = DefaultEndpoint::new(DEFAULT_ENDPOINT, endpoint_kind);
+    default.base_url = url;
+    if kind.is_in_process() {
+        default.locality = Some(Locality::Local);
+    }
+    default
+}
+
+/// The backend URL the operator configured for `kind`: `[broker] base_url`
+/// for the broker, `[openai] base_url` for every other provider.
+pub(crate) fn configured_backend_url<'a>(
+    kind: ProviderKind,
+    openai_base_url: Option<&'a str>,
+    broker_base_url: Option<&'a str>,
+) -> Option<&'a str> {
+    match kind {
+        ProviderKind::Broker => broker_base_url,
+        _ => openai_base_url,
     }
 }
 
-/// `provider = "openai"` pointed at a local OpenAI-compatible server.
-fn is_loopback_url(url: &str) -> bool {
-    reqwest::Url::parse(url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_owned))
-        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "::1"))
+/// The URL the `[agent]` provider connects to: the configured one, else
+/// the provider's own default (the same defaults the provider is built
+/// with). `None` for the in-process backend, and for the cloud APIs on
+/// their built-in address.
+fn backend_url(kind: ProviderKind, configured: Option<&str>) -> Option<String> {
+    let default = match kind {
+        ProviderKind::Ollama => Some(DEFAULT_OLLAMA_BASE_URL),
+        ProviderKind::LlamaCpp => Some(DEFAULT_LLAMACPP_BASE_URL),
+        ProviderKind::Jan => return Some(crate::jan_base_url(configured.map(str::to_owned))),
+        ProviderKind::Lemonade => Some(crate::DEFAULT_LEMONADE_BASE_URL),
+        ProviderKind::Broker => Some(crate::DEFAULT_BROKER_BASE_URL),
+        ProviderKind::MistralRs => return None,
+        ProviderKind::OpenAi | ProviderKind::Anthropic => None,
+    };
+    configured.or(default).map(str::to_owned)
+}
+
+/// llama-server's default address.
+const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
+
+/// `config.validate(default)`, worded for aivyx-pa: the `default` endpoint
+/// is the `[agent]` backend, which has no `locality` setting of its own,
+/// and the in-process backend has no address to be missing.
+pub(crate) fn config_issues(config: &RoutingConfig, default: &DefaultEndpoint) -> Vec<String> {
+    let is_default = |endpoint: &str| endpoint == default.name.as_str();
+    config
+        .validate(default)
+        .into_iter()
+        .filter_map(|issue| match issue {
+            ConfigIssue::MissingBaseUrl { endpoint }
+                if is_default(&endpoint) && default.locality == Some(Locality::Local) =>
+            {
+                None
+            }
+            ConfigIssue::NonLocalAddress { endpoint, host } if is_default(&endpoint) => {
+                Some(format!(
+                    "the [agent] backend at `{host}` is not a local address, so routing counts \
+                     its models as cloud (cloud-tagged [[routing.models]] entries on it may be \
+                     chosen) — expected if it is your own server with a public-looking name"
+                ))
+            }
+            issue => Some(issue.to_string()),
+        })
+        .collect()
+}
+
+/// The operator's own `[agent]` backend as an endpoint for doctor, `init`
+/// and residency to read. aivyx-route never contacts an endpoint it counts
+/// as cloud, but this is the backend every request already goes to, so it
+/// is marked local and read whatever its address.
+pub(crate) fn operator_backend(kind: EndpointKind, base_url: String) -> EndpointConfig {
+    EndpointConfig {
+        kind,
+        base_url: Some(base_url),
+        locality: Some(Locality::Local),
+    }
 }
 
 /// `[routing.escalation]` plus the operator's own cloud API keys: what a
@@ -110,16 +193,44 @@ pub(crate) fn check_routing_config(
                  provider and model; give this endpoint another name"
             ));
         }
-        if endpoint.kind.locality() == Locality::Cloud && escalation.mode == EscalationMode::Never {
+        if endpoint.effective_locality() == Locality::Cloud
+            && escalation.mode == EscalationMode::Never
+        {
             return Err(format!(
-                "[routing.endpoints.{name}] is a cloud endpoint, but [routing.escalation] mode \
-                 is \"never\" — set it to \"ask\" or \"auto\" to allow escalating to it, or \
-                 remove the endpoint (routing may already pick other models on a cloud [agent] \
-                 provider via [[routing.models]])"
+                "[routing.endpoints.{name}] is a cloud endpoint{why}, but [routing.escalation] \
+                 mode is \"never\" — set it to \"ask\" or \"auto\" to allow escalating to it, \
+                 or remove the endpoint (routing may already pick other models on a cloud \
+                 [agent] provider via [[routing.models]])",
+                why = why_cloud(endpoint),
             ));
         }
     }
     Ok(())
+}
+
+/// Why a non-cloud kind counts as cloud, for the startup error: no
+/// address, or an address that isn't local. Empty for a cloud kind.
+fn why_cloud(endpoint: &EndpointConfig) -> String {
+    if endpoint.kind.locality() == Locality::Cloud {
+        return String::new();
+    }
+    match endpoint.base_url() {
+        _ if endpoint.locality == Some(Locality::Cloud) => " (marked locality = \"cloud\")".into(),
+        None => " (it has no base_url, so it counts as cloud)".into(),
+        Some(url) => format!(
+            " (`{host}` is not a local address — set locality = \"local\" on it if it is on \
+             your own network)",
+            host = url_host(url),
+        ),
+    }
+}
+
+/// The host (and port) of `url`, without scheme, credentials, path or
+/// query, so an error can name the address without echoing a secret.
+fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    authority.rsplit_once('@').map_or(authority, |(_, host)| host)
 }
 
 /// Model routing Part 3b — cloud escalation is live: `[routing]` is
@@ -135,7 +246,7 @@ pub(crate) fn escalation_active(
         && cfg.filter(|c| c.enabled).is_some_and(|c| {
             c.endpoints
                 .values()
-                .any(|e| e.kind.locality() == Locality::Cloud)
+                .any(|e| e.effective_locality() == Locality::Cloud)
         })
 }
 
@@ -198,7 +309,8 @@ pub(crate) fn provider_base_url(base: &str) -> String {
 
 /// Builds the provider for one `[routing.endpoints.*]` entry. The default
 /// endpoint never reaches here (`RoutedProvider` serves it with the
-/// configured provider). Local endpoints never get an API key; a cloud
+/// configured provider). Non-cloud kinds never get an API key (even at a
+/// hosted address, which makes them cloud escalation targets); a cloud
 /// endpoint gets the operator's own key for its kind and its `base_url`
 /// if set.
 pub(crate) fn provider_factory(cfg: &RoutingConfig, access: &CloudAccess) -> ProviderFactory {
@@ -318,7 +430,7 @@ pub(crate) fn cloud_candidates(
             config
                 .endpoints
                 .get(p.endpoint.as_str())
-                .is_some_and(|e| e.kind.locality() == Locality::Cloud)
+                .is_some_and(|e| e.effective_locality() == Locality::Cloud)
         })
         .collect()
 }
@@ -344,7 +456,7 @@ fn without_cloud_endpoints(profiles: &mut Vec<ModelProfile>, config: &RoutingCon
             || config
                 .endpoints
                 .get(p.endpoint.as_str())
-                .is_some_and(|e| e.kind.locality() != Locality::Cloud)
+                .is_some_and(|e| e.effective_locality() != Locality::Cloud)
     });
 }
 
@@ -383,12 +495,12 @@ pub(crate) fn default_residency(
             DefaultResidency::Ollama(provider_base_url(base_url.unwrap_or(DEFAULT_OLLAMA_BASE_URL)))
         }
         ProviderKind::LlamaCpp => DefaultResidency::LlamaServer(provider_base_url(
-            base_url.unwrap_or("http://localhost:8080"),
+            base_url.unwrap_or(DEFAULT_LLAMACPP_BASE_URL),
         )),
         ProviderKind::MistralRs => DefaultResidency::Resident,
         ProviderKind::Broker => DefaultResidency::Broker(provider_base_url(broker_base_url)),
         ProviderKind::Lemonade => DefaultResidency::Lemonade(provider_base_url(
-            base_url.unwrap_or("http://127.0.0.1:13305/api"),
+            base_url.unwrap_or(crate::DEFAULT_LEMONADE_BASE_URL),
         )),
         ProviderKind::Jan | ProviderKind::OpenAi | ProviderKind::Anthropic => {
             DefaultResidency::None
@@ -415,10 +527,7 @@ impl ResidencySources {
         if let Some((kind, url)) = own {
             endpoints.push((
                 EndpointRef::new(DEFAULT_ENDPOINT),
-                EndpointConfig {
-                    kind,
-                    base_url: Some(url.clone()),
-                },
+                operator_backend(kind, url.clone()),
             ));
         }
         ResidencySources {
@@ -537,7 +646,7 @@ async fn prepare(
     check_cloud_keys(routing, access)?;
     let config = effective_routing_config(routing, model);
     let default = default_endpoint(kind, base_url);
-    for issue in config.validate(&default) {
+    for issue in config_issues(&config, &default) {
         eprintln!("aivyx-pa: routing config: {issue}");
     }
     let refresher = Arc::new(DiscoveryRefresher {
@@ -587,7 +696,7 @@ pub(crate) async fn wrap_with_routing(
         eprintln!("aivyx-pa: routing: {warning}");
     }
     let router = Router::new(profiles, config.tasks.clone())
-        .with_allow_cloud(default.kind.locality() == Locality::Cloud);
+        .with_allow_cloud(default.effective_locality() == Locality::Cloud);
     let mut routed = RoutedProvider::new(
         default_key,
         provider,
@@ -1043,6 +1152,7 @@ mod tests {
         EndpointConfig {
             kind,
             base_url: base_url.map(str::to_string),
+            locality: None,
         }
     }
 
@@ -1098,6 +1208,131 @@ mod tests {
             default_endpoint(ProviderKind::Ollama, None).name.as_str(),
             DEFAULT_ENDPOINT
         );
+    }
+
+    #[test]
+    fn default_endpoint_carries_the_backends_real_address() {
+        let url = |p, u| default_endpoint(p, u).base_url;
+        assert_eq!(url(ProviderKind::Ollama, None).as_deref(), Some(DEFAULT_OLLAMA_BASE_URL));
+        assert_eq!(
+            url(ProviderKind::Ollama, Some("http://gpu:11434")).as_deref(),
+            Some("http://gpu:11434")
+        );
+        assert_eq!(url(ProviderKind::LlamaCpp, None).as_deref(), Some("http://localhost:8080"));
+        assert_eq!(url(ProviderKind::Jan, None).as_deref(), Some("http://localhost:1337"));
+        assert_eq!(
+            url(ProviderKind::Lemonade, None).as_deref(),
+            Some(crate::DEFAULT_LEMONADE_BASE_URL)
+        );
+        assert_eq!(
+            url(ProviderKind::Broker, None).as_deref(),
+            Some(crate::DEFAULT_BROKER_BASE_URL)
+        );
+        assert_eq!(
+            url(ProviderKind::Broker, Some("http://10.0.0.2:8899")).as_deref(),
+            Some("http://10.0.0.2:8899")
+        );
+        assert_eq!(
+            url(ProviderKind::OpenAi, Some("http://192.168.1.5:8000/v1")).as_deref(),
+            Some("http://192.168.1.5:8000/v1")
+        );
+        assert_eq!(url(ProviderKind::MistralRs, None), None);
+    }
+
+    #[test]
+    fn the_broker_is_addressed_by_its_own_base_url() {
+        let openai = Some("https://ollama.example.com");
+        let broker = Some("http://127.0.0.1:9900");
+        assert_eq!(configured_backend_url(ProviderKind::Broker, openai, broker), broker);
+        assert_eq!(configured_backend_url(ProviderKind::Broker, openai, None), None);
+        assert_eq!(configured_backend_url(ProviderKind::Ollama, openai, broker), openai);
+    }
+
+    #[test]
+    fn the_default_endpoints_locality_comes_from_its_address() {
+        use ProviderKind as P;
+        let loc = |p, u| default_endpoint(p, u).effective_locality();
+        for p in [P::Ollama, P::LlamaCpp, P::Jan, P::Lemonade, P::Broker, P::MistralRs] {
+            assert_eq!(loc(p, None), Locality::Local, "{p:?}");
+        }
+        assert_eq!(loc(P::Ollama, Some("http://192.168.1.20:11434")), Locality::Local);
+        assert_eq!(loc(P::Ollama, Some("https://ollama.example.com")), Locality::Cloud);
+        assert_eq!(loc(P::LlamaCpp, Some("https://llm.example.com")), Locality::Cloud);
+        assert_eq!(loc(P::Broker, Some("https://broker.example.com")), Locality::Cloud);
+        // `provider = "openai"` on a LAN server is local, not just on loopback.
+        assert_eq!(loc(P::OpenAi, Some("http://192.168.1.5:8000/v1")), Locality::Local);
+        assert_eq!(
+            default_endpoint(P::OpenAi, Some("http://192.168.1.5:8000/v1")).kind,
+            EndpointKind::OpenaiCompat
+        );
+        assert_eq!(loc(P::OpenAi, Some("https://api.groq.com/openai/v1")), Locality::Cloud);
+        assert_eq!(loc(P::OpenAi, None), Locality::Cloud);
+        assert_eq!(loc(P::Anthropic, None), Locality::Cloud);
+    }
+
+    #[test]
+    fn config_issues_name_the_agent_backend_and_skip_the_in_process_one() {
+        let cfg = RoutingConfig::default();
+        assert!(
+            config_issues(&cfg, &default_endpoint(ProviderKind::MistralRs, None)).is_empty(),
+            "an in-process backend has no address to report"
+        );
+        assert!(config_issues(&cfg, &default_endpoint(ProviderKind::Ollama, None)).is_empty());
+        let remote = config_issues(
+            &cfg,
+            &default_endpoint(ProviderKind::Ollama, Some("https://ollama.example.com")),
+        );
+        assert_eq!(remote.len(), 1, "{remote:?}");
+        assert!(remote[0].contains("[agent]"), "{}", remote[0]);
+        assert!(remote[0].contains("ollama.example.com"), "{}", remote[0]);
+        // The default endpoint has no `locality` setting to point at.
+        assert!(!remote[0].contains("locality = "), "{}", remote[0]);
+    }
+
+    #[test]
+    fn a_non_cloud_kind_at_a_hosted_address_is_a_cloud_endpoint() {
+        let groq = parse(
+            "[routing]\nenabled = true\n[routing.endpoints.groq]\nkind = \"openai_compat\"\n\
+             base_url = \"https://api.groq.com/openai/v1\"\n",
+        );
+        let err = check_routing_config(&groq, &escalation(EscalationMode::Never)).unwrap_err();
+        assert!(err.contains("groq"), "{err}");
+        assert!(err.contains("api.groq.com"), "{err}");
+        assert!(err.contains("[routing.escalation] mode"), "{err}");
+        assert!(escalation_active(Some(&groq), &escalation(EscalationMode::Ask)));
+
+        let urlless = parse("[routing.endpoints.box]\nkind = \"openai_compat\"\n");
+        let err = check_routing_config(&urlless, &escalation(EscalationMode::Never)).unwrap_err();
+        assert!(err.contains("no base_url"), "{err}");
+
+        // The operator marks a LAN box with a public-looking name local.
+        let marked = parse(
+            "[routing]\nenabled = true\n[routing.endpoints.gpu]\nkind = \"ollama\"\n\
+             base_url = \"http://gpu.example.com:11434\"\nlocality = \"local\"\n",
+        );
+        assert!(check_routing_config(&marked, &escalation(EscalationMode::Never)).is_ok());
+        assert!(!escalation_active(Some(&marked), &escalation(EscalationMode::Ask)));
+    }
+
+    #[test]
+    fn the_cloud_endpoint_error_names_only_the_host() {
+        let cfg = parse(
+            "[routing]\nenabled = true\n[routing.endpoints.gw]\nkind = \"openai_compat\"\n\
+             base_url = \"https://user:s3cret@api.example.com/v1?key=abc\"\n",
+        );
+        let err = check_routing_config(&cfg, &escalation(EscalationMode::Never)).unwrap_err();
+        assert!(err.contains("`api.example.com`"), "{err}");
+        for leaked in ["s3cret", "user", "key=abc", "/v1"] {
+            assert!(!err.contains(leaked), "{leaked} leaked: {err}");
+        }
+    }
+
+    #[test]
+    fn the_operators_own_backend_is_probed_whatever_its_address() {
+        let backend =
+            operator_backend(EndpointKind::Lemonade, "https://lemonade.example.com/api".into());
+        assert_eq!(backend.base_url(), Some("https://lemonade.example.com/api"));
+        assert_eq!(backend.effective_locality(), Locality::Local);
     }
 
     fn escalation(mode: EscalationMode) -> EscalationConfig {
@@ -1477,6 +1712,10 @@ mod tests {
     }
 
     async fn plan_on_cloud_default(kind: ProviderKind) -> Result<ModelKey, String> {
+        plan_on_default(kind, None).await
+    }
+
+    async fn plan_on_default(kind: ProviderKind, base_url: Option<&str>) -> Result<ModelKey, String> {
         let cfg = parse(
             "[routing]\nenabled = true\ndiscover = false\n\
              [[routing.models]]\nid = \"claude-big\"\ntier = \"large\"\nlocality = \"cloud\"\n\
@@ -1486,7 +1725,7 @@ mod tests {
             Some(&cfg),
             &CloudAccess::default(),
             kind,
-            None,
+            base_url,
             "claude-small",
             unused_provider(),
             None,
@@ -1742,6 +1981,59 @@ mod tests {
         );
         assert_eq!(keys_per_config[1], keys_per_config[0]);
     }
+
+    #[tokio::test]
+    async fn hosted_openai_compatible_models_are_escalation_targets_not_local_candidates() {
+        let cfg = parse(
+            "[routing]\nenabled = true\ndiscover = false\n\
+             [routing.endpoints.groq]\nkind = \"openai_compat\"\n\
+             base_url = \"https://api.groq.com/openai/v1\"\n\
+             [routing.endpoints.gpu]\nkind = \"ollama\"\nbase_url = \"http://gpu.lan:11434\"\n\
+             [[routing.models]]\nid = \"llama-3.3-70b\"\nendpoint = \"groq\"\ntier = \"large\"\n\
+             [[routing.models]]\nid = \"coder\"\nendpoint = \"gpu\"\ntier = \"medium\"\n",
+        );
+        let (_, routed) = wrap_with_routing(
+            Some(&cfg),
+            &cloud_access(),
+            ProviderKind::Ollama,
+            None,
+            "qwen3:8b",
+            unused_provider(),
+            None,
+            DefaultResidency::None,
+        )
+        .await
+        .unwrap();
+        let keys: Vec<String> = routed
+            .expect("routing is on")
+            .router()
+            .profiles()
+            .iter()
+            .map(|p| p.key().to_string())
+            .collect();
+        assert!(keys.contains(&"coder@gpu".to_string()), "{keys:?}");
+        assert!(!keys.iter().any(|k| k.ends_with("@groq")), "{keys:?}");
+
+        let default = default_endpoint(ProviderKind::Ollama, None);
+        let cloud: Vec<String> =
+            cloud_candidates(&cfg, &default).iter().map(|p| p.key().to_string()).collect();
+        assert_eq!(cloud, vec!["llama-3.3-70b@groq"]);
+    }
+
+    #[tokio::test]
+    async fn a_remote_default_backend_lets_routing_pick_cloud_models_on_it() {
+        // A hosted [agent] backend is already where every request goes, so
+        // cloud-tagged entries on it are fair game, as on a cloud provider.
+        assert_eq!(
+            plan_on_default(ProviderKind::Ollama, Some("https://ollama.example.com")).await,
+            Ok(key("default", "claude-big"))
+        );
+        assert_ne!(
+            plan_on_default(ProviderKind::Ollama, Some("http://192.168.1.20:11434")).await,
+            Ok(key("default", "claude-big"))
+        );
+    }
+
     #[test]
     fn render_status_prints_one_line_per_candidate_and_marks_the_default() {
         use Capability::{Completion, Tools, Vision};
@@ -2179,7 +2471,7 @@ mod tests {
             sources,
             [(
                 DEFAULT_ENDPOINT.to_string(),
-                endpoint(EndpointKind::Lemonade, Some("http://127.0.0.1:1/api"))
+                operator_backend(EndpointKind::Lemonade, "http://127.0.0.1:1/api".into())
             )]
         );
         assert!(s.is_active());
