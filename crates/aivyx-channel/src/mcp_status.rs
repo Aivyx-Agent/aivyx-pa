@@ -37,16 +37,20 @@ pub fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Shared snapshot path for a given instance: `$XDG_DATA_HOME/aivyx-pa/mcp-status.json` (or
+/// `$HOME/.local/share/aivyx-pa/…`), beside the store. `None` if neither
+/// env var is set (no writable home — callers skip silently).
+/// Task 3: path now comes from InstancePaths.
+pub fn snapshot_path_for(paths: &aivyx_instance::InstancePaths) -> Option<PathBuf> {
+    paths.data_dir().map(|d| d.join("mcp-status.json"))
+}
+
 /// Shared snapshot path: `$XDG_DATA_HOME/aivyx-pa/mcp-status.json` (or
 /// `$HOME/.local/share/aivyx-pa/…`), beside the store. `None` if neither
 /// env var is set (no writable home — callers skip silently).
 pub fn snapshot_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
-        })?;
-    Some(base.join("aivyx-pa").join("mcp-status.json"))
+    let paths = aivyx_instance::InstancePaths::current().ok()?;
+    snapshot_path_for(&paths)
 }
 
 /// Write the snapshot (called by the daemon at the end of MCP startup).

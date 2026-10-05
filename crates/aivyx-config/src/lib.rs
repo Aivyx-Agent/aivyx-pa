@@ -6005,7 +6005,6 @@ const ENV_FS_ROOT: &str = "AIVYX_PA_FS_ROOT";
 /// Chapter O — env override for the agent workspace directory.
 const ENV_WORKSPACE: &str = "AIVYX_PA_WORKSPACE";
 const ENV_STORAGE_PATH: &str = "AIVYX_PA_STORAGE_PATH";
-const ENV_XDG_DATA_HOME: &str = "XDG_DATA_HOME";
 const ENV_HOME: &str = "HOME";
 
 /// The config file's name, wherever it lives.
@@ -6027,6 +6026,30 @@ pub fn resolve_config_path() -> PathBuf {
         env_string(ENV_XDG_CONFIG_HOME).as_deref(),
         env_string(ENV_HOME).as_deref(),
     )
+}
+
+/// Resolve the config path for a given instance (explicit inputs).
+/// Empty strings count as unset. Only the CWD file's existence is checked on disk.
+/// Task 3: the default branch now uses InstancePaths.
+pub fn resolve_config_path_from_for(
+    env_override: Option<&str>,
+    cwd: Option<&Path>,
+    paths: &aivyx_instance::InstancePaths,
+) -> PathBuf {
+    fn set(v: Option<&str>) -> Option<&str> {
+        v.filter(|s| !s.is_empty())
+    }
+    if let Some(explicit) = set(env_override) {
+        return PathBuf::from(explicit);
+    }
+    if let Some(local) = cwd.map(|d| d.join(CONFIG_FILE_NAME)) {
+        if local.exists() {
+            return local;
+        }
+    }
+    paths
+        .config_file()
+        .unwrap_or_else(|| PathBuf::from(CONFIG_FILE_NAME))
 }
 
 /// [`resolve_config_path`] over explicit inputs (empty strings count as
@@ -6241,7 +6264,7 @@ impl AivyxConfig {
         // Phase 9 adds TOML `fs.root` between them. Chapter N inserts the
         // `[access] root` and `[access] level`-derived default below the
         // explicit `[fs] root`. A missing HOME with no explicit override is
-        // a typed NoHome error.
+        // a typed NoHome error. Task 3: sandbox path now comes from InstancePaths.
         let fs_root = match env_path(ENV_FS_ROOT) {
             Some(p) => Sourced::new(p, FieldSource::Env),
             None => match toml.fs.root.clone() {
@@ -6252,9 +6275,14 @@ impl AivyxConfig {
                         // Derive the default root from the access level.
                         let root = match access_level.value {
                             AccessLevel::Sandbox => {
-                                let home = env_path(ENV_HOME)
-                                    .ok_or(ConfigError::NoHome { field: "fs_root" })?;
-                                home.join("aivyx-pa-sandbox")
+                                let instance_paths = aivyx_instance::InstancePaths::current()
+                                    .map_err(|e| ConfigError::Invalid {
+                                        field: "fs_root",
+                                        reason: format!("failed to resolve instance: {}", e),
+                                    })?;
+                                instance_paths
+                                    .sandbox_dir()
+                                    .ok_or(ConfigError::NoHome { field: "fs_root" })?
                             }
                             AccessLevel::Home => env_path(ENV_HOME)
                                 .ok_or(ConfigError::NoHome { field: "fs_root" })?,
@@ -6386,6 +6414,7 @@ impl AivyxConfig {
         // The agent's own always-available workspace, independent of
         // `fs_root`. Path: AIVYX_PA_WORKSPACE → `[workspace] path` →
         // `$HOME/.aivyx-pa/workspace`. Absent section ⇒ enabled at default.
+        // Task 3: workspace path now comes from InstancePaths.
         let workspace_enabled = match toml.workspace.enabled {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(true, FieldSource::Default),
@@ -6395,9 +6424,16 @@ impl AivyxConfig {
             None => match toml.workspace.path.clone() {
                 Some(p) => Sourced::new(p, FieldSource::Toml),
                 None => {
-                    let home = env_path(ENV_HOME)
-                        .ok_or(ConfigError::NoHome { field: "workspace_path" })?;
-                    Sourced::new(home.join(".aivyx-pa").join("workspace"), FieldSource::Default)
+                    let instance_paths = aivyx_instance::InstancePaths::current()
+                        .map_err(|e| ConfigError::Invalid {
+                            field: "workspace_path",
+                            reason: format!("failed to resolve instance: {}", e),
+                        })?;
+                    let path = instance_paths
+                        .home_dir()
+                        .ok_or(ConfigError::NoHome { field: "workspace_path" })?
+                        .join("workspace");
+                    Sourced::new(path, FieldSource::Default)
                 }
             },
         };
@@ -6418,21 +6454,20 @@ impl AivyxConfig {
         // Phase 8 logic: env → $XDG_DATA_HOME/aivyx-pa/store.redb →
         // $HOME/.local/share/aivyx-pa/store.redb. Phase 9 adds a TOML
         // `storage.path` entry with env-beats-toml precedence.
+        // Task 3: store path now comes from InstancePaths.
         let storage_path = match env_path(ENV_STORAGE_PATH) {
             Some(p) => Sourced::new(p, FieldSource::Env),
             None => match toml.storage.path.clone() {
                 Some(p) => Sourced::new(p, FieldSource::Toml),
                 None => {
-                    let default_path = if let Some(xdg) = env_path(ENV_XDG_DATA_HOME) {
-                        xdg.join("aivyx-pa").join("store.redb")
-                    } else {
-                        let home =
-                            env_path(ENV_HOME).ok_or(ConfigError::NoHome { field: "storage_path" })?;
-                        home.join(".local")
-                            .join("share")
-                            .join("aivyx-pa")
-                            .join("store.redb")
-                    };
+                    let instance_paths = aivyx_instance::InstancePaths::current()
+                        .map_err(|e| ConfigError::Invalid {
+                            field: "storage_path",
+                            reason: format!("failed to resolve instance: {}", e),
+                        })?;
+                    let default_path = instance_paths
+                        .store_file()
+                        .ok_or(ConfigError::NoHome { field: "storage_path" })?;
                     Sourced::new(default_path, FieldSource::Default)
                 }
             },

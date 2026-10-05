@@ -37,6 +37,7 @@ use std::path::{Path, PathBuf};
 /// Directory names that make any path passing through them secret by default
 /// (SSH/GPG keys, cloud + k8s + docker credentials, browser profiles holding
 /// cookies/logins, password managers, OS keyrings).
+/// Task 3: Added `.aivyx-pa` (and instances/) to protect all Aivyx data.
 const SENSITIVE_DIR_SEGMENTS: &[&str] = &[
     ".ssh",
     ".gnupg",
@@ -49,6 +50,8 @@ const SENSITIVE_DIR_SEGMENTS: &[&str] = &[
     ".password-store",
     "keyrings",
     "Keychains",
+    ".aivyx-pa",
+    "instances",
 ];
 
 /// Exact basenames that are secret by default (dotfiles holding tokens/keys,

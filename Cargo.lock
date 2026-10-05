@@ -162,6 +162,7 @@ dependencies = [
  "aivyx-cost",
  "aivyx-crypto",
  "aivyx-discord",
+ "aivyx-instance",
  "aivyx-ipc",
  "aivyx-kvcache",
  "aivyx-llm",
@@ -267,6 +268,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-cost",
  "aivyx-crypto",
+ "aivyx-instance",
  "aivyx-route",
  "aivyx-storage",
  "base64 0.22.1",
@@ -509,6 +511,7 @@ name = "aivyx-ipc"
 version = "0.14.8"
 dependencies = [
  "aivyx-capability",
+ "aivyx-instance",
  "aivyx-team-types",
  "serde",
  "serde_json",

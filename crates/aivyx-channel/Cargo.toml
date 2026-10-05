@@ -52,6 +52,8 @@ channel-voice-full = ["channel-voice", "aivyx-voice/recommended-voice"]
 [dependencies]
 # Phase 135 — voice channel optional dep.
 aivyx-voice = { path = "../aivyx-voice", optional = true }
+# Task 3: Instance paths and names for multi-instance support.
+aivyx-instance = { path = "../aivyx-instance" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
 # Phase 14 Task 1 — `aivyx-config` promoted from binary-only to a

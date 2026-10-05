@@ -71,6 +71,20 @@ pub const LAUNCHD_LABEL: &str = "com.aivyx-pa.daemon";
 /// `install`). Relative to the user's config dir.
 pub const ENV_FILE_REL: &str = "aivyx-pa/daemon.env";
 
+/// Compute the systemd unit name for a given instance.
+/// Task 3: unit names are instance-aware.
+#[allow(dead_code)]
+pub fn systemd_unit_for(paths: &aivyx_instance::InstancePaths) -> String {
+    paths.systemd_unit()
+}
+
+/// Compute the launchd label for a given instance.
+/// Task 3: launchd labels are instance-aware.
+#[allow(dead_code)]
+pub fn launchd_label_for(paths: &aivyx_instance::InstancePaths) -> String {
+    paths.launchd_label()
+}
+
 /// A resolved install plan — the concrete paths + contents an install will
 /// write. Pure data so a `--dry-run`/preview (AN.1) can show exactly what will
 /// happen before any side effect.
@@ -88,13 +102,20 @@ pub struct ServicePlan {
 /// testable. The unit references the env file via `EnvironmentFile=-` (the `-`
 /// makes it optional, so a missing/rotated secret file degrades to a clear
 /// startup error rather than a unit that won't load).
-pub fn render_systemd_unit(
+/// Render the systemd unit for a given instance. Task 3: adds --instance for named instances.
+pub fn render_systemd_unit_for(
     bin_path: &str,
     web_ui: bool,
     env_file: &str,
     working_dir: &str,
+    paths: &aivyx_instance::InstancePaths,
 ) -> String {
     let web_ui_flag = if web_ui { " --web-ui" } else { "" };
+    let instance_flag = if !paths.name().is_default() {
+        format!(" --instance {}", paths.name().as_str())
+    } else {
+        String::new()
+    };
     format!(
         "[Unit]\n\
          Description=Aivyx personal-assistant daemon\n\
@@ -104,7 +125,7 @@ pub fn render_systemd_unit(
          \n\
          [Service]\n\
          Type=simple\n\
-         ExecStart={bin_path} daemon run{web_ui_flag}\n\
+         ExecStart={bin_path} daemon run{instance_flag}{web_ui_flag}\n\
          WorkingDirectory={working_dir}\n\
          EnvironmentFile=-{env_file}\n\
          Restart=on-failure\n\
@@ -113,6 +134,28 @@ pub fn render_systemd_unit(
          [Install]\n\
          WantedBy=default.target\n"
     )
+}
+
+pub fn render_systemd_unit(
+    bin_path: &str,
+    web_ui: bool,
+    env_file: &str,
+    working_dir: &str,
+) -> String {
+    let paths = aivyx_instance::InstancePaths::current()
+        .unwrap_or_else(|_| {
+            // Fallback for default instance when env resolution fails
+            aivyx_instance::InstancePaths::new(
+                aivyx_instance::InstanceName::default_instance(),
+                aivyx_instance::BaseDirs {
+                    home: None,
+                    xdg_config_home: None,
+                    xdg_data_home: None,
+                    xdg_runtime_dir: None,
+                },
+            )
+        });
+    render_systemd_unit_for(bin_path, web_ui, env_file, working_dir, &paths)
 }
 
 /// Render the 0o600 env file the unit references. The **only** place the
@@ -844,5 +887,104 @@ mod tests {
         // would hang or misbehave under `cargo test`'s non-interactive
         // environment. The env-var short-circuit above and this keyring-hit
         // case are what's safely testable without a real TTY.
+    }
+
+    #[test]
+    fn systemd_unit_for_default_instance_matches_constant() {
+        let default_paths = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::default_instance(),
+            aivyx_instance::BaseDirs {
+                home: Some("/h".into()),
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: Some("/r".into()),
+            },
+        );
+        assert_eq!(systemd_unit_for(&default_paths), SERVICE_UNIT);
+    }
+
+    #[test]
+    fn systemd_unit_for_named_instance() {
+        let research_paths = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::parse("research").unwrap(),
+            aivyx_instance::BaseDirs {
+                home: Some("/h".into()),
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: Some("/r".into()),
+            },
+        );
+        assert_eq!(systemd_unit_for(&research_paths), "aivyx-pa-daemon-research.service");
+    }
+
+    #[test]
+    fn launchd_label_for_default_instance_matches_constant() {
+        let default_paths = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::default_instance(),
+            aivyx_instance::BaseDirs {
+                home: Some("/h".into()),
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: Some("/r".into()),
+            },
+        );
+        assert_eq!(launchd_label_for(&default_paths), LAUNCHD_LABEL);
+    }
+
+    #[test]
+    fn launchd_label_for_named_instance() {
+        let research_paths = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::parse("research").unwrap(),
+            aivyx_instance::BaseDirs {
+                home: Some("/h".into()),
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: Some("/r".into()),
+            },
+        );
+        assert_eq!(launchd_label_for(&research_paths), "com.aivyx-pa.daemon.research");
+    }
+
+    #[test]
+    fn render_systemd_unit_for_default_instance_has_no_instance_flag() {
+        let default_paths = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::default_instance(),
+            aivyx_instance::BaseDirs {
+                home: Some("/h".into()),
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: Some("/r".into()),
+            },
+        );
+        let unit = render_systemd_unit_for(
+            "/b/aivyx-pa",
+            false,
+            "/e",
+            "/w",
+            &default_paths,
+        );
+        assert!(unit.contains("ExecStart=/b/aivyx-pa daemon run\n"));
+        assert!(!unit.contains("--instance"));
+    }
+
+    #[test]
+    fn render_systemd_unit_for_named_instance_includes_instance_flag() {
+        let research_paths = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::parse("research").unwrap(),
+            aivyx_instance::BaseDirs {
+                home: Some("/h".into()),
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: Some("/r".into()),
+            },
+        );
+        let unit = render_systemd_unit_for(
+            "/b/aivyx-pa",
+            false,
+            "/e",
+            "/w",
+            &research_paths,
+        );
+        assert!(unit.contains("ExecStart=/b/aivyx-pa daemon run --instance research\n"));
     }
 }

@@ -21,7 +21,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 /// Keyring service name (the application) and account (which secret).
 const SERVICE: &str = "aivyx-pa";
-const ACCOUNT: &str = "master-passphrase";
+const ACCOUNT_BASE: &str = "master-passphrase";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeyringError {
@@ -32,8 +32,22 @@ pub enum KeyringError {
     Unavailable(String),
 }
 
+fn entry_for(paths: &aivyx_instance::InstancePaths) -> Result<keyring::Entry, KeyringError> {
+    let account = paths.keyring_account(ACCOUNT_BASE);
+    keyring::Entry::new(SERVICE, &account)
+        .map_err(|e| KeyringError::Unavailable(e.to_string()))
+}
+
 fn entry() -> Result<keyring::Entry, KeyringError> {
-    keyring::Entry::new(SERVICE, ACCOUNT)
+    let paths = aivyx_instance::InstancePaths::current()
+        .map_err(|e| KeyringError::Unavailable(format!("failed to resolve instance: {}", e)))?;
+    entry_for(&paths)
+}
+
+/// Store (or overwrite) the master passphrase in the OS keyring for a given instance.
+pub fn store_for(paths: &aivyx_instance::InstancePaths, passphrase: &SecretString) -> Result<(), KeyringError> {
+    entry_for(paths)?
+        .set_password(passphrase.expose_secret())
         .map_err(|e| KeyringError::Unavailable(e.to_string()))
 }
 
@@ -42,6 +56,17 @@ pub fn store(passphrase: &SecretString) -> Result<(), KeyringError> {
     entry()?
         .set_password(passphrase.expose_secret())
         .map_err(|e| KeyringError::Unavailable(e.to_string()))
+}
+
+/// Retrieve the stored passphrase for a given instance, or `None` if nothing is stored.
+/// `Err` only on a genuine keyring failure (unavailable / locked), which lets the daemon
+/// distinguish "no keyring / not set" (fall back) from a surprising fault.
+pub fn retrieve_for(paths: &aivyx_instance::InstancePaths) -> Result<Option<SecretString>, KeyringError> {
+    match entry_for(paths)?.get_password() {
+        Ok(p) => Ok(Some(SecretString::from(p))),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(KeyringError::Unavailable(e.to_string())),
+    }
 }
 
 /// Retrieve the stored passphrase, or `None` if nothing is stored. `Err` only
@@ -55,6 +80,15 @@ pub fn retrieve() -> Result<Option<SecretString>, KeyringError> {
     }
 }
 
+/// Remove the stored passphrase for a given instance. `Ok` even if there was nothing to remove.
+pub fn clear_for(paths: &aivyx_instance::InstancePaths) -> Result<(), KeyringError> {
+    match entry_for(paths)?.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(KeyringError::Unavailable(e.to_string())),
+    }
+}
+
 /// Remove the stored passphrase. `Ok` even if there was nothing to remove.
 pub fn clear() -> Result<(), KeyringError> {
     match entry()?.delete_credential() {
@@ -62,6 +96,11 @@ pub fn clear() -> Result<(), KeyringError> {
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(KeyringError::Unavailable(e.to_string())),
     }
+}
+
+/// Best-effort: is a passphrase currently stored for a given instance?
+pub fn is_stored_for(paths: &aivyx_instance::InstancePaths) -> Result<bool, KeyringError> {
+    Ok(retrieve_for(paths)?.is_some())
 }
 
 /// Best-effort: is a passphrase currently stored?
