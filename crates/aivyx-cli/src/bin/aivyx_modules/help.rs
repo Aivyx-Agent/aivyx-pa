@@ -130,7 +130,7 @@ pub const COMMANDS: &[CommandHelp] = &[
         summary: "Show or set the filesystem/network access level",
         usage: &[
             "aivyx-pa access show",
-            "aivyx-pa access set <sandbox|workspace|home|full|custom> [--root <dir>] [--yes]",
+            "aivyx-pa access set <sandbox|workspace|home|full|custom>",
             "    [--root <dir>] [--yes]",
         ],
     },
@@ -140,7 +140,7 @@ pub const COMMANDS: &[CommandHelp] = &[
         summary: "Show or set the autonomy level",
         usage: &[
             "aivyx-pa autonomy show",
-            "aivyx-pa autonomy set <manual|assisted|supervised|autonomous|unleashed> [--yes]",
+            "aivyx-pa autonomy set <manual|assisted|supervised|autonomous|unleashed>",
             "    [--yes]",
         ],
     },
@@ -332,7 +332,7 @@ pub const COMMANDS: &[CommandHelp] = &[
         group: Group::Inspection,
         summary: "Bind a hardware-backed federation key (YubiKey)",
         usage: &[
-            "aivyx-pa federation yubikey-init <instance-id> <key-binding-path> [--card <serial>] [--overwrite-existing-key]",
+            "aivyx-pa federation yubikey-init <instance-id> <key-binding-path>",
             "    [--card <serial>] [--overwrite-existing-key]",
         ],
     },
