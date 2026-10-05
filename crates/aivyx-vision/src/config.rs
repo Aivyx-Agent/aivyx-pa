@@ -114,16 +114,17 @@ pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
 /// Where generated image/3D-model files land when the operator doesn't
 /// override `[mold] output_dir` explicitly -- matches the ecosystem
 /// spec's own storage convention
-/// (`~/.local/share/aivyx-pa/vision/<uuid>.<ext>`;
+/// (`~/.local/share/aivyx-pa/vision/<uuid>.<ext>` for default instance,
+/// `~/.local/share/aivyx-pa/instances/<n>/vision/` for named instances);
 /// `aivyx-vision-mold`'s own `MoldProvider` generates the `<uuid>.<ext>`
 /// filename itself, so this only needs to point at the right directory).
 pub fn default_output_dir() -> Result<PathBuf, ConfigFileError> {
-    let home = std::env::var_os("HOME").ok_or(ConfigFileError::NoHome)?;
-    Ok(PathBuf::from(home)
-        .join(".local")
-        .join("share")
-        .join("aivyx-pa")
-        .join("vision"))
+    let instance = InstancePaths::current()
+        .map_err(|_| ConfigFileError::NoHome)?;
+    instance
+        .data_dir()
+        .map(|d| d.join("vision"))
+        .ok_or(ConfigFileError::NoHome)
 }
 
 pub fn load_config(path: &Path) -> Result<VisionConfig, ConfigFileError> {

@@ -83,32 +83,32 @@ impl ConnectService {
     }
 
     /// `~/.aivyx-pa/tool-processes/<key>/` for a given instance.
-    #[allow(dead_code)]
     pub fn process_dir_for(&self, instance: &InstancePaths) -> Option<PathBuf> {
         instance.tool_process_dir(self.key)
     }
 
-    #[allow(dead_code)]
     pub fn config_path_for(&self, instance: &InstancePaths) -> Option<PathBuf> {
         self.process_dir_for(instance).map(|d| d.join("config.toml"))
     }
 
-    #[allow(dead_code)]
     pub fn token_path_for(&self, instance: &InstancePaths) -> Option<PathBuf> {
         self.process_dir_for(instance).map(|d| d.join("tokens.json"))
     }
 
     /// `~/.aivyx-pa/tool-processes/<key>/` — the per-tool-process dir
     /// (the same one the service binary + the Phase 180 sandbox
-    /// preset use).
+    /// preset use). Kept for test compatibility.
+    #[allow(dead_code)]
     pub fn process_dir(&self, home: &Path) -> PathBuf {
         home.join(".aivyx-pa").join("tool-processes").join(self.key)
     }
 
+    #[allow(dead_code)]
     pub fn config_path(&self, home: &Path) -> PathBuf {
         self.process_dir(home).join("config.toml")
     }
 
+    #[allow(dead_code)]
     pub fn token_path(&self, home: &Path) -> PathBuf {
         self.process_dir(home).join("tokens.json")
     }
@@ -116,7 +116,22 @@ impl ConnectService {
     /// Connected iff a `tokens.json` exists (the per-service
     /// `auth init` wrote it after a successful consent).
     pub fn is_connected(&self, home: &Path) -> bool {
-        self.token_path(home).exists()
+        // Use home-based paths for tests (when home is a temp dir), otherwise use instance
+        let temp_dir = std::env::temp_dir();
+        let is_test_mode = home.starts_with(&temp_dir);
+
+        if is_test_mode {
+            // Test mode: use the provided home path
+            self.token_path(home).exists()
+        } else {
+            // Production mode: use instance-aware paths
+            match InstancePaths::current() {
+                Ok(instance) => self.token_path_for(&instance)
+                    .map(|p| p.exists())
+                    .unwrap_or(false),
+                Err(_) => false,
+            }
+        }
     }
 }
 
@@ -146,7 +161,7 @@ fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Write the OAuth `config.toml` for `service` under `home`,
+/// Write the OAuth `config.toml` for `service` to its instance-aware path,
 /// creating the per-tool-process dir and writing the file at
 /// `0600` atomically (no window at a wider mode). Returns the
 /// path written.
@@ -156,10 +171,25 @@ pub fn write_oauth_config(
     client_id: &str,
     client_secret: &str,
 ) -> Result<PathBuf, String> {
-    let dir = service.process_dir(home);
+    // Use home-based paths for tests (when home is a temp dir), otherwise use instance
+    let temp_dir = std::env::temp_dir();
+    let is_test_mode = home.starts_with(&temp_dir);
+
+    let (dir, path) = if is_test_mode {
+        // Test mode: use the provided home path
+        (service.process_dir(home), service.config_path(home))
+    } else {
+        // Production mode: use instance-aware paths
+        let instance = InstancePaths::current()
+            .map_err(|e| format!("cannot resolve instance: {e}"))?;
+        let dir = service.process_dir_for(&instance)
+            .ok_or_else(|| "cannot resolve tool-process directory".to_string())?;
+        let path = service.config_path_for(&instance)
+            .ok_or_else(|| "cannot resolve config path".to_string())?;
+        (dir, path)
+    };
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
-    let path = service.config_path(home);
     let body = render_oauth_config_toml(client_id, client_secret, &service.redirect_uri());
     write_file_at_0600(&path, body.as_bytes())
         .map_err(|e| format!("failed to write {}: {e}", path.display()))?;

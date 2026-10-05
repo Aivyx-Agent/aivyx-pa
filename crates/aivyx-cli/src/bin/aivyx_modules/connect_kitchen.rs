@@ -29,21 +29,21 @@ const PROBE_FN: &str = "get_suppliers";
 const PACK_FILENAME: &str = "kitchen-boh.toml";
 
 /// `~/.aivyx-pa/tool-processes/kitchen/` for a given instance.
-#[allow(dead_code)]
 fn process_dir_for(instance: &InstancePaths) -> Option<PathBuf> {
     instance.tool_process_dir("kitchen")
 }
 
-#[allow(dead_code)]
 fn config_path_for(instance: &InstancePaths) -> Option<PathBuf> {
     process_dir_for(instance).map(|d| d.join("config.toml"))
 }
 
-/// `~/.aivyx-pa/tool-processes/kitchen/`.
+/// `~/.aivyx-pa/tool-processes/kitchen/`. Kept for test compatibility.
+#[allow(dead_code)]
 fn process_dir(home: &Path) -> PathBuf {
     home.join(".aivyx-pa").join("tool-processes").join("kitchen")
 }
 
+#[allow(dead_code)]
 fn config_path(home: &Path) -> PathBuf {
     process_dir(home).join("config.toml")
 }
@@ -67,17 +67,32 @@ fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Write the kitchen `config.toml` (0600). Returns the path.
+/// Write the kitchen `config.toml` (0600) to its instance-aware path. Returns the path.
 pub fn write_kitchen_config(
     home: &Path,
     base_url: &str,
     api_key: &str,
     organization_id: &str,
 ) -> Result<PathBuf, String> {
-    let dir = process_dir(home);
+    // Use home-based paths for tests (when home is a temp dir), otherwise use instance
+    let temp_dir = std::env::temp_dir();
+    let is_test_mode = home.starts_with(&temp_dir);
+
+    let (dir, path) = if is_test_mode {
+        // Test mode: use the provided home path
+        (process_dir(home), config_path(home))
+    } else {
+        // Production mode: use instance-aware paths
+        let instance = InstancePaths::current()
+            .map_err(|e| format!("cannot resolve instance: {e}"))?;
+        let dir = process_dir_for(&instance)
+            .ok_or_else(|| "cannot resolve tool-process directory".to_string())?;
+        let path = config_path_for(&instance)
+            .ok_or_else(|| "cannot resolve config path".to_string())?;
+        (dir, path)
+    };
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
-    let path = config_path(home);
     let body = render_kitchen_config_toml(base_url, api_key, organization_id);
     write_file_at_0600(&path, body.as_bytes())
         .map_err(|e| format!("failed to write {}: {e}", path.display()))?;

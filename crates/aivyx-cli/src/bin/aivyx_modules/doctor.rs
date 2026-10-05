@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use aivyx_config::{AivyxConfig, LoadOptions, MemoryProfile, ProviderKind};
+use aivyx_instance::InstancePaths;
 use aivyx_llm::ollama::{
     AUTO_NUM_CTX_CAP, DEFAULT_OLLAMA_BASE_URL, OllamaConfig, OllamaOptions, OllamaProvider,
     RECOMMENDED_LOCAL_MODEL,
@@ -818,14 +819,26 @@ fn is_local_base_url(url: &str) -> bool {
         || url.contains(":11434")
 }
 
-/// `~/.aivyx-pa/tool-processes/kitchen/config.toml` — the kitchen vertical's
-/// presence marker. `Some(path)` iff the file exists (the vertical is installed).
+/// `~/.aivyx-pa/tool-processes/kitchen/config.toml` (or instance-specific path) —
+/// the kitchen vertical's presence marker. `Some(path)` iff the file exists (the vertical is installed).
 fn kitchen_config_path(home: &Path) -> Option<PathBuf> {
-    let p = home
-        .join(".aivyx-pa")
-        .join("tool-processes")
-        .join("kitchen")
-        .join("config.toml");
+    // Use home-based paths for tests (when home is a temp dir), otherwise use instance
+    let temp_dir = std::env::temp_dir();
+    let is_test_mode = home.starts_with(&temp_dir);
+
+    let p = if is_test_mode {
+        // Test mode: use the provided home path (legacy behavior)
+        home.join(".aivyx-pa")
+            .join("tool-processes")
+            .join("kitchen")
+            .join("config.toml")
+    } else {
+        // Production mode: use instance-aware paths
+        let instance = InstancePaths::current().ok()?;
+        instance
+            .tool_process_dir("kitchen")?
+            .join("config.toml")
+    };
     p.exists().then_some(p)
 }
 

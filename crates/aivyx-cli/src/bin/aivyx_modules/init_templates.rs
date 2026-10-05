@@ -110,27 +110,14 @@ pub fn bundled_templates() -> Vec<Template> {
 // User-dir override lookup
 // ---------------------------------------------------------------------------
 
-/// Resolve the user template directory. Per XDG conventions:
-/// `$XDG_DATA_HOME/aivyx-pa/templates/` if set, otherwise
-/// `~/.local/share/aivyx-pa/templates/`. Returns `None` if neither
-/// `XDG_DATA_HOME` nor `HOME` is in the environment.
+/// Resolve the user template directory for the current instance.
+/// For default instance: `$XDG_DATA_HOME/aivyx-pa/templates/` if set,
+/// otherwise `~/.local/share/aivyx-pa/templates/`.
+/// For named instances: `~/.local/share/aivyx-pa/instances/<n>/templates/`.
+/// Returns `None` if the instance cannot be resolved.
 pub fn user_template_dir() -> Option<PathBuf> {
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        if !xdg.is_empty() {
-            return Some(PathBuf::from(xdg).join("aivyx-pa").join("templates"));
-        }
-    }
-    let home = std::env::var("HOME").ok()?;
-    if home.is_empty() {
-        return None;
-    }
-    Some(
-        PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("aivyx-pa")
-            .join("templates"),
-    )
+    let instance = aivyx_instance::InstancePaths::current().ok()?;
+    instance.data_dir().map(|d| d.join("templates"))
 }
 
 /// Enumerate user-dir templates. Returns an empty Vec if the
