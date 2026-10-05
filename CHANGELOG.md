@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.14.7] — 2026-10-05
+
 ### Changed
 
 - Model routing decides local or cloud by address, not just by kind
