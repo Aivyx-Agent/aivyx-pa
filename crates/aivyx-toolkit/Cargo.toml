@@ -18,6 +18,7 @@ name = "aivyx-toolkit"
 path = "src/main.rs"
 
 [dependencies]
+aivyx-instance = { path = "../aivyx-instance" }
 # Tool process SDK — same shape as aivyx-gmail. Multi-tool
 # harness pattern still inline here per the Phase 123
 # SDK-validation finding (lift recommendation still

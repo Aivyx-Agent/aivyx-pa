@@ -18,6 +18,7 @@ name = "aivyx-drive"
 path = "src/main.rs"
 
 [dependencies]
+aivyx-instance = { path = "../aivyx-instance" }
 # Tool process SDK — consumes the Phase 128 Task 2 lifted
 # multi-tool harness directly. No in-tree harness copy.
 aivyx-tool = { path = "../aivyx-tool" }

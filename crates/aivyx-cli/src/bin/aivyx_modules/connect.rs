@@ -15,6 +15,8 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
+use aivyx_instance::InstancePaths;
+
 /// A connectable Google OAuth service. The registry is the source
 /// of truth for what `aivyx-pa connect` can onboard; Notion / n8n
 /// (API-key paste) are a deferred follow-on.
@@ -78,6 +80,22 @@ impl ConnectService {
     /// registered against the operator's Google Cloud OAuth app.
     pub fn redirect_uri(&self) -> String {
         format!("http://127.0.0.1:{}/callback", self.redirect_port)
+    }
+
+    /// `~/.aivyx-pa/tool-processes/<key>/` for a given instance.
+    #[allow(dead_code)]
+    pub fn process_dir_for(&self, instance: &InstancePaths) -> Option<PathBuf> {
+        instance.tool_process_dir(self.key)
+    }
+
+    #[allow(dead_code)]
+    pub fn config_path_for(&self, instance: &InstancePaths) -> Option<PathBuf> {
+        self.process_dir_for(instance).map(|d| d.join("config.toml"))
+    }
+
+    #[allow(dead_code)]
+    pub fn token_path_for(&self, instance: &InstancePaths) -> Option<PathBuf> {
+        self.process_dir_for(instance).map(|d| d.join("tokens.json"))
     }
 
     /// `~/.aivyx-pa/tool-processes/<key>/` — the per-tool-process dir
@@ -764,5 +782,23 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn process_dir_for_named_instance() {
+        use aivyx_instance::{BaseDirs, InstanceName};
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/home/user")),
+            xdg_config_home: Some(PathBuf::from("/etc/config")),
+            xdg_data_home: Some(PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let svc = find_service("gmail").unwrap();
+        let p = svc.process_dir_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/gmail")
+        );
     }
 }

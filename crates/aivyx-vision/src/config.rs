@@ -29,6 +29,8 @@ use secrecy::SecretString;
 use serde::Deserialize;
 use thiserror::Error;
 
+use aivyx_instance::InstancePaths;
+
 #[derive(Debug, Error)]
 pub enum ConfigFileError {
     #[error("config file I/O failed at {path:?}: {source}")]
@@ -98,13 +100,15 @@ pub struct VisionConfig {
     pub mold: Option<MoldSettings>,
 }
 
+pub fn default_config_path_for(instance: &InstancePaths) -> Option<PathBuf> {
+    instance
+        .tool_process_dir("vision")
+        .map(|d| d.join("config.toml"))
+}
+
 pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
-    let home = std::env::var_os("HOME").ok_or(ConfigFileError::NoHome)?;
-    Ok(PathBuf::from(home)
-        .join(".aivyx-pa")
-        .join("tool-processes")
-        .join("vision")
-        .join("config.toml"))
+    let instance = InstancePaths::current().map_err(|_| ConfigFileError::NoHome)?;
+    default_config_path_for(&instance).ok_or(ConfigFileError::NoHome)
 }
 
 /// Where generated image/3D-model files land when the operator doesn't
@@ -327,5 +331,22 @@ mod tests {
         let dir = default_output_dir().unwrap();
         assert!(dir.ends_with("aivyx-pa/vision"));
         assert!(dir.starts_with(std::env::var("HOME").unwrap()));
+    }
+
+    #[test]
+    fn default_config_path_for_named_instance() {
+        use aivyx_instance::{BaseDirs, InstanceName};
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/home/user")),
+            xdg_config_home: Some(PathBuf::from("/etc/config")),
+            xdg_data_home: Some(PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = default_config_path_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/vision/config.toml")
+        );
     }
 }

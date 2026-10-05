@@ -118,6 +118,7 @@ dependencies = [
 name = "aivyx-auth-cli"
 version = "0.14.8"
 dependencies = [
+ "aivyx-instance",
  "serde",
  "thiserror 2.0.18",
  "toml 0.8.23",
@@ -130,6 +131,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-google-oauth",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "chrono",
@@ -302,6 +304,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-google-oauth",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "reqwest 0.12.28",
@@ -387,6 +390,7 @@ dependencies = [
 name = "aivyx-desktop"
 version = "0.14.8"
 dependencies = [
+ "aivyx-instance",
  "aivyx-ipc",
  "auto-launch",
  "futures-util",
@@ -429,6 +433,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-google-oauth",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "base64 0.22.1",
@@ -472,6 +477,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-google-oauth",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "base64 0.22.1",
@@ -487,6 +493,7 @@ dependencies = [
 name = "aivyx-google-oauth"
 version = "0.14.8"
 dependencies = [
+ "aivyx-instance",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -530,6 +537,7 @@ version = "0.14.8"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-kitchen",
  "aivyx-tool",
  "aivyx-vertical-sdk",
@@ -617,6 +625,7 @@ dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "reqwest 0.12.28",
@@ -634,6 +643,7 @@ dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "reqwest 0.12.28",
@@ -651,6 +661,7 @@ dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "serde",
@@ -800,6 +811,7 @@ version = "0.14.8"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "chrono",
@@ -844,6 +856,7 @@ version = "0.14.8"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-llm",
  "aivyx-tool",
  "aivyx-vision-core",

@@ -18,6 +18,7 @@ name = "aivyx-contacts"
 path = "src/main.rs"
 
 [dependencies]
+aivyx-instance = { path = "../aivyx-instance" }
 # Tool process SDK — consumes the lifted multi-tool harness
 # directly (same as aivyx-drive / aivyx-calendar). No in-tree copy.
 aivyx-tool = { path = "../aivyx-tool" }

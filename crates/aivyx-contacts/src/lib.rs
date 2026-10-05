@@ -45,6 +45,8 @@ pub mod tools;
 
 pub use contacts_client::{ContactsClient, ContactsClientError};
 
+use aivyx_instance::InstancePaths;
+
 // Re-export the shared OAuth substrate so consumers (main.rs +
 // downstream) use a single import path, identical to aivyx-drive.
 pub use aivyx_google_oauth::{
@@ -70,23 +72,27 @@ pub use aivyx_tool::multi_harness::{run_multi_tool_subprocess, HarnessError};
 pub const DEFAULT_CONTACTS_SCOPES: &[&str] =
     &["https://www.googleapis.com/auth/contacts"];
 
+/// Service-specific token storage path for a given instance
+/// (`~/.aivyx-pa[/instances/<n>]/tool-processes/contacts/tokens.json`).
+/// Returns `None` when the instance path cannot be resolved.
+pub fn default_token_path_for(instance: &InstancePaths) -> Option<std::path::PathBuf> {
+    instance
+        .tool_process_dir("contacts")
+        .map(|d| d.join("tokens.json"))
+}
+
 /// Service-specific token storage path
 /// (`$HOME/.aivyx-pa/tool-processes/contacts/tokens.json`).
-/// Returns `None` when `$HOME` is unset.
+/// Returns `None` when the instance cannot be resolved from the environment.
 pub fn default_token_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(
-        std::path::PathBuf::from(home)
-            .join(".aivyx-pa")
-            .join("tool-processes")
-            .join("contacts")
-            .join("tokens.json"),
-    )
+    let instance = InstancePaths::current().ok()?;
+    default_token_path_for(&instance)
 }
 
 #[cfg(test)]
 mod scope_tests {
     use super::*;
+    use aivyx_instance::{BaseDirs, InstanceName};
 
     #[test]
     fn default_scopes_use_read_write_contacts() {
@@ -114,5 +120,21 @@ mod scope_tests {
         if let Some(p) = default_token_path() {
             assert!(p.ends_with("tool-processes/contacts/tokens.json"));
         }
+    }
+
+    #[test]
+    fn default_token_path_for_named_instance() {
+        let dirs = BaseDirs {
+            home: Some(std::path::PathBuf::from("/home/user")),
+            xdg_config_home: Some(std::path::PathBuf::from("/etc/config")),
+            xdg_data_home: Some(std::path::PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(std::path::PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = default_token_path_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/contacts/tokens.json")
+        );
     }
 }

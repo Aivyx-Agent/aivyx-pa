@@ -40,6 +40,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use aivyx_instance::InstancePaths;
+
 #[derive(Debug, Error)]
 pub enum ConfigFileError {
     #[error("config file I/O failed at {path:?}: {source}")]
@@ -75,15 +77,27 @@ pub struct BraveSearchConfig {
     pub api_key: String,
 }
 
+/// Default config path for a given instance:
+/// `~/.aivyx-pa[/instances/<n>]/tool-processes/toolkit/config.toml`.
+pub fn default_config_path_for(instance: &InstancePaths) -> Option<PathBuf> {
+    instance
+        .tool_process_dir("toolkit")
+        .map(|d| d.join("config.toml"))
+}
+
 /// Default config path:
 /// `$HOME/.aivyx-pa/tool-processes/toolkit/config.toml`.
 pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
-    let home = std::env::var_os("HOME").ok_or(ConfigFileError::NoHome)?;
-    Ok(PathBuf::from(home)
-        .join(".aivyx-pa")
-        .join("tool-processes")
-        .join("toolkit")
-        .join("config.toml"))
+    let instance = InstancePaths::current().map_err(|_| ConfigFileError::NoHome)?;
+    default_config_path_for(&instance).ok_or(ConfigFileError::NoHome)
+}
+
+/// Default state-directory path for a given instance:
+/// `~/.aivyx-pa[/instances/<n>]/tool-processes/toolkit/`. Returned without
+/// `config.toml` appended so callers (task storage,
+/// health-state storage) can join their own file names.
+pub fn default_state_dir_for(instance: &InstancePaths) -> Option<PathBuf> {
+    instance.tool_process_dir("toolkit")
 }
 
 /// Default state-directory path:
@@ -91,11 +105,8 @@ pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
 /// `config.toml` appended so callers (task storage,
 /// health-state storage) can join their own file names.
 pub fn default_state_dir() -> Result<PathBuf, ConfigFileError> {
-    let home = std::env::var_os("HOME").ok_or(ConfigFileError::NoHome)?;
-    Ok(PathBuf::from(home)
-        .join(".aivyx-pa")
-        .join("tool-processes")
-        .join("toolkit"))
+    let instance = InstancePaths::current().map_err(|_| ConfigFileError::NoHome)?;
+    default_state_dir_for(&instance).ok_or(ConfigFileError::NoHome)
 }
 
 /// Load the toolkit config from disk. Surfaces a distinct
@@ -233,5 +244,39 @@ mod tests {
         assert!(s.contains("toolkit"), "{s}");
         // No trailing file name — callers join their own.
         assert!(!s.ends_with(".toml"), "{s}");
+    }
+
+    #[test]
+    fn default_config_path_for_named_instance() {
+        use aivyx_instance::{BaseDirs, InstanceName};
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/home/user")),
+            xdg_config_home: Some(PathBuf::from("/etc/config")),
+            xdg_data_home: Some(PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = default_config_path_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/toolkit/config.toml")
+        );
+    }
+
+    #[test]
+    fn default_state_dir_for_named_instance() {
+        use aivyx_instance::{BaseDirs, InstanceName};
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/home/user")),
+            xdg_config_home: Some(PathBuf::from("/etc/config")),
+            xdg_data_home: Some(PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = default_state_dir_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/toolkit")
+        );
     }
 }

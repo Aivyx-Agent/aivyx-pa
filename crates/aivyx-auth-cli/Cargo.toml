@@ -14,3 +14,4 @@ readme.workspace = true
 serde = { workspace = true }
 toml = "0.8"
 thiserror = { workspace = true }
+aivyx-instance = { path = "../aivyx-instance" }

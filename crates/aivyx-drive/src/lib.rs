@@ -54,6 +54,8 @@ pub mod tools;
 
 pub use drive_client::{DriveClient, DriveClientError};
 
+use aivyx_instance::InstancePaths;
+
 // Re-export the lifted OAuth substrate so consumers
 // (main.rs + downstream) can use a single import path.
 pub use aivyx_google_oauth::{
@@ -97,22 +99,25 @@ pub const DEFAULT_DRIVE_SCOPES: &[&str] = &[
 ];
 
 /// Service-specific token storage path
+/// (`~/.aivyx-pa[/instances/<n>]/tool-processes/drive/tokens.json`).
+/// Returns `None` when the instance path cannot be resolved.
+pub fn default_token_path_for(instance: &InstancePaths) -> Option<std::path::PathBuf> {
+    instance
+        .tool_process_dir("drive")
+        .map(|d| d.join("tokens.json"))
+}
+
 /// (`$HOME/.aivyx-pa/tool-processes/drive/tokens.json`).
-/// Returns `None` when `$HOME` is unset.
+/// Returns `None` when the instance cannot be resolved from the environment.
 pub fn default_token_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(
-        std::path::PathBuf::from(home)
-            .join(".aivyx-pa")
-            .join("tool-processes")
-            .join("drive")
-            .join("tokens.json"),
-    )
+    let instance = InstancePaths::current().ok()?;
+    default_token_path_for(&instance)
 }
 
 #[cfg(test)]
 mod scope_tests {
     use super::*;
+    use aivyx_instance::{BaseDirs, InstanceName};
 
     #[test]
     fn default_scopes_include_full_drive() {
@@ -129,5 +134,21 @@ mod scope_tests {
         // drive.recent_activity.
         assert!(DEFAULT_DRIVE_SCOPES
             .contains(&"https://www.googleapis.com/auth/drive.activity.readonly"));
+    }
+
+    #[test]
+    fn default_token_path_for_named_instance() {
+        let dirs = BaseDirs {
+            home: Some(std::path::PathBuf::from("/home/user")),
+            xdg_config_home: Some(std::path::PathBuf::from("/etc/config")),
+            xdg_data_home: Some(std::path::PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(std::path::PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = default_token_path_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/drive/tokens.json")
+        );
     }
 }

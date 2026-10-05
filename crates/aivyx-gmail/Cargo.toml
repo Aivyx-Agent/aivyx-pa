@@ -18,6 +18,7 @@ name = "aivyx-gmail"
 path = "src/main.rs"
 
 [dependencies]
+aivyx-instance = { path = "../aivyx-instance" }
 # Tool process SDK — wire envelopes + harness primitives. Phase 123
 # uses the wire types directly and writes a multi-tool harness
 # inline (single-tool `run_tool_as_subprocess` doesn't fit Gmail's

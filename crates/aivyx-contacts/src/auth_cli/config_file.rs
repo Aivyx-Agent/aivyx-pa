@@ -27,6 +27,8 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use aivyx_instance::InstancePaths;
+
 use crate::OAuthConfig;
 
 #[derive(Debug, Error)]
@@ -44,14 +46,17 @@ pub enum ConfigFileError {
     NoHome,
 }
 
+/// Default path for a given instance: `~/.aivyx-pa[/instances/<n>]/tool-processes/contacts/config.toml`.
+pub fn default_config_path_for(instance: &InstancePaths) -> Option<PathBuf> {
+    instance
+        .tool_process_dir("contacts")
+        .map(|d| d.join("config.toml"))
+}
+
 /// Default path: `$HOME/.aivyx-pa/tool-processes/contacts/config.toml`.
 pub fn default_config_path() -> Result<PathBuf, ConfigFileError> {
-    let home = std::env::var_os("HOME").ok_or(ConfigFileError::NoHome)?;
-    Ok(PathBuf::from(home)
-        .join(".aivyx-pa")
-        .join("tool-processes")
-        .join("contacts")
-        .join("config.toml"))
+    let instance = InstancePaths::current().map_err(|_| ConfigFileError::NoHome)?;
+    default_config_path_for(&instance).ok_or(ConfigFileError::NoHome)
 }
 
 /// Load the OAuth config from the given path. Surfaces a
@@ -196,5 +201,22 @@ redirect_uri = "http://localhost:0/cb"
             other => panic!("expected Parse; got {other:?}"),
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn default_config_path_for_named_instance() {
+        use aivyx_instance::{BaseDirs, InstanceName};
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/home/user")),
+            xdg_config_home: Some(PathBuf::from("/etc/config")),
+            xdg_data_home: Some(PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = default_config_path_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/contacts/config.toml")
+        );
     }
 }

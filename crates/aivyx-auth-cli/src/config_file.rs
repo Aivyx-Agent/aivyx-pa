@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
+use aivyx_instance::InstancePaths;
+
 #[derive(Debug, Error)]
 pub enum ConfigFileError {
     /// The config file does not exist. Common operator
@@ -45,21 +47,30 @@ pub enum ConfigFileError {
 }
 
 /// Compute the default config-file path for a Chapter F
-/// service. Returns `None` if `$HOME` is not set in
-/// the environment (rare but possible inside locked-
-/// down container builds).
+/// service for a given instance. Returns `None` if the
+/// instance path cannot be resolved.
+///
+/// `service_subdir` is the leaf directory name —
+/// `"notion"`, `"obsidian"`, `"n8n"`, etc.
+pub fn default_config_path_for(
+    instance: &InstancePaths,
+    service_subdir: &str,
+) -> Option<PathBuf> {
+    instance
+        .tool_process_dir(service_subdir)
+        .map(|d| d.join("config.toml"))
+}
+
+/// Compute the default config-file path for a Chapter F
+/// service. Returns `None` if the instance cannot be
+/// resolved from the environment (rare but possible
+/// inside locked-down container builds).
 ///
 /// `service_subdir` is the leaf directory name —
 /// `"notion"`, `"obsidian"`, `"n8n"`, etc.
 pub fn default_config_path(service_subdir: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(
-        PathBuf::from(home)
-            .join(".aivyx-pa")
-            .join("tool-processes")
-            .join(service_subdir)
-            .join("config.toml"),
-    )
+    let instance = InstancePaths::current().ok()?;
+    default_config_path_for(&instance, service_subdir)
 }
 
 /// Load a TOML config file and deserialise into the
@@ -253,6 +264,23 @@ max_retries = 5"#,
             let s = p.to_string_lossy();
             assert!(s.ends_with("/.aivyx-pa/tool-processes/n8n/config.toml"), "{s}");
         }
+    }
+
+    #[test]
+    fn default_config_path_for_named_instance() {
+        use aivyx_instance::{BaseDirs, InstanceName};
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/home/user")),
+            xdg_config_home: Some(PathBuf::from("/etc/config")),
+            xdg_data_home: Some(PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = default_config_path_for(&instance, "notion").expect("path");
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/notion/config.toml")
+        );
     }
 
     #[test]

@@ -18,6 +18,7 @@ name = "aivyx-notion"
 path = "src/main.rs"
 
 [dependencies]
+aivyx-instance = { path = "../aivyx-instance" }
 # Tool process SDK — consumes the lifted multi-tool harness
 # from aivyx-tool::multi_harness (Phase 128 Task 2 lift).
 aivyx-tool = { path = "../aivyx-tool" }

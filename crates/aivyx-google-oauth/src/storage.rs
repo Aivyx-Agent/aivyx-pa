@@ -31,6 +31,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs;
 
+use aivyx_instance::InstancePaths;
+
 use super::tokens::TokenSet;
 
 /// On-disk wrapper around [`TokenSet`]. Versioned at the file
@@ -67,19 +69,23 @@ pub enum StorageError {
     },
 }
 
+/// Default path for the Gmail tool process's token file for a given instance.
+/// Resolves to `~/.aivyx-pa[/instances/<n>]/tool-processes/gmail/tokens.json`.
+/// Returns `None` if the instance path cannot be resolved.
+pub fn default_token_path_for(instance: &InstancePaths) -> Option<PathBuf> {
+    instance
+        .tool_process_dir("gmail")
+        .map(|d| d.join("tokens.json"))
+}
+
 /// Default path for the Gmail tool process's token file.
 /// Resolves to `$HOME/.aivyx-pa/tool-processes/gmail/tokens.json`.
-/// Returns `None` if `$HOME` is unset (operator-conservative;
-/// the binary will surface a clear error rather than guessing
-/// a path).
+/// Returns `None` if the instance cannot be resolved from the environment
+/// (operator-conservative; the binary will surface a clear error rather
+/// than guessing a path).
 pub fn default_token_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let path = PathBuf::from(home)
-        .join(".aivyx-pa")
-        .join("tool-processes")
-        .join("gmail")
-        .join("tokens.json");
-    Some(path)
+    let instance = InstancePaths::current().ok()?;
+    default_token_path_for(&instance)
 }
 
 /// Load tokens from disk. Returns `Ok(None)` if the file
@@ -390,5 +396,22 @@ mod tests {
         // function; this is a one-line smoke test that the
         // contract function exists and the return type matches.
         let _: Option<PathBuf> = default_token_path();
+    }
+
+    #[test]
+    fn default_token_path_for_named_instance() {
+        use aivyx_instance::{BaseDirs, InstanceName};
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/home/user")),
+            xdg_config_home: Some(PathBuf::from("/etc/config")),
+            xdg_data_home: Some(PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = default_token_path_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/gmail/tokens.json")
+        );
     }
 }

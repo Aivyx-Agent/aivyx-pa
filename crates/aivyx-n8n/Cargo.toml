@@ -18,6 +18,7 @@ name = "aivyx-n8n"
 path = "src/main.rs"
 
 [dependencies]
+aivyx-instance = { path = "../aivyx-instance" }
 aivyx-tool = { path = "../aivyx-tool" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }

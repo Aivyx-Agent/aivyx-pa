@@ -18,6 +18,7 @@ name = "aivyx-kitchen-toolkit"
 path = "src/main.rs"
 
 [dependencies]
+aivyx-instance = { path = "../../aivyx-instance" }
 # Tool-process building blocks (Tool trait, ToolContext, the multi-tool harness)
 # + scope types, all via the stable `aivyx-vertical-sdk` facade — the pack never
 # depends on the engine crates (aivyx-core / aivyx-tool / aivyx-capability)

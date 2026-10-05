@@ -14,6 +14,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
+use aivyx_instance::InstancePaths;
 use aivyx_kitchen::KITCHEN_BOH_TOML;
 use aivyx_kitchen_toolkit::KitchenClient;
 
@@ -26,6 +27,17 @@ const KITCHEN_BINARY: &str = "aivyx-kitchen-toolkit";
 const PROBE_FN: &str = "get_suppliers";
 /// The planted pack filename, beside `aivyx-pa.toml` (Mise OQ-1).
 const PACK_FILENAME: &str = "kitchen-boh.toml";
+
+/// `~/.aivyx-pa/tool-processes/kitchen/` for a given instance.
+#[allow(dead_code)]
+fn process_dir_for(instance: &InstancePaths) -> Option<PathBuf> {
+    instance.tool_process_dir("kitchen")
+}
+
+#[allow(dead_code)]
+fn config_path_for(instance: &InstancePaths) -> Option<PathBuf> {
+    process_dir_for(instance).map(|d| d.join("config.toml"))
+}
 
 /// `~/.aivyx-pa/tool-processes/kitchen/`.
 fn process_dir(home: &Path) -> PathBuf {
@@ -299,5 +311,22 @@ mod tests {
             "kitchen-boh.toml"
         ));
         assert_eq!(doc["team"]["config_path"].as_str(), Some("mine.toml"));
+    }
+
+    #[test]
+    fn process_dir_for_named_instance() {
+        use aivyx_instance::{BaseDirs, InstanceName};
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/home/user")),
+            xdg_config_home: Some(PathBuf::from("/etc/config")),
+            xdg_data_home: Some(PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = process_dir_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/kitchen")
+        );
     }
 }
