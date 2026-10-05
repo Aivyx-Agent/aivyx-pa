@@ -872,8 +872,14 @@ running Aivyx PA daemon":
    `bwrap`/`firejail`/`docker` wrapper mechanism (`aivyx-tool/src/
    sandbox.rs`, Phase 52/55/180); that mechanism is opt-in/preset-based,
    not the `aivyx-confine` boundary described here.
-8. **Prompt-injection content scanning:** **No.** Operators are
-   responsible for what they grant a role authority to do.
+8. **Prompt-injection content scanning:** **Partly.** Untrusted
+   content (web fetches, file reads, MCP and integration output) is
+   fenced as data (Bulwark) and scanned for known injection phrasings
+   by `aivyx-injection-guard` (Picket); a match escalates the turn for
+   operator review. The scan is pattern-based, so a novel phrasing can
+   pass it, and it does not catch an attack that stays within the
+   role's legitimate authority (§5.3). Operators remain responsible for
+   what they grant a role authority to do.
 9. **Defense against a compromised OS user:** **No.** Outside scope.
 
 ## 7. Reporting a vulnerability
