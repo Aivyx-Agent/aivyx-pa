@@ -1037,6 +1037,7 @@ fn _unused_capability_set_ref(_cs: &CapabilitySet) {}
 #[cfg(test)]
 mod git_tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use crate::tools::process_group::test_support::{cleanup, wait_until_gone};
     use crate::{
         AgentId, ChannelContext, ChannelError, ChannelPlatform, MessageOrigin, NullAuditHook,

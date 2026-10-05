@@ -722,6 +722,7 @@ pub fn carved_home_notice(fs_root: &Path, home: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use crate::tools::process_group::test_support::{cleanup, wait_until_gone};
     use crate::{
         AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform, MessageOrigin,

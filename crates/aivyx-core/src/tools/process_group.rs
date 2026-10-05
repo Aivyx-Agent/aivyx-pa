@@ -202,7 +202,7 @@ async fn read_pipe<R: tokio::io::AsyncRead + Unpin>(pipe: Option<&mut R>) -> Vec
     buf
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) mod test_support {
     use std::time::{Duration, Instant};
 
