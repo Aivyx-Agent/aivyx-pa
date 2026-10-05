@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-10-06
+
 ### Added
 
 - **Named instances** — run several fully separate agents as one OS user,
