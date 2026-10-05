@@ -55,7 +55,7 @@ A vertical pack is up to six things, each riding an existing primitive:
 | **Template** | `aivyx-pa init --template <name>` (Phase 66) → seeds Profile + default Role | config only |
 | **Toolkit crate** | a bundled multi-tool process, same shape as `aivyx-toolkit`/`aivyx-gmail` (Chapter F/G), built against `aivyx-vertical-sdk` (the `Tool` trait + `run_multi_tool_subprocess`) | new sibling crate |
 | **Scopes + gate policy** | capability scope bases (additive to `aivyx-capability` `KNOWN_BASES`) + trust ceiling + gates | additive bases |
-| **Team (Nonagon)** | a customised `aivyx_team::TeamConfig` — a lead + ≤9 least-privileged specialists over the pack's scopes — loaded by `aivyx-pa team run --config <pack.toml>` (Chapter J) | config (TOML) |
+| **Team (Nonagon)** | a customised `aivyx_team::TeamConfig` — a lead + ≤8 least-privileged specialists (nine members in all) over the pack's scopes — loaded by `aivyx-pa team run --config <pack.toml>` (Chapter J) | config (TOML) |
 | **Skills bundle** | starter conversationally-taught `LearnedSkill`s | config only |
 | **Integrations** | `aivyx-pa connect` tool-processes / MCP servers (Chapter F) | config only |
 
@@ -342,7 +342,7 @@ facade first (one reviewed place), don't reach around it.
 
 Reference: [`crates/verticals/aivyx-kitchen/src/lib.rs`](../crates/verticals/aivyx-kitchen/src/lib.rs).
 
-A team crate ships a `TeamConfig` (a lead + ≤9 least-privileged specialists)
+A team crate ships a `TeamConfig` (a lead + ≤8 least-privileged specialists (nine members in all))
 and the `MissionPlan`(s) they run. The pattern:
 
 ```rust
