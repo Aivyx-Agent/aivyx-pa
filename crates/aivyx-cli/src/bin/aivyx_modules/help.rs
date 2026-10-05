@@ -484,6 +484,20 @@ pub fn with_help_hint(err: String, args: &[String]) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn every_command_has_a_cli_reference_heading() {
+        let manual = include_str!("../../../../../docs/manual/reference/01-cli.md");
+        let missing: Vec<&str> = COMMANDS
+            .iter()
+            .map(|c| c.name)
+            .filter(|name| !manual.contains(&format!("### `aivyx-pa {name}")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "docs/manual/reference/01-cli.md has no heading for: {missing:?}"
+        );
+    }
+
     fn argv(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
     }
