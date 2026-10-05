@@ -123,11 +123,17 @@ upstream MCP-server tool description steers the LLM into emitting
    and when the turn is cancelled and the call is dropped — so a
    background job (`cmd &`, a hook's daemonised child) never outlives
    the tool call; on timeout it gets SIGTERM, then SIGKILL two seconds
-   later (Phase 42). `git.*` spawns follow the same contract.
+   later (Phase 42). `git.*` spawns follow the same contract, and a
+   call ends when the command itself exits even if a background job
+   still holds its output pipe. On non-Linux builds there is no sandbox
+   backend, so a process that calls `setsid` itself leaves the group
+   and survives.
 4. **Environment isolation.** `shell.exec` strips API keys and
    provider tokens from the child's environment so an LLM-generated
    command cannot exfiltrate them via `echo $ANTHROPIC_API_KEY`
-   (Phase 42).
+   (Phase 42). `git.*` spawns get the same allowlist (`PATH`, `HOME`,
+   `USER`, `LANG`, `TERM`), so a git hook planted in a configured repo
+   can't read `AIVYX_PA_PASSPHRASE` or provider keys either.
 5. **OS-level process confinement.** Even a call that clears every
    gate above still runs the spawned `sh` under Landlock + seccomp-bpf
    confinement (`aivyx-confine`, on by default). `shell.exec`'s write
@@ -159,7 +165,8 @@ upstream MCP-server tool description steers the LLM into emitting
      *carved*: `ls`, `touch` and `mkdir` still work there, but `rm`
      and `mv` of entries directly in it fail with `EACCES`, and a file
      created there has no write rights until the next call. Deeper,
-     fully granted subdirectories are unaffected.
+     fully granted subdirectories are unaffected. `aivyx-pa doctor`
+     and `aivyx-pa access show` print a notice when this applies.
 
    Each of the first three has an operator opt-out in `[confine]`
    (`allow_unix_sockets`, `share_system_tmp`,

@@ -581,7 +581,8 @@ share_system_tmp = false              # true: shared /tmp writable instead of a 
 `git.*` tools refuse a `[git] repos` entry whose `.git` is a file (a
 linked git worktree or submodule): its real gitdir lives outside the
 repo, out of the sandbox's reach, and running it unconfined instead
-would let a command run in the repo plant such a file and escape — see
+would let a command run in the repo plant such a file and escape. The
+daemon warns about such entries at startup — see
 `docs/THREAT_MODEL.md` §6 property 7.
 
 When Landlock *is* available (the common case on a modern Linux
