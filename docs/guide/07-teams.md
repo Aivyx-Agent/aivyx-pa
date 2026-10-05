@@ -7,7 +7,9 @@ agent.
 
 ## How a team works
 
-A team is a **lead** plus up to nine **specialists**. Each member has:
+A team is a **lead** plus up to eight **specialists** — nine members in all,
+which is where the built-in team's name, the *Nonagon*, comes from. Each
+member has:
 
 - a **role** (what it's responsible for),
 - a **character** (how it approaches its work),
@@ -30,10 +32,11 @@ multiplies what your assistant can take on without multiplying what can go wrong
 The **Teams** screen shows your active team — the lead and each specialist, their
 roles, what they're trusted to do, and the tools they hold. You can also edit the
 roster here: adjust roles, characters, and scopes, within the nine-member limit.
+Each member can even use its own model.
 
 ## Vertical packs
 
-A team can be tailored to a domain. Aivyx PA ships an open example — a
+A team can be tailored to a domain. Aivyx PA ships an example — a
 back-of-house kitchen crew (a manager leading stocktake, inventory, purchasing,
 and food-safety specialists) — that shows how a team plus a set of domain tools
 becomes a ready-made expert crew for a specific line of work. These domain

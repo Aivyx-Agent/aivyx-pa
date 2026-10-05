@@ -19,6 +19,10 @@ The assistant drafts the skill, shows it back to you (name, when to use it, the
 steps), and saves it **only after you confirm**. You can refine a skill later
 ("also run the linter first") or drop one you no longer want.
 
+**It starts with a few.** A fresh assistant comes with some starter skills,
+and it can also consult a small shared library of general-purpose skills
+that ships with Aivyx PA.
+
 **It also learns skills on its own.** After handling something complex, it may
 notice a repeatable pattern and propose it as a skill for your approval. And as
 skills get used, the assistant can suggest sharper versions of ones that aren't

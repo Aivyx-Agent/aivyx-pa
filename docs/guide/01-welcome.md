@@ -24,7 +24,11 @@ part of the Studio — the web interface you're reading this in.
 
 If you're brand new, start with **Getting started** and then **Create your
 agent** — those two get you to a working assistant. After that, browse the pages
-for whichever features you want to use. Each Studio screen has its own page.
+for whichever features you want to use: the Studio screens, the terminal,
+autonomy and routines, security, and backups each have a page.
+
+For exhaustive detail — every command, config setting and tool — see the
+[reference manual](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/manual/README.md).
 
 ## The big picture
 
@@ -33,3 +37,7 @@ way you talk to your assistant — this web Studio, the [desktop app](11-desktop
 the terminal, voice, or [chat apps](13-chat-apps-and-accounts.md) — is just a
 different window onto that same daemon. Close a window and the assistant keeps
 running; your conversation, memory, and settings persist.
+
+You can also run [several separate assistants](16-named-instances.md) side by
+side — say one for research and one for the household — each with its own
+memory, personality and Studio.

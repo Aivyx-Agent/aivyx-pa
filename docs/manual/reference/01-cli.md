@@ -174,11 +174,16 @@ aivyx-pa autonomy set <manual|assisted|supervised|autonomous|unleashed> [--yes]
 
 | Level | In short |
 |---|---|
-| `manual` | asks before everything, even reversible actions |
-| `assisted` *(default)* | reversible actions run; anything irreversible asks |
-| `supervised` | irreversible actions are batched for your review; the autonomous loop can run with a check each iteration |
-| `autonomous` | pursues goals unattended within its caps; irreversible actions are refused without you |
-| `unleashed` | for a dedicated, isolated machine: destructive-action confirmation off (money and outbound sends still refused unless you open the expert escape hatch) |
+| `manual` | asks before every change it makes (not before reading); the autonomous loop is off |
+| `assisted` *(default)* | irreversible steps ask you first; the loop is off |
+| `supervised` | the loop may work its backlog on its own; irreversible steps still ask |
+| `autonomous` | as `supervised`, and routines the agent creates start without your approval |
+| `unleashed` | for an isolated machine: as `autonomous`, and delete/overwrite confirmation is off — but only at the `sandbox` access level unless you also set `[access] confirm_destructive = false` |
+
+Batching approvals for review at `supervised` is designed but not built yet.
+Unattended runs (routines, the loop) never wait for an answer: an
+irreversible step there is refused. Per-domain exceptions live in
+`[[autonomy.override]]`.
 
 `autonomous` and `unleashed` ask you to confirm unless `--yes`. The agent can
 never raise its own level. See [Autonomy and routines](../../guide/15-autonomy-and-routines.md)

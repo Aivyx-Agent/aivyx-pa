@@ -29,7 +29,8 @@ Right-click (or click) the tray icon for:
 - **Open Studio** — show and focus the window.
 - **Restart daemon** — restart the background service if something seems stuck.
 - **Start at login** — toggle launch-on-login on or off.
-- **Quit Aivyx PA** — fully exit (this stops the background service too).
+- **Quit Aivyx PA** — fully exit. If the app started the background service,
+  quitting stops it too; one you started yourself keeps running.
 
 ## Getting it
 
@@ -53,3 +54,7 @@ Like every Aivyx PA interface, the desktop app is a window onto the background
 service (the *daemon*). It starts the daemon for you if it isn't already running
 and attaches to it if it is — so your conversation, memory, and settings are the
 same whether you use the desktop app, the browser, or the terminal.
+
+The desktop app works with your **default** assistant. If you run
+[several](16-named-instances.md), open the others' Studios in a browser
+(`aivyx-pa --instance <name> studio` prints the link).

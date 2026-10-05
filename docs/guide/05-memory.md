@@ -14,9 +14,12 @@ preferences, ongoing projects, decisions, useful context. It doesn't memorize
 every message; it keeps what's likely to matter later. When you ask something, it
 pulls back the relevant pieces to inform its answer.
 
-Recall is smart: it finds memories by meaning (not just exact keywords), and it
-follows connections between related topics, so asking about one thing surfaces
-the things linked to it.
+Recall finds memories by keyword and — when an embeddings model is set up —
+by meaning, so asking about "the trip to Japan" finds the note that says
+"flights to Tokyo booked for May". Setup arranges embeddings for you with Ollama (it offers to
+download a small model) and OpenAI; Anthropic has no embeddings service, so
+with Anthropic alone recall is keyword-only until you add an `[embedding]`
+section.
 
 ## The Memory screen
 
@@ -37,10 +40,26 @@ it as the encyclopedia your assistant writes about your world.
 
 ## The Graph screen
 
-The **Graph** is the same knowledge as a visual map: topics are nodes, and lines
-connect topics that relate to each other (the more they come up together, the
-stronger the link). Click a node to focus on it. It's a good way to see the shape
-of what your assistant understands and how ideas connect.
+The **Graph** is your assistant's knowledge as a map of things and how they
+relate: people, projects and places are the points, and each line is a
+named relationship — *works on*, *lives in*, *depends on*. Click a point to
+focus on it. It's a good way to see the shape of what your assistant
+understands.
+
+## Turning on the full memory
+
+The Wiki and the Graph stay empty until you turn on the **smart** memory
+profile, because building them takes model calls in the background. Add
+this to your config file and restart the daemon:
+
+```toml
+[memory]
+profile = "smart"
+```
+
+`lite` is the middle ground: smarter recall over what's already stored, with
+no extra model calls. See the [configuration reference](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/manual/reference/02-configuration.md)
+for the finer settings.
 
 ## Privacy
 

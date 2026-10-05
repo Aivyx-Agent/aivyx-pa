@@ -8,8 +8,11 @@ create yourself — nothing goes through an Aivyx PA server.
 ## Chat apps: Telegram, Discord, Slack
 
 A chat app is one more window onto the same assistant: same memory, same
-personality, same audit log. Risky actions still stop for your approval — you
-answer with `/approve` or `/reject` right in the chat.
+personality, same audit log. Risky actions still stop for your approval: the
+assistant tells you what it wants to do, and replying "yes" in your next
+message lets it go ahead once. (Team missions have their own commands —
+`/team approve`, `/team reject` and so on — which only senders you list in
+`team_command_allowed_senders` may use.)
 
 Setting one up has three parts:
 

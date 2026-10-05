@@ -15,9 +15,9 @@ page in this guide; this is the map.
 | **Reminders** | Reminders you or the assistant have set. |
 | **Chat** | A direct conversation with your assistant. |
 | **Memory** | Browse and search everything your assistant has learned, including its Learning digest (moved here from the Command Center). |
-| **Wiki** | Your assistant's knowledge as readable per-topic pages. |
-| **Graph** | The same knowledge as a visual map of connected topics. |
-| **Settings** | Access level and spending budgets (see [Access & settings](08-access-and-settings.md)). |
+| **Wiki** | Your assistant's knowledge as readable per-topic pages (needs the smart memory profile). |
+| **Graph** | Your assistant's knowledge as a map of things and the named relationships between them (needs the smart memory profile — see [Memory](05-memory.md)). |
+| **Settings** | Access level, autonomy and spending budgets (see [Access & settings](08-access-and-settings.md)). |
 | **Agents** | Edit the Profile and approve the character changes your assistant proposes (see [Skills & personality](06-skills-and-persona.md)). |
 | **Skills** | The library of things your assistant has learned to do. |
 | **Teams** | View and edit your team of specialists (see [Teams](07-teams.md)). |

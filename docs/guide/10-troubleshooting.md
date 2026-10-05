@@ -56,7 +56,14 @@ design and will pause for your approval rather than refuse.
 **It stopped a long job partway through.**
 Two likely reasons, both intentional: it hit an **approval gate** (a step that
 needs your sign-off — approve it to continue), or it reached a **budget** limit
-(raise the budget on Settings, or let it resume in the next billing window).
+(raise the budget on Settings, or wait — the daily cap is a rolling 24 hours).
+
+**A second assistant won't start, or its Studio shows the wrong one.**
+With [named instances](16-named-instances.md), each needs its own Studio port.
+`aivyx-pa instances list` shows every instance's port; set a free one with
+`web_ui_port` under `[daemon]` in that instance's config. Also check you're
+not in a folder with its own `aivyx-pa.toml` — that file wins for every
+instance started there.
 
 **The [desktop app](11-desktop-app.md) won't open (on Linux).**
 It needs a few system packages (a webview and the tray libraries). If it fails

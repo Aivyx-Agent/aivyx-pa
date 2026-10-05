@@ -44,13 +44,16 @@ reversible later from the **Agents** screen.
 
 ## Step 3 — Access (how far it can reach)
 
-Finally, choose how much of your machine the assistant can touch. There are
-three levels:
+Finally, choose how much of your machine the assistant can touch:
 
-- **Sandbox** — it can only read and write inside one dedicated folder. Safest;
-  good for trying things out.
+- **Sandbox** *(the default)* — it can only read and write inside one
+  dedicated folder, `~/aivyx-pa-sandbox`. Safest; good for trying things out.
+- **Workspace** — one project folder you choose. *(Terminal setup only; in
+  the Studio, pick it later on **Settings**.)*
 - **Home** — it can reach your home directory (documents, projects, …).
-- **Full** — broad access to your filesystem.
+- **Full** — the whole filesystem, system files included.
+
+Anything beyond the sandbox shows a warning and asks you to confirm.
 
 Whatever you pick, **irreversible actions always stop for your confirmation** —
 deleting or overwriting a file, sending an email, spending money. Access level
