@@ -1531,7 +1531,10 @@ mod tests {
 
         let shared = std::env::temp_dir().join(format!("aivyx-pa-shared-{}", uuid::Uuid::new_v4()));
         let outcome = tool
-            .execute(json!({ "cmd": format!("touch {}", shared.display()) }), &ctx)
+            .execute(
+                json!({ "cmd": format!("touch {}", shared.display()) }),
+                &ctx,
+            )
             .await;
         let output = completed_output(&outcome);
         let created = shared.exists();

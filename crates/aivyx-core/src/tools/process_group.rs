@@ -115,9 +115,9 @@ pub(crate) mod test_support {
                 Err(_) => return true,
                 Ok(stat) => {
                     // Field 3 (after the parenthesised comm) is the state.
-                    let state = stat.rsplit_once(')').and_then(|(_, rest)| {
-                        rest.split_whitespace().next().map(str::to_owned)
-                    });
+                    let state = stat
+                        .rsplit_once(')')
+                        .and_then(|(_, rest)| rest.split_whitespace().next().map(str::to_owned));
                     if matches!(state.as_deref(), Some("Z") | Some("X")) {
                         return true;
                     }
