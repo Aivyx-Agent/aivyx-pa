@@ -224,6 +224,7 @@ dependencies = [
  "aivyx-dataread",
  "aivyx-discord",
  "aivyx-federation",
+ "aivyx-instance",
  "aivyx-kitchen",
  "aivyx-kitchen-toolkit",
  "aivyx-kvcache",
@@ -781,6 +782,7 @@ version = "0.14.8"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "async-trait",
  "serde",
  "serde_json",

@@ -437,6 +437,7 @@ pub fn render_top_level_help() -> String {
     out.push('\n');
 
     out.push_str("Global flags:\n");
+    out.push_str("  --instance <name>      Use a named instance (multi-instance support).\n");
     out.push_str("  --verify-only          Forensic: verify the audit chain and exit.\n");
     out.push_str("  --channel <kind>       local | telegram | discord | slack | voice.\n");
     out.push_str("  --role <name>          Use a named role for this session.\n");

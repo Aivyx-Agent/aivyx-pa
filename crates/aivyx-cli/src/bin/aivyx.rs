@@ -178,7 +178,7 @@ mod workspace;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 // Phase 9 Task 3 — `SecretString` no longer lives on the binary's
 // surface: all secrets are owned by `aivyx_config::SourcedSecret`
@@ -233,6 +233,16 @@ use aivyx_telegram::{TelegramSessionConfig, run_telegram_multi_session};
 
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 const PROMPT: &str = "> ";
+
+/// Global static for CLI args after the --instance flag has been stripped.
+/// Populated by main() before any other processing, and accessed via cli_args().
+static CLI_ARGS: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Get the CLI args with the --instance flag already stripped.
+/// Must only be called after main() has initialized CLI_ARGS.
+fn cli_args() -> Vec<String> {
+    CLI_ARGS.get().expect("CLI_ARGS not initialized").clone()
+}
 
 /// Jan's server root for the OpenAI-compatible provider, which appends
 /// `/v1/chat/completions` itself: the configured `[openai] base_url` or the
@@ -505,11 +515,37 @@ fn build_web_extract_for_channel(
 // structure and per-section teaching commentary.
 
 fn main() -> ExitCode {
+    // Parse and strip --instance flag at the very top, before any thread or
+    // runtime starts. std::env::set_var is unsafe in edition 2024.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let (instance_name, stripped_args) = match split_instance_flag(&raw) {
+        Ok((name, args)) => (name, args),
+        Err(e) => {
+            eprintln!("aivyx-pa: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Set the instance env var if explicitly provided, otherwise validate existing.
+    if let Some(name) = instance_name {
+        // SAFETY: Called at the very start of main(), before any thread or
+        // async runtime exists. No other thread can be reading this env var yet.
+        unsafe { std::env::set_var(aivyx_instance::ENV_INSTANCE, &name) }
+    } else {
+        // Validate any existing AIVYX_PA_INSTANCE env var.
+        if let Err(e) = aivyx_instance::InstanceName::from_env() {
+            eprintln!("aivyx-pa: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    // Store stripped args in the static for use by parse_cli_args().
+    let _ = CLI_ARGS.set(stripped_args.clone());
+
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            let args: Vec<String> = std::env::args().skip(1).collect();
-            eprintln!("aivyx-pa: {}", help::with_help_hint(e, &args));
+            eprintln!("aivyx-pa: {}", help::with_help_hint(e, &stripped_args));
             ExitCode::FAILURE
         }
     }
@@ -2778,6 +2814,53 @@ struct CliMcpSse {
     url: String,
 }
 
+/// Extract and validate the `--instance` flag from args.
+///
+/// Supports both `--instance <name>` and `--instance=<name>` forms.
+/// Validates the name using `aivyx_instance::InstanceName::parse`.
+/// Returns `(Some(name), stripped_args)` if present, `(None, args)` if absent.
+/// Returns an error if the flag is malformed, invalid, or appears more than once.
+fn split_instance_flag(args: &[String]) -> Result<(Option<String>, Vec<String>), String> {
+    let mut instance_name: Option<String> = None;
+    let mut result = Vec::new();
+    let mut i = 0;
+
+    while i < args.len() {
+        let arg = &args[i];
+
+        if arg == "--instance" {
+            // --instance <name> form
+            if instance_name.is_some() {
+                return Err("--instance may only be specified once".to_string());
+            }
+            if i + 1 >= args.len() {
+                return Err("--instance requires a value".to_string());
+            }
+            let name = args[i + 1].clone();
+            aivyx_instance::InstanceName::parse(&name)?;
+            instance_name = Some(name);
+            i += 2;
+        } else if arg.starts_with("--instance=") {
+            // --instance=<name> form
+            if instance_name.is_some() {
+                return Err("--instance may only be specified once".to_string());
+            }
+            let name = arg.strip_prefix("--instance=").unwrap().to_string();
+            if name.is_empty() {
+                return Err("--instance requires a value".to_string());
+            }
+            aivyx_instance::InstanceName::parse(&name)?;
+            instance_name = Some(name);
+            i += 1;
+        } else {
+            result.push(arg.clone());
+            i += 1;
+        }
+    }
+
+    Ok((instance_name, result))
+}
+
 /// Parse the CLI arg surface.
 ///
 /// Recognized forms:
@@ -2793,7 +2876,7 @@ struct CliMcpSse {
 /// Mutual exclusions: `--verify-only` vs `--channel`, `--verify-only`
 /// vs `--print-role`, `daemon run` vs all other modes.
 fn parse_cli_args() -> Result<CliArgs, String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = cli_args();
     parse_cli_args_from(&args)
 }
 
@@ -16234,5 +16317,23 @@ mod early_validate_fail_output_tests {
             "the non-TTY fail message must stay prefix-free -- main()'s generic \
              handler adds \"aivyx-pa: \" itself; baking it in here doubles it"
         );
+    }
+}
+
+#[cfg(test)]
+mod split_instance_flag_tests {
+    use super::split_instance_flag;
+
+    #[test]
+    fn instance_flag_is_stripped_anywhere() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(split_instance_flag(&a(&["--instance", "research", "daemon", "run"])).unwrap(),
+                   (Some("research".into()), a(&["daemon", "run"])));
+        assert_eq!(split_instance_flag(&a(&["daemon", "status", "--instance=home"])).unwrap(),
+                   (Some("home".into()), a(&["daemon", "status"])));
+        assert_eq!(split_instance_flag(&a(&["daemon", "status"])).unwrap(), (None, a(&["daemon", "status"])));
+        assert!(split_instance_flag(&a(&["--instance"])).is_err());            // missing value
+        assert!(split_instance_flag(&a(&["--instance", "Bad_Name"])).is_err()); // invalid name
+        assert!(split_instance_flag(&a(&["--instance", "a", "--instance", "b"])).is_err()); // twice
     }
 }

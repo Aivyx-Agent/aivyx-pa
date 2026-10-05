@@ -29,6 +29,7 @@ dist = false
 # stdio + a Tool impl that delegates over a channel.
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
+aivyx-instance = { path = "../aivyx-instance" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-util", "sync", "rt", "time"] }
 serde = { workspace = true }
