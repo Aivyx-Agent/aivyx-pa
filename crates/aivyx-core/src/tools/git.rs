@@ -55,9 +55,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use crate::tools::process_group::confined_output;
 use crate::{
-    AivyxError, CapabilitySet, ExecutionConfiner, GitCheckpointer, NoopConfiner, Tool, ToolContext,
-    ToolId, ToolOutcome, Verification, default_confiner,
+    AivyxError, CapabilitySet, ConfineOptions, ExecutionConfiner, GitCheckpointer, Tool,
+    ToolContext, ToolId, ToolOutcome, Verification, default_confiner_with_options,
 };
 use aivyx_capability::Scope;
 
@@ -71,7 +72,7 @@ use aivyx_capability::Scope;
 /// both.
 pub struct GitReadToolConfig {
     repos: Vec<PathBuf>,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
 }
 
 impl GitReadToolConfig {
@@ -82,14 +83,25 @@ impl GitReadToolConfig {
     pub fn new(repos: impl IntoIterator<Item = PathBuf>) -> Self {
         GitReadToolConfig {
             repos: repos.into_iter().collect(),
-            require_enforcement: true,
+            confine_options: ConfineOptions::new(),
         }
     }
 
     /// See `GitWriteToolConfig::with_require_enforcement` — same flag,
     /// same default, same reasoning.
     pub fn with_require_enforcement(mut self, require_enforcement: bool) -> Self {
-        self.require_enforcement = require_enforcement;
+        self.confine_options = self
+            .confine_options
+            .require_enforcement(require_enforcement);
+        self
+    }
+
+    /// The full aivyx-confine policy (`[confine]` in config): enforcement
+    /// plus the `allow_unix_sockets` / `allow_leaving_process_group` /
+    /// `share_system_tmp` opt-outs. Replaces whatever
+    /// `with_require_enforcement` set.
+    pub fn with_confine_options(mut self, options: ConfineOptions) -> Self {
+        self.confine_options = options;
         self
     }
 
@@ -105,13 +117,13 @@ impl GitReadToolConfig {
                 id: ToolId::new(),
                 repos: Arc::clone(&allow_set),
                 schema: status_input_schema(),
-                require_enforcement: self.require_enforcement,
+                confine_options: self.confine_options.clone(),
             },
             GitDiffTool {
                 id: ToolId::new(),
                 repos: allow_set,
                 schema: diff_input_schema(),
-                require_enforcement: self.require_enforcement,
+                confine_options: self.confine_options.clone(),
             },
         ))
     }
@@ -124,7 +136,7 @@ impl GitReadToolConfig {
 pub struct GitWriteToolConfig {
     repos: Vec<PathBuf>,
     confirm_destructive: bool,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
     checkpointers: HashMap<PathBuf, Arc<GitCheckpointer>>,
 }
 
@@ -135,7 +147,7 @@ impl GitWriteToolConfig {
         GitWriteToolConfig {
             repos: repos.into_iter().collect(),
             confirm_destructive: false,
-            require_enforcement: true,
+            confine_options: ConfineOptions::new(),
             checkpointers: HashMap::new(),
         }
     }
@@ -152,7 +164,18 @@ impl GitWriteToolConfig {
     /// Whether Landlock confinement (via `aivyx-confine`) must succeed
     /// for `git.commit` to run at all. `true` (fail-closed) by default.
     pub fn with_require_enforcement(mut self, require_enforcement: bool) -> Self {
-        self.require_enforcement = require_enforcement;
+        self.confine_options = self
+            .confine_options
+            .require_enforcement(require_enforcement);
+        self
+    }
+
+    /// The full aivyx-confine policy (`[confine]` in config): enforcement
+    /// plus the `allow_unix_sockets` / `allow_leaving_process_group` /
+    /// `share_system_tmp` opt-outs. Replaces whatever
+    /// `with_require_enforcement` set.
+    pub fn with_confine_options(mut self, options: ConfineOptions) -> Self {
+        self.confine_options = options;
         self
     }
 
@@ -187,7 +210,7 @@ impl GitWriteToolConfig {
             repos: allow_set,
             confirm_destructive: self.confirm_destructive,
             schema: commit_input_schema(),
-            require_enforcement: self.require_enforcement,
+            confine_options: self.confine_options,
             checkpointers: self.checkpointers,
         })
     }
@@ -205,7 +228,7 @@ pub struct GitStatusTool {
     id: ToolId,
     repos: Arc<[PathBuf]>,
     schema: Value,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
 }
 
 impl GitStatusTool {
@@ -278,9 +301,16 @@ impl Tool for GitStatusTool {
             .arg("status")
             .arg("--porcelain")
             .arg("--untracked-files=all");
-        let confiner = confiner_for(&repo, self.require_enforcement);
-        let mut command = confiner.confine(command);
-        let output = match command.output().await {
+        let confiner = match confiner_for(&repo, &self.confine_options) {
+            Ok(c) => c,
+            Err(detail) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("{}: {detail}", self.name()),
+                });
+            }
+        };
+        let output = match run_confined(confiner.as_ref(), command).await {
             Ok(o) => o,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -324,7 +354,7 @@ pub struct GitDiffTool {
     id: ToolId,
     repos: Arc<[PathBuf]>,
     schema: Value,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
 }
 
 impl GitDiffTool {
@@ -425,9 +455,16 @@ impl Tool for GitDiffTool {
             cmd.arg("--").arg(p);
         }
 
-        let confiner = confiner_for(&repo, self.require_enforcement);
-        let mut cmd = confiner.confine(cmd);
-        let output = match cmd.output().await {
+        let confiner = match confiner_for(&repo, &self.confine_options) {
+            Ok(c) => c,
+            Err(detail) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("{}: {detail}", self.name()),
+                });
+            }
+        };
+        let output = match run_confined(confiner.as_ref(), cmd).await {
             Ok(o) => o,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -478,7 +515,7 @@ pub struct GitCommitTool {
     repos: Arc<[PathBuf]>,
     confirm_destructive: bool,
     schema: Value,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
     checkpointers: HashMap<PathBuf, Arc<GitCheckpointer>>,
 }
 
@@ -489,7 +526,7 @@ impl std::fmt::Debug for GitCommitTool {
             .field("repos", &self.repos)
             .field("confirm_destructive", &self.confirm_destructive)
             .field("schema", &self.schema)
-            .field("require_enforcement", &self.require_enforcement)
+            .field("confine_options", &self.confine_options)
             .field("checkpointed_repos", &self.checkpointers.len())
             .finish()
     }
@@ -561,7 +598,15 @@ impl Tool for GitCommitTool {
             }
         };
 
-        let confiner = confiner_for(&repo, self.require_enforcement);
+        let confiner = match confiner_for(&repo, &self.confine_options) {
+            Ok(c) => c,
+            Err(detail) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("{}: {detail}", self.name()),
+                });
+            }
+        };
 
         let message = match input.get("message").and_then(|v| v.as_str()) {
             Some(m) if !m.trim().is_empty() => m,
@@ -646,8 +691,7 @@ impl Tool for GitCommitTool {
         for p in &paths {
             add_cmd.arg(p);
         }
-        let mut add_cmd = confiner.confine(add_cmd);
-        match add_cmd.output().await {
+        match run_confined(confiner.as_ref(), add_cmd).await {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr).to_string();
@@ -680,8 +724,7 @@ impl Tool for GitCommitTool {
             .arg("commit")
             .arg("-m")
             .arg(message);
-        let mut commit_cmd = confiner.confine(commit_cmd);
-        let commit_out = match commit_cmd.output().await {
+        let commit_out = match run_confined(confiner.as_ref(), commit_cmd).await {
             Ok(o) => o,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -719,8 +762,7 @@ impl Tool for GitCommitTool {
             .arg(&repo)
             .arg("rev-parse")
             .arg("HEAD");
-        let mut rev_parse_cmd = confiner.confine(rev_parse_cmd);
-        let commit_hash = match rev_parse_cmd.output().await {
+        let commit_hash = match run_confined(confiner.as_ref(), rev_parse_cmd).await {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
             // The commit succeeded; failing to read HEAD back is
             // non-fatal — report the commit without the hash rather
@@ -745,55 +787,75 @@ impl Tool for GitCommitTool {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Per-repo latch: `true` the first time `repo` is seen (the caller
-/// should log a warning), `false` on every subsequent call for the same
-/// canonicalized repo — keeps routine git activity against a
-/// worktree/submodule repo from flooding the daemon log with the
-/// identical warning on every single tool call. Process-lifetime only
-/// (resets on restart), which is fine: the point is deduplicating noise
-/// within one running session, not persisting the fact across restarts.
-/// Falls back to the raw (non-canonicalized) path on a canonicalization
-/// failure — that just means two paths that *should* dedupe (e.g. a
-/// symlinked alias) won't, not a correctness issue.
-fn should_warn_once(repo: &Path) -> bool {
-    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
-        std::sync::OnceLock::new();
-    let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
-    let set = WARNED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
-    set.lock().unwrap().insert(canonical)
+/// Confine `command` and run it to completion under the process-group
+/// contract (see `tools::process_group`): it leads its own group, which is
+/// killed as soon as git exits (before its pipes are drained) or this
+/// future is dropped, so a hook's background job can neither outlive the
+/// git call nor stall it by holding git's stderr. `process_group(0)` is
+/// set here too, not only by the confiner, so the kill is safe whatever
+/// confiner is in use. The environment is cleared to `shell.exec`'s
+/// allowlist.
+async fn run_confined(
+    confiner: &dyn ExecutionConfiner,
+    mut command: tokio::process::Command,
+) -> std::io::Result<std::process::Output> {
+    command.process_group(0);
+    // Same environment policy as `shell.exec`: hooks and git itself must
+    // not see the daemon's secrets (`AIVYX_PA_PASSPHRASE`, provider API
+    // keys) or the operator's `GIT_DIR`/`GIT_CONFIG_*`. HOME stays so git
+    // still reads the global user.name/user.email.
+    command.env_clear();
+    for &var in crate::tools::shell::SAFE_ENV_DEFAULTS {
+        if let Some(val) = std::env::var_os(var) {
+            command.env(var, val);
+        }
+    }
+    confined_output(confiner.confine(command)).await
 }
 
-/// Build the confiner to use for a git command about to run against
-/// `repo`. A linked git worktree or submodule's `.git` is a **file**
-/// (not a directory) containing `gitdir: <path-to-the-real-gitdir>`,
-/// which typically lives outside `repo` — Landlock confinement scoped to
-/// `repo` alone would cut git off from its own real gitdir and break
-/// every operation on it (`fatal: not a git repository`). Detect that
-/// shape here and fall back to `NoopConfiner` for this one repo rather
-/// than the real backend, logging why so an operator sees it in the
-/// daemon log rather than silently getting an unconfined `git`.
+/// Build the confiner for a git command about to run against `repo`,
+/// or refuse the call.
 ///
-/// Centralizing this (used by all three tools' `execute()`) means the
-/// worktree/submodule check and the default-confiner construction can't
-/// drift apart across call sites the way three separate copies could.
-fn confiner_for(repo: &Path, require_enforcement: bool) -> Arc<dyn ExecutionConfiner> {
+/// A linked git worktree or submodule's `.git` is a **file**
+/// (`gitdir: <path>`) whose real gitdir usually lives outside `repo`,
+/// where a confiner scoped to `repo` can't reach it. These used to run
+/// with `NoopConfiner` instead — but a confined `shell.exec` in the repo
+/// can write that file itself, pointing at a gitdir it planted with a
+/// hook, and so turn the next `git.*` call into unconfined code execution
+/// (2026-10-04 audit). Such repos are refused instead: the check needs no
+/// trust in the file's contents, and a `.git` swapped in after it is
+/// harmless because the command still runs confined.
+fn confiner_for(
+    repo: &Path,
+    options: &ConfineOptions,
+) -> Result<Arc<dyn ExecutionConfiner>, String> {
     if repo.join(".git").is_file() {
-        if should_warn_once(repo) {
-            // No `tracing` dependency in this crate (the rest of `aivyx-pa`
-            // logs operator-facing warnings via `eprintln!`, e.g.
-            // `aivyx-cli/src/bin/aivyx.rs`) — match that convention rather
-            // than pulling in a new logging dependency for one line.
-            eprintln!(
-                "aivyx-pa: skipping Landlock confinement for {}: its .git is a file, \
-                 not a directory, so this repo is a git worktree or submodule \
-                 whose real gitdir lives outside the repo root — confining to the \
-                 repo root would break git entirely here",
-                repo.display(),
-            );
-        }
-        return Arc::new(NoopConfiner);
+        return Err(format!(
+            "{}/.git is a file, not a directory (a git worktree or submodule, or a \
+             .git written by a command run in the repo). git.* tools only run \
+             against a repo with its own .git directory, because a gitdir \
+             outside the repo can't be reached under confinement",
+            repo.display()
+        ));
     }
-    default_confiner(repo, &[], &[], require_enforcement)
+    Ok(default_confiner_with_options(
+        repo,
+        &[],
+        &[],
+        options.clone(),
+    ))
+}
+
+/// The `[git] repos` entries whose `.git` is a file (a linked worktree or
+/// submodule). Every `git.*` call refuses them (`confiner_for`); the
+/// binary warns about them at startup so the operator learns before the
+/// first refused call.
+pub fn gitfile_repos(repos: &[PathBuf]) -> Vec<PathBuf> {
+    repos
+        .iter()
+        .filter(|repo| repo.join(".git").is_file())
+        .cloned()
+        .collect()
 }
 
 /// Canonicalize an operator repo allow-set: each entry must
@@ -975,6 +1037,8 @@ fn _unused_capability_set_ref(_cs: &CapabilitySet) {}
 #[cfg(test)]
 mod git_tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::tools::process_group::test_support::{cleanup, wait_until_gone};
     use crate::{
         AgentId, ChannelContext, ChannelError, ChannelPlatform, MessageOrigin, NullAuditHook,
         SessionId, StreamEvent, TurnId, TurnOutcome,
@@ -1457,6 +1521,214 @@ mod git_tests {
         std::fs::remove_dir_all(&repo).ok();
     }
 
+    // ---- Process-group lifetime (aivyx-confine 061768f) ------------
+
+    fn write_hook(repo: &Path, name: &str, body: &str) {
+        let hook_path = repo.join(".git/hooks").join(name);
+        std::fs::write(&hook_path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A hook's background job must not outlive the `git.commit` call.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn git_commit_kills_a_hooks_background_job_when_the_call_finishes() {
+        let Some(repo) = init_temp_repo() else { return };
+        write_hook(
+            &repo,
+            "post-commit",
+            "sleep 300 >/dev/null 2>&1 </dev/null & echo $! > .git/bg.pid",
+        );
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["a.txt"] }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "git.commit should succeed; got {outcome:?}"
+        );
+        let pid: u32 = std::fs::read_to_string(repo.join(".git/bg.pid"))
+            .expect("the hook wrote its background pid")
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = wait_until_gone(pid);
+        cleanup(pid);
+        std::fs::remove_dir_all(&repo).ok();
+        assert!(
+            gone,
+            "hook background job {pid} survived the git.commit call"
+        );
+    }
+
+    /// A hook's background job that keeps git's stderr open (no
+    /// redirect) must not stall the call: it ends when git exits, and the
+    /// job is killed then.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn git_commit_returns_when_git_exits_even_if_a_hook_job_holds_stderr() {
+        let Some(repo) = init_temp_repo() else { return };
+        write_hook(&repo, "post-commit", "sleep 300 & echo $! > .git/bg.pid");
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let started = std::time::Instant::now();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            tool.execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["a.txt"] }),
+                &ctx,
+            ),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        let pid: Option<u32> = std::fs::read_to_string(repo.join(".git/bg.pid"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+        let gone = pid.map(wait_until_gone);
+        if let Some(pid) = pid {
+            cleanup(pid);
+        }
+        std::fs::remove_dir_all(&repo).ok();
+        let outcome = outcome.expect("git.commit stalled on the hook's background job");
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "git.commit should succeed; got {outcome:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "git.commit took {elapsed:?}"
+        );
+        assert_eq!(gone, Some(true), "hook background job survived the call");
+    }
+
+    /// Variables a hook may legitimately see: the allowlist `run_confined`
+    /// passes through, what aivyx-confine sets, what `sh` sets itself, and
+    /// git's own `GIT_*` hook variables.
+    fn hook_env_var_is_allowed(name: &str) -> bool {
+        crate::tools::shell::SAFE_ENV_DEFAULTS.contains(&name)
+            || matches!(name, "TMPDIR" | "PWD" | "OLDPWD" | "SHLVL" | "_")
+            || name.starts_with("GIT_")
+    }
+
+    /// Run by `git_hooks_do_not_inherit_the_daemons_secrets` in a child
+    /// test process whose environment holds fake secrets. Also meaningful
+    /// on its own: cargo sets `CARGO_*` variables a hook must not see.
+    #[tokio::test]
+    #[ignore = "run via git_hooks_do_not_inherit_the_daemons_secrets"]
+    async fn git_hook_environment_holds_only_the_allowlist() {
+        let Some(repo) = init_temp_repo() else { return };
+        write_hook(&repo, "post-commit", "env > .git/hook-env.txt");
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["a.txt"] }),
+                &ctx,
+            )
+            .await;
+        let env = std::fs::read_to_string(repo.join(".git/hook-env.txt"));
+        std::fs::remove_dir_all(&repo).ok();
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "git.commit should succeed; got {outcome:?}"
+        );
+        let env = env.expect("the hook ran and wrote its environment");
+        assert!(!env.contains("AIVYX_PA_PASSPHRASE"), "{env}");
+        assert!(!env.contains("sk-fake-secret"), "{env}");
+        let leaked: Vec<&str> = env
+            .lines()
+            .filter_map(|l| l.split_once('=').map(|(k, _)| k))
+            .filter(|k| !k.is_empty() && !hook_env_var_is_allowed(k))
+            .collect();
+        assert!(leaked.is_empty(), "hook saw non-allowlisted vars: {leaked:?}");
+    }
+
+    /// git.* hooks must not see the daemon's secrets (the master
+    /// passphrase, provider keys). Re-runs the ignored test above in a
+    /// child process with fake secrets set, so this process's own
+    /// environment is never mutated.
+    #[test]
+    fn git_hooks_do_not_inherit_the_daemons_secrets() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tools::git::git_tests::git_hook_environment_holds_only_the_allowlist",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("AIVYX_PA_PASSPHRASE", "fake-passphrase")
+            .env("ANTHROPIC_API_KEY", "sk-fake-secret")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Dropping the `git.commit` future mid-hook (a cancelled turn) kills
+    /// the hook and everything it started.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cancelling_git_commit_kills_the_process_group() {
+        let Some(repo) = init_temp_repo() else { return };
+        write_hook(
+            &repo,
+            "pre-commit",
+            "sleep 300 >/dev/null 2>&1 </dev/null & echo $! > .git/bg.pid\nsleep 300",
+        );
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let cancelled = tokio::time::timeout(
+            std::time::Duration::from_millis(2000),
+            tool.execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["a.txt"] }),
+                &ctx,
+            ),
+        )
+        .await;
+        assert!(cancelled.is_err(), "the commit should still be in its hook");
+        let pid: u32 = std::fs::read_to_string(repo.join(".git/bg.pid"))
+            .expect("the hook wrote its background pid")
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = wait_until_gone(pid);
+        cleanup(pid);
+        std::fs::remove_dir_all(&repo).ok();
+        assert!(
+            gone,
+            "hook background job {pid} survived a cancelled git.commit"
+        );
+    }
+
     #[tokio::test]
     async fn commit_rejects_path_traversal_and_empty_inputs() {
         let Some(repo) = init_temp_repo() else { return };
@@ -1491,81 +1763,103 @@ mod git_tests {
         std::fs::remove_dir_all(&repo).ok();
     }
 
-    // ---- confiner_for: worktree/submodule fallback (final-review Fix 2) ---
+    // ---- gitfile escape (2026-10-04 audit) ---------------------------
 
+    /// A confined `shell.exec` in the repo can replace `.git` with a
+    /// gitfile (`gitdir: <elsewhere>`). That must not turn the next
+    /// `git.*` call into an unconfined one that runs the planted gitdir's
+    /// hooks with the operator's full authority.
     #[tokio::test]
-    async fn confiner_for_falls_back_to_noop_when_git_is_a_file() {
-        // A linked worktree or submodule's `.git` is a plain file (not a
-        // directory) containing `gitdir: <real-gitdir-elsewhere>`. We
-        // simulate the shape directly rather than needing a real `git
-        // worktree add` fixture — `confiner_for` only inspects
-        // `repo.join(".git")`'s file-vs-directory-ness, so the exact
-        // gitdir target (even a dangling, nonexistent one) doesn't matter
-        // for this test.
-        let repo = tempfile::tempdir().unwrap();
-        std::fs::write(repo.path().join(".git"), "gitdir: /some/nonexistent/path").unwrap();
-
-        let confiner = confiner_for(repo.path(), true);
-
-        // Behavioral proof of which variant came back: `ExecutionConfiner`
-        // has no `Debug`/`PartialEq`, so confine a trivial command and
-        // check an effect only `NoopConfiner` would allow. A real
-        // `LandlockConfiner` confined to `repo.path()` would deny a write
-        // to an unrelated `/var/tmp` directory; `NoopConfiner` never
-        // touches the command at all.
+    async fn a_planted_gitfile_cannot_make_git_tools_run_unconfined() {
+        let Some(repo) = init_temp_repo() else { return };
         let Ok(outside) = tempfile::Builder::new().tempdir_in("/var/tmp") else {
+            std::fs::remove_dir_all(&repo).ok();
             return;
         };
-        let target = outside.path().join("proof.txt");
-        let mut command = tokio::process::Command::new("sh");
-        command.args(["-c", &format!("echo hi > {}", target.display())]);
-        let mut command = confiner.confine(command);
-        let output = command.output().await.expect("command should spawn");
+        // Move the real gitdir out of the repo and leave a gitfile behind,
+        // the shape a linked worktree or submodule has.
+        let gitdir = outside.path().join("gitdir");
+        // (`cp -a` + remove, not `rename`: /var/tmp may be another
+        // filesystem than the repo's temp dir.)
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(repo.join(".git"))
+            .arg(&gitdir)
+            .status()
+            .unwrap();
+        assert!(copied.success());
+        std::fs::remove_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(repo.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+        // A hook that proves it ran unconfined by writing outside the repo.
+        let marker = outside.path().join("escaped");
+        let hook = gitdir.join("hooks/post-commit");
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch {}\n", marker.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
 
+        let base = repo.display().to_string();
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let commit = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+        let outcome = commit
+            .execute(
+                json!({ "repo": base, "message": "m", "paths": ["a.txt"] }),
+                &ctx,
+            )
+            .await;
         assert!(
-            output.status.success(),
-            "NoopConfiner must not block this write (worktree/submodule fallback \
-             should skip Landlock entirely): {}",
-            String::from_utf8_lossy(&output.stderr)
+            !marker.exists(),
+            "git.commit ran a gitfile repo's hook outside the sandbox"
         );
-        assert!(target.exists(), "the write should have actually landed");
-    }
+        let detail = ctx_less_outcome_detail(&outcome);
+        assert!(detail.contains(".git is a file"), "{detail}");
 
-    #[tokio::test]
-    async fn confiner_for_uses_the_real_confiner_for_a_normal_repo() {
-        // Sanity check for the branch condition itself: an ordinary repo
-        // (`.git` is a directory, the common case) must NOT take the
-        // worktree/submodule fallback path — confirmed indirectly via
-        // `init_temp_repo`'s real `git init`, whose `.git` is always a
-        // directory.
-        let Some(repo) = init_temp_repo() else { return };
-        assert!(repo.join(".git").is_dir());
-        // Just exercise construction — `default_confiner` itself is
-        // covered by aivyx-confine's own test suite; this only confirms
-        // `confiner_for` takes the non-fallback branch without panicking.
-        let _confiner = confiner_for(&repo, true);
+        let (status, diff) = GitReadToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.read should build");
+        for outcome in [
+            status.execute(json!({ "repo": base }), &ctx).await,
+            diff.execute(json!({ "repo": base }), &ctx).await,
+        ] {
+            let detail = ctx_less_outcome_detail(&outcome);
+            assert!(detail.contains(".git is a file"), "{detail}");
+        }
         std::fs::remove_dir_all(&repo).ok();
     }
 
     #[test]
-    fn should_warn_once_fires_once_per_repo_then_stays_silent() {
-        let repo = tempfile::tempdir().unwrap();
-        assert!(
-            should_warn_once(repo.path()),
-            "the first call for a repo must report true (caller should warn)"
-        );
-        assert!(
-            !should_warn_once(repo.path()),
-            "a second call for the SAME repo must report false (already warned)"
-        );
+    fn gitfile_repos_lists_entries_whose_git_is_a_file() {
+        let plain = tempfile::tempdir().unwrap();
+        std::fs::create_dir(plain.path().join(".git")).unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        std::fs::write(worktree.path().join(".git"), "gitdir: /elsewhere").unwrap();
+        let repos = vec![plain.path().to_path_buf(), worktree.path().to_path_buf()];
+        assert_eq!(gitfile_repos(&repos), vec![worktree.path().to_path_buf()]);
+    }
 
-        // A different repo warns independently -- the latch is per-repo,
-        // not a single global "only ever warn once" flag.
-        let other_repo = tempfile::tempdir().unwrap();
-        assert!(
-            should_warn_once(other_repo.path()),
-            "a different repo must warn on its own first call"
-        );
+    // ---- confiner_for: gitfile refusal --------------------------------
+
+    #[test]
+    fn confiner_for_refuses_a_repo_whose_git_is_a_file() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join(".git"), "gitdir: /some/nonexistent/path").unwrap();
+        let err = confiner_for(repo.path(), &ConfineOptions::new())
+            .err()
+            .expect("a gitfile repo must be refused");
+        assert!(err.contains(".git is a file"), "{err}");
+    }
+
+    #[test]
+    fn confiner_for_accepts_a_normal_repo() {
+        let Some(repo) = init_temp_repo() else { return };
+        assert!(repo.join(".git").is_dir());
+        assert!(confiner_for(&repo, &ConfineOptions::new()).is_ok());
+        std::fs::remove_dir_all(&repo).ok();
     }
 
     // ---- git.commit checkpointing (aivyx-checkpoint git.rs/workspace.rs adoption) ----
@@ -1768,7 +2062,10 @@ mod git_tests {
             .arg(&hook_path)
             .output()
             .expect("git config must run");
-        assert!(out.status.success(), "git config core.fsmonitor must succeed");
+        assert!(
+            out.status.success(),
+            "git config core.fsmonitor must succeed"
+        );
         marker
     }
 

@@ -25,6 +25,14 @@ fn config_path() -> std::path::PathBuf {
 pub fn run_access_show() -> Result<(), String> {
     let cfg = load_config_for_inspection()?;
     print!("{}", render_access_for_show(&cfg));
+    // aivyx-confine carves the home root when a credential store it keeps
+    // unreadable is in shell.exec's reach (levels `home`/`full`).
+    if let Some(home) = std::env::var_os("HOME")
+        && let Some(notice) =
+            aivyx_core::carved_home_notice(&cfg.fs_root.value, std::path::Path::new(&home))
+    {
+        println!("  \u{26a0} note: {notice}");
+    }
     Ok(())
 }
 

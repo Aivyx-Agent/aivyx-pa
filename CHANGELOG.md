@@ -51,6 +51,61 @@ All notable changes to Aivyx are recorded here. This project adheres to
     real User PIN (hidden) instead of constructing a throwaway signer
     with an empty one, which the bumped `aivyx-yubi` now rejects
     outright at construction.
+- `aivyx-vision` bumped to `531aa7d`: generated SVG loses all CSS and
+  every reference that doesn't point inside the document, input over
+  256 KiB or nested deeper than 64 elements is rejected, and the output
+  is no longer indented.
+
+### Security
+
+- `shell.exec` and `git.*` run under a stricter sandbox (`aivyx-confine`
+  bumped to `061768f`, which fixes the 2026-10-04 subsystem-audit
+  findings). What a confined command notices:
+  - **No local daemons.** Unix sockets can't be opened and the session
+    IPC variables are removed, so ssh-agent (`git push` over ssh),
+    `git commit -S`, `docker`, `psql`/`mysql` over their default
+    sockets, git credential-cache/libsecret helpers and `systemctl
+    --user` fail. Previously the D-Bus session bus (`systemd-run
+    --user`) let a confined command run code outside the sandbox.
+  - **Private `TMPDIR`.** Each tool gets its own temp directory,
+    exported as `TMPDIR`; the shared `/tmp` is no longer writable, and
+    tools that hard-code `/tmp` fail.
+  - **No leaving the process group.** `setsid`/`setpgid` fail, which
+    breaks the `setsid` tool, interactive job control, Python
+    `start_new_session=True` and test runners that use per-test process
+    groups. Git's background auto-maintenance prints `fatal: setsid
+    failed` and skips that run; the git command itself still succeeds.
+  - **Carved directories.** Under the `home`/`full` access levels, when
+    `~/.cargo/credentials(.toml)` or `~/.config/git/credentials` exists
+    (now always unreadable), `rm`/`mv` of entries directly in `$HOME`
+    (and the other directories on the path to that file) fail, and a
+    file created there can't be written until the next call. Deeper
+    subdirectories are unaffected. `aivyx-pa doctor` and `aivyx-pa
+    access show` say when this applies.
+  - Namespaces (`unshare`, `bwrap`, rootless containers) and signals to
+    processes outside the call are blocked.
+- Everything a `shell.exec` or `git.*` call starts is killed when the
+  command exits, errors, times out or the turn is cancelled. A
+  background job (`cmd &`, a git hook's detached child) no longer
+  outlives the call, and one still holding the output pipe no longer
+  stalls the call until its timeout. On Linux nothing can leave the
+  group; on other platforms (no sandbox backend) a process that calls
+  `setsid` itself escapes the kill.
+- `git.*` commands (and so git hooks) no longer inherit the daemon's
+  environment: like `shell.exec`, they get only `PATH`, `HOME`, `USER`,
+  `LANG` and `TERM`. A hook planted in a configured repo could read
+  `AIVYX_PA_PASSPHRASE` and provider API keys. The operator's
+  `GIT_DIR`/`GIT_CONFIG_*` variables no longer apply to `git.*` either.
+- New `[confine]` opt-outs, all default `false`: `allow_unix_sockets`,
+  `allow_leaving_process_group` and `share_system_tmp` (see
+  `examples/aivyx-pa.toml`). With `allow_unix_sockets` on, the sandbox
+  no longer contains code execution.
+- `git.status`, `git.diff` and `git.commit` refuse a repo whose `.git` is
+  a file (a linked worktree or submodule) instead of running git
+  unconfined for it. A confined `shell.exec` in the repo could write such
+  a file pointing at a gitdir it planted, so the next `git.*` call ran
+  that gitdir's hooks outside the sandbox. The daemon warns about such
+  entries at startup.
 
 ## [0.14.6] — 2026-10-05
 

@@ -281,12 +281,13 @@ dependencies = [
 [[package]]
 name = "aivyx-confine"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-confine?rev=fd9f1b4b825641e3ed9d3f4f7532e44dee8a5d6b#fd9f1b4b825641e3ed9d3f4f7532e44dee8a5d6b"
+source = "git+https://github.com/Aivyx-Agent/aivyx-confine?rev=061768fa23e3117f954a2e9a8f5dfb34dace78ae#061768fa23e3117f954a2e9a8f5dfb34dace78ae"
 dependencies = [
  "globset",
  "landlock",
  "libc",
  "seccompiler",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -850,7 +851,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-core"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=825662152ffaf2bdcb54360eaa8f4ece0dce9478#825662152ffaf2bdcb54360eaa8f4ece0dce9478"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=531aa7d6e61f095aa8132ea9c7696bff15c3e131#531aa7d6e61f095aa8132ea9c7696bff15c3e131"
 dependencies = [
  "async-trait",
  "thiserror 2.0.18",
@@ -859,7 +860,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-mold"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=825662152ffaf2bdcb54360eaa8f4ece0dce9478#825662152ffaf2bdcb54360eaa8f4ece0dce9478"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=531aa7d6e61f095aa8132ea9c7696bff15c3e131#531aa7d6e61f095aa8132ea9c7696bff15c3e131"
 dependencies = [
  "aivyx-vision-core",
  "async-trait",
@@ -876,11 +877,12 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-svg"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=825662152ffaf2bdcb54360eaa8f4ece0dce9478#825662152ffaf2bdcb54360eaa8f4ece0dce9478"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=531aa7d6e61f095aa8132ea9c7696bff15c3e131#531aa7d6e61f095aa8132ea9c7696bff15c3e131"
 dependencies = [
  "async-trait",
  "svg-hush",
  "thiserror 2.0.18",
+ "xml",
 ]
 
 [[package]]

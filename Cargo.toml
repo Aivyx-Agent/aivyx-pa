@@ -277,7 +277,7 @@ crossterm = "0.29"
 # outright (E0425). The only one of the four shipped targets
 # aivyx-confine had never actually been cross-compiled for before --
 # it wasn't adopted until 2026-08-17, after aivyx's last real release.
-aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "fd9f1b4b825641e3ed9d3f4f7532e44dee8a5d6b", default-features = false }
+aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "061768fa23e3117f954a2e9a8f5dfb34dace78ae", default-features = false }
 
 # Shared git-ref checkpoint/rollback for fs_root's mutating tools
 # (fs.write, fs.delete, shell.exec), adopted from the sibling aivyx-coder
@@ -348,9 +348,9 @@ aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "d387a
 # out of lockstep with each other. No platform-specific backend, so no
 # target-gating needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "825662152ffaf2bdcb54360eaa8f4ece0dce9478" }
-aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "825662152ffaf2bdcb54360eaa8f4ece0dce9478" }
-aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "825662152ffaf2bdcb54360eaa8f4ece0dce9478" }
+aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "531aa7d6e61f095aa8132ea9c7696bff15c3e131" }
+aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "531aa7d6e61f095aa8132ea9c7696bff15c3e131" }
+aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "531aa7d6e61f095aa8132ea9c7696bff15c3e131" }
 
 # The profile that 'dist' will build with
 [profile.dist]

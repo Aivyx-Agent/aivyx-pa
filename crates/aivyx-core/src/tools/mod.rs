@@ -28,6 +28,7 @@
 pub mod fs;
 pub mod git;
 pub mod net_dns;
+pub(crate) mod process_group;
 pub mod role_switch;
 pub mod routing;
 pub mod shell;
@@ -40,14 +41,16 @@ pub use fs::{
     FsDeleteTool, FsDeleteToolConfig, FsMetadataTool, FsMetadataToolConfig, FsReadTool,
     FsReadToolConfig, FsWriteTool, FsWriteToolConfig,
 };
-pub use git::{GitCommitTool, GitDiffTool, GitReadToolConfig, GitStatusTool, GitWriteToolConfig};
+pub use git::{
+    GitCommitTool, GitDiffTool, GitReadToolConfig, GitStatusTool, GitWriteToolConfig, gitfile_repos,
+};
 pub use net_dns::NetDnsTool;
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
 pub use routing::{
     RoutingCandidate, RoutingConversation, RoutingEscalation, RoutingExplainTool, RoutingStatus,
     RoutingStatusTool, RoutingVram, resolve_model, routing_status,
 };
-pub use shell::{ShellExecTool, ShellExecToolConfig};
+pub use shell::{ShellExecTool, ShellExecToolConfig, carved_home_notice};
 pub use skill_defaults::{
     SkillDefaultsListTool, SkillDefaultsReadTool, render_default_skills_section,
 };

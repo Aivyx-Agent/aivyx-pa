@@ -117,20 +117,63 @@ upstream MCP-server tool description steers the LLM into emitting
    `tool.allowlist:<tool>` scope is denied
    (`aivyx-capability/src/lib.rs:65`).
 3. **Process-group isolation.** The shell subprocess is launched in
-   its own process group; SIGTERM→SIGKILL escalation on timeout
-   prevents zombie grandchildren (Phase 42).
+   its own process group, and under confinement nothing it starts can
+   leave that group (`setsid`/`setpgid` fail with `EPERM`). The whole
+   group is `SIGKILL`ed when the call ends — on normal exit, on error,
+   and when the turn is cancelled and the call is dropped — so a
+   background job (`cmd &`, a hook's daemonised child) never outlives
+   the tool call; on timeout it gets SIGTERM, then SIGKILL two seconds
+   later (Phase 42). `git.*` spawns follow the same contract, and a
+   call ends when the command itself exits even if a background job
+   still holds its output pipe. On non-Linux builds there is no sandbox
+   backend, so a process that calls `setsid` itself leaves the group
+   and survives.
 4. **Environment isolation.** `shell.exec` strips API keys and
    provider tokens from the child's environment so an LLM-generated
    command cannot exfiltrate them via `echo $ANTHROPIC_API_KEY`
-   (Phase 42).
+   (Phase 42). `git.*` spawns get the same allowlist (`PATH`, `HOME`,
+   `USER`, `LANG`, `TERM`), so a git hook planted in a configured repo
+   can't read `AIVYX_PA_PASSPHRASE` or provider keys either.
 5. **OS-level process confinement.** Even a call that clears every
    gate above still runs the spawned `sh` under Landlock + seccomp-bpf
    confinement (`aivyx-confine`, on by default). `shell.exec`'s write
    grant is scoped to `cwd_root` plus a fixed system/toolchain list —
    `rm -rf $HOME` targets almost entirely outside that grant, so the
    kernel denies the deletions regardless of what the capability/
-   allowlist layers above did or didn't catch. See §5.6 / property 7
-   in §6 for the mechanism and its current scope.
+   allowlist layers above did or didn't catch. The same layer also
+   closes the routes *around* the filesystem grant (aivyx-confine
+   `061768f`):
+   - **No local daemons.** `socket(AF_UNIX)` fails with `EPERM` and the
+     session IPC variables (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`,
+     `XDG_RUNTIME_DIR`, ...) are removed, because Landlock does not
+     gate `connect()` to an existing Unix socket: the D-Bus session bus
+     alone (`systemd-run --user`) was unconfined code execution. This
+     also breaks ssh-agent `git push`, `git commit -S`, `docker`,
+     `psql`/`mysql` over their default sockets and `systemctl --user`
+     inside `shell.exec`.
+   - **Private `TMPDIR`.** Writes go to a temp directory private to
+     the tool (exported as `TMPDIR`, removed when the tool is dropped);
+     the shared `/tmp` is not writable, so a command can't tamper with
+     other programs' temp files. Tools that hard-code `/tmp` fail.
+   - **Process groups** as in item 3: `setsid`/`setpgid` are blocked,
+     so git's background auto-maintenance prints `fatal: setsid failed`
+     and skips that run (the git command itself still succeeds).
+   - **Credential stores.** `~/.cargo/credentials(.toml)` and
+     `~/.config/git/credentials` are always unreadable. When
+     `cwd_root` contains one of them (access level `home` or `full`),
+     every directory on the path to it — `$HOME` itself included — is
+     *carved*: `ls`, `touch` and `mkdir` still work there, but `rm`
+     and `mv` of entries directly in it fail with `EACCES`, and a file
+     created there has no write rights until the next call. Deeper,
+     fully granted subdirectories are unaffected. `aivyx-pa doctor`
+     and `aivyx-pa access show` print a notice when this applies.
+
+   Each of the first three has an operator opt-out in `[confine]`
+   (`allow_unix_sockets`, `share_system_tmp`,
+   `allow_leaving_process_group`), all default `false`; turning
+   `allow_unix_sockets` on means the sandbox no longer contains code
+   execution. See §5.6 / property 7 in §6 for the mechanism and its
+   current scope.
 6. **Audit trail.** The denied call (or, if it ran, the call +
    output hash) lands in the HMAC-chained audit log
    synchronously. There is no path that runs a tool without
@@ -684,9 +727,11 @@ gap has narrowed substantially.
   - `#![forbid(unsafe_code)]` on `aivyx-crypto`, `aivyx-storage`,
     and `aivyx-telegram`.
   - Within this workspace's own crates, the only production
-    `unsafe` is in `aivyx-core::tools::shell` — `libc::killpg` for
-    process-group teardown when a shell invocation times out
-    (Phase 42, narrowly scoped).
+    `unsafe` is `libc::killpg` for process-group teardown: the
+    SIGTERM a timed-out shell invocation gets (Phase 42), and, on
+    non-Linux builds only, the end-of-call group kill in
+    `aivyx-core::tools::process_group` (Linux uses aivyx-confine's
+    `kill_process_group`).
   - `aivyx-confine` (an external dependency, Linux builds only —
     see `aivyx-core`'s Cargo.toml target-gating) adds its own
     narrowly-scoped `unsafe`, compiled into the same production
@@ -811,13 +856,17 @@ running Aivyx PA daemon":
    (`aivyx-confine`, on by default — there is no config option to turn
    confinement itself off; `[confine] require_enforcement`, default
    `true`, only governs whether a *failure* to establish the Landlock
-   ruleset fails the spawn closed or lets it run unconfined) — see
-   §5.6. One real, code-level exception: a `[git] repos` entry that is
-   a linked git worktree or submodule (its `.git` is a file pointing
-   elsewhere, not a directory) runs fully unconfined instead — Landlock
-   can't reach the real gitdir from the worktree root alone, so `git.rs`
-   falls back to no confinement for that specific repo rather than
-   breaking it outright. `[[tool_process]]`/MCP external tool
+   ruleset fails the spawn closed or lets it run unconfined; the
+   `allow_unix_sockets` / `share_system_tmp` /
+   `allow_leaving_process_group` opt-outs, all default `false`, each
+   relax one part of the sandbox described in §4.1 item 5) — see
+   §5.6. A `[git] repos` entry whose `.git` is a file (a linked git
+   worktree or submodule, pointing at a gitdir elsewhere) is refused by
+   every `git.*` tool: confinement scoped to the repo can't reach that
+   gitdir, and the earlier fallback — running such repos unconfined —
+   let a confined `shell.exec` write a `.git` file pointing at a gitdir
+   it planted, so the next `git.*` call ran its hooks outside the
+   sandbox (2026-10-04 audit). `[[tool_process]]`/MCP external tool
    processes remain on the separate, pre-existing operator-configured
    `bwrap`/`firejail`/`docker` wrapper mechanism (`aivyx-tool/src/
    sandbox.rs`, Phase 52/55/180); that mechanism is opt-in/preset-based,

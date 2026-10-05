@@ -2155,8 +2155,37 @@ parent_role = "researcher"
 # Landlock is working normally, and this section has no effect on
 # non-Linux builds (no confinement backend there at all).
 #
+# Inside the sandbox a command also:
+#   - cannot open Unix sockets, so it cannot reach local daemons
+#     (ssh-agent, gpg-agent, docker, the D-Bus session bus, databases on
+#     their default sockets): `git push` over ssh with an agent,
+#     `git commit -S`, `docker`, `psql`, `systemctl --user` fail;
+#   - gets a private, per-tool TMPDIR instead of the shared /tmp (tools
+#     that hard-code /tmp fail);
+#   - leads its own process group and cannot leave it (setsid/setpgid
+#     fail): everything it starts, background jobs included, is killed
+#     when the tool call finishes, times out or is cancelled. Git's
+#     background auto-maintenance prints `fatal: setsid failed` and is
+#     skipped; the git command itself still succeeds.
+#
+# Each of the three opt-outs below relaxes one of those, defaults to
+# false, and should stay false unless a workflow needs it:
+#   allow_unix_sockets          — reach local daemons again. Any daemon
+#                                 that runs commands (the D-Bus session
+#                                 bus via `systemd-run --user`, docker)
+#                                 is then a way out of the sandbox.
+#   allow_leaving_process_group — allow setsid/setpgid (interactive job
+#                                 control, Python start_new_session=True,
+#                                 test runners that use process groups).
+#                                 A process that leaves survives the call.
+#   share_system_tmp            — read+write on the shared /tmp again,
+#                                 including other programs' temp files.
+#
 # [confine]
-# require_enforcement = true   # default; false = fail-open on setup failure
+# require_enforcement = true            # default; false = fail-open on setup failure
+# allow_unix_sockets = false            # default
+# allow_leaving_process_group = false   # default
+# share_system_tmp = false              # default
 
 # ----------------------------------------------------------------
 # Team — Chapter Roster (the Nonagon the daemon runs)

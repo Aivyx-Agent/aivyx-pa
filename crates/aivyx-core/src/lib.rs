@@ -60,7 +60,7 @@ pub use tools::{
     RoutingStatusTool, ShellExecTool, ShellExecToolConfig, SkillDefaultsListTool,
     SkillDefaultsReadTool, SkillReader, SkillsInvokeTool, SkillsListTool, WebExtractTool,
     WebExtractToolConfig, WebFetchTool, WebFetchToolConfig, WebPostTool, WebPostToolConfig,
-    render_default_skills_section,
+    carved_home_notice, gitfile_repos, render_default_skills_section,
 };
 // Routing visibility B1 — the router state shared by `routing.status` and
 // the daemon's `GetRoutingStatus` query, and `/model`-style id resolution.
@@ -93,7 +93,10 @@ pub use tokio_util::sync::CancellationToken;
 // platform). Re-exporting it would put a Linux-only-real type in a
 // cross-platform crate's public API.
 pub use aivyx_checkpoint::GitCheckpointer;
-pub use aivyx_confine::{ExecutionConfiner, NoopConfiner, default_confiner};
+pub use aivyx_confine::{
+    ConfineOptions, ExecutionConfiner, NoopConfiner, default_confiner,
+    default_confiner_with_options, kill_process_group,
+};
 
 // ---------------------------------------------------------------------------
 // ID newtypes
