@@ -5,6 +5,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.14.8] — 2026-10-05
+
+### Security
+
+- `xxhash-rust` bumped to 0.8.19 (Dependabot alert: its safe xxh3
+  custom-secret API accepted a too-short secret in release builds).
+
 ## [0.14.7] — 2026-10-05
 
 ### Changed
