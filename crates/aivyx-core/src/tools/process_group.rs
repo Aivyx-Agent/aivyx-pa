@@ -152,10 +152,7 @@ pub(crate) async fn run_in_own_group(
         })
     };
     let finished = match timeout {
-        Some(limit) => match tokio::time::timeout(limit, run).await {
-            Ok(result) => Some(result),
-            Err(_elapsed) => None,
-        },
+        Some(limit) => tokio::time::timeout(limit, run).await.ok(),
         None => Some(run.await),
     };
     match finished {
