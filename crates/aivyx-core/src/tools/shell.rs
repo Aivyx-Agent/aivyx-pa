@@ -680,6 +680,7 @@ const CONFINE_DENIED_HOME_FILES: &[&str] = &[
     ".cargo/credentials.toml",
     ".cargo/credentials",
     ".config/git/credentials",
+    ".git-credentials",
 ];
 
 /// An operator-facing notice when `shell.exec` rooted at `fs_root` will
@@ -1401,6 +1402,15 @@ mod tests {
         assert!(notice.contains("rm"), "{notice}");
         // `full`: fs_root = / is an ancestor of home, same effect.
         assert!(carved_home_notice(Path::new("/"), home.path()).is_some());
+    }
+
+    #[test]
+    fn carved_home_notice_names_the_git_credential_store() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join(".git-credentials"), "t").unwrap();
+        let notice = carved_home_notice(home.path(), home.path())
+            .expect("~/.git-credentials carves the home root");
+        assert!(notice.contains(".git-credentials"), "{notice}");
     }
 
     #[test]
