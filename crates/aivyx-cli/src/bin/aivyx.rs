@@ -2895,6 +2895,11 @@ fn split_instance_flag(args: &[String]) -> Result<(Option<String>, Vec<String>),
     while i < args.len() {
         let arg = &args[i];
 
+        if arg == "--" {
+            // Everything after `--` is passed through untouched.
+            result.extend(args[i..].iter().cloned());
+            break;
+        }
         if arg == "--instance" {
             // --instance <name> form
             if instance_name.is_some() {
@@ -16494,5 +16499,7 @@ mod split_instance_flag_tests {
         assert!(split_instance_flag(&a(&["--instance"])).is_err());            // missing value
         assert!(split_instance_flag(&a(&["--instance", "Bad_Name"])).is_err()); // invalid name
         assert!(split_instance_flag(&a(&["--instance", "a", "--instance", "b"])).is_err()); // twice
+    assert_eq!(split_instance_flag(&a(&["chat", "--", "--instance", "x"])).unwrap(),
+               (None, a(&["chat", "--", "--instance", "x"])));
     }
 }

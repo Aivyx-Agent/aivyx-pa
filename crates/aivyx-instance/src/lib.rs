@@ -345,7 +345,7 @@ pub fn list_instances(dirs: &BaseDirs) -> Vec<InstanceName> {
         if let Ok(entries) = std::fs::read_dir(&instances_dir) {
             for entry in entries.flatten() {
                 if let Ok(name) = entry.file_name().into_string() {
-                    if InstanceName::parse(&name).is_ok() {
+                    if name != DEFAULT_INSTANCE && InstanceName::parse(&name).is_ok() {
                         instances.insert(name);
                     }
                 }
@@ -359,7 +359,7 @@ pub fn list_instances(dirs: &BaseDirs) -> Vec<InstanceName> {
         if let Ok(entries) = std::fs::read_dir(&instances_dir) {
             for entry in entries.flatten() {
                 if let Ok(name) = entry.file_name().into_string() {
-                    if InstanceName::parse(&name).is_ok() {
+                    if name != DEFAULT_INSTANCE && InstanceName::parse(&name).is_ok() {
                         instances.insert(name);
                     }
                 }
@@ -510,5 +510,9 @@ mod tests {
         let d = BaseDirs { home: Some(h.to_path_buf()), xdg_config_home: None, xdg_data_home: None, xdg_runtime_dir: None };
         let names: Vec<String> = list_instances(&d).iter().map(|n| n.as_str().to_string()).collect();
         assert_eq!(names, vec!["default", "household", "research"]);
+    // A stray `instances/default` dir is not a second default.
+    std::fs::create_dir_all(h.join(".config/aivyx-pa/instances/default")).unwrap();
+    let again: Vec<String> = list_instances(&d).iter().map(|n| n.as_str().to_string()).collect();
+    assert_eq!(again, vec!["default", "household", "research"]);
     }
 }
