@@ -1652,16 +1652,27 @@ parent_role = "researcher"
 # that same provider.
 #
 # Cloud and privacy (PRODUCT.md G6; amendment A15):
-#   * [routing.endpoints.*] with kind = "anthropic" or "openai" is a
-#     cloud ESCALATION target, never an ordinary candidate — see
-#     "Cloud escalation" below. With [routing.escalation] mode = "never"
-#     it is rejected at startup.
+#   * Cloud or local is decided by aivyx-route from the address, not just
+#     the kind: kind = "anthropic" / "openai" is always cloud; any other
+#     kind is local only when its base_url host is local (loopback, a
+#     private / link-local / CGNAT-Tailscale IP, or a name that is
+#     `localhost`, has no dots, or ends in .local / .lan / .internal /
+#     .home.arpa). So an "openai_compat" endpoint at
+#     https://api.groq.com/openai/v1, or an "ollama" one on a public
+#     host, is cloud; so is one with no base_url. A box on your own
+#     network with a public-looking DNS name: add `locality = "local"` to
+#     its [routing.endpoints.*] table (`locality = "cloud"` forces cloud).
+#   * A cloud [routing.endpoints.*] entry is an ESCALATION target, never
+#     an ordinary candidate — see "Cloud escalation" below. With
+#     [routing.escalation] mode = "never" it is rejected at startup.
 #   * Ordinary cloud candidates are allowed only on the `default` endpoint, and
-#     only when the [agent] provider is itself cloud — e.g. on
-#     provider = "anthropic", routing may pick another Anthropic model
-#     you list in [[routing.models]]; on a local provider, a cloud-
-#     tagged entry is never chosen. (provider = "openai" with a loopback
-#     base_url counts as local.)
+#     only when the [agent] backend is itself cloud by the same rule — e.g.
+#     on provider = "anthropic", or an Ollama/llama.cpp/Jan/Lemonade/broker
+#     base_url on a public host, routing may pick another model on it you
+#     list in [[routing.models]]; on a local backend, a cloud-tagged entry
+#     is never chosen. (provider = "openai" with a local base_url counts
+#     as a local OpenAI-compatible server; mistral.rs runs in-process and
+#     is always local.)
 #   * No API key is ever sent to a routing endpoint.
 #   * Routed Ollama / OpenAI-compatible endpoints use the provider's
 #     DEFAULT settings — your [ollama] tuning (e.g. num_ctx) applies
@@ -1776,8 +1787,10 @@ parent_role = "researcher"
 # Lets a local-first setup send a SPECIFIC conversation's call to a
 # cloud model you configure — only with consent, never after the
 # conversation has touched sensitive data, and always audited. Nothing
-# changes unless a [routing.endpoints.*] entry has kind = "anthropic" or
-# "openai" (with at least one [[routing.models]] entry on it). Governed
+# changes unless a [routing.endpoints.*] entry is cloud — kind =
+# "anthropic" or "openai", or another kind at a non-local address (see
+# "Cloud and privacy" above) — with at least one [[routing.models]] entry
+# on it. Governed
 # by docs/amendments/2026-09-26-cloud-escalation.md (A15).
 #
 # [routing.endpoints.claude]

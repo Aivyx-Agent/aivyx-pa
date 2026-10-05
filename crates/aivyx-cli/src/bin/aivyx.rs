@@ -1185,7 +1185,11 @@ fn run() -> Result<(), String> {
             config.routing.as_ref(),
             &access,
             config.provider.value,
-            config.openai_base_url.as_ref().map(|s| s.value.as_str()),
+            routing::configured_backend_url(
+                config.provider.value,
+                config.openai_base_url.as_ref().map(|s| s.value.as_str()),
+                config.broker_base_url.as_deref(),
+            ),
             &config.model.value,
             routing::default_residency(
                 config.provider.value,
@@ -6899,9 +6903,14 @@ async fn run_async(
     // factory.
     let mut broker_slot_hint_mode = false;
     // Model routing Part 3a — the match below consumes `openai_base_url`;
-    // routing needs it to tell a local OpenAI-compatible server from the
-    // real (cloud) OpenAI API.
-    let routing_base_url: Option<String> = openai_base_url.as_ref().map(|s| s.value.clone());
+    // routing needs the backend's address (the broker's for `broker`) to
+    // decide whether the [agent] backend is local or cloud.
+    let routing_base_url: Option<String> = routing::configured_backend_url(
+        provider_kind.value,
+        openai_base_url.as_ref().map(|s| s.value.as_str()),
+        config_broker_base_url.as_deref(),
+    )
+    .map(str::to_owned);
     // Model routing Part 3b — likewise the API keys: a cloud
     // `[routing.endpoints.*]` uses the operator's own key for its kind.
     let mut routing_access = routing::CloudAccess {
