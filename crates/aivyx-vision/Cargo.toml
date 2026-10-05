@@ -18,6 +18,7 @@ name = "aivyx-vision"
 path = "src/main.rs"
 
 [dependencies]
+aivyx-instance = { path = "../aivyx-instance" }
 # Tool process SDK — same shape as aivyx-toolkit/aivyx-gmail. Not workspace
 # dependencies: aivyx-core/aivyx-tool/aivyx-llm are internal path deps with
 # no [workspace.dependencies] entry, consistent with every other consumer

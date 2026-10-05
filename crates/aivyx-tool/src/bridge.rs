@@ -281,6 +281,9 @@ impl ToolProcessBridge {
         if let Ok(home) = std::env::var("HOME") {
             cmd.env("HOME", home);
         }
+        if let Ok(instance) = std::env::var(aivyx_instance::ENV_INSTANCE) {
+            cmd.env(aivyx_instance::ENV_INSTANCE, instance);
+        }
         for var in PROXY_ENV_VARS {
             if let Ok(value) = std::env::var(var) {
                 cmd.env(var, value);
@@ -1033,6 +1036,96 @@ sys.exit(0)
                     "HTTP_PROXY must survive env_clear() so tool-process outbound \
                      calls (via reqwest's auto_sys_proxy) still route through an \
                      operator's configured egress proxy"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_process_still_sees_the_daemons_aivyx_pa_instance() {
+        // Task 2 — AIVYX_PA_INSTANCE must survive env_clear() the same
+        // way PATH/HOME/HTTP_PROXY do, so tool processes inherit the
+        // instance configuration from their parent daemon.
+        //
+        // SAFETY: no other test in this process reads or writes
+        // AIVYX_PA_INSTANCE, so the mutation can't race a concurrent reader.
+        unsafe {
+            std::env::set_var(aivyx_instance::ENV_INSTANCE, "research");
+        }
+
+        let script = r#"
+import sys, json, struct, os
+
+def read_frame():
+    hdr = sys.stdin.buffer.read(4)
+    if not hdr or len(hdr) < 4:
+        return None
+    (n,) = struct.unpack(">I", hdr)
+    return json.loads(sys.stdin.buffer.read(n).decode("utf-8"))
+
+def write_frame(msg):
+    body = json.dumps(msg).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+
+hello = read_frame()
+assert hello["type"] == "ToolHello"
+write_frame({
+    "type": "ToolRegister",
+    "tool_process_name": "instance-check-tool",
+    "tools": [{
+        "name": "check_instance",
+        "description": "Report the AIVYX_PA_INSTANCE var, if visible.",
+        "input_schema": {"type": "object"},
+        "required_scope": "memory.read"
+    }]
+})
+
+inv = read_frame()
+assert inv["type"] == "InvokeTool"
+write_frame({
+    "type": "ToolResult",
+    "call_id": inv["call_id"],
+    "verified": "NotApplicable",
+    "output": {"instance": os.environ.get("AIVYX_PA_INSTANCE", "absent")}
+})
+sys.exit(0)
+"#;
+        let config = ToolProcessConfig {
+            name: "instance-check".into(),
+            command: "python3".into(),
+            args: vec!["-c".into(), script.into()],
+            env: vec![],
+            sandbox: None,
+            notification_sink: None,
+        };
+        let bridge = match ToolProcessBridge::spawn(config).await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skipping: python3 unavailable: {e}");
+                unsafe {
+                    std::env::remove_var(aivyx_instance::ENV_INSTANCE);
+                }
+                return;
+            }
+        };
+
+        let outcome = bridge
+            .invoke("check_instance", serde_json::json!({}), "turn-1")
+            .await
+            .expect("invoke must succeed");
+
+        unsafe {
+            std::env::remove_var(aivyx_instance::ENV_INSTANCE);
+        }
+
+        match outcome {
+            InvocationOutcome::Completed { output, .. } => {
+                assert_eq!(
+                    output["instance"], "research",
+                    "AIVYX_PA_INSTANCE must survive env_clear() so tool processes \
+                     inherit the instance configuration from their parent daemon"
                 );
             }
             other => panic!("expected Completed, got {other:?}"),

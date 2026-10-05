@@ -17,6 +17,8 @@ aivyx-team-types = { path = "../aivyx-team-types" }
 # No storage/network/async deps of its own (serde + globset only), so it
 # stays wasm32-clean like the rest of this crate.
 aivyx-capability = { path = "../aivyx-capability" }
+# Task 3: Instance paths and names for multi-instance support.
+aivyx-instance = { path = "../aivyx-instance" }
 serde = { workspace = true }
 # LearnedSkill::{to,from}_json_value (persona) serialize through serde_json.
 serde_json = { workspace = true }

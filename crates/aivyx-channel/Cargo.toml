@@ -52,6 +52,8 @@ channel-voice-full = ["channel-voice", "aivyx-voice/recommended-voice"]
 [dependencies]
 # Phase 135 — voice channel optional dep.
 aivyx-voice = { path = "../aivyx-voice", optional = true }
+# Task 3: Instance paths and names for multi-instance support.
+aivyx-instance = { path = "../aivyx-instance" }
 aivyx-core = { path = "../aivyx-core" }
 aivyx-capability = { path = "../aivyx-capability" }
 # Phase 14 Task 1 — `aivyx-config` promoted from binary-only to a
@@ -224,6 +226,7 @@ tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
 # LocalChannel unit tests exercise the async ChannelContext surface
 # against an in-memory Vec<u8> sink; tokio drives #[tokio::test] and
 # serde_json builds the tool-call inputs the tests feed in.

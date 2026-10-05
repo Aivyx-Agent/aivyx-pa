@@ -132,6 +132,8 @@ mod help;
 mod identity;
 #[path = "aivyx_modules/init.rs"]
 mod init;
+#[path = "aivyx_modules/instances.rs"]
+mod instances;
 #[path = "aivyx_modules/init_templates.rs"]
 mod init_templates;
 #[path = "aivyx_modules/learning.rs"]
@@ -178,7 +180,7 @@ mod workspace;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 // Phase 9 Task 3 — `SecretString` no longer lives on the binary's
 // surface: all secrets are owned by `aivyx_config::SourcedSecret`
@@ -233,6 +235,16 @@ use aivyx_telegram::{TelegramSessionConfig, run_telegram_multi_session};
 
 const DEFAULT_MAX_TOKENS: u32 = 1024;
 const PROMPT: &str = "> ";
+
+/// Global static for CLI args after the --instance flag has been stripped.
+/// Populated by main() before any other processing, and accessed via cli_args().
+static CLI_ARGS: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Get the CLI args with the --instance flag already stripped.
+/// Must only be called after main() has initialized CLI_ARGS.
+fn cli_args() -> Vec<String> {
+    CLI_ARGS.get().expect("CLI_ARGS not initialized").clone()
+}
 
 /// Jan's server root for the OpenAI-compatible provider, which appends
 /// `/v1/chat/completions` itself: the configured `[openai] base_url` or the
@@ -505,11 +517,48 @@ fn build_web_extract_for_channel(
 // structure and per-section teaching commentary.
 
 fn main() -> ExitCode {
+    // Parse and strip --instance flag at the very top, before any thread or
+    // runtime starts. std::env::set_var is unsafe in edition 2024.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let (instance_name, stripped_args) = match split_instance_flag(&raw) {
+        Ok((name, args)) => (name, args),
+        Err(e) => {
+            eprintln!("aivyx-pa: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Set the instance env var if explicitly provided, otherwise validate existing.
+    if let Some(name) = instance_name {
+        // SAFETY: Called at the very start of main(), before any thread or
+        // async runtime exists. No other thread can be reading this env var yet.
+        unsafe { std::env::set_var(aivyx_instance::ENV_INSTANCE, &name) }
+    } else {
+        // Validate any existing AIVYX_PA_INSTANCE env var.
+        if let Err(e) = aivyx_instance::InstanceName::from_env() {
+            eprintln!("aivyx-pa: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    // Store stripped args in the static for use by parse_cli_args().
+    let _ = CLI_ARGS.set(stripped_args.clone());
+
+    // A stray ./aivyx-pa.toml would otherwise silently take over a named
+    // instance's config (it outranks the instance's own file).
+    if let Ok(instance) = aivyx_instance::InstanceName::from_env() {
+        let has_override = std::env::var_os(aivyx_config::ENV_CONFIG_PATH)
+            .is_some_and(|v| !v.is_empty());
+        let local = std::path::Path::new(aivyx_config::CONFIG_FILE_NAME).exists();
+        if let Some(notice) = local_config_notice(&instance, has_override, local) {
+            eprintln!("{notice}");
+        }
+    }
+
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            let args: Vec<String> = std::env::args().skip(1).collect();
-            eprintln!("aivyx-pa: {}", help::with_help_hint(e, &args));
+            eprintln!("aivyx-pa: {}", help::with_help_hint(e, &stripped_args));
             ExitCode::FAILURE
         }
     }
@@ -617,6 +666,29 @@ fn run() -> Result<(), String> {
                 return rt.block_on(init::run_init_wizard(Some(&template)));
             }
         }
+    }
+
+    // ---- Named instances ---------------------------------------------------
+    if let CliMode::Instances(ref cmd) = mode {
+        if let InstancesCmd::Create(name) = cmd {
+            // `create` runs the setup wizard *for the new instance*, so select
+            // it as this process's instance first.
+            // SAFETY: no runtime or other thread exists yet in this process
+            // (the tokio runtime is built just below), so nothing can be
+            // reading the environment concurrently.
+            unsafe { std::env::set_var(aivyx_instance::ENV_INSTANCE, name.as_str()) }
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async {
+            match cmd {
+                InstancesCmd::List => instances::run_list().await,
+                InstancesCmd::Create(name) => instances::run_create(name).await,
+                InstancesCmd::Remove(name) => instances::run_remove(name).await,
+            }
+        });
     }
 
     // ---- Phase 182: guided credential onboarding ------------------------
@@ -1558,8 +1630,13 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
                     .pid
                     .map(|p| format!("  pid: {p}\n"))
                     .unwrap_or_default();
+                let instance_str = aivyx_instance::InstanceName::from_env()
+                    .ok()
+                    .filter(|n| !n.is_default())
+                    .map(|n| format!("  instance: {n}\n"))
+                    .unwrap_or_default();
                 eprintln!(
-                    "aivyx-pa daemon: running (protocol {version})\n  socket: {}\n{pid_str}",
+                    "aivyx-pa daemon: running (protocol {version})\n{instance_str}  socket: {}\n{pid_str}",
                     socket_path.display(),
                 );
             } else {
@@ -2129,6 +2206,9 @@ enum CliMode {
     /// connectable services + status; `Some(service)` runs the
     /// guided OAuth flow.
     Connect(Option<String>),
+    /// `aivyx-pa instances list | create <name> | remove <name>`: named
+    /// instances (several separate agents for one OS user).
+    Instances(InstancesCmd),
     /// `aivyx-pa mcp-server <name>`: bundled MCP server (Phase 46).
     McpServer(String),
     /// `aivyx-pa profile <subcommand>`: Profile inspection / edit
@@ -2286,6 +2366,14 @@ enum CliMode {
     /// prints the candidates; `explain [--limit N]` lists the audit chain's
     /// `ModelRouted` decisions, newest first (cold-start like `cost`).
     Routing(RoutingSubcommand),
+}
+
+/// `aivyx-pa instances …` subcommands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InstancesCmd {
+    List,
+    Create(aivyx_instance::InstanceName),
+    Remove(aivyx_instance::InstanceName),
 }
 
 /// Model routing Part 3a — `aivyx-pa routing <subcommand>`.
@@ -2778,6 +2866,73 @@ struct CliMcpSse {
     url: String,
 }
 
+/// The one-line notice printed when a named instance is about to read
+/// `./aivyx-pa.toml` from the current directory instead of its own config.
+fn local_config_notice(
+    instance: &aivyx_instance::InstanceName,
+    has_config_override: bool,
+    local_config_exists: bool,
+) -> Option<String> {
+    (!instance.is_default() && !has_config_override && local_config_exists).then(|| {
+        format!(
+            "aivyx-pa: using ./{} from the current directory for instance `{instance}`",
+            aivyx_config::CONFIG_FILE_NAME
+        )
+    })
+}
+
+/// Extract and validate the `--instance` flag from args.
+///
+/// Supports both `--instance <name>` and `--instance=<name>` forms.
+/// Validates the name using `aivyx_instance::InstanceName::parse`.
+/// Returns `(Some(name), stripped_args)` if present, `(None, args)` if absent.
+/// Returns an error if the flag is malformed, invalid, or appears more than once.
+fn split_instance_flag(args: &[String]) -> Result<(Option<String>, Vec<String>), String> {
+    let mut instance_name: Option<String> = None;
+    let mut result = Vec::new();
+    let mut i = 0;
+
+    while i < args.len() {
+        let arg = &args[i];
+
+        if arg == "--" {
+            // Everything after `--` is passed through untouched.
+            result.extend(args[i..].iter().cloned());
+            break;
+        }
+        if arg == "--instance" {
+            // --instance <name> form
+            if instance_name.is_some() {
+                return Err("--instance may only be specified once".to_string());
+            }
+            if i + 1 >= args.len() {
+                return Err("--instance requires a value".to_string());
+            }
+            let name = args[i + 1].clone();
+            aivyx_instance::InstanceName::parse(&name)?;
+            instance_name = Some(name);
+            i += 2;
+        } else if arg.starts_with("--instance=") {
+            // --instance=<name> form
+            if instance_name.is_some() {
+                return Err("--instance may only be specified once".to_string());
+            }
+            let name = arg.strip_prefix("--instance=").unwrap().to_string();
+            if name.is_empty() {
+                return Err("--instance requires a value".to_string());
+            }
+            aivyx_instance::InstanceName::parse(&name)?;
+            instance_name = Some(name);
+            i += 1;
+        } else {
+            result.push(arg.clone());
+            i += 1;
+        }
+    }
+
+    Ok((instance_name, result))
+}
+
 /// Parse the CLI arg surface.
 ///
 /// Recognized forms:
@@ -2793,7 +2948,7 @@ struct CliMcpSse {
 /// Mutual exclusions: `--verify-only` vs `--channel`, `--verify-only`
 /// vs `--print-role`, `daemon run` vs all other modes.
 fn parse_cli_args() -> Result<CliArgs, String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = cli_args();
     parse_cli_args_from(&args)
 }
 
@@ -3504,6 +3659,31 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Learning { window_secs },
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Named instances — `aivyx-pa instances list | create <n> | remove <n>`.
+    if !args.is_empty() && args[0] == "instances" {
+        let usage = "usage: aivyx-pa instances list | create <name> | remove <name>";
+        let cmd = match (args.get(1).map(String::as_str), args.get(2), args.len()) {
+            (None, _, _) | (Some("list"), None, 2) => InstancesCmd::List,
+            (Some("create"), Some(n), 3) => {
+                InstancesCmd::Create(aivyx_instance::InstanceName::parse(n)?)
+            }
+            (Some("remove"), Some(n), 3) => {
+                InstancesCmd::Remove(aivyx_instance::InstanceName::parse(n)?)
+            }
+            _ => return Err(usage.into()),
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Instances(cmd),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -6227,6 +6407,25 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
     }
 }
 
+/// The kvcache directory under `base` for `instance`: `base/kvcache` for
+/// the default instance (unchanged), `base/instances/<n>/kvcache` otherwise.
+fn kvcache_dir_for_instance(
+    base: &std::path::Path,
+    instance: &aivyx_instance::InstanceName,
+) -> std::path::PathBuf {
+    if instance.is_default() {
+        base.join("kvcache")
+    } else {
+        base.join("instances").join(instance.as_str()).join("kvcache")
+    }
+}
+
+/// The selected instance (validated at startup in `main`).
+fn current_instance_name() -> aivyx_instance::InstanceName {
+    aivyx_instance::InstanceName::from_env()
+        .unwrap_or_else(|_| aivyx_instance::InstanceName::default_instance())
+}
+
 /// The kvcache store directory this run actually uses: the configured
 /// override, or the historical `ProjectDirs`-derived default when
 /// unset. Single source of truth reused by both the real kvcache
@@ -6235,10 +6434,17 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
 fn effective_kvcache_store_path(config: &aivyx_config::AivyxConfig) -> std::path::PathBuf {
     let raw = match &config.kvcache_store_path {
         Some(sourced) => sourced.value.clone(),
-        None => match directories::ProjectDirs::from("", "", "aivyx-pa") {
-            Some(dirs) => dirs.data_local_dir().join("kvcache"),
-            None => std::env::temp_dir().join("aivyx-pa").join("kvcache"),
-        },
+        None => {
+            // The historical ProjectDirs base (on macOS that's
+            // ~/Library/Application Support, not ~/.local/share), so the
+            // default instance's cache never moves; named instances nest
+            // under it.
+            let base = match directories::ProjectDirs::from("", "", "aivyx-pa") {
+                Some(dirs) => dirs.data_local_dir().to_path_buf(),
+                None => std::env::temp_dir().join("aivyx-pa"), // instance-paths: ok — kvcache base when no ProjectDirs; named instances nest under it
+            };
+            kvcache_dir_for_instance(&base, &current_instance_name())
+        }
     };
     std::fs::canonicalize(&raw).unwrap_or(raw)
 }
@@ -8868,15 +9074,11 @@ async fn run_async(
             .parent()
             .map(|p| vec![p.to_path_buf()])
             .unwrap_or_default();
-        let writable: Vec<std::path::PathBuf> = std::env::var_os("HOME")
-            .map(|home| {
-                vec![
-                    std::path::PathBuf::from(home)
-                        .join(".aivyx-pa")
-                        .join("tool-processes")
-                        .join(&tp_cfg.name),
-                ]
-            })
+        // Task 3: use InstancePaths for tool-processes directory
+        let writable: Vec<std::path::PathBuf> = aivyx_instance::InstancePaths::current()
+            .ok()
+            .and_then(|paths| paths.tool_process_dir(&tp_cfg.name))
+            .map(|p| vec![p])
             .unwrap_or_default();
         let spawn_sandbox = aivyx_tool::resolve_sandbox(
             explicit,
@@ -14130,6 +14332,39 @@ mod tests {
     }
 
     #[test]
+    fn instances_subcommands_parse() {
+        let mode = |v: &[&str]| parse_cli_args_from(&argv(v)).map(|a| a.mode);
+        assert_eq!(mode(&["instances"]).unwrap(), CliMode::Instances(InstancesCmd::List));
+        assert_eq!(mode(&["instances", "list"]).unwrap(), CliMode::Instances(InstancesCmd::List));
+        assert_eq!(
+            mode(&["instances", "create", "research"]).unwrap(),
+            CliMode::Instances(InstancesCmd::Create(
+                aivyx_instance::InstanceName::parse("research").unwrap()
+            ))
+        );
+        assert_eq!(
+            mode(&["instances", "remove", "research"]).unwrap(),
+            CliMode::Instances(InstancesCmd::Remove(
+                aivyx_instance::InstanceName::parse("research").unwrap()
+            ))
+        );
+        assert!(mode(&["instances", "create"]).is_err());
+        assert!(mode(&["instances", "create", "Bad_Name"]).is_err());
+        assert!(mode(&["instances", "frobnicate"]).is_err());
+        assert!(mode(&["instances", "list", "extra"]).is_err());
+    }
+
+    #[test]
+    fn local_config_notice_only_for_a_named_instance_without_an_override() {
+        let named = aivyx_instance::InstanceName::parse("research").unwrap();
+        let default = aivyx_instance::InstanceName::default_instance();
+        assert!(local_config_notice(&named, false, true).is_some());
+        assert!(local_config_notice(&named, true, true).is_none()); // AIVYX_PA_CONFIG_PATH wins
+        assert!(local_config_notice(&named, false, false).is_none()); // no ./aivyx-pa.toml
+        assert!(local_config_notice(&default, false, true).is_none());
+    }
+
+    #[test]
     fn parse_connect_no_service_lists() {
         let parsed = parse_cli_args_from(&argv(&["connect"])).expect("connect must parse");
         assert_eq!(parsed.mode, CliMode::Connect(None));
@@ -15801,6 +16036,18 @@ mod tests {
     }
 
     #[test]
+    fn kvcache_dir_nests_named_instances_and_keeps_the_default() {
+        let base = PathBuf::from("/b/aivyx-pa");
+        let default = aivyx_instance::InstanceName::default_instance();
+        let research = aivyx_instance::InstanceName::parse("research").unwrap();
+        assert_eq!(kvcache_dir_for_instance(&base, &default), PathBuf::from("/b/aivyx-pa/kvcache"));
+        assert_eq!(
+            kvcache_dir_for_instance(&base, &research),
+            PathBuf::from("/b/aivyx-pa/instances/research/kvcache")
+        );
+    }
+
+    #[test]
     fn effective_kvcache_store_path_uses_the_configured_override() {
         let cfg = load_phase_122_config(
             "[kvcache]\n\
@@ -16234,5 +16481,25 @@ mod early_validate_fail_output_tests {
             "the non-TTY fail message must stay prefix-free -- main()'s generic \
              handler adds \"aivyx-pa: \" itself; baking it in here doubles it"
         );
+    }
+}
+
+#[cfg(test)]
+mod split_instance_flag_tests {
+    use super::split_instance_flag;
+
+    #[test]
+    fn instance_flag_is_stripped_anywhere() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(split_instance_flag(&a(&["--instance", "research", "daemon", "run"])).unwrap(),
+                   (Some("research".into()), a(&["daemon", "run"])));
+        assert_eq!(split_instance_flag(&a(&["daemon", "status", "--instance=home"])).unwrap(),
+                   (Some("home".into()), a(&["daemon", "status"])));
+        assert_eq!(split_instance_flag(&a(&["daemon", "status"])).unwrap(), (None, a(&["daemon", "status"])));
+        assert!(split_instance_flag(&a(&["--instance"])).is_err());            // missing value
+        assert!(split_instance_flag(&a(&["--instance", "Bad_Name"])).is_err()); // invalid name
+        assert!(split_instance_flag(&a(&["--instance", "a", "--instance", "b"])).is_err()); // twice
+    assert_eq!(split_instance_flag(&a(&["chat", "--", "--instance", "x"])).unwrap(),
+               (None, a(&["chat", "--", "--instance", "x"])));
     }
 }

@@ -5,6 +5,22 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Named instances** — run several fully separate agents as one OS user,
+  each with its own roles, Profile, Persona, memory, audit log, passphrase,
+  background service and Studio (amendment A17):
+  - `--instance <name>` on every command, or `AIVYX_PA_INSTANCE`.
+  - `aivyx-pa instances list | create <name> | remove <name>`; `create`
+    picks a free Studio port from 7844 and runs setup for the new instance;
+    `remove` refuses the default instance, a running one, or one with an
+    installed service, and asks for the name to be typed back.
+  - Each Studio shows its instance name in the tab title; `daemon status`
+    prints it.
+  - The default instance keeps every existing path, so current installs
+    are unchanged. The desktop app and chat channels still use the default
+    instance.
+
 ## [0.14.8] — 2026-10-05
 
 ### Security

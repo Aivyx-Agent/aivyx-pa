@@ -42,16 +42,41 @@ pub mod vault_client;
 pub use vault_client::{VaultClient, VaultConfig, VaultError, MARKDOWN_EXT};
 
 pub use aivyx_tool::multi_harness::{run_multi_tool_subprocess, HarnessError};
+use aivyx_instance::InstancePaths;
+
+/// Default config file path for a given instance:
+/// `~/.aivyx-pa[/instances/<n>]/tool-processes/obsidian/config.toml`.
+pub fn default_config_path_for(instance: &InstancePaths) -> Option<std::path::PathBuf> {
+    instance
+        .tool_process_dir("obsidian")
+        .map(|d| d.join("config.toml"))
+}
 
 /// Default config file path:
 /// `$HOME/.aivyx-pa/tool-processes/obsidian/config.toml`.
 pub fn default_config_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(
-        std::path::PathBuf::from(home)
-            .join(".aivyx-pa")
-            .join("tool-processes")
-            .join("obsidian")
-            .join("config.toml"),
-    )
+    let instance = InstancePaths::current().ok()?;
+    default_config_path_for(&instance)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aivyx_instance::{BaseDirs, InstanceName};
+
+    #[test]
+    fn default_config_path_for_named_instance() {
+        let dirs = BaseDirs {
+            home: Some(std::path::PathBuf::from("/home/user")),
+            xdg_config_home: Some(std::path::PathBuf::from("/etc/config")),
+            xdg_data_home: Some(std::path::PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(std::path::PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = default_config_path_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/obsidian/config.toml")
+        );
+    }
 }

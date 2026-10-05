@@ -37,7 +37,7 @@ pub fn daemon_log_path(xdg_state_home: Option<&str>, home: Option<&str>) -> Opti
             home.filter(|h| !h.is_empty())
                 .map(|h| Path::new(h).join(".local/state"))
         })?;
-    Some(state.join("aivyx-pa").join("desktop-daemon.log"))
+    Some(state.join("aivyx-pa").join("desktop-daemon.log")) // instance-paths: ok — the desktop app serves the default instance only (v1)
 }
 
 /// The last `n` non-empty lines of `text`.

@@ -419,11 +419,24 @@ fn log_rejected_token_once(ip: std::net::IpAddr) {
 /// item B. Split out from `handle_websocket`'s send call so the shape is
 /// unit-testable without a real connection — mirrors `should_log_rejected_
 /// token`'s own split from its side-effecting caller.
-fn server_info_json(boot_id: &str) -> serde_json::Value {
-    serde_json::json!({
+fn server_info_json(boot_id: &str, instance: Option<&str>) -> serde_json::Value {
+    let mut v = serde_json::json!({
         "type": "ServerInfo",
         "boot_id": boot_id,
-    })
+    });
+    if let Some(name) = instance {
+        v["instance"] = serde_json::Value::String(name.to_string());
+    }
+    v
+}
+
+/// This daemon's instance name for Studio — `None` for the default
+/// instance, which needs no label.
+fn named_instance() -> Option<String> {
+    aivyx_instance::InstanceName::from_env()
+        .ok()
+        .filter(|n| !n.is_default())
+        .map(|n| n.as_str().to_string())
 }
 
 /// Handle a single TCP connection. Peek at the first bytes to
@@ -971,7 +984,7 @@ async fn handle_websocket(
 
     // Send ServerInfo to the browser (POLISH_WAVES.md sub-project 6, item
     // B) — one shot per connection, same pattern as SessionStarted above.
-    let server_info_json = server_info_json(boot_id);
+    let server_info_json = server_info_json(boot_id, named_instance().as_deref());
     {
         let mut sink = ws_sink.lock().await;
         let _ = sink
@@ -1201,9 +1214,12 @@ mod tests {
 
     #[test]
     fn server_info_json_shape() {
-        let v = server_info_json("abc-123");
+        let v = server_info_json("abc-123", None);
         assert_eq!(v["type"], "ServerInfo");
         assert_eq!(v["boot_id"], "abc-123");
+        assert!(v.get("instance").is_none());
+        let named = server_info_json("abc-123", Some("research"));
+        assert_eq!(named["instance"], "research");
     }
 
     #[test]

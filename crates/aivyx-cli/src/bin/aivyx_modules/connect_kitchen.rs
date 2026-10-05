@@ -14,6 +14,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
+use aivyx_instance::InstancePaths;
 use aivyx_kitchen::KITCHEN_BOH_TOML;
 use aivyx_kitchen_toolkit::KitchenClient;
 
@@ -27,11 +28,24 @@ const PROBE_FN: &str = "get_suppliers";
 /// The planted pack filename, beside `aivyx-pa.toml` (Mise OQ-1).
 const PACK_FILENAME: &str = "kitchen-boh.toml";
 
-/// `~/.aivyx-pa/tool-processes/kitchen/`.
-fn process_dir(home: &Path) -> PathBuf {
-    home.join(".aivyx-pa").join("tool-processes").join("kitchen")
+/// `~/.aivyx-pa/tool-processes/kitchen/` for a given instance.
+fn process_dir_for(instance: &InstancePaths) -> Option<PathBuf> {
+    instance.tool_process_dir("kitchen")
 }
 
+fn config_path_for(instance: &InstancePaths) -> Option<PathBuf> {
+    process_dir_for(instance).map(|d| d.join("config.toml"))
+}
+
+/// `~/.aivyx-pa/tool-processes/kitchen/`. Kept for test compatibility.
+#[allow(dead_code)]
+fn process_dir(home: &Path) -> PathBuf {
+    InstancePaths::with_home_or_default(home)
+        .tool_process_dir("kitchen")
+        .unwrap_or_else(|| home.to_path_buf())
+}
+
+#[allow(dead_code)]
 fn config_path(home: &Path) -> PathBuf {
     process_dir(home).join("config.toml")
 }
@@ -55,17 +69,21 @@ fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Write the kitchen `config.toml` (0600). Returns the path.
+/// Write the kitchen `config.toml` (0600) to its instance-aware path. Returns the path.
 pub fn write_kitchen_config(
     home: &Path,
     base_url: &str,
     api_key: &str,
     organization_id: &str,
 ) -> Result<PathBuf, String> {
-    let dir = process_dir(home);
+    // Use home-based paths for tests (when home is a temp dir), otherwise use instance
+    let instance = InstancePaths::with_home(home)?;
+    let dir = process_dir_for(&instance)
+        .ok_or_else(|| "cannot resolve tool-process directory".to_string())?;
+    let path = config_path_for(&instance)
+        .ok_or_else(|| "cannot resolve config path".to_string())?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
-    let path = config_path(home);
     let body = render_kitchen_config_toml(base_url, api_key, organization_id);
     write_file_at_0600(&path, body.as_bytes())
         .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
@@ -299,5 +317,22 @@ mod tests {
             "kitchen-boh.toml"
         ));
         assert_eq!(doc["team"]["config_path"].as_str(), Some("mine.toml"));
+    }
+
+    #[test]
+    fn process_dir_for_named_instance() {
+        use aivyx_instance::{BaseDirs, InstanceName};
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/home/user")),
+            xdg_config_home: Some(PathBuf::from("/etc/config")),
+            xdg_data_home: Some(PathBuf::from("/var/data")),
+            xdg_runtime_dir: Some(PathBuf::from("/run")),
+        };
+        let instance = InstancePaths::new(InstanceName::parse("research").unwrap(), dirs);
+        let p = process_dir_for(&instance).expect("path");
+        assert_eq!(
+            p,
+            PathBuf::from("/home/user/.aivyx-pa/instances/research/tool-processes/kitchen")
+        );
     }
 }

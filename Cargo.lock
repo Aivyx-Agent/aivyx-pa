@@ -118,6 +118,7 @@ dependencies = [
 name = "aivyx-auth-cli"
 version = "0.14.8"
 dependencies = [
+ "aivyx-instance",
  "serde",
  "thiserror 2.0.18",
  "toml 0.8.23",
@@ -130,6 +131,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-google-oauth",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "chrono",
@@ -162,6 +164,7 @@ dependencies = [
  "aivyx-cost",
  "aivyx-crypto",
  "aivyx-discord",
+ "aivyx-instance",
  "aivyx-ipc",
  "aivyx-kvcache",
  "aivyx-llm",
@@ -193,6 +196,7 @@ dependencies = [
  "serde_jcs",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.26.2",
@@ -224,6 +228,7 @@ dependencies = [
  "aivyx-dataread",
  "aivyx-discord",
  "aivyx-federation",
+ "aivyx-instance",
  "aivyx-kitchen",
  "aivyx-kitchen-toolkit",
  "aivyx-kvcache",
@@ -252,6 +257,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
@@ -266,6 +272,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-cost",
  "aivyx-crypto",
+ "aivyx-instance",
  "aivyx-route",
  "aivyx-storage",
  "base64 0.22.1",
@@ -299,6 +306,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-google-oauth",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "reqwest 0.12.28",
@@ -384,6 +392,7 @@ dependencies = [
 name = "aivyx-desktop"
 version = "0.14.8"
 dependencies = [
+ "aivyx-instance",
  "aivyx-ipc",
  "auto-launch",
  "futures-util",
@@ -426,6 +435,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-google-oauth",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "base64 0.22.1",
@@ -469,6 +479,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-google-oauth",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "base64 0.22.1",
@@ -484,6 +495,7 @@ dependencies = [
 name = "aivyx-google-oauth"
 version = "0.14.8"
 dependencies = [
+ "aivyx-instance",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -497,10 +509,18 @@ version = "0.1.0"
 source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=a0b0e7a55d0a7a5d07108a285a76101c12a45f21#a0b0e7a55d0a7a5d07108a285a76101c12a45f21"
 
 [[package]]
+name = "aivyx-instance"
+version = "0.14.8"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "aivyx-ipc"
 version = "0.14.8"
 dependencies = [
  "aivyx-capability",
+ "aivyx-instance",
  "aivyx-team-types",
  "serde",
  "serde_json",
@@ -519,6 +539,7 @@ version = "0.14.8"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-kitchen",
  "aivyx-tool",
  "aivyx-vertical-sdk",
@@ -606,6 +627,7 @@ dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "reqwest 0.12.28",
@@ -623,6 +645,7 @@ dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "reqwest 0.12.28",
@@ -640,6 +663,7 @@ dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "serde",
@@ -774,6 +798,7 @@ version = "0.14.8"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "async-trait",
  "serde",
  "serde_json",
@@ -788,6 +813,7 @@ version = "0.14.8"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-tool",
  "async-trait",
  "chrono",
@@ -832,6 +858,7 @@ version = "0.14.8"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-instance",
  "aivyx-llm",
  "aivyx-tool",
  "aivyx-vision-core",

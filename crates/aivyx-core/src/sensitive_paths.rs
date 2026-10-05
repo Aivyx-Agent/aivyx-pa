@@ -358,6 +358,26 @@ mod tests {
     }
 
     #[test]
+    fn aivyx_workspace_and_user_instances_dirs_are_not_sensitive() {
+        // Task 3: workspace and user-created instance folders are NOT secrets.
+        // The `.redb` extension rule protects the store; explicit basenames protect
+        // daemon-specific files; nothing should block reads of workspace or user data.
+        let g = guard();
+        // Aivyx workspace notes (NOT a secret directory)
+        assert!(
+            g.classify(Path::new("/home/alice/.aivyx-pa/workspace/notes.md"))
+                .is_none(),
+            "workspace notes must not be blocked"
+        );
+        // User's own `instances` folder (could be a project dir)
+        assert!(
+            g.classify(Path::new("/proj/instances/a.txt"))
+                .is_none(),
+            "user instances folder must not be blocked"
+        );
+    }
+
+    #[test]
     fn disabled_guard_is_a_noop() {
         let g = SensitivePolicy::disabled();
         assert!(g.classify(Path::new("/home/alice/.ssh/id_rsa")).is_none());

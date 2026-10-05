@@ -2268,20 +2268,34 @@ fn build_wizard_provider(
 // Entry point (stub — wired end-to-end in Task 5)
 // ---------------------------------------------------------------------------
 
-/// Compute default paths for the wizard. Uses `$HOME` to derive
+/// Compute default paths for the wizard. Uses InstancePaths to derive
 /// sensible defaults matching `aivyx-config` resolution logic.
+/// Task 3: sandbox and store paths now come from InstancePaths.
 fn default_paths() -> (String, String) {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let fs_root = format!("{home}/aivyx-pa-sandbox");
-    // Mirror aivyx-config's own storage_path default resolution exactly
-    // (crates/aivyx-config/src/lib.rs: XDG_DATA_HOME first, falling back
-    // to $HOME/.local/share) -- Task 2's store-collision guard checks
-    // this same path, so a divergence here would let it silently miss
-    // an orphaned store that actually lives at the XDG path.
-    let storage_path = match std::env::var("XDG_DATA_HOME") {
-        Ok(xdg) if !xdg.is_empty() => format!("{xdg}/aivyx-pa/store.redb"),
-        _ => format!("{home}/.local/share/aivyx-pa/store.redb"),
-    };
+    let paths = aivyx_instance::InstancePaths::current()
+        .unwrap_or_else(|_| {
+            // Fallback if instance resolution fails (HOME and XDG not set)
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            aivyx_instance::InstancePaths::new(
+                aivyx_instance::InstanceName::default_instance(),
+                aivyx_instance::BaseDirs {
+                    home: Some(home.into()),
+                    xdg_config_home: None,
+                    xdg_data_home: std::env::var("XDG_DATA_HOME").ok().map(|s| s.into()),
+                    xdg_runtime_dir: None,
+                },
+            )
+        });
+    let fs_root = paths
+        .sandbox_dir()
+        .unwrap_or_else(|| ".".into())
+        .to_string_lossy()
+        .to_string();
+    let storage_path = paths
+        .store_file()
+        .unwrap_or_else(|| "store.redb".into())
+        .to_string_lossy()
+        .to_string();
     (fs_root, storage_path)
 }
 

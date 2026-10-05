@@ -15,6 +15,7 @@ name = "aivyx-desktop"
 path = "src/main.rs"
 
 [dependencies]
+aivyx-instance = { path = "../aivyx-instance" }
 # Windowing + event loop (the tauri-ecosystem winit fork; pairs with wry and the
 # tray-icon / global-hotkey crates which integrate with its event loop).
 tao = "0.35"

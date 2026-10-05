@@ -11,6 +11,9 @@ repository.workspace = true
 readme.workspace = true
 
 [dependencies]
+# Task 3: Instance paths and names for multi-instance support.
+aivyx-instance = { path = "../aivyx-instance" }
+
 # Chapter Freight — validate `[pack] trusted_publishers` entries are
 # base64 of 32-byte keys at load (strict-at-load house style).
 base64 = { workspace = true }

@@ -25,32 +25,47 @@ pub const MAX_PAYLOAD_SIZE: u32 = 16 * 1024 * 1024;
 /// Length of the frame header (4-byte big-endian payload length).
 pub const FRAME_HEADER_LEN: usize = 4;
 
-/// Resolve the daemon socket path per `docs/DAEMON_IPC.md`:
+/// Resolve the daemon socket path for a given instance per `docs/DAEMON_IPC.md`:
+///
+/// 1. `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock` (preferred) for default instance
+/// 2. `$HOME/.local/share/aivyx-pa/daemon.sock` (fallback) for default instance
+///
+/// Named instances nest under `instances/<name>/`.
+///
+/// Returns `Err` only if neither `XDG_RUNTIME_DIR` nor `HOME` is set.
+pub fn default_socket_path_for(paths: &aivyx_instance::InstancePaths) -> Result<PathBuf, String> {
+    paths
+        .socket_path()
+        .ok_or_else(|| "neither XDG_RUNTIME_DIR nor HOME is set; cannot determine daemon socket path".into())
+}
+
+/// Resolve the daemon socket path using the current instance.
 ///
 /// 1. `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock` (preferred)
 /// 2. `$HOME/.local/share/aivyx-pa/daemon.sock` (fallback)
 ///
 /// Returns `Err` only if neither `XDG_RUNTIME_DIR` nor `HOME` is set.
 pub fn default_socket_path() -> Result<PathBuf, String> {
-    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-        return Ok(PathBuf::from(xdg).join("aivyx-pa").join("daemon.sock"));
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return Ok(PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("aivyx-pa")
-            .join("daemon.sock"));
-    }
-    Err("neither XDG_RUNTIME_DIR nor HOME is set; cannot determine daemon socket path".into())
+    let paths = aivyx_instance::InstancePaths::current()
+        .map_err(|e| format!("failed to resolve current instance: {}", e))?;
+    default_socket_path_for(&paths)
 }
 
-/// Resolve the daemon PID file path — sibling of the socket file.
+/// Resolve the daemon PID file path for a given instance — sibling of the socket file.
+pub fn default_pid_path_for(paths: &aivyx_instance::InstancePaths) -> Result<PathBuf, String> {
+    paths
+        .pid_path()
+        .ok_or_else(|| "neither XDG_RUNTIME_DIR nor HOME is set; cannot determine daemon pid path".into())
+}
+
+/// Resolve the daemon PID file path using the current instance — sibling of the socket file.
 ///
 /// `$XDG_RUNTIME_DIR/aivyx-pa/daemon.pid` (preferred) or
 /// `$HOME/.local/share/aivyx-pa/daemon.pid` (fallback).
 pub fn default_pid_path() -> Result<PathBuf, String> {
-    default_socket_path().map(|p| p.with_extension("pid"))
+    let paths = aivyx_instance::InstancePaths::current()
+        .map_err(|e| format!("failed to resolve current instance: {}", e))?;
+    default_pid_path_for(&paths)
 }
 
 // ---------------------------------------------------------------------------
@@ -3375,6 +3390,11 @@ pub enum DaemonEnvelope {
     /// and hints that a reload will pick up the newer bundle.
     ServerInfo {
         boot_id: String,
+        /// The named instance this daemon serves (`None` for the default
+        /// instance, and from daemons that predate named instances), so
+        /// Studio can label the tab.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instance: Option<String>,
     },
     StreamEvent {
         session_id: String,
@@ -5237,11 +5257,26 @@ mod tests {
     fn server_info_round_trips() {
         let msg = DaemonEnvelope::ServerInfo {
             boot_id: "test-boot-id".to_string(),
+            instance: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"ServerInfo\""));
+        assert!(!json.contains("instance"), "{json}");
         let back: DaemonEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn server_info_carries_a_named_instance_and_old_json_still_parses() {
+        let named = DaemonEnvelope::ServerInfo {
+            boot_id: "b".to_string(),
+            instance: Some("research".to_string()),
+        };
+        let json = serde_json::to_string(&named).unwrap();
+        assert_eq!(serde_json::from_str::<DaemonEnvelope>(&json).unwrap(), named);
+        let old: DaemonEnvelope =
+            serde_json::from_str(r#"{"type":"ServerInfo","boot_id":"b"}"#).unwrap();
+        assert_eq!(old, DaemonEnvelope::ServerInfo { boot_id: "b".to_string(), instance: None });
     }
 
     #[test]
@@ -5684,6 +5719,40 @@ mod tests {
             path.parent(),
             sock.parent(),
             "pid and socket paths must share the same parent directory"
+        );
+    }
+
+    #[test]
+    fn socket_path_follows_the_instance() {
+        let p = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::parse("research").unwrap(),
+            aivyx_instance::BaseDirs {
+                home: Some("/h".into()),
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: Some("/r".into()),
+            },
+        );
+        assert_eq!(
+            default_socket_path_for(&p).unwrap(),
+            std::path::PathBuf::from("/r/aivyx-pa/instances/research/daemon.sock")
+        );
+    }
+
+    #[test]
+    fn pid_path_follows_the_instance() {
+        let p = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::parse("research").unwrap(),
+            aivyx_instance::BaseDirs {
+                home: Some("/h".into()),
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: Some("/r".into()),
+            },
+        );
+        assert_eq!(
+            default_pid_path_for(&p).unwrap(),
+            std::path::PathBuf::from("/r/aivyx-pa/instances/research/daemon.pid")
         );
     }
 

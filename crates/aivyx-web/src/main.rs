@@ -770,6 +770,17 @@ struct NotifyConfigUi {
 struct ServerInfoUi {
     boot_id: Option<String>,
     update_available: bool,
+    /// The named instance this daemon serves; `None` for the default one.
+    instance: Option<String>,
+}
+
+/// The browser tab's title: plain for the default instance, with the
+/// instance name for a named one so two Studio tabs are never confused.
+fn studio_title(instance: Option<&str>) -> String {
+    match instance {
+        Some(name) if name != "default" => format!("Aivyx PA Studio — {name}"),
+        _ => "Aivyx PA Studio".to_string(),
+    }
 }
 
 /// The state transition `ServerInfoUi` takes on receiving a `boot_id`:
@@ -779,12 +790,17 @@ struct ServerInfoUi {
 /// doesn't clear it, and a manual dismiss (not modeled here; see the
 /// render step) is the only way off, so a real update can't be hidden by
 /// a lucky match.
-fn apply_server_info(current: &ServerInfoUi, boot_id: String) -> ServerInfoUi {
-    match &current.boot_id {
-        None => ServerInfoUi { boot_id: Some(boot_id), update_available: false },
+fn apply_server_info(
+    current: &ServerInfoUi,
+    boot_id: String,
+    instance: Option<String>,
+) -> ServerInfoUi {
+    let next = match &current.boot_id {
+        None => ServerInfoUi { boot_id: Some(boot_id), update_available: false, instance: None },
         Some(seen) if *seen == boot_id => current.clone(),
-        Some(_) => ServerInfoUi { boot_id: Some(boot_id), update_available: true },
-    }
+        Some(_) => ServerInfoUi { boot_id: Some(boot_id), update_available: true, instance: None },
+    };
+    ServerInfoUi { instance, ..next }
 }
 
 #[cfg(test)]
@@ -792,31 +808,45 @@ mod server_info_tests {
     use super::*;
 
     #[test]
+    fn studio_title_names_only_a_named_instance() {
+        assert_eq!(studio_title(None), "Aivyx PA Studio");
+        assert_eq!(studio_title(Some("default")), "Aivyx PA Studio");
+        assert_eq!(studio_title(Some("research")), "Aivyx PA Studio — research");
+    }
+
+    #[test]
+    fn server_info_records_the_instance() {
+        let next = apply_server_info(&ServerInfoUi::default(), "a".to_string(), Some("research".to_string()));
+        assert_eq!(next.instance.as_deref(), Some("research"));
+        assert!(!next.update_available);
+    }
+
+    #[test]
     fn first_boot_id_is_recorded_without_a_banner() {
-        let next = apply_server_info(&ServerInfoUi::default(), "a".to_string());
+        let next = apply_server_info(&ServerInfoUi::default(), "a".to_string(), None);
         assert_eq!(next.boot_id, Some("a".to_string()));
         assert!(!next.update_available);
     }
 
     #[test]
     fn same_boot_id_again_does_not_trigger_the_banner() {
-        let seen = ServerInfoUi { boot_id: Some("a".to_string()), update_available: false };
-        let next = apply_server_info(&seen, "a".to_string());
+        let seen = ServerInfoUi { boot_id: Some("a".to_string()), update_available: false, instance: None };
+        let next = apply_server_info(&seen, "a".to_string(), None);
         assert!(!next.update_available);
     }
 
     #[test]
     fn a_different_boot_id_triggers_the_banner() {
-        let seen = ServerInfoUi { boot_id: Some("a".to_string()), update_available: false };
-        let next = apply_server_info(&seen, "b".to_string());
+        let seen = ServerInfoUi { boot_id: Some("a".to_string()), update_available: false, instance: None };
+        let next = apply_server_info(&seen, "b".to_string(), None);
         assert_eq!(next.boot_id, Some("b".to_string()));
         assert!(next.update_available);
     }
 
     #[test]
     fn banner_stays_on_across_a_further_reconnect_to_the_same_new_id() {
-        let updated = ServerInfoUi { boot_id: Some("b".to_string()), update_available: true };
-        let next = apply_server_info(&updated, "b".to_string());
+        let updated = ServerInfoUi { boot_id: Some("b".to_string()), update_available: true, instance: None };
+        let next = apply_server_info(&updated, "b".to_string(), None);
         assert!(next.update_available);
     }
 }
@@ -1322,7 +1352,7 @@ fn App() -> Element {
     };
 
     rsx! {
-        document::Title { "Aivyx PA Studio" }
+        document::Title { {studio_title(server_info().instance.as_deref())} }
         document::Link { rel: "icon", href: FAVICON }
         document::Stylesheet { href: STITCH_CSS }
         style { {font_faces()} }
@@ -1338,6 +1368,11 @@ fn App() -> Element {
                         style: "position:sticky;top:0;z-index:1000;background:var(--danger, #b91c1c);color:#fff;text-align:center;padding:6px 12px;font-size:13px;letter-spacing:0.02em;",
                         role: "alert",
                         "Connection to the agent lost — reconnecting…"
+                    }
+                }
+                if let Some(name) = server_info().instance.clone() {
+                    div { class: "notice info instance-badge", role: "status",
+                        "Instance: {name}"
                     }
                 }
                 if server_info().update_available {
@@ -11353,9 +11388,9 @@ async fn read_task(
                     briefing.write().on_daemon_error(message.clone());
                     transcript.write().push(ChatLine::error(message));
                 }
-                DaemonEnvelope::ServerInfo { boot_id } => {
+                DaemonEnvelope::ServerInfo { boot_id, instance } => {
                     let current = server_info();
-                    server_info.set(apply_server_info(&current, boot_id));
+                    server_info.set(apply_server_info(&current, boot_id, instance));
                 }
                 _ => {}
             }
