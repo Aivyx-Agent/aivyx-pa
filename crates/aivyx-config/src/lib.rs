@@ -6018,13 +6018,26 @@ const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 /// existing per-directory setup keeps working unchanged), else
 /// `$XDG_CONFIG_HOME/aivyx-pa/aivyx-pa.toml` (default `~/.config`). The
 /// file may not exist yet — `init` creates it there.
+/// Task 3: now uses InstancePaths for the default branch.
 pub fn resolve_config_path() -> PathBuf {
     let cwd = std::env::current_dir().ok();
-    resolve_config_path_from(
+    let paths = aivyx_instance::InstancePaths::current()
+        .unwrap_or_else(|_| {
+            // Fallback if instance resolution fails
+            aivyx_instance::InstancePaths::new(
+                aivyx_instance::InstanceName::default_instance(),
+                aivyx_instance::BaseDirs {
+                    home: env_string(ENV_HOME).map(PathBuf::from),
+                    xdg_config_home: env_string(ENV_XDG_CONFIG_HOME).map(PathBuf::from),
+                    xdg_data_home: None,
+                    xdg_runtime_dir: None,
+                },
+            )
+        });
+    resolve_config_path_from_for(
         env_string(ENV_CONFIG_PATH).as_deref(),
         cwd.as_deref(),
-        env_string(ENV_XDG_CONFIG_HOME).as_deref(),
-        env_string(ENV_HOME).as_deref(),
+        &paths,
     )
 }
 

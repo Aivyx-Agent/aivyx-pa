@@ -12473,3 +12473,49 @@ fn the_config_path_resolves_env_then_an_existing_cwd_file_then_xdg() {
         Path::new("aivyx-pa.toml")
     );
 }
+
+#[test]
+fn resolve_config_path_from_for_named_instance() {
+    use crate::resolve_config_path_from_for;
+    use aivyx_instance::{BaseDirs, InstanceName, InstancePaths};
+
+    // Named instance should nest under instances/
+    let research = InstancePaths::new(
+        InstanceName::parse("research").unwrap(),
+        BaseDirs {
+            home: Some("/home/alice".into()),
+            xdg_config_home: Some("/home/alice/.config".into()),
+            xdg_data_home: None,
+            xdg_runtime_dir: None,
+        },
+    );
+
+    // Default branch should use instance config file
+    let path = resolve_config_path_from_for(None, None, &research);
+    assert_eq!(
+        path,
+        std::path::PathBuf::from("/home/alice/.config/aivyx-pa/instances/research/aivyx-pa.toml"),
+        "named instance should nest under instances/"
+    );
+
+    // Default instance should use root config dir
+    let default = InstancePaths::new(
+        InstanceName::default_instance(),
+        BaseDirs {
+            home: Some("/home/alice".into()),
+            xdg_config_home: Some("/home/alice/.config".into()),
+            xdg_data_home: None,
+            xdg_runtime_dir: None,
+        },
+    );
+    let path = resolve_config_path_from_for(None, None, &default);
+    assert_eq!(
+        path,
+        std::path::PathBuf::from("/home/alice/.config/aivyx-pa/aivyx-pa.toml"),
+        "default instance should not nest"
+    );
+
+    // Env override should win regardless of instance
+    let path = resolve_config_path_from_for(Some("/etc/custom.toml"), None, &research);
+    assert_eq!(path, std::path::PathBuf::from("/etc/custom.toml"));
+}
