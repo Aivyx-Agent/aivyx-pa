@@ -564,6 +564,20 @@ require_enforcement = true   # default
   workspace installs no tracing subscriber today, so nothing is
   currently surfaced to the operator — don't rely on seeing a log line.)
 
+Inside the sandbox a command can't reach local daemons over Unix
+sockets (ssh-agent, gpg-agent, docker, the D-Bus session bus), gets a
+private `TMPDIR` instead of the shared `/tmp`, and can't leave its
+process group, which is killed when the tool call ends. Three opt-outs,
+all default `false`, relax one each — see the commented `[confine]`
+block in `examples/aivyx-pa.toml` and `docs/THREAT_MODEL.md` §4.1:
+
+```toml
+[confine]
+allow_unix_sockets = false            # true: local daemons reachable (sandbox no longer contains code execution)
+allow_leaving_process_group = false   # true: setsid/setpgid allowed; such processes outlive the call
+share_system_tmp = false              # true: shared /tmp writable instead of a private TMPDIR
+```
+
 One other exception worth knowing: a `[git] repos` entry that's a
 linked git worktree or submodule runs fully unconfined regardless of
 this setting — see `docs/THREAT_MODEL.md` §6 property 7.
