@@ -823,22 +823,10 @@ fn is_local_base_url(url: &str) -> bool {
 /// the kitchen vertical's presence marker. `Some(path)` iff the file exists (the vertical is installed).
 fn kitchen_config_path(home: &Path) -> Option<PathBuf> {
     // Use home-based paths for tests (when home is a temp dir), otherwise use instance
-    let temp_dir = std::env::temp_dir();
-    let is_test_mode = home.starts_with(&temp_dir);
-
-    let p = if is_test_mode {
-        // Test mode: use the provided home path (legacy behavior)
-        home.join(".aivyx-pa")
-            .join("tool-processes")
-            .join("kitchen")
-            .join("config.toml")
-    } else {
-        // Production mode: use instance-aware paths
-        let instance = InstancePaths::current().ok()?;
-        instance
-            .tool_process_dir("kitchen")?
-            .join("config.toml")
-    };
+    let p = InstancePaths::with_home(home)
+        .ok()?
+        .tool_process_dir("kitchen")?
+        .join("config.toml");
     p.exists().then_some(p)
 }
 

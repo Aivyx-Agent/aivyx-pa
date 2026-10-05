@@ -123,6 +123,15 @@ impl InstancePaths {
         Ok(InstancePaths { name, dirs })
     }
 
+    /// The selected instance (as [`InstancePaths::current`]), but rooted at
+    /// `home` instead of `$HOME` — for code that is handed a home directory
+    /// by its caller.
+    pub fn with_home(home: &std::path::Path) -> Result<Self, String> {
+        let mut paths = Self::current()?;
+        paths.dirs.home = Some(home.to_path_buf());
+        Ok(paths)
+    }
+
     /// Get the instance name.
     pub fn name(&self) -> &InstanceName {
         &self.name
@@ -213,6 +222,18 @@ impl InstancePaths {
         } else {
             Some(base.join("instances").join(self.name.as_str()))
         }
+    }
+
+    /// `$HOME/.local/share/aivyx-pa[/instances/<n>]`, ignoring
+    /// `XDG_DATA_HOME` — for the few historical paths (vision output) that
+    /// were always home-based, so the default instance's never move.
+    pub fn home_data_dir(&self) -> Option<PathBuf> {
+        let base = self.dirs.home.as_ref()?.join(".local").join("share").join("aivyx-pa");
+        Some(if self.name.is_default() {
+            base
+        } else {
+            base.join("instances").join(self.name.as_str())
+        })
     }
 
     /// Socket path: `runtime_dir/daemon.sock`
@@ -360,6 +381,20 @@ mod tests {
 
     fn p(name: &str, d: BaseDirs) -> InstancePaths {
         InstancePaths::new(InstanceName::parse(name).unwrap(), d)
+    }
+
+    #[test]
+    fn with_home_roots_home_paths_at_the_given_dir() {
+        let p = InstancePaths::with_home(std::path::Path::new("/tmp/h")).unwrap();
+        assert_eq!(p.home_dir().unwrap(), PathBuf::from("/tmp/h/.aivyx-pa"));
+    }
+
+    #[test]
+    fn home_data_dir_ignores_xdg_data_home() {
+        let d = p("default", dirs(Some("/h"), None, Some("/d"), None));
+        assert_eq!(d.home_data_dir().unwrap(), PathBuf::from("/h/.local/share/aivyx-pa"));
+        let r = p("research", dirs(Some("/h"), None, Some("/d"), None));
+        assert_eq!(r.home_data_dir().unwrap(), PathBuf::from("/h/.local/share/aivyx-pa/instances/research"));
     }
 
     #[test]

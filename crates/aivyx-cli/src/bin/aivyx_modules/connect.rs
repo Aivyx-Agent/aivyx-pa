@@ -116,22 +116,10 @@ impl ConnectService {
     /// Connected iff a `tokens.json` exists (the per-service
     /// `auth init` wrote it after a successful consent).
     pub fn is_connected(&self, home: &Path) -> bool {
-        // Use home-based paths for tests (when home is a temp dir), otherwise use instance
-        let temp_dir = std::env::temp_dir();
-        let is_test_mode = home.starts_with(&temp_dir);
-
-        if is_test_mode {
-            // Test mode: use the provided home path
-            self.token_path(home).exists()
-        } else {
-            // Production mode: use instance-aware paths
-            match InstancePaths::current() {
-                Ok(instance) => self.token_path_for(&instance)
-                    .map(|p| p.exists())
-                    .unwrap_or(false),
-                Err(_) => false,
-            }
-        }
+        InstancePaths::with_home(home)
+            .ok()
+            .and_then(|instance| self.token_path_for(&instance))
+            .is_some_and(|p| p.exists())
     }
 }
 
@@ -172,22 +160,13 @@ pub fn write_oauth_config(
     client_secret: &str,
 ) -> Result<PathBuf, String> {
     // Use home-based paths for tests (when home is a temp dir), otherwise use instance
-    let temp_dir = std::env::temp_dir();
-    let is_test_mode = home.starts_with(&temp_dir);
-
-    let (dir, path) = if is_test_mode {
-        // Test mode: use the provided home path
-        (service.process_dir(home), service.config_path(home))
-    } else {
-        // Production mode: use instance-aware paths
-        let instance = InstancePaths::current()
-            .map_err(|e| format!("cannot resolve instance: {e}"))?;
-        let dir = service.process_dir_for(&instance)
-            .ok_or_else(|| "cannot resolve tool-process directory".to_string())?;
-        let path = service.config_path_for(&instance)
-            .ok_or_else(|| "cannot resolve config path".to_string())?;
-        (dir, path)
-    };
+    let instance = InstancePaths::with_home(home)?;
+    let dir = service
+        .process_dir_for(&instance)
+        .ok_or_else(|| "cannot resolve tool-process directory".to_string())?;
+    let path = service
+        .config_path_for(&instance)
+        .ok_or_else(|| "cannot resolve config path".to_string())?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let body = render_oauth_config_toml(client_id, client_secret, &service.redirect_uri());

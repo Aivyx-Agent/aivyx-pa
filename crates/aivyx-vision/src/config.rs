@@ -122,7 +122,7 @@ pub fn default_output_dir() -> Result<PathBuf, ConfigFileError> {
     let instance = InstancePaths::current()
         .map_err(|_| ConfigFileError::NoHome)?;
     instance
-        .data_dir()
+        .home_data_dir()
         .map(|d| d.join("vision"))
         .ok_or(ConfigFileError::NoHome)
 }

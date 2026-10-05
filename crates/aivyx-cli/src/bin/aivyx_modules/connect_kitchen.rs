@@ -75,22 +75,11 @@ pub fn write_kitchen_config(
     organization_id: &str,
 ) -> Result<PathBuf, String> {
     // Use home-based paths for tests (when home is a temp dir), otherwise use instance
-    let temp_dir = std::env::temp_dir();
-    let is_test_mode = home.starts_with(&temp_dir);
-
-    let (dir, path) = if is_test_mode {
-        // Test mode: use the provided home path
-        (process_dir(home), config_path(home))
-    } else {
-        // Production mode: use instance-aware paths
-        let instance = InstancePaths::current()
-            .map_err(|e| format!("cannot resolve instance: {e}"))?;
-        let dir = process_dir_for(&instance)
-            .ok_or_else(|| "cannot resolve tool-process directory".to_string())?;
-        let path = config_path_for(&instance)
-            .ok_or_else(|| "cannot resolve config path".to_string())?;
-        (dir, path)
-    };
+    let instance = InstancePaths::with_home(home)?;
+    let dir = process_dir_for(&instance)
+        .ok_or_else(|| "cannot resolve tool-process directory".to_string())?;
+    let path = config_path_for(&instance)
+        .ok_or_else(|| "cannot resolve config path".to_string())?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let body = render_kitchen_config_toml(base_url, api_key, organization_id);
