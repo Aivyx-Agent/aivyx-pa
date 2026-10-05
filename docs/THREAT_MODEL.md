@@ -853,12 +853,13 @@ running Aivyx PA daemon":
    `allow_unix_sockets` / `share_system_tmp` /
    `allow_leaving_process_group` opt-outs, all default `false`, each
    relax one part of the sandbox described in §4.1 item 5) — see
-   §5.6. One real, code-level exception: a `[git] repos` entry that is
-   a linked git worktree or submodule (its `.git` is a file pointing
-   elsewhere, not a directory) runs fully unconfined instead — Landlock
-   can't reach the real gitdir from the worktree root alone, so `git.rs`
-   falls back to no confinement for that specific repo rather than
-   breaking it outright. `[[tool_process]]`/MCP external tool
+   §5.6. A `[git] repos` entry whose `.git` is a file (a linked git
+   worktree or submodule, pointing at a gitdir elsewhere) is refused by
+   every `git.*` tool: confinement scoped to the repo can't reach that
+   gitdir, and the earlier fallback — running such repos unconfined —
+   let a confined `shell.exec` write a `.git` file pointing at a gitdir
+   it planted, so the next `git.*` call ran its hooks outside the
+   sandbox (2026-10-04 audit). `[[tool_process]]`/MCP external tool
    processes remain on the separate, pre-existing operator-configured
    `bwrap`/`firejail`/`docker` wrapper mechanism (`aivyx-tool/src/
    sandbox.rs`, Phase 52/55/180); that mechanism is opt-in/preset-based,

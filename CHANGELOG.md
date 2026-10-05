@@ -85,6 +85,11 @@ All notable changes to Aivyx are recorded here. This project adheres to
   `allow_leaving_process_group` and `share_system_tmp` (see
   `examples/aivyx-pa.toml`). With `allow_unix_sockets` on, the sandbox
   no longer contains code execution.
+- `git.status`, `git.diff` and `git.commit` refuse a repo whose `.git` is
+  a file (a linked worktree or submodule) instead of running git
+  unconfined for it. A confined `shell.exec` in the repo could write such
+  a file pointing at a gitdir it planted, so the next `git.*` call ran
+  that gitdir's hooks outside the sandbox.
 - `aivyx-vision` bumped to `531aa7d`: generated SVG loses all CSS and
   every reference that doesn't point inside the document, input over
   256 KiB or nested deeper than 64 elements is rejected, and the output

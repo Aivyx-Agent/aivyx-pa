@@ -854,8 +854,7 @@ impl LlmPlanner {
             return; // see this method's doc comment -- refiner + kvcache are in tension
         }
         let Some(slot_id) = kv.pool.checkout() else {
-            // No `tracing` dependency in this crate (see `tools/git.rs`'s
-            // `confiner_for` doc comment) -- `eprintln!` matches the rest
+            // No `tracing` dependency in this crate -- `eprintln!` matches the rest
             // of `aivyx-pa`'s operator-facing warning convention. Rate-limited
             // (see the one-shot warning latches above `impl LlmPlanner`)
             // so a persistently-full pool doesn't spam this line every

@@ -578,9 +578,11 @@ allow_leaving_process_group = false   # true: setsid/setpgid allowed; such proce
 share_system_tmp = false              # true: shared /tmp writable instead of a private TMPDIR
 ```
 
-One other exception worth knowing: a `[git] repos` entry that's a
-linked git worktree or submodule runs fully unconfined regardless of
-this setting — see `docs/THREAT_MODEL.md` §6 property 7.
+`git.*` tools refuse a `[git] repos` entry whose `.git` is a file (a
+linked git worktree or submodule): its real gitdir lives outside the
+repo, out of the sandbox's reach, and running it unconfined instead
+would let a command run in the repo plant such a file and escape — see
+`docs/THREAT_MODEL.md` §6 property 7.
 
 When Landlock *is* available (the common case on a modern Linux
 kernel), confinement always applies regardless of this setting —
