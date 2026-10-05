@@ -50,8 +50,8 @@ of everything. The default instance's paths never change.
 | Background service | `aivyx-pa-daemon-<n>.service`; macOS `com.aivyx-pa.daemon.<n>` |
 | Keyring entry | service `aivyx-pa`, account `passphrase:<n>` |
 
-Instance names are 1–32 characters of `a-z`, `0-9` and `-`, not starting or
-ending with `-`. `aivyx-pa instances list` shows every instance with its
+Instance names are 1–32 letters, digits and `-`, not starting or ending
+with `-`. `aivyx-pa instances list` shows every instance with its
 config path and Studio port.
 
 ## What to back up

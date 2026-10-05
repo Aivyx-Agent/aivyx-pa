@@ -53,9 +53,9 @@ Two things hold at every level:
 - **Only you can raise it.** The assistant can never change its own
   autonomy or access.
 
-Batching approvals for later review at *supervised* is planned but not built
-yet. You can also set a different level for one area — say, autonomous for
-coding but manual for email — in the config file; see
+Batching approvals for later review at *supervised*, and different levels
+for different areas (say, autonomous for coding but manual for email), are
+planned but not fully built yet; see
 [Autonomy and routines](15-autonomy-and-routines.md).
 
 ## Budgets

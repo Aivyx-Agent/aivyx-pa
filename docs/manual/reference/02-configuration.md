@@ -20,7 +20,7 @@ The first that exists wins:
 Every section is optional; a missing section means its defaults. Where a
 setting also has an environment variable, the variable wins — see
 [Environment variables](05-environment-variables.md).
-`aivyx-pa --verify-only` loads the config, reports problems and exits.
+`aivyx-pa doctor` checks the config and tells you what to fix.
 
 ## Reading the tables
 
@@ -242,7 +242,7 @@ How much the agent may do without asking you, with per-domain exceptions. See [A
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `domain` | string |  | A capability domain, such as `shell` or `email`. |
+| `domain` | string |  | The area this applies to. Today only `schedules` changes behaviour (whether routines the agent creates need approval); other domains are accepted and shown by `autonomy show`. |
 | `level` | `manual` \| `assisted` \| `supervised` \| `autonomous` \| `unleashed` |  | The autonomy level for calls in that domain. The most specific match wins. |
 
 #### `[autonomy.auto_approve]`
@@ -824,7 +824,7 @@ Where routines and the agent can send notifications (`notify.send`).
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `name` | string | `"phone"` | A unique name for this entry. |
-| `kind` | string | `"telegram"` | Lowercase string discriminator. Accepted values: `"telegram"`, `"webhook"`, `"email"`. |
+| `kind` | string | `"telegram"` | Lowercase string discriminator. Accepted values: `"telegram"`, `"webhook"`, `"email"`, and `"web-ui"`. |
 | `chat_id` | string | `"123456789"` | Required when `kind = "telegram"`. The operator-owned Telegram chat the bot is authorized to message. |
 | `url` | string | `"https://ntfy.sh/aivyx-personal-2026"` | Required when `kind = "webhook"`. The endpoint to POST to. |
 | `to` | string | `"you@example.com"` | Required when `kind = "email"`. The recipient address; the shared SMTP credentials live in `[email]`. |

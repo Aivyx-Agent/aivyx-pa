@@ -102,6 +102,36 @@ pub const PAGES: &[Page] = &[
         body: include_str!("../../../docs/guide/11-desktop-app.md"),
     },
     Page {
+        id: "terminal-and-cli",
+        file: "14-terminal-and-cli.md",
+        title: "Terminal and command line",
+        body: include_str!("../../../docs/guide/14-terminal-and-cli.md"),
+    },
+    Page {
+        id: "autonomy-and-routines",
+        file: "15-autonomy-and-routines.md",
+        title: "Autonomy and routines",
+        body: include_str!("../../../docs/guide/15-autonomy-and-routines.md"),
+    },
+    Page {
+        id: "named-instances",
+        file: "16-named-instances.md",
+        title: "Several assistants",
+        body: include_str!("../../../docs/guide/16-named-instances.md"),
+    },
+    Page {
+        id: "security-and-privacy",
+        file: "17-security-and-privacy.md",
+        title: "Security and privacy",
+        body: include_str!("../../../docs/guide/17-security-and-privacy.md"),
+    },
+    Page {
+        id: "backups-upgrades-and-moving",
+        file: "18-backups-upgrades-and-moving.md",
+        title: "Backups, upgrades and moving",
+        body: include_str!("../../../docs/guide/18-backups-upgrades-and-moving.md"),
+    },
+    Page {
         id: "troubleshooting",
         file: "10-troubleshooting.md",
         title: "Troubleshooting",
@@ -338,6 +368,20 @@ pub fn is_markdown_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_guide_file_is_registered() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/guide");
+        let registered: Vec<&str> = PAGES.iter().map(|p| p.file).collect();
+        let mut missing: Vec<String> = std::fs::read_dir(dir)
+            .expect("docs/guide exists")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".md") && !registered.contains(&name.as_str()))
+            .collect();
+        missing.sort();
+        assert!(missing.is_empty(), "docs/guide pages missing from guide.rs PAGES: {missing:?}");
+    }
 
     #[test]
     fn escapes_raw_html_instead_of_passing_it_through() {

@@ -415,7 +415,7 @@ aivyx-pa instances remove research      # asks you to type the name back
 Every command takes `--instance <name>`, or set `AIVYX_PA_INSTANCE=<name>`
 (the flag wins). Without either you get the `default` instance — exactly
 the paths in the table above, so an existing install is unaffected.
-Names are 1–32 characters of `a-z`, `0-9` and `-`.
+Names are 1–32 letters, digits and `-` (not starting or ending with `-`).
 
 Where a named instance's files go:
 
@@ -6823,23 +6823,27 @@ from the block to avoid noise.
 ## Uninstall
 
 ```sh
-# If you installed it as a service (Chapter Anchor), remove that first —
-# stops + disables the unit and deletes its secret env file.
+# If you installed it as a service, remove that first — stops and
+# disables the unit and deletes its secret env file.
 aivyx-pa daemon uninstall 2>/dev/null
 
-# Remove the binary
-rm "$(command -v aivyx-pa)"
-
-# Stop and remove the daemon socket/PID (if a daemon is still around)
+# Stop a daemon that's still running, and forget the saved passphrase
 aivyx-pa daemon stop 2>/dev/null
-rm -f /run/user/$UID/aivyx-pa.sock /run/user/$UID/aivyx-pa.pid
+aivyx-pa keyring clear
 
-# Remove the encrypted store and config (DESTROYS YOUR DATA)
-rm -f ./aivyx-pa.toml /tmp/aivyx-pa-store.redb
-# Adjust paths to match your config's [storage] path.
+# Remove the encrypted store, config and integration settings
+# (DESTROYS YOUR DATA — named instances live under these too)
+rm -rf ~/.config/aivyx-pa ~/.local/share/aivyx-pa ~/.aivyx-pa
+# Adjust if you moved the store with [storage] path. The sandbox
+# folder(s), ~/aivyx-pa-sandbox[-<name>], hold files the agent made
+# for you — check them before deleting.
+
+# Remove the binary last (the commands above need it)
+rm "$(command -v aivyx-pa)"
 ```
 
-The encrypted store contains your conversation history, audit
-chain, memory, missions, schedules, profile, and persona deltas.
+Repeat the service and keyring steps with `--instance <name>` for each
+named instance. The encrypted store contains your conversation history,
+audit chain, memory, missions, schedules, profile, and persona deltas.
 Deleting it is irreversible — there is no cloud backup by
 design (PRODUCT.md G6).

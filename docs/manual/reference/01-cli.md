@@ -49,9 +49,11 @@ aivyx-pa --headless "<task>"
 aivyx-pa --headless            # reads tasks from standard input, one session
 ```
 
-The task runs over the daemon; the result is printed and the command exits.
-Actions that need your approval are refused rather than waiting for an answer
-nobody can give. See `docs/HEADLESS_MODE.md` for exit codes.
+The task runs over the daemon, which must already be running (headless never
+starts one); the result is printed and the command exits. Actions that need
+your approval are refused rather than waiting for an answer nobody can give.
+Exit codes: `0` completed, `3` refused at an approval gate or stopped for
+cloud consent, `1` anything else.
 
 ## Setup and the daemon
 
@@ -183,7 +185,9 @@ aivyx-pa autonomy set <manual|assisted|supervised|autonomous|unleashed> [--yes]
 Batching approvals for review at `supervised` is designed but not built yet.
 Unattended runs (routines, the loop) never wait for an answer: an
 irreversible step there is refused. Per-domain exceptions live in
-`[[autonomy.override]]`.
+`[[autonomy.override]]`; `autonomy show` displays them, but today only the
+`schedules` domain changes behaviour (whether agent-created routines need
+approval).
 
 `autonomous` and `unleashed` ask you to confirm unless `--yes`. The agent can
 never raise its own level. See [Autonomy and routines](../../guide/15-autonomy-and-routines.md)

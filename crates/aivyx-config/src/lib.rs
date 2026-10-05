@@ -4645,8 +4645,9 @@ struct RawFileWatch {
 struct RawNotifyTarget {
     name: String,
     /// Lowercase string discriminator. Accepted values:
-    /// `"telegram"`, `"webhook"`, `"email"` (Phase 68).
-    /// Anything else is rejected at load time.
+    /// `"telegram"`, `"webhook"`, `"email"` (Phase 68), and
+    /// `"web-ui"` (Phase 69 — a desktop notification in the open
+    /// Studio). Anything else is rejected at load time.
     kind: String,
     /// Required when `kind = "telegram"`. The operator-owned
     /// Telegram chat the bot is authorized to message.

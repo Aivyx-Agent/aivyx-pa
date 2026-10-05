@@ -12,7 +12,8 @@ repository on GitHub.
 
 **Audit log** — A tamper-evident record of every tool call and decision,
 kept in the store. Each entry is chained to the previous one with an HMAC,
-so a change anywhere breaks the chain. Check it with `aivyx-pa audit`.
+so a change anywhere breaks the chain. Verify it with `aivyx-pa --verify-only`;
+export it with `aivyx-pa audit export`.
 
 **Autonomous loop** — Works through a queue of *stories* (tasks) on its own
 until done or a limit is hit. Configured in `[loop]`, driven with
@@ -63,7 +64,8 @@ graph, which cost model calls.
 often run by a team.
 
 **Notify target** — A named place notifications can go: a Telegram chat, a
-webhook or an email address (`[[notify_target]]`).
+webhook, an email address, or a desktop notification from the open Studio
+(`[[notify_target]]`).
 
 **Pack (vertical pack)** — A signed bundle that adds a domain-specific team
 and tools, such as the kitchen example. Managed with `aivyx-pa pack`.
@@ -127,6 +129,7 @@ to today; most have a design doc under `docs/`.
 |---|---|
 | Abacus | The calculator, unit-conversion and date tools. |
 | Almanac | The Studio's Tools screen. |
+| Anchor | Running the daemon as a background service (`aivyx-pa daemon install`). |
 | Atlas | The tool catalog, [`docs/TOOLS.md`](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/TOOLS.md), and `tools.list`. |
 | Ballast | Per-mission spending caps (`[budget] per_mission_*`). |
 | Bridle | Guards for local tool-calling, including the loop breakers that stop a turn repeating itself. |

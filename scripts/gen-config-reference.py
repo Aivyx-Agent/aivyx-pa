@@ -167,7 +167,7 @@ MEANINGS = {
     "access.root": "The directory for the `workspace` and `custom` levels (required for those).",
     "access.confirm_destructive": "Ask before irreversible actions (delete, overwrite, destructive shell, outbound messages). On by default above `sandbox`.",
     "autonomy.level": "The global autonomy level.",
-    "autonomy.override.domain": "A capability domain, such as `shell` or `email`.",
+    "autonomy.override.domain": "The area this applies to. Today only `schedules` changes behaviour (whether routines the agent creates need approval); other domains are accepted and shown by `autonomy show`.",
     "autonomy.override.level": "The autonomy level for calls in that domain. The most specific match wins.",
     "autonomy.auto_approve.scopes": "Reversible capability scopes that may run without asking. Never covers irreversible actions.",
     "workspace.enabled": "Turn the agent's workspace on or off. On by default.",
@@ -736,7 +736,7 @@ The first that exists wins:
 Every section is optional; a missing section means its defaults. Where a
 setting also has an environment variable, the variable wins — see
 [Environment variables](05-environment-variables.md).
-`aivyx-pa --verify-only` loads the config, reports problems and exits.
+`aivyx-pa doctor` checks the config and tells you what to fix.
 
 ## Reading the tables
 

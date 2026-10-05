@@ -105,7 +105,7 @@ Missions, routines, reminders, skills, reflection and the like — the agent man
 | `mission.create` | Create a new long-running mission. |
 | `mission.list` | List all missions. |
 | `mission.status` | Get the full status of a mission by ID. |
-| `notify.send` | Push a notification message to an operator-configured target (Telegram chat, generic webhook, or email). |
+| `notify.send` | Push a notification message to an operator-configured target (Telegram chat, generic webhook, email, or the Studio). |
 | `ollama.list` | List locally available Ollama models. No input parameters. |
 | `ollama.pull` | Pull (download) a model from the Ollama registry. |
 | `ollama.show` | Show metadata for an Ollama model. |
