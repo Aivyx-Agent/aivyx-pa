@@ -37,7 +37,6 @@ use std::path::{Path, PathBuf};
 /// Directory names that make any path passing through them secret by default
 /// (SSH/GPG keys, cloud + k8s + docker credentials, browser profiles holding
 /// cookies/logins, password managers, OS keyrings).
-/// Task 3: Added `.aivyx-pa` (and instances/) to protect all Aivyx data.
 const SENSITIVE_DIR_SEGMENTS: &[&str] = &[
     ".ssh",
     ".gnupg",
@@ -50,8 +49,6 @@ const SENSITIVE_DIR_SEGMENTS: &[&str] = &[
     ".password-store",
     "keyrings",
     "Keychains",
-    ".aivyx-pa",
-    "instances",
 ];
 
 /// Exact basenames that are secret by default (dotfiles holding tokens/keys,
@@ -358,6 +355,26 @@ mod tests {
         // Persistence names are a WRITE concern only — reads of them are allowed
         // (e.g. the agent inspecting your .bashrc is fine; rewriting it isn't).
         assert!(g.classify(Path::new("/home/alice/.bashrc")).is_none());
+    }
+
+    #[test]
+    fn aivyx_workspace_and_user_instances_dirs_are_not_sensitive() {
+        // Task 3: workspace and user-created instance folders are NOT secrets.
+        // The `.redb` extension rule protects the store; explicit basenames protect
+        // daemon-specific files; nothing should block reads of workspace or user data.
+        let g = guard();
+        // Aivyx workspace notes (NOT a secret directory)
+        assert!(
+            g.classify(Path::new("/home/alice/.aivyx-pa/workspace/notes.md"))
+                .is_none(),
+            "workspace notes must not be blocked"
+        );
+        // User's own `instances` folder (could be a project dir)
+        assert!(
+            g.classify(Path::new("/proj/instances/a.txt"))
+                .is_none(),
+            "user instances folder must not be blocked"
+        );
     }
 
     #[test]
