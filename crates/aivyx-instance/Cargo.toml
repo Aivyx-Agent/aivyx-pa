@@ -1,0 +1,16 @@
+[package]
+name = "aivyx-instance"
+description = "Per-instance path and name resolver for multi-instance Aivyx PA"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3.27.0"

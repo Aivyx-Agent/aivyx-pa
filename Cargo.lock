@@ -497,6 +497,13 @@ version = "0.1.0"
 source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=a0b0e7a55d0a7a5d07108a285a76101c12a45f21#a0b0e7a55d0a7a5d07108a285a76101c12a45f21"
 
 [[package]]
+name = "aivyx-instance"
+version = "0.14.8"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "aivyx-ipc"
 version = "0.14.8"
 dependencies = [
