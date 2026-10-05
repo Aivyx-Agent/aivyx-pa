@@ -190,14 +190,20 @@ impl InstancePaths {
         self.data_dir().map(|d| d.join("store.redb"))
     }
 
-    /// Runtime directory: `$XDG_RUNTIME_DIR/aivyx-pa[/instances/<n>]`, else `data_dir()`
+    /// Runtime directory: `$XDG_RUNTIME_DIR/aivyx-pa[/instances/<n>]`, else `$HOME/.local/share/aivyx-pa`
+    /// (falls back to hardcoded `~/.local/share`, not `$XDG_DATA_HOME`, matching today's protocol.rs)
     fn runtime_dir_base(&self) -> Option<PathBuf> {
         self.dirs
             .xdg_runtime_dir
             .as_ref()
             .cloned()
             .map(|r| r.join("aivyx-pa"))
-            .or_else(|| self.data_dir())
+            .or_else(|| {
+                self.dirs
+                    .home
+                    .as_ref()
+                    .map(|h| h.join(".local").join("share").join("aivyx-pa"))
+            })
     }
 
     pub fn runtime_dir(&self) -> Option<PathBuf> {
@@ -406,6 +412,38 @@ mod tests {
     fn no_base_dirs_gives_none() {
         let d = p("default", dirs(None, None, None, None));
         assert!(d.config_file().is_none() && d.socket_path().is_none() && d.home_dir().is_none());
+    }
+
+    #[test]
+    fn socket_fallback_ignores_xdg_data_home_like_today() {
+        let d = p("default", dirs(Some("/h"), None, Some("/d"), None));
+        assert_eq!(d.socket_path().unwrap(), PathBuf::from("/h/.local/share/aivyx-pa/daemon.sock"));
+        let r = p("research", dirs(Some("/h"), None, Some("/d"), None));
+        assert_eq!(r.socket_path().unwrap(), PathBuf::from("/h/.local/share/aivyx-pa/instances/research/daemon.sock"));
+    }
+
+    #[test]
+    fn config_uses_xdg_config_home_when_set() {
+        let d = p("default", dirs(Some("/h"), Some("/c"), None, None));
+        assert_eq!(d.config_file().unwrap(), PathBuf::from("/c/aivyx-pa/aivyx-pa.toml"));
+    }
+
+    #[test]
+    fn data_uses_xdg_data_home_when_set() {
+        let d = p("default", dirs(Some("/h"), None, Some("/d"), None));
+        assert_eq!(d.store_file().unwrap(), PathBuf::from("/d/aivyx-pa/store.redb"));
+    }
+
+    #[test]
+    fn config_falls_back_to_home_when_xdg_config_not_set() {
+        let d = p("default", dirs(Some("/h"), None, None, None));
+        assert_eq!(d.config_file().unwrap(), PathBuf::from("/h/.config/aivyx-pa/aivyx-pa.toml"));
+    }
+
+    #[test]
+    fn data_falls_back_to_home_when_xdg_data_not_set() {
+        let d = p("default", dirs(Some("/h"), None, None, None));
+        assert_eq!(d.store_file().unwrap(), PathBuf::from("/h/.local/share/aivyx-pa/store.redb"));
     }
 
     #[test]
