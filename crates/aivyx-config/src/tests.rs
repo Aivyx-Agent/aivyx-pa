@@ -12113,6 +12113,42 @@ fn confine_require_enforcement_reads_an_explicit_false() {
     drop(env);
 }
 
+/// No `[confine]` section ⇒ the three aivyx-confine opt-outs
+/// (`allow_unix_sockets`, `allow_leaving_process_group`,
+/// `share_system_tmp`) all default to `false` — the strict policy.
+#[test]
+fn confine_opt_outs_default_to_false_when_absent() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n", "confine-opt-outs-absent");
+    assert!(!cfg.allow_unix_sockets.value);
+    assert_eq!(cfg.allow_unix_sockets.source, FieldSource::Default);
+    assert!(!cfg.allow_leaving_process_group.value);
+    assert_eq!(cfg.allow_leaving_process_group.source, FieldSource::Default);
+    assert!(!cfg.share_system_tmp.value);
+    assert_eq!(cfg.share_system_tmp.source, FieldSource::Default);
+    drop(env);
+}
+
+/// Each `[confine]` opt-out is read independently from TOML.
+#[test]
+fn confine_opt_outs_read_explicit_values() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[confine]\nallow_unix_sockets = true\nallow_leaving_process_group = true\n\
+         share_system_tmp = false\n",
+        "confine-opt-outs-explicit",
+    );
+    assert!(cfg.allow_unix_sockets.value);
+    assert_eq!(cfg.allow_unix_sockets.source, FieldSource::Toml);
+    assert!(cfg.allow_leaving_process_group.value);
+    assert_eq!(cfg.allow_leaving_process_group.source, FieldSource::Toml);
+    assert!(!cfg.share_system_tmp.value);
+    assert_eq!(cfg.share_system_tmp.source, FieldSource::Toml);
+    // Untouched: the opt-outs never relax enforcement itself.
+    assert!(cfg.require_enforcement.value);
+    drop(env);
+}
+
 /// No `[agent] injection_scan_enabled` key ⇒ defaults to `true`
 /// (fail-closed), matching `require_enforcement`'s posture.
 #[test]

@@ -894,6 +894,20 @@ pub struct AivyxConfig {
     /// `shell.exec`/`git.rs` to run a command at all. `true` (fail-closed)
     /// by default, matching `aivyx-coder`'s own `aivyx-confine` usage.
     pub require_enforcement: Sourced<bool>,
+    /// `[confine] allow_unix_sockets` — opt out of aivyx-confine's
+    /// `socket(AF_UNIX)` block so confined commands can reach local
+    /// daemons (ssh-agent, gpg-agent, docker, the D-Bus session bus).
+    /// `false` by default: with it on, a confined command can ask a local
+    /// daemon to run code outside the sandbox (`systemd-run --user`).
+    pub allow_unix_sockets: Sourced<bool>,
+    /// `[confine] allow_leaving_process_group` — opt out of aivyx-confine's
+    /// `setsid`/`setpgid` block. `false` by default: with it on, a confined
+    /// command can leave processes running after its tool call ends.
+    pub allow_leaving_process_group: Sourced<bool>,
+    /// `[confine] share_system_tmp` — give confined commands read+write on
+    /// the shared system temp dir instead of a private per-tool `TMPDIR`.
+    /// `false` by default.
+    pub share_system_tmp: Sourced<bool>,
     /// `[agent] injection_scan_enabled` — global on/off for Chapter
     /// Picket's active injection scan (`check_for_injection`). `true`
     /// (fail-closed) by default. Does NOT affect Chapter Bulwark's
@@ -5064,6 +5078,12 @@ struct RawGit {
 struct RawConfine {
     #[serde(default)]
     require_enforcement: Option<bool>,
+    #[serde(default)]
+    allow_unix_sockets: Option<bool>,
+    #[serde(default)]
+    allow_leaving_process_group: Option<bool>,
+    #[serde(default)]
+    share_system_tmp: Option<bool>,
 }
 
 /// Phase 68 — `[email]` section deserialize target.
@@ -6275,6 +6295,16 @@ impl AivyxConfig {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(true, FieldSource::Default),
         };
+        // The aivyx-confine opt-outs: each relaxes one part of the
+        // sandbox, so each is off unless the operator turns it on.
+        let confine_opt_out = |value: Option<bool>| match value {
+            Some(b) => Sourced::new(b, FieldSource::Toml),
+            None => Sourced::new(false, FieldSource::Default),
+        };
+        let allow_unix_sockets = confine_opt_out(toml.confine.allow_unix_sockets);
+        let allow_leaving_process_group =
+            confine_opt_out(toml.confine.allow_leaving_process_group);
+        let share_system_tmp = confine_opt_out(toml.confine.share_system_tmp);
 
         // --- agent.injection_scan_enabled / injection_scan_exempt -----
         // Chapter Picket Finding 3 follow-up. Fail-closed by default,
@@ -8106,6 +8136,9 @@ impl AivyxConfig {
             access_level,
             confirm_destructive,
             require_enforcement,
+            allow_unix_sockets,
+            allow_leaving_process_group,
+            share_system_tmp,
             guard_sensitive_paths,
             allow_sensitive_paths,
             allow_private_egress,

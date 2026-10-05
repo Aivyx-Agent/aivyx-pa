@@ -55,9 +55,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use crate::tools::process_group::confined_output;
 use crate::{
-    AivyxError, CapabilitySet, ExecutionConfiner, GitCheckpointer, NoopConfiner, Tool, ToolContext,
-    ToolId, ToolOutcome, Verification, default_confiner,
+    AivyxError, CapabilitySet, ConfineOptions, ExecutionConfiner, GitCheckpointer, NoopConfiner,
+    Tool, ToolContext, ToolId, ToolOutcome, Verification, default_confiner_with_options,
 };
 use aivyx_capability::Scope;
 
@@ -71,7 +72,7 @@ use aivyx_capability::Scope;
 /// both.
 pub struct GitReadToolConfig {
     repos: Vec<PathBuf>,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
 }
 
 impl GitReadToolConfig {
@@ -82,14 +83,23 @@ impl GitReadToolConfig {
     pub fn new(repos: impl IntoIterator<Item = PathBuf>) -> Self {
         GitReadToolConfig {
             repos: repos.into_iter().collect(),
-            require_enforcement: true,
+            confine_options: ConfineOptions::new(),
         }
     }
 
     /// See `GitWriteToolConfig::with_require_enforcement` — same flag,
     /// same default, same reasoning.
     pub fn with_require_enforcement(mut self, require_enforcement: bool) -> Self {
-        self.require_enforcement = require_enforcement;
+        self.confine_options = self.confine_options.require_enforcement(require_enforcement);
+        self
+    }
+
+    /// The full aivyx-confine policy (`[confine]` in config): enforcement
+    /// plus the `allow_unix_sockets` / `allow_leaving_process_group` /
+    /// `share_system_tmp` opt-outs. Replaces whatever
+    /// `with_require_enforcement` set.
+    pub fn with_confine_options(mut self, options: ConfineOptions) -> Self {
+        self.confine_options = options;
         self
     }
 
@@ -105,13 +115,13 @@ impl GitReadToolConfig {
                 id: ToolId::new(),
                 repos: Arc::clone(&allow_set),
                 schema: status_input_schema(),
-                require_enforcement: self.require_enforcement,
+                confine_options: self.confine_options.clone(),
             },
             GitDiffTool {
                 id: ToolId::new(),
                 repos: allow_set,
                 schema: diff_input_schema(),
-                require_enforcement: self.require_enforcement,
+                confine_options: self.confine_options.clone(),
             },
         ))
     }
@@ -124,7 +134,7 @@ impl GitReadToolConfig {
 pub struct GitWriteToolConfig {
     repos: Vec<PathBuf>,
     confirm_destructive: bool,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
     checkpointers: HashMap<PathBuf, Arc<GitCheckpointer>>,
 }
 
@@ -135,7 +145,7 @@ impl GitWriteToolConfig {
         GitWriteToolConfig {
             repos: repos.into_iter().collect(),
             confirm_destructive: false,
-            require_enforcement: true,
+            confine_options: ConfineOptions::new(),
             checkpointers: HashMap::new(),
         }
     }
@@ -152,7 +162,16 @@ impl GitWriteToolConfig {
     /// Whether Landlock confinement (via `aivyx-confine`) must succeed
     /// for `git.commit` to run at all. `true` (fail-closed) by default.
     pub fn with_require_enforcement(mut self, require_enforcement: bool) -> Self {
-        self.require_enforcement = require_enforcement;
+        self.confine_options = self.confine_options.require_enforcement(require_enforcement);
+        self
+    }
+
+    /// The full aivyx-confine policy (`[confine]` in config): enforcement
+    /// plus the `allow_unix_sockets` / `allow_leaving_process_group` /
+    /// `share_system_tmp` opt-outs. Replaces whatever
+    /// `with_require_enforcement` set.
+    pub fn with_confine_options(mut self, options: ConfineOptions) -> Self {
+        self.confine_options = options;
         self
     }
 
@@ -187,7 +206,7 @@ impl GitWriteToolConfig {
             repos: allow_set,
             confirm_destructive: self.confirm_destructive,
             schema: commit_input_schema(),
-            require_enforcement: self.require_enforcement,
+            confine_options: self.confine_options,
             checkpointers: self.checkpointers,
         })
     }
@@ -205,7 +224,7 @@ pub struct GitStatusTool {
     id: ToolId,
     repos: Arc<[PathBuf]>,
     schema: Value,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
 }
 
 impl GitStatusTool {
@@ -278,9 +297,8 @@ impl Tool for GitStatusTool {
             .arg("status")
             .arg("--porcelain")
             .arg("--untracked-files=all");
-        let confiner = confiner_for(&repo, self.require_enforcement);
-        let mut command = confiner.confine(command);
-        let output = match command.output().await {
+        let confiner = confiner_for(&repo, &self.confine_options);
+        let output = match run_confined(confiner.as_ref(), command).await {
             Ok(o) => o,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -324,7 +342,7 @@ pub struct GitDiffTool {
     id: ToolId,
     repos: Arc<[PathBuf]>,
     schema: Value,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
 }
 
 impl GitDiffTool {
@@ -425,9 +443,8 @@ impl Tool for GitDiffTool {
             cmd.arg("--").arg(p);
         }
 
-        let confiner = confiner_for(&repo, self.require_enforcement);
-        let mut cmd = confiner.confine(cmd);
-        let output = match cmd.output().await {
+        let confiner = confiner_for(&repo, &self.confine_options);
+        let output = match run_confined(confiner.as_ref(), cmd).await {
             Ok(o) => o,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -478,7 +495,7 @@ pub struct GitCommitTool {
     repos: Arc<[PathBuf]>,
     confirm_destructive: bool,
     schema: Value,
-    require_enforcement: bool,
+    confine_options: ConfineOptions,
     checkpointers: HashMap<PathBuf, Arc<GitCheckpointer>>,
 }
 
@@ -489,7 +506,7 @@ impl std::fmt::Debug for GitCommitTool {
             .field("repos", &self.repos)
             .field("confirm_destructive", &self.confirm_destructive)
             .field("schema", &self.schema)
-            .field("require_enforcement", &self.require_enforcement)
+            .field("confine_options", &self.confine_options)
             .field("checkpointed_repos", &self.checkpointers.len())
             .finish()
     }
@@ -561,7 +578,7 @@ impl Tool for GitCommitTool {
             }
         };
 
-        let confiner = confiner_for(&repo, self.require_enforcement);
+        let confiner = confiner_for(&repo, &self.confine_options);
 
         let message = match input.get("message").and_then(|v| v.as_str()) {
             Some(m) if !m.trim().is_empty() => m,
@@ -646,8 +663,7 @@ impl Tool for GitCommitTool {
         for p in &paths {
             add_cmd.arg(p);
         }
-        let mut add_cmd = confiner.confine(add_cmd);
-        match add_cmd.output().await {
+        match run_confined(confiner.as_ref(), add_cmd).await {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr).to_string();
@@ -680,8 +696,7 @@ impl Tool for GitCommitTool {
             .arg("commit")
             .arg("-m")
             .arg(message);
-        let mut commit_cmd = confiner.confine(commit_cmd);
-        let commit_out = match commit_cmd.output().await {
+        let commit_out = match run_confined(confiner.as_ref(), commit_cmd).await {
             Ok(o) => o,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -719,8 +734,7 @@ impl Tool for GitCommitTool {
             .arg(&repo)
             .arg("rev-parse")
             .arg("HEAD");
-        let mut rev_parse_cmd = confiner.confine(rev_parse_cmd);
-        let commit_hash = match rev_parse_cmd.output().await {
+        let commit_hash = match run_confined(confiner.as_ref(), rev_parse_cmd).await {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
             // The commit succeeded; failing to read HEAD back is
             // non-fatal — report the commit without the hash rather
@@ -744,6 +758,20 @@ impl Tool for GitCommitTool {
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+/// Confine `command` and run it to completion under the process-group
+/// contract (see `tools::process_group`): it leads its own group, which is
+/// killed when the command finishes or this future is dropped, so a hook's
+/// background job can't outlive the git call. `process_group(0)` is set
+/// here too, not only by the confiner, so the kill is safe under
+/// `NoopConfiner` as well.
+async fn run_confined(
+    confiner: &dyn ExecutionConfiner,
+    mut command: tokio::process::Command,
+) -> std::io::Result<std::process::Output> {
+    command.process_group(0);
+    confined_output(confiner.confine(command)).await
+}
 
 /// Per-repo latch: `true` the first time `repo` is seen (the caller
 /// should log a warning), `false` on every subsequent call for the same
@@ -776,7 +804,7 @@ fn should_warn_once(repo: &Path) -> bool {
 /// Centralizing this (used by all three tools' `execute()`) means the
 /// worktree/submodule check and the default-confiner construction can't
 /// drift apart across call sites the way three separate copies could.
-fn confiner_for(repo: &Path, require_enforcement: bool) -> Arc<dyn ExecutionConfiner> {
+fn confiner_for(repo: &Path, options: &ConfineOptions) -> Arc<dyn ExecutionConfiner> {
     if repo.join(".git").is_file() {
         if should_warn_once(repo) {
             // No `tracing` dependency in this crate (the rest of `aivyx-pa`
@@ -793,7 +821,7 @@ fn confiner_for(repo: &Path, require_enforcement: bool) -> Arc<dyn ExecutionConf
         }
         return Arc::new(NoopConfiner);
     }
-    default_confiner(repo, &[], &[], require_enforcement)
+    default_confiner_with_options(repo, &[], &[], options.clone())
 }
 
 /// Canonicalize an operator repo allow-set: each entry must
@@ -975,6 +1003,7 @@ fn _unused_capability_set_ref(_cs: &CapabilitySet) {}
 #[cfg(test)]
 mod git_tests {
     use super::*;
+    use crate::tools::process_group::test_support::{cleanup, wait_until_gone};
     use crate::{
         AgentId, ChannelContext, ChannelError, ChannelPlatform, MessageOrigin, NullAuditHook,
         SessionId, StreamEvent, TurnId, TurnOutcome,
@@ -1457,6 +1486,89 @@ mod git_tests {
         std::fs::remove_dir_all(&repo).ok();
     }
 
+    // ---- Process-group lifetime (aivyx-confine 061768f) ------------
+
+    fn write_hook(repo: &Path, name: &str, body: &str) {
+        let hook_path = repo.join(".git/hooks").join(name);
+        std::fs::write(&hook_path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A hook's background job must not outlive the `git.commit` call.
+    #[tokio::test]
+    async fn git_commit_kills_a_hooks_background_job_when_the_call_finishes() {
+        let Some(repo) = init_temp_repo() else { return };
+        write_hook(
+            &repo,
+            "post-commit",
+            "sleep 300 >/dev/null 2>&1 </dev/null & echo $! > .git/bg.pid",
+        );
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let outcome = tool
+            .execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["a.txt"] }),
+                &ctx,
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "git.commit should succeed; got {outcome:?}"
+        );
+        let pid: u32 = std::fs::read_to_string(repo.join(".git/bg.pid"))
+            .expect("the hook wrote its background pid")
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = wait_until_gone(pid);
+        cleanup(pid);
+        std::fs::remove_dir_all(&repo).ok();
+        assert!(gone, "hook background job {pid} survived the git.commit call");
+    }
+
+    /// Dropping the `git.commit` future mid-hook (a cancelled turn) kills
+    /// the hook and everything it started.
+    #[tokio::test]
+    async fn cancelling_git_commit_kills_the_process_group() {
+        let Some(repo) = init_temp_repo() else { return };
+        write_hook(
+            &repo,
+            "pre-commit",
+            "sleep 300 >/dev/null 2>&1 </dev/null & echo $! > .git/bg.pid\nsleep 300",
+        );
+        std::fs::write(repo.join("a.txt"), "hello").unwrap();
+        let tool = GitWriteToolConfig::new(vec![repo.clone()])
+            .build()
+            .expect("git.commit should build");
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let cancelled = tokio::time::timeout(
+            std::time::Duration::from_millis(2000),
+            tool.execute(
+                json!({ "repo": repo.display().to_string(), "message": "m", "paths": ["a.txt"] }),
+                &ctx,
+            ),
+        )
+        .await;
+        assert!(cancelled.is_err(), "the commit should still be in its hook");
+        let pid: u32 = std::fs::read_to_string(repo.join(".git/bg.pid"))
+            .expect("the hook wrote its background pid")
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = wait_until_gone(pid);
+        cleanup(pid);
+        std::fs::remove_dir_all(&repo).ok();
+        assert!(gone, "hook background job {pid} survived a cancelled git.commit");
+    }
+
     #[tokio::test]
     async fn commit_rejects_path_traversal_and_empty_inputs() {
         let Some(repo) = init_temp_repo() else { return };
@@ -1505,7 +1617,7 @@ mod git_tests {
         let repo = tempfile::tempdir().unwrap();
         std::fs::write(repo.path().join(".git"), "gitdir: /some/nonexistent/path").unwrap();
 
-        let confiner = confiner_for(repo.path(), true);
+        let confiner = confiner_for(repo.path(), &ConfineOptions::new());
 
         // Behavioral proof of which variant came back: `ExecutionConfiner`
         // has no `Debug`/`PartialEq`, so confine a trivial command and
@@ -1543,7 +1655,7 @@ mod git_tests {
         // Just exercise construction — `default_confiner` itself is
         // covered by aivyx-confine's own test suite; this only confirms
         // `confiner_for` takes the non-fallback branch without panicking.
-        let _confiner = confiner_for(&repo, true);
+        let _confiner = confiner_for(&repo, &ConfineOptions::new());
         std::fs::remove_dir_all(&repo).ok();
     }
 

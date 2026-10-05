@@ -28,6 +28,7 @@
 pub mod fs;
 pub mod git;
 pub mod net_dns;
+pub(crate) mod process_group;
 pub mod role_switch;
 pub mod routing;
 pub mod shell;

@@ -80,7 +80,10 @@
 //! - **Process-group execution.** `process_group(0)` puts `sh -c`
 //!   and all grandchildren under one PGID. On timeout, the tool
 //!   SIGTERMs the group, waits 2s, then SIGKILLs. Prevents zombie
-//!   grandchildren from outliving the turn.
+//!   grandchildren from outliving the turn. Since aivyx-confine
+//!   `061768f` the group is also SIGKILLed when `sh` exits normally or
+//!   the call is cancelled (`tools::process_group`), and confined
+//!   commands cannot leave it (`setsid`/`setpgid` are refused).
 //! - **Environment isolation.** `env_clear()` strips the daemon's
 //!   env (including secrets like `ANTHROPIC_API_KEY`). Only safe
 //!   defaults (`PATH`, `HOME`, `USER`, `LANG`, `TERM`) plus
@@ -96,9 +99,10 @@ use tokio::process::Command;
 
 use aivyx_capability::Scope;
 
+use crate::tools::process_group::{ProcessGroupGuard, kill_group};
 use crate::{
-    AivyxError, ExecutionConfiner, Tool, ToolContext, ToolId, ToolOutcome, Verification,
-    default_confiner,
+    AivyxError, ConfineOptions, ExecutionConfiner, Tool, ToolContext, ToolId, ToolOutcome,
+    Verification, default_confiner_with_options,
 };
 
 /// Default wall-clock timeout for a single `shell.exec` invocation.
@@ -121,13 +125,23 @@ pub const MAX_TIMEOUT_MS: u64 = 600_000;
 /// infallible to construct — same split `fs.read` uses.
 pub struct ShellExecToolConfig {
     cwd_root: PathBuf,
+    confine_options: ConfineOptions,
 }
 
 impl ShellExecToolConfig {
     pub fn new(cwd_root: impl Into<PathBuf>) -> Self {
         ShellExecToolConfig {
             cwd_root: cwd_root.into(),
+            confine_options: ConfineOptions::new(),
         }
+    }
+
+    /// The aivyx-confine policy for the confiner `build()` creates —
+    /// `[confine]` in config. Defaults to `ConfineOptions::new()`:
+    /// enforcement required, every opt-out off.
+    pub fn with_confine_options(mut self, options: ConfineOptions) -> Self {
+        self.confine_options = options;
+        self
     }
 
     /// Canonicalize the cwd sandbox root and return a ready-to-
@@ -146,7 +160,7 @@ impl ShellExecToolConfig {
                 "shell.exec cwd_root {canonical:?} is not a directory"
             )));
         }
-        let confiner = default_confiner(&canonical, &[], &[], true);
+        let confiner = default_confiner_with_options(&canonical, &[], &[], self.confine_options);
         Ok(ShellExecTool {
             id: ToolId::new(),
             cwd_root: Arc::from(canonical),
@@ -222,10 +236,11 @@ impl ShellExecTool {
         self
     }
 
-    /// Override the confiner `build()` set by default. The real binary
-    /// call site uses this to pass the operator's configured
-    /// `require_enforcement` value instead of the hardcoded `true`
-    /// `build()` itself uses.
+    /// Replace the confiner `build()` created. The binary sets its
+    /// `[confine]` policy through `ShellExecToolConfig::with_confine_options`
+    /// instead; this is for callers that build their own confiner. The
+    /// process-group kill does not depend on it: `execute` puts the
+    /// command in its own group itself.
     pub fn with_confiner(mut self, confiner: Arc<dyn ExecutionConfiner>) -> Self {
         self.confiner = confiner;
         self
@@ -451,7 +466,9 @@ impl Tool for ShellExecTool {
          `args.cwd` field (optional) picks a subdirectory of the \
          sandbox root; `args.timeout_ms` (optional, default 30000, \
          max 600000) sets a wall-clock timeout. Output is bundled \
-         into one result — no streaming."
+         into one result — no streaming. Anything the command starts \
+         in the background is killed when it exits. Put scratch files \
+         under $TMPDIR, not /tmp, which is usually not writable."
     }
 
     fn input_schema(&self) -> &Value {
@@ -594,14 +611,14 @@ impl Tool for ShellExecTool {
         // Kill the child if the parent task is dropped (e.g. the
         // turn is cancelled mid-exec). Without this the child
         // would keep running until its own exit, leaking CPU
-        // beyond the turn's wall-clock budget. With process_group
-        // this only kills the direct child; the timeout path below
-        // handles the full group via killpg().
+        // beyond the turn's wall-clock budget. This only reaches the
+        // direct child; `ProcessGroupGuard` below kills the rest of the
+        // group on every exit path.
         command.kill_on_drop(true);
 
         let mut command = self.confiner.confine(command);
 
-        let child = match command.spawn() {
+        let mut child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -611,81 +628,80 @@ impl Tool for ShellExecTool {
             }
         };
 
-        // Capture the PID before wait_with_output() consumes the
-        // child. The PID equals the PGID because we called
-        // process_group(0). We need it in the timeout path to
-        // signal the entire process group.
-        let child_pid = child.id();
+        // The child leads its own process group (`process_group(0)`
+        // above, and aivyx-confine refuses `setsid`/`setpgid` inside the
+        // sandbox), so its pid is the group id. The guard kills the whole
+        // group when this call ends for any reason — including the
+        // `execute` future being dropped by a cancelled turn — so no
+        // background job (`cmd &`) outlives the call.
+        let mut group = ProcessGroupGuard::new(&child);
+        let mut stdout_pipe = child.stdout.take();
+        let mut stderr_pipe = child.stderr.take();
 
-        let output =
-            match tokio::time::timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
-                .await
-            {
-                Ok(Ok(out)) => out,
-                Ok(Err(e)) => {
-                    return ToolOutcome::Failed(AivyxError::Tool {
-                        tool: self.id,
-                        detail: format!("wait failed: {e}"),
+        // Wait for `sh` itself, then kill the group so any background job
+        // still holding the pipes closes them, then finish reading. Ending
+        // the call on `sh`'s exit (rather than on EOF, as
+        // `wait_with_output` does) keeps `sleep 300 &` from stalling the
+        // call until its timeout.
+        let run = async {
+            let (status, stdout, stderr) = tokio::join!(
+                async {
+                    let status = child.wait().await;
+                    group.kill_now();
+                    status
+                },
+                read_pipe(stdout_pipe.as_mut()),
+                read_pipe(stderr_pipe.as_mut()),
+            );
+            status.map(|status| (status, stdout, stderr))
+        };
+        let output = match tokio::time::timeout(Duration::from_millis(timeout_ms), run).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: format!("wait failed: {e}"),
+                });
+            }
+            Err(_elapsed) => {
+                // Phase 42 — graceful process-group shutdown: SIGTERM the
+                // whole group so processes can flush and clean up, then
+                // SIGKILL it two seconds later. The guard is disarmed so
+                // it doesn't SIGKILL straight away on return; the
+                // background task takes over the group's lifetime.
+                if let Some(pgid) = group.disarm() {
+                    if let Ok(raw) = libc::pid_t::try_from(pgid) {
+                        // SAFETY: killpg with a positive group id. A group
+                        // that already exited returns ESRCH, ignored.
+                        unsafe {
+                            libc::killpg(raw, libc::SIGTERM);
+                        }
+                    }
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        let _ = kill_group(pgid);
                     });
                 }
-                Err(_elapsed) => {
-                    // Phase 42 — graceful process-group shutdown:
-                    // 1. SIGTERM the entire process group (child +
-                    //    grandchildren). This lets processes flush
-                    //    buffers and clean up temp files.
-                    // 2. Wait 2 seconds for graceful exit.
-                    // 3. SIGKILL the process group if still alive.
-                    //
-                    // The child's PID equals its PGID because we
-                    // called process_group(0). child_pid is None
-                    // only if the child exited before we read it,
-                    // which would be surprising here (we just timed
-                    // out waiting for it), but we handle it.
-                    if let Some(pid) = child_pid {
-                        let pgid = pid as i32;
-                        // SIGTERM the process group.
-                        // Safety: killpg is a standard POSIX call.
-                        // pgid is always positive (u32 -> i32 of a
-                        // real PID). A stale pgid (process already
-                        // exited) returns ESRCH, which we ignore.
-                        unsafe {
-                            libc::killpg(pgid, libc::SIGTERM);
-                        }
 
-                        // Give the group 2 seconds to exit gracefully,
-                        // then SIGKILL. We spawn a brief background
-                        // reaper — the timeout future already dropped
-                        // the child handle, so we can't await it here.
-                        // Instead we wait synchronously (non-blocking
-                        // for already-exited processes) via killpg
-                        // after a sleep.
-                        tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_secs(2)).await;
-                            // If the group is still alive, force-kill.
-                            unsafe {
-                                libc::killpg(pgid, libc::SIGKILL);
-                            }
-                        });
-                    }
+                return ToolOutcome::Completed {
+                    output: json!({
+                        "cmd": cmd,
+                        "cwd": canonical_cwd.display().to_string(),
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": -1_i64,
+                        "timed_out": true,
+                        "timeout_ms": timeout_ms,
+                    }),
+                    verified: Verification::NotApplicable,
+                };
+            }
+        };
+        let (status, stdout, stderr) = output;
 
-                    return ToolOutcome::Completed {
-                        output: json!({
-                            "cmd": cmd,
-                            "cwd": canonical_cwd.display().to_string(),
-                            "stdout": "",
-                            "stderr": "",
-                            "exit_code": -1_i64,
-                            "timed_out": true,
-                            "timeout_ms": timeout_ms,
-                        }),
-                        verified: Verification::NotApplicable,
-                    };
-                }
-            };
-
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let exit_code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&stderr).into_owned();
+        let exit_code = status.code().unwrap_or(-1);
 
         ToolOutcome::Completed {
             output: json!({
@@ -706,6 +722,18 @@ impl Tool for ShellExecTool {
     }
 }
 
+/// Read a child's captured pipe to EOF. A read error ends the capture
+/// early with what was read so far — the command's own exit status is
+/// what the agent acts on, not a broken pipe.
+async fn read_pipe<R: tokio::io::AsyncRead + Unpin>(pipe: Option<&mut R>) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut buf = Vec::new();
+    if let Some(pipe) = pipe {
+        let _ = pipe.read_to_end(&mut buf).await;
+    }
+    buf
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -713,6 +741,7 @@ impl Tool for ShellExecTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::process_group::test_support::{cleanup, wait_until_gone};
     use crate::{
         AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform, MessageOrigin,
         NullAuditHook, SessionId, StreamEvent, TurnId, TurnOutcome,
@@ -1336,8 +1365,8 @@ mod tests {
         let ctx = make_ctx(&channel, &audit);
 
         // Outside the sandbox root entirely — /var/tmp, not another
-        // tempfile::tempdir() (which would also resolve under /tmp,
-        // itself write-granted by aivyx-confine's default write scope).
+        // tempfile::tempdir() under /tmp (not writable when confined
+        // either, but kept on a path no confiner option ever grants).
         // Skip (not panic) on a machine where /var/tmp isn't writable,
         // matching `tools::git`'s `init_temp_repo` skip-not-fail posture
         // for environment-dependent fixtures.
@@ -1375,6 +1404,140 @@ mod tests {
                  redirect fails inside it), got {other:?}"
             ),
         }
+    }
+
+    // ---- Process-group lifetime (aivyx-confine 061768f) ------------
+
+    fn completed_output(outcome: &ToolOutcome) -> &Value {
+        match outcome {
+            ToolOutcome::Completed { output, .. } => output,
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// A background job the command started must not outlive the call.
+    #[tokio::test]
+    async fn execute_kills_a_background_job_when_the_call_finishes() {
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let outcome = tool
+            .execute(
+                json!({ "cmd": "sleep 300 >/dev/null 2>&1 & echo $!" }),
+                &ctx,
+            )
+            .await;
+        let output = completed_output(&outcome);
+        assert_eq!(output["exit_code"], 0, "{output}");
+        let pid: u32 = output["stdout"].as_str().unwrap().trim().parse().unwrap();
+        let gone = wait_until_gone(pid);
+        cleanup(pid);
+        assert!(gone, "background job {pid} survived the shell.exec call");
+    }
+
+    /// A background job still holding the stdout pipe must not stall the
+    /// call until its timeout: the call ends when `sh` exits.
+    #[tokio::test]
+    async fn execute_returns_when_sh_exits_even_if_a_background_job_holds_stdout() {
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let started = std::time::Instant::now();
+        let outcome = tool
+            .execute(
+                json!({ "cmd": "sleep 300 & echo $!", "args": { "timeout_ms": 20000 } }),
+                &ctx,
+            )
+            .await;
+        let elapsed = started.elapsed();
+        let output = completed_output(&outcome);
+        let pid: Option<u32> = output["stdout"].as_str().unwrap().trim().parse().ok();
+        if let Some(pid) = pid {
+            let gone = wait_until_gone(pid);
+            cleanup(pid);
+            assert!(gone, "background job {pid} survived the shell.exec call");
+        }
+        assert_eq!(output["timed_out"], false, "{output}");
+        assert!(pid.is_some(), "stdout must still be captured: {output}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "call took {elapsed:?}; it should end when sh exits"
+        );
+    }
+
+    /// Dropping the `execute` future (a cancelled turn) kills the whole
+    /// group, not just `sh`.
+    #[tokio::test]
+    async fn cancelling_execute_kills_the_process_group() {
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let pid_file = scratch.dir.join("bg.pid");
+        let cancelled = tokio::time::timeout(
+            std::time::Duration::from_millis(1500),
+            tool.execute(
+                json!({ "cmd": "sleep 300 >/dev/null 2>&1 & echo $! > bg.pid; sleep 300" }),
+                &ctx,
+            ),
+        )
+        .await;
+        assert!(cancelled.is_err(), "the call should still be running");
+        let pid: u32 = std::fs::read_to_string(&pid_file)
+            .expect("the command wrote its background pid")
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = wait_until_gone(pid);
+        cleanup(pid);
+        assert!(gone, "background job {pid} survived a cancelled shell.exec");
+    }
+
+    /// Confined commands get a private, writable `TMPDIR`, and the shared
+    /// `/tmp` is not writable (aivyx-confine's default; `[confine]
+    /// share_system_tmp` opts out).
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn confined_commands_use_a_private_tmpdir_not_the_shared_tmp() {
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let outcome = tool
+            .execute(
+                json!({ "cmd": "echo x > \"$TMPDIR/f\" && cat \"$TMPDIR/f\" && echo \"$TMPDIR\"" }),
+                &ctx,
+            )
+            .await;
+        let output = completed_output(&outcome);
+        assert_eq!(output["exit_code"], 0, "{output}");
+        let stdout = output["stdout"].as_str().unwrap();
+        let tmpdir = stdout.lines().nth(1).unwrap_or_default();
+        assert!(stdout.starts_with("x\n"), "{output}");
+        assert!(
+            tmpdir.contains("aivyx-confine-") && tmpdir != "/tmp",
+            "TMPDIR should be the confiner's private dir, got {tmpdir:?}"
+        );
+
+        let shared = std::env::temp_dir().join(format!("aivyx-pa-shared-{}", uuid::Uuid::new_v4()));
+        let outcome = tool
+            .execute(json!({ "cmd": format!("touch {}", shared.display()) }), &ctx)
+            .await;
+        let output = completed_output(&outcome);
+        let created = shared.exists();
+        std::fs::remove_file(&shared).ok();
+        assert!(!created, "a confined command wrote to the shared temp dir");
+        assert_ne!(output["exit_code"], 0, "{output}");
     }
 
     #[tokio::test]
