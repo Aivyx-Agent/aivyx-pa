@@ -12552,3 +12552,53 @@ fn integration_writes_ask_at_every_autonomy_level_unless_explicitly_off() {
     assert!(!confirm_integration_writes_for(&Sourced::new(false, FieldSource::Toml)));
     assert!(confirm_integration_writes_for(&Sourced::new(true, FieldSource::Env)));
 }
+
+/// `[[autonomy.override]] domain` must name an area (a capability's first
+/// word); `schedules` is an alias for `schedule`; one override per area.
+#[test]
+fn autonomy_override_area_is_validated_and_normalised() {
+    let env = EnvScope::new();
+    let err = load_with_toml_result(
+        "\n[[autonomy.override]]\ndomain = \"emial\"\nlevel = \"manual\"\n",
+        "auto-area-typo",
+    )
+    .expect_err("unknown area must fail")
+    .to_string();
+    assert!(err.contains("emial") && err.contains("email"), "{err}");
+    let err = load_with_toml_result(
+        "\n[[autonomy.override]]\ndomain = \"email\"\nlevel = \"manual\"\n\
+         \n[[autonomy.override]]\ndomain = \"email\"\nlevel = \"autonomous\"\n",
+        "auto-area-dup",
+    )
+    .expect_err("duplicate area must fail")
+    .to_string();
+    assert!(err.contains("email") && err.contains("more than one"), "{err}");
+    let cfg = load_with_toml(
+        "\n[[autonomy.override]]\ndomain = \"schedules\"\nlevel = \"autonomous\"\n",
+        "auto-area-alias",
+    );
+    assert_eq!(cfg.autonomy_overrides[0].domain, "schedule");
+    drop(env);
+}
+
+/// The posture for a call follows its area's override, else the global level.
+#[test]
+fn autonomy_posture_resolves_per_area_and_base() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[autonomy]\nlevel = \"assisted\"\n\
+         \n[[autonomy.override]]\ndomain = \"email\"\nlevel = \"manual\"\n\
+         \n[[autonomy.override]]\ndomain = \"fs\"\nlevel = \"unleashed\"\n",
+        "auto-area-resolve",
+    );
+    assert_eq!(cfg.posture_for_base("email.send"), AutonomyLevel::Manual.expand());
+    assert_eq!(cfg.posture_for_base("fs.delete"), AutonomyLevel::Unleashed.expand());
+    assert_eq!(cfg.posture_for_base("shell.exec"), AutonomyLevel::Assisted.expand());
+    assert_eq!(cfg.posture_for_area("schedules"), cfg.posture_for_area("schedule"));
+    let looser: Vec<&str> = crate::looser_overrides(cfg.autonomy_level.value, &cfg.autonomy_overrides)
+        .into_iter()
+        .map(|o| o.domain.as_str())
+        .collect();
+    assert_eq!(looser, vec!["fs"]);
+    drop(env);
+}

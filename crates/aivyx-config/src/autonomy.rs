@@ -26,7 +26,8 @@ use serde::Deserialize;
 ///
 /// `Assisted` is the default — an absent `[autonomy]` section resolves here,
 /// so existing configs behave byte-for-byte as before.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+/// Ordered by how much the agent may do on its own (declaration order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AutonomyLevel {
     /// Confirm *every* action, even reversible ones. No loop, no
@@ -155,9 +156,28 @@ pub fn resolve_posture(
     domain: Option<&str>,
 ) -> AutonomyPosture {
     let level = domain
+        .map(normalize_area)
         .and_then(|d| overrides.iter().find(|o| o.domain == d).map(|o| o.level))
         .unwrap_or(global);
     level.expand()
+}
+
+/// The canonical spelling of an override area: `schedules` (the name the
+/// routine-growth wiring and older configs use) is the `schedule` area.
+pub fn normalize_area(domain: &str) -> &str {
+    match domain {
+        "schedules" => "schedule",
+        d => d,
+    }
+}
+
+/// The overrides that give their area *more* autonomy than the global level —
+/// surfaced as a start-up warning and in `aivyx-pa autonomy show`.
+pub fn looser_overrides(
+    global: AutonomyLevel,
+    overrides: &[AutonomyOverride],
+) -> Vec<&AutonomyOverride> {
+    overrides.iter().filter(|o| o.level > global).collect()
 }
 
 /// What a run does at an approval point. Config-native so it stays out of the

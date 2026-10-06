@@ -9999,7 +9999,7 @@ async fn run_async(
     // [autonomy.overrides] entry can pin it independently): below
     // policy_auto agent creations land disabled pending Studio approval.
     let schedule_growth =
-        aivyx_config::resolve_posture(autonomy_level.value, &autonomy_overrides, Some("schedules"))
+        aivyx_config::resolve_posture(autonomy_level.value, &autonomy_overrides, Some("schedule"))
             .growth;
     schedule_create_tool
         .set_growth(schedule_growth)

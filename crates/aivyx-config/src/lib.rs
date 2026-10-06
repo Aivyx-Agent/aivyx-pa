@@ -110,7 +110,8 @@ pub use config_write::{
 // RN.2+. `Assisted` is the default and expands to today's behavior.
 pub mod autonomy;
 pub use autonomy::{
-    resolve_posture, AutonomyLevel, AutonomyOverride, AutonomyPosture, GatePosture, GrowthAdoption,
+    looser_overrides, normalize_area, resolve_posture, AutonomyLevel, AutonomyOverride,
+    AutonomyPosture, GatePosture, GrowthAdoption,
 };
 
 /// Whether deletes and overwrites need an operator-confirmed `confirmed: true`
@@ -6173,6 +6174,17 @@ impl AivyxConfig {
         resolve_posture(self.autonomy_level.value, &self.autonomy_overrides, domain)
     }
 
+    /// The posture for calls in `area` (a capability's first word): its
+    /// `[[autonomy.override]]` if any, else the global level.
+    pub fn posture_for_area(&self, area: &str) -> AutonomyPosture {
+        self.effective_autonomy(Some(area))
+    }
+
+    /// The posture for a call needing capability `base` (e.g. `email.send`).
+    pub fn posture_for_base(&self, base: &str) -> AutonomyPosture {
+        self.posture_for_area(base.split('.').next().unwrap_or(base))
+    }
+
     /// Whether deletes and overwrites actually ask first — see
     /// [`confirm_destructive_for`].
     pub fn effective_confirm_destructive(&self) -> bool {
@@ -6449,8 +6461,18 @@ impl AivyxConfig {
                         field: "autonomy.override.domain",
                         reason: "each `[[autonomy.override]]` requires a non-empty `domain`"
                             .to_string(),
-                    })?
-                    .to_string();
+                    })?;
+                let domain = normalize_area(domain).to_string();
+                let areas = aivyx_capability::areas();
+                if !areas.contains(domain.as_str()) {
+                    return Err(ConfigError::Invalid {
+                        field: "autonomy.override.domain",
+                        reason: format!(
+                            "`{domain}` isn't an area; use one of: {}",
+                            areas.into_iter().collect::<Vec<_>>().join(", ")
+                        ),
+                    });
+                }
                 let level = raw.level.ok_or(ConfigError::Invalid {
                     field: "autonomy.override.level",
                     reason: format!(
@@ -6460,6 +6482,13 @@ impl AivyxConfig {
                 Ok(AutonomyOverride { domain, level })
             })
             .collect::<Result<Vec<_>, ConfigError>>()?;
+        let mut seen = std::collections::BTreeSet::new();
+        if let Some(dup) = autonomy_overrides.iter().find(|o| !seen.insert(o.domain.as_str())) {
+            return Err(ConfigError::Invalid {
+                field: "autonomy.override.domain",
+                reason: format!("area `{}` has more than one `[[autonomy.override]]`", dup.domain),
+            });
+        }
         let autonomy_auto_approve = toml.autonomy.auto_approve.scopes.clone();
 
         // --- workspace (Chapter O) ----------------------------------

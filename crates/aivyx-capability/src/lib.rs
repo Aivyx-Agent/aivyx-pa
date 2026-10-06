@@ -674,6 +674,14 @@ pub fn is_withheld_integration_base(base: &str) -> bool {
     WITHHELD_INTEGRATION_BASES.contains(&base)
 }
 
+/// Every capability *area*: the distinct first words of the known bases
+/// (`fs.delete` → `fs`, `email.send` → `email`). Per-area autonomy
+/// (`[[autonomy.override]] domain`) names one of these; deriving the list
+/// keeps it in step with the bases instead of a hand-kept table.
+pub fn areas() -> std::collections::BTreeSet<&'static str> {
+    KNOWN_BASES.iter().filter_map(|b| b.split('.').next()).collect()
+}
+
 // ---------------------------------------------------------------------------
 // Scope
 // ---------------------------------------------------------------------------
@@ -1443,6 +1451,17 @@ static CEILING_UNTRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn areas_are_the_first_words_of_known_bases() {
+        let areas = areas();
+        for a in ["fs", "shell", "git", "email", "calendar", "schedule", "mcp"] {
+            assert!(areas.contains(a), "{a} missing");
+        }
+        for base in KNOWN_BASES {
+            assert!(areas.contains(base.split('.').next().unwrap()), "{base}");
+        }
+    }
 
     fn s(x: &str) -> Scope {
         Scope::parse(x).expect("test scope must parse")
