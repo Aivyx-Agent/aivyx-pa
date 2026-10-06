@@ -72,6 +72,7 @@ pub mod routing_guard;
 pub mod cooccurrence_ledger;
 pub mod graph_query_tool;
 pub mod conflict_dismissals;
+pub mod parked_steps;
 pub mod contradiction;
 pub mod soul_contradiction;
 pub mod knowledge_graph;
