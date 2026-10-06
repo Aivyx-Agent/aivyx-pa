@@ -6410,6 +6410,38 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
     }
 }
 
+/// Which areas confirm every change — the `manual` autonomy level per area —
+/// from `[autonomy] level` and `[[autonomy.override]]`.
+fn confirm_all_areas(
+    level: aivyx_config::AutonomyLevel,
+    overrides: &[aivyx_config::AutonomyOverride],
+) -> aivyx_core::ConfirmAllAreas {
+    let manual = |posture: aivyx_config::AutonomyPosture| {
+        matches!(posture.gate, aivyx_config::GatePosture::ConfirmAll)
+    };
+    aivyx_core::ConfirmAllAreas {
+        default: manual(aivyx_config::resolve_posture(level, overrides, None)),
+        areas: overrides
+            .iter()
+            .map(|o| (o.domain.clone(), manual(o.level.expand())))
+            .collect(),
+    }
+}
+
+/// Whether deletes and overwrites ask, for tools in `area` — an explicit
+/// `[access] confirm_destructive` wins, else that area's autonomy level.
+fn area_confirm_destructive(
+    configured: &aivyx_config::Sourced<bool>,
+    level: aivyx_config::AutonomyLevel,
+    overrides: &[aivyx_config::AutonomyOverride],
+    area: &str,
+) -> bool {
+    aivyx_config::confirm_destructive_for(
+        configured,
+        &aivyx_config::resolve_posture(level, overrides, Some(area)),
+    )
+}
+
 /// The kvcache directory under `base` for `instance`: `base/kvcache` for
 /// the default instance (unchanged), `base/instances/<n>/kvcache` otherwise.
 fn kvcache_dir_for_instance(
@@ -6985,8 +7017,15 @@ async fn run_async(
     // the level's intent is reported but no uncapped loop is conjured.
     let autonomy_posture =
         aivyx_config::resolve_posture(autonomy_level.value, &autonomy_overrides, None);
-    // The `manual` level: every change asks first (TurnSafety::with_confirm_all).
-    let manual_autonomy = matches!(autonomy_posture.gate, aivyx_config::GatePosture::ConfirmAll);
+    // The `manual` level, per area: every change in a manual area asks first
+    // (TurnSafety::with_confirm_all_areas).
+    let confirm_all_areas = confirm_all_areas(autonomy_level.value, &autonomy_overrides);
+    for o in aivyx_config::looser_overrides(autonomy_level.value, &autonomy_overrides) {
+        eprintln!(
+            "aivyx-pa: autonomy for `{}` is {}, looser than the global level ({}).",
+            o.domain, o.level, autonomy_level.value,
+        );
+    }
     let loop_state: Option<aivyx_channel::loop_driver::SharedLoopState> = match &config_loop {
         Some(c) if autonomy_posture.arms_loop(c.enabled) => {
             if !c.enabled {
@@ -7640,8 +7679,17 @@ async fn run_async(
     // Integration writes (email, Drive, Calendar…) ask unless explicitly
     // switched off — the autonomy level doesn't decide those.
     let confirm_integration_writes = aivyx_config::confirm_integration_writes_for(&confirm_destructive);
+    // Deletes and overwrites follow the level of each tool's own area: `git`
+    // for git.commit, `fs` for fs.write/fs.delete and the data writers (the
+    // shadowed `confirm_destructive` below).
+    let confirm_destructive_git = area_confirm_destructive(
+        &confirm_destructive,
+        autonomy_level.value,
+        &autonomy_overrides,
+        "git",
+    );
     let confirm_destructive =
-        aivyx_config::confirm_destructive_for(&confirm_destructive, &autonomy_posture);
+        area_confirm_destructive(&confirm_destructive, autonomy_level.value, &autonomy_overrides, "fs");
     // aivyx-confine — the operator's `[confine]` posture, resolved once
     // here into the `ConfineOptions` the shell.exec + git.rs
     // confiner-construction sites below share.
@@ -8631,7 +8679,7 @@ async fn run_async(
         // operator who wants the agent to commit declares
         // `git.write:<repo>` in the role's `capability_scopes`.
         let git_commit = aivyx_core::GitWriteToolConfig::new(repos)
-            .with_confirm_destructive(confirm_destructive)
+            .with_confirm_destructive(confirm_destructive_git)
             .with_confine_options(confine_options.clone())
             .with_checkpointers(git_checkpointers)
             .build()
@@ -9698,6 +9746,7 @@ async fn run_async(
     // Chapter N — each prompt-assembly closure owns its own cheap Arc
     // clone of the fs root (a `move` closure can't borrow the outer one).
     let prompt_fs_root_cf = prompt_fs_root.clone();
+    let child_confirm_all_areas = confirm_all_areas.clone();
     let child_factory: Arc<ChildAgentFactory> = Arc::new(move |target: &str| {
         // Resolve the target role. `roles` is the same validated
         // map the parent was built against, so a missing key is a
@@ -9918,7 +9967,7 @@ async fn run_async(
             injection_scan_enabled,
             injection_scan_exempt_for_factory.clone(),
         )
-        .with_confirm_all(manual_autonomy)
+        .with_confirm_all_areas(child_confirm_all_areas.clone())
         .apply(child_agent);
 
         Ok(Box::new(child_agent) as Box<dyn Agent>)
@@ -10470,7 +10519,7 @@ async fn run_async(
             injection_scan_enabled,
             injection_scan_exempt.clone(),
         )
-        .with_confirm_all(manual_autonomy)
+        .with_confirm_all_areas(confirm_all_areas.clone())
         .apply(daemon_agent);
         let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
 
@@ -11242,7 +11291,7 @@ async fn run_async(
                     injection_scan_enabled,
                     injection_scan_exempt.clone(),
                 )
-                .with_confirm_all(manual_autonomy),
+                .with_confirm_all_areas(confirm_all_areas.clone()),
                 // Task 4 fix round 1 — same `[access] confirm_destructive`
                 // posture as the tool-level fs.write/fs.delete/git.commit
                 // gate wired above from this same `confirm_destructive`
@@ -11834,7 +11883,7 @@ async fn run_async(
                         injection_scan_enabled,
                         injection_scan_exempt.clone(),
                     )
-                    .with_confirm_all(manual_autonomy),
+                    .with_confirm_all_areas(confirm_all_areas.clone()),
                     checkpointer: checkpointer.clone(),
                     // Task 4 fix round 1 — same `[access] confirm_destructive`
                     // posture as the Local arm and the tool-level
@@ -16031,6 +16080,32 @@ mod tests {
                 .contains(".local/share/aivyx-pa/kvcache"),
             "default kvcache path must be unchanged when no override is configured, got {path:?}"
         );
+    }
+
+    #[test]
+    fn confirm_all_table_follows_the_overrides() {
+        use aivyx_config::{AutonomyLevel as L, AutonomyOverride as O};
+        let ov = vec![
+            O { domain: "email".into(), level: L::Manual },
+            O { domain: "shell".into(), level: L::Autonomous },
+        ];
+        let t = confirm_all_areas(L::Assisted, &ov);
+        assert!(!t.default);
+        assert!(t.for_base("email.send"));
+        assert!(!t.for_base("shell.exec"));
+        let t = confirm_all_areas(L::Manual, &ov);
+        assert!(t.default && !t.for_base("shell.exec"));
+    }
+
+    #[test]
+    fn delete_confirmation_follows_each_tools_area() {
+        use aivyx_config::{AutonomyLevel as L, AutonomyOverride as O, FieldSource, Sourced};
+        let unset = Sourced::new(true, FieldSource::Default);
+        let ov = vec![O { domain: "fs".into(), level: L::Unleashed }];
+        assert!(!area_confirm_destructive(&unset, L::Assisted, &ov, "fs"));
+        assert!(area_confirm_destructive(&unset, L::Assisted, &ov, "git"));
+        let explicit = Sourced::new(true, FieldSource::Toml);
+        assert!(area_confirm_destructive(&explicit, L::Assisted, &ov, "fs"));
     }
 
     #[test]
