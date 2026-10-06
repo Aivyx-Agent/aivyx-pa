@@ -24,7 +24,7 @@ use aivyx_core::{
     Agent, Approval, ApprovalRequest, AreaFlags, CancellationToken, ChannelContext, ChannelError,
     ChannelPlatform, SessionId, StreamEvent, TurnOutcome,
 };
-use aivyx_ipc::parked::{ParkedState, ParkedStep};
+pub use aivyx_ipc::parked::{ParkedState, ParkedStep};
 use aivyx_ipc::protocol::{QueryPayload, QueryResponsePayload};
 use aivyx_storage::DomainHandle;
 use async_trait::async_trait;

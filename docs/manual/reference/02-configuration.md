@@ -237,6 +237,7 @@ How much the agent may do without asking you, with per-domain exceptions. See [A
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `level` | `manual` \| `assisted` \| `supervised` \| `autonomous` \| `unleashed` |  | The global autonomy level. |
+| `review_expiry_days` | integer |  | How many days a step parked for your review (areas at `supervised`) waits before it lapses unreviewed. Default 7; at least 1. |
 
 #### `[[autonomy.override]]`
 

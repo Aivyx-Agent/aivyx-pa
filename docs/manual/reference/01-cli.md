@@ -297,6 +297,25 @@ aivyx-pa loop log [--limit <N>]
 
 See [Autonomy and routines](../../guide/15-autonomy-and-routines.md).
 
+### `aivyx-pa review`
+
+Steps that unattended runs (routines, webhooks, file watches, the loop, team
+missions) parked for your approval, because their area is at the
+`supervised` autonomy level.
+
+```
+aivyx-pa review [list]
+aivyx-pa review approve <id> [--yes]
+aivyx-pa review deny <id>
+```
+
+`list` shows what's waiting and what was resolved recently. `approve` shows
+the step and what it touches now, asks `[y/N]` (skip with `--yes`), then runs
+the exact call once; `deny` drops it. Unreviewed steps lapse after
+`[autonomy] review_expiry_days` (default 7). The Studio's Command Center
+lists the same steps under "Needs you". See
+[Autonomy and routines](../../guide/15-autonomy-and-routines.md#reviewing-parked-steps).
+
 ### `aivyx-pa memory`
 
 What your agent remembers.

@@ -169,6 +169,7 @@ MEANINGS = {
     "autonomy.level": "The global autonomy level.",
     "autonomy.override.domain": "The area this applies to: the first word of a capability (`fs`, `shell`, `git`, `email`…; `aivyx-pa autonomy show` lists them). An unknown area is an error; `schedules` also works.",
     "autonomy.override.level": "The autonomy level for calls in that area: `manual` asks before every change there; `unleashed` stops deletes and overwrites asking for that area's tools.",
+    "autonomy.review_expiry_days": "How many days a step parked for your review (areas at `supervised`) waits before it lapses unreviewed. Default 7; at least 1.",
     "autonomy.auto_approve.scopes": "Reversible capability scopes that may run without asking. Never covers irreversible actions.",
     "workspace.enabled": "Turn the agent's workspace on or off. On by default.",
     "kvcache.store_path": "The KV-cache store directory. When aivyx-coder shares the same llama.cpp server, point both at the same directory.",

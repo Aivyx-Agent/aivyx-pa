@@ -142,6 +142,8 @@ mod learning;
 mod loop_cli;
 #[path = "aivyx_modules/mcp_recipes.rs"]
 mod mcp_recipes;
+#[path = "aivyx_modules/review.rs"]
+mod review;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
 #[path = "aivyx_modules/memory.rs"]
@@ -982,6 +984,13 @@ fn run() -> Result<(), String> {
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt.block_on(async move { learning::run_learning(window_secs).await });
+    }
+    if let CliMode::Review(cmd) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async move { review::run_review(cmd).await });
     }
 
     // Phase 173 — `aivyx-pa loop <subcommand>`: autonomous loop
@@ -2281,6 +2290,9 @@ enum CliMode {
     /// pane. `window_secs = None` → the daemon's default
     /// lookback.
     Learning { window_secs: Option<u64> },
+    /// `aivyx-pa review [list] | approve <id> [--yes] | deny <id>`: steps
+    /// unattended runs parked for the operator's approval (supervised areas).
+    Review(review::ReviewCommand),
     /// `aivyx-pa tools [--window <secs>]`: Phase 102 read-only
     /// tool-observability view — every registered tool
     /// annotated with audit-derived call/outcome stats.
@@ -3662,6 +3674,20 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Learning { window_secs },
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // Supervised batching — `aivyx-pa review [list] | approve <id> [--yes] | deny <id>`.
+    if !args.is_empty() && args[0] == "review" {
+        return Ok(CliArgs {
+            mode: CliMode::Review(review::parse(&args[1..])?),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -14423,6 +14449,11 @@ mod tests {
     fn instances_subcommands_parse() {
         let mode = |v: &[&str]| parse_cli_args_from(&argv(v)).map(|a| a.mode);
         assert_eq!(mode(&["instances"]).unwrap(), CliMode::Instances(InstancesCmd::List));
+        assert_eq!(
+            mode(&["review", "deny", "ab12cd34"]).unwrap(),
+            CliMode::Review(review::ReviewCommand::Deny { id: "ab12cd34".into() })
+        );
+        assert!(mode(&["review", "bogus"]).is_err());
         assert_eq!(mode(&["instances", "list"]).unwrap(), CliMode::Instances(InstancesCmd::List));
         assert_eq!(
             mode(&["instances", "create", "research"]).unwrap(),

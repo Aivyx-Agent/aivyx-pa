@@ -220,6 +220,16 @@ pub const COMMANDS: &[CommandHelp] = &[
         ],
     },
     CommandHelp {
+        name: "review",
+        group: Group::Agent,
+        summary: "Review steps parked for your approval",
+        usage: &[
+            "aivyx-pa review [list]",
+            "aivyx-pa review approve <id> [--yes]",
+            "aivyx-pa review deny <id>",
+        ],
+    },
+    CommandHelp {
         name: "memory",
         group: Group::Agent,
         summary: "Inspect, search, and manage agent memory",
