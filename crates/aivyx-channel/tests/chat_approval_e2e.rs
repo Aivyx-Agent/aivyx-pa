@@ -63,9 +63,11 @@ impl Agent for AskingAgent {
                 summary: "fs.delete todo.md".into(),
                 input: serde_json::json!({"path": "todo.md"}),
                 reason: "deleting can't be undone".into(),
+                scope_base: "fs.delete".into(),
+                trust_tier: aivyx_capability::TrustTier::Trusted,
             })
             .await;
-        *self.answer.lock().unwrap() = Some(answer);
+        *self.answer.lock().unwrap() = Some(answer.clone());
         TurnOutcome::Completed {
             final_message: format!("answer={answer:?}"),
             tool_calls_made: 0,
@@ -254,7 +256,7 @@ async fn closing_the_connection_during_an_approval_denies_it() {
     drop(c);
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Some(a) = *answer.lock().unwrap() {
+            if let Some(a) = answer.lock().unwrap().clone() {
                 return a;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;

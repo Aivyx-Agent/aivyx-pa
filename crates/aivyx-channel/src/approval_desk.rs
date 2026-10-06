@@ -112,6 +112,8 @@ mod tests {
             summary: "fs.delete todo.md".into(),
             input: serde_json::json!({"path": "todo.md"}),
             reason: "can't be undone".into(),
+            scope_base: "fs.delete".into(),
+            trust_tier: aivyx_capability::TrustTier::Trusted,
         }
     }
 

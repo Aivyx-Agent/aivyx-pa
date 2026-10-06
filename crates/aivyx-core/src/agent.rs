@@ -575,6 +575,58 @@ impl Agent for ConcreteAgent {
         }
         outcome
     }
+
+    /// Supervised batching — run a parked call the operator approved, once,
+    /// through the normal per-call path (`run_tool_call`) with
+    /// `operator_approved` set, under this agent's current capabilities
+    /// capped by `channel`'s trust tier. No model is involved.
+    async fn run_approved_call(
+        &self,
+        tool: &str,
+        input: serde_json::Value,
+        channel: &dyn ChannelContext,
+    ) -> Result<String, String> {
+        let Some(tool_id) = self.tools.find_by_name(tool) else {
+            return Err(format!("the tool `{tool}` no longer exists"));
+        };
+        let effective = self
+            .capabilities
+            .intersect(channel.trust_tier().default_ceiling());
+        let cancellation = channel.cancellation_token();
+        let env = TurnCallEnv {
+            turn_id: TurnId::new(),
+            channel,
+            cancellation: &cancellation,
+            effective: &effective,
+            message_origin: crate::MessageOrigin::Operator,
+        };
+        let req = crate::planner::ToolCallRequest {
+            tool_id,
+            input,
+            auto_corrected_from: None,
+            extracted_from_text: None,
+            operator_approved: true,
+        };
+        let (_, outcome, _) = self.run_tool_call(&env, req).await;
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                let text = match output {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                Ok(text.chars().take(500).collect())
+            }
+            ToolOutcome::Denied { scope, .. } => {
+                Err(format!("the capability `{scope}` is not granted any more"))
+            }
+            ToolOutcome::NotInRole { tool_name } => {
+                Err(format!("the active role doesn't allow `{tool_name}`"))
+            }
+            ToolOutcome::RateLimited { reason, .. }
+            | ToolOutcome::RequiresEscalation { reason, .. } => Err(reason),
+            ToolOutcome::Failed(e) => Err(e.to_string()),
+        }
+    }
 }
 
 impl ConcreteAgent {
@@ -1278,28 +1330,37 @@ impl CycleConfig {
     }
 }
 
-/// Which areas confirm every change — the `manual` autonomy level, per area.
-/// An area is the first word of a capability base (`fs.write` → `fs`).
-/// Built by the daemon from `[autonomy] level` and `[[autonomy.override]]`;
-/// `aivyx-core` keeps its own type so it doesn't depend on `aivyx-config`.
+/// An on/off setting per autonomy area — e.g. which areas confirm every
+/// change (the `manual` level) or which are `supervised`. An area is the
+/// first word of a capability base (`fs.write` → `fs`). Built by the daemon
+/// from `[autonomy] level` and `[[autonomy.override]]`; `aivyx-core` keeps
+/// its own type so it doesn't depend on `aivyx-config`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ConfirmAllAreas {
-    /// Whether an area with no entry confirms every change (the global level).
+pub struct AreaFlags {
+    /// The setting for an area with no entry (the global level).
     pub default: bool,
-    /// Areas whose setting differs from `default`: area → confirm every change?
+    /// Areas whose setting differs from `default`.
     pub areas: std::collections::BTreeMap<String, bool>,
 }
 
-impl ConfirmAllAreas {
+/// Which areas confirm every change — the `manual` autonomy level, per area.
+pub type ConfirmAllAreas = AreaFlags;
+
+impl AreaFlags {
     /// The same setting for every area.
     pub fn everywhere(on: bool) -> Self {
         Self { default: on, areas: Default::default() }
     }
 
-    /// Whether a call needing capability `base` confirms every change.
+    /// The setting for a call needing capability `base`.
     pub fn for_base(&self, base: &str) -> bool {
         let area = base.split('.').next().unwrap_or(base);
         self.areas.get(area).copied().unwrap_or(self.default)
+    }
+
+    /// Whether any area is on.
+    pub fn any(&self) -> bool {
+        self.default || self.areas.values().any(|on| *on)
     }
 }
 
@@ -1515,7 +1576,8 @@ impl ConcreteAgent {
         input: serde_json::Value,
         reason: &str,
     ) -> Option<(StepObservation, ToolOutcome, Option<String>)> {
-        let tool_name = self.tools.get(tool_id)?.name().to_string();
+        let tool = self.tools.get(tool_id)?;
+        let tool_name = tool.name().to_string();
         let mut shown = input;
         if let Some(obj) = shown.as_object_mut() {
             obj.remove("confirmed");
@@ -1525,6 +1587,8 @@ impl ConcreteAgent {
             summary: approval_summary(&tool_name, &shown),
             input: shown.clone(),
             reason: reason.to_string(),
+            scope_base: tool.required_scope(&shown).base().to_string(),
+            trust_tier: env.channel.trust_tier(),
         };
         deadline.pause();
         let answer = env.channel.request_approval(&request).await;
@@ -1533,6 +1597,7 @@ impl ConcreteAgent {
             crate::Approval::Approved => "approved",
             crate::Approval::Denied => "denied",
             crate::Approval::TimedOut => "timed_out",
+            crate::Approval::Parked { .. } => "parked",
             crate::Approval::Unavailable => return None,
         };
         self.audit.on_event(AuditTag::ApprovalRequested {
@@ -1560,10 +1625,12 @@ impl ConcreteAgent {
                 .await,
             ),
             _ => {
-                let detail = if answer == crate::Approval::TimedOut {
-                    "No answer within 10 minutes, so this action was not taken."
-                } else {
-                    "The operator declined this action."
+                let detail = match &answer {
+                    crate::Approval::TimedOut => {
+                        "No answer within 10 minutes, so this action was not taken.".to_string()
+                    }
+                    crate::Approval::Parked { id } => crate::parked_message(id),
+                    _ => "The operator declined this action.".to_string(),
                 };
                 Some((
                     StepObservation {
@@ -1572,7 +1639,7 @@ impl ConcreteAgent {
                     },
                     ToolOutcome::Failed(AivyxError::Tool {
                         tool: tool_id,
-                        detail: detail.to_string(),
+                        detail,
                     }),
                     None,
                 ))
@@ -6373,7 +6440,7 @@ mod tests {
         fn new(answers: &[crate::Approval]) -> Self {
             ApprovingChannel {
                 inner: FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted),
-                answers: Mutex::new(answers.iter().copied().collect()),
+                answers: Mutex::new(answers.iter().cloned().collect()),
                 asked: Mutex::new(Vec::new()),
             }
         }
@@ -6837,6 +6904,92 @@ mod tests {
              escalates via the side-channel injection signal: {:?}",
             tool_call_events[0]
         );
+    }
+
+    // ---- Supervised batching: a parked answer ----
+
+    #[tokio::test]
+    async fn a_parked_answer_tells_the_model_and_the_turn_continues() {
+        let tool = ConfirmFirstTool::new();
+        let audit = RecordingAudit::new();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let agent = make_capturing_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            audit.clone(),
+            delete_plan(tool.id, json!({"path": "todo.md", "confirmed": true})),
+            captured.clone(),
+        );
+        let channel = ApprovingChannel::new(&[crate::Approval::Parked { id: "ab12cd34".into() }]);
+        let out = agent
+            .turn(Message::text(channel.session_id(), "delete"), &channel)
+            .await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        let asked = channel.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].scope_base, "fs.read");
+        assert_eq!(asked[0].trust_tier, TrustTier::Trusted);
+        assert_eq!(asked[0].input, json!({"path": "todo.md"}));
+        // Never ran confirmed.
+        assert_eq!(
+            tool.ran_with.lock().unwrap().clone(),
+            vec![json!({"path": "todo.md", "confirmed": false})]
+        );
+        let parked = crate::parked_message("ab12cd34");
+        assert!(captured.lock().unwrap().iter().any(|o| matches!(o,
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) if *detail == parked)));
+        assert!(audit.snapshot().iter().any(|e| matches!(e,
+            AuditTag::ApprovalResolved { outcome, .. } if outcome == "parked")));
+    }
+
+    #[tokio::test]
+    async fn run_approved_call_runs_once_with_operator_approval() {
+        let tool = ConfirmFirstTool::new();
+        let agent = make_agent(fs_read_caps(), vec![tool.clone()], RecordingAudit::new(), vec![]);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let out = agent
+            .run_approved_call("fs.delete", json!({"path": "todo.md"}), &channel)
+            .await;
+        assert_eq!(out, Ok(json!({"deleted": true}).to_string()));
+        assert_eq!(
+            tool.ran_with.lock().unwrap().clone(),
+            vec![json!({"path": "todo.md", "confirmed": true})]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_approved_call_refuses_a_capability_no_longer_held() {
+        let tool = ConfirmFirstTool::new();
+        let agent = make_agent(CapabilitySet::empty(), vec![tool.clone()], RecordingAudit::new(), vec![]);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let err = agent
+            .run_approved_call("fs.delete", json!({"path": "todo.md"}), &channel)
+            .await
+            .unwrap_err();
+        assert!(err.contains("not granted"), "{err}");
+        assert!(tool.ran_with.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_approved_call_refuses_an_unknown_tool() {
+        let agent = make_agent(fs_read_caps(), vec![], RecordingAudit::new(), vec![]);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let err = agent
+            .run_approved_call("nope.tool", json!({}), &channel)
+            .await
+            .unwrap_err();
+        assert!(err.contains("no longer exists"), "{err}");
+    }
+
+    #[test]
+    fn area_flags_any_and_for_base() {
+        assert!(!AreaFlags::everywhere(false).any());
+        assert!(AreaFlags::everywhere(true).any());
+        let mut f = AreaFlags::everywhere(false);
+        f.areas.insert("fs".into(), true);
+        assert!(f.any());
+        assert!(f.for_base("fs.delete"));
+        assert!(!f.for_base("email.send"));
     }
 
     /// A custom planner that, in addition to `VecPlanner`'s scripted

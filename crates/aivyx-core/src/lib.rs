@@ -45,7 +45,7 @@ pub mod textual_tool_call;
 pub mod tools;
 
 pub use agent::{
-    BudgetGate, ConcreteAgent, ConfirmAllAreas, CycleConfig, MAX_STEPS_PER_TURN, RateGate,
+    AreaFlags, BudgetGate, ConcreteAgent, ConfirmAllAreas, CycleConfig, MAX_STEPS_PER_TURN, RateGate,
     TurnBudgetGuard,
     TurnSafety,
 };
@@ -325,10 +325,16 @@ pub struct ApprovalRequest {
     pub input: serde_json::Value,
     /// Why it's asking (the tool's escalation reason).
     pub reason: String,
+    /// The capability base the call needs (`fs.delete`); its first word is
+    /// the autonomy area.
+    pub scope_base: String,
+    /// The trust tier of the channel the call ran on. An approved parked
+    /// call runs at this tier again.
+    pub trust_tier: aivyx_capability::TrustTier,
 }
 
 /// The operator's answer to an [`ApprovalRequest`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Approval {
     Approved,
     Denied,
@@ -336,6 +342,16 @@ pub enum Approval {
     TimedOut,
     /// This channel can't ask (a chat app, a script, an unattended run).
     Unavailable,
+    /// Not taken now: stored under `id` for the operator's later review
+    /// (an unattended run in a `supervised` area).
+    Parked { id: String },
+}
+
+/// What the model is told about a call parked for the operator's review.
+pub fn parked_message(id: &str) -> String {
+    format!(
+        "This step needs the operator's approval, so it was parked for review (id `{id}`) and not taken. Don't rely on it having happened."
+    )
 }
 
 /// A channel's view onto an agent turn. Defined here rather than in
@@ -1112,6 +1128,19 @@ pub trait Agent: Send + Sync {
     fn capabilities(&self) -> &CapabilitySet;
 
     async fn turn(&self, message: Message, channel: &dyn ChannelContext) -> TurnOutcome;
+
+    /// Run one tool call the operator has approved (a parked step) with no
+    /// model involved: capability check → audit → execute → audit, like any
+    /// call, with `operator_approved` set. `Ok` carries a short result;
+    /// `Err` says why it didn't run or how it failed.
+    async fn run_approved_call(
+        &self,
+        _tool: &str,
+        _input: serde_json::Value,
+        _channel: &dyn ChannelContext,
+    ) -> Result<String, String> {
+        Err("this agent can't run approved calls".into())
+    }
 }
 
 /// Shared-ownership agent handle. The turn loop's idiomatic "one agent,
