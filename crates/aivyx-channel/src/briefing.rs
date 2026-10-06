@@ -63,6 +63,26 @@ pub struct TeamGateFact {
     pub goal: String,
 }
 
+/// A step an unattended run parked for review (supervised batching).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParkedFact {
+    pub id: String,
+    pub summary: String,
+    /// Which run parked it ("routine digest").
+    pub origin: String,
+    pub parked_at: i64,
+    /// What the step touches as it is now.
+    pub preview: Option<String>,
+}
+
+/// A parked step resolved inside the window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParkedResolvedFact {
+    pub summary: String,
+    pub state: aivyx_ipc::parked::ParkedState,
+    pub at_unix: i64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProposalFact {
     pub id: String,
@@ -99,6 +119,10 @@ pub struct Facts {
     pub memories_saved: Vec<i64>,
     pub mission_gates: Vec<GateFact>,
     pub team_gates: Vec<TeamGateFact>,
+    /// Steps parked for review, still pending.
+    pub parked_pending: Vec<ParkedFact>,
+    /// Parked steps resolved in the window.
+    pub parked_resolved: Vec<ParkedResolvedFact>,
     pub proposals: Vec<ProposalFact>,
     /// Reminders due within [`REMINDER_LOOKAHEAD_SECS`] (and any already
     /// due the driver hasn't fired yet).
@@ -131,6 +155,19 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 fn item(key: String, sentence: String, detail: Option<String>, action: NeedsYouAction, link: &str) -> NeedsYouItem {
     NeedsYouItem { key, sentence, detail, action, link: link.to_string() }
+}
+
+/// How long ago: "5 min", "3 h", "2 days" (at least "1 min").
+fn ago(secs: i64) -> String {
+    let secs = secs.max(0);
+    if secs < 3600 {
+        format!("{} min", (secs / 60).max(1))
+    } else if secs < DAY {
+        format!("{} h", secs / 3600)
+    } else {
+        let d = secs / DAY;
+        format!("{d} {}", if d == 1 { "day" } else { "days" })
+    }
 }
 
 /// `due_unix` relative to `now`: "due now", "due in 25 min", "due in 1 h
@@ -168,6 +205,16 @@ pub fn compose(f: &Facts, now: i64) -> Briefing {
             None,
             NeedsYouAction::TeamGate { mission_id: g.mission_id.clone(), step: g.step.clone() },
             "mission-control",
+        ));
+    }
+    // Steps unattended runs parked for review (supervised batching).
+    for p in &f.parked_pending {
+        needs.push(item(
+            format!("parked:{}", p.id),
+            format!("The {} is waiting for your go-ahead: {}.", p.origin, p.summary.trim_end_matches('.')),
+            Some(format!("Parked {} ago.", ago(now - p.parked_at))),
+            NeedsYouAction::ParkedStep { id: p.id.clone(), preview: p.preview.clone() },
+            "command",
         ));
     }
     // Proposals.
@@ -270,6 +317,17 @@ pub fn compose(f: &Facts, now: i64) -> Briefing {
             warn: false,
             link: "audit".into(),
         });
+    }
+    for p in &f.parked_resolved {
+        use aivyx_ipc::parked::ParkedState as S;
+        let (sentence, warn) = match p.state {
+            S::Approved => (format!("You approved a parked step: {}.", p.summary), false),
+            S::Denied => (format!("You turned down a parked step: {}.", p.summary), false),
+            S::Lapsed => (format!("A parked step lapsed unreviewed: {}.", p.summary), true),
+            S::Failed => (format!("A parked step you approved failed: {}.", p.summary), true),
+            S::Pending => continue,
+        };
+        log.push(LogEntry { at_unix: p.at_unix, sentence, warn, link: "command".into() });
     }
     if let Some(last) = f.memories_saved.iter().copied().max() {
         log.push(LogEntry {
@@ -662,6 +720,27 @@ pub async fn gather(src: &BriefingSources<'_>, last_here: Option<i64>, now: i64)
         }
     }
 
+    if let Some(parker) = src.parked {
+        match parker.list().await {
+            Ok(steps) => {
+                for s in steps {
+                    if s.state == aivyx_ipc::parked::ParkedState::Pending {
+                        f.parked_pending.push(ParkedFact {
+                            id: s.id,
+                            summary: s.summary,
+                            origin: s.origin,
+                            parked_at: s.parked_at,
+                            preview: s.preview,
+                        });
+                    } else if let Some(at) = s.resolved_at.filter(|t| *t >= window_start) {
+                        f.parked_resolved.push(ParkedResolvedFact { summary: s.summary, state: s.state, at_unix: at });
+                    }
+                }
+            }
+            Err(_) => f.source_errors.push("parked steps".into()),
+        }
+    }
+
     if let Some(store) = src.reminders {
         match store.list().await {
             Ok(all) => {
@@ -714,6 +793,52 @@ mod tests {
         assert!(b.coming_up.is_empty());
         assert_eq!(b.log_more, 0);
         assert_eq!(b.last_active_unix, Some(NOW - 3_600));
+    }
+
+    #[test]
+    fn pending_parked_steps_come_after_gates_with_a_preview() {
+        let mut f = base();
+        f.team_gates = vec![TeamGateFact { mission_id: "t1".into(), step: "deploy".into(), goal: "ship".into() }];
+        f.proposals = vec![ProposalFact { id: "p2".into(), category: "communication style".into(), is_skill: false, reason: None }];
+        f.parked_pending = vec![ParkedFact {
+            id: "ab12cd34".into(),
+            summary: "fs.delete old.txt".into(),
+            origin: "routine tidy".into(),
+            parked_at: NOW - 2 * 3600,
+            preview: Some("Now: old.txt (5 bytes)\nhello".into()),
+        }];
+        let b = compose(&f, NOW);
+        let card = &b.needs_you[1];
+        assert_eq!(card.sentence, "The routine tidy is waiting for your go-ahead: fs.delete old.txt.");
+        assert_eq!(card.detail.as_deref(), Some("Parked 2 h ago."));
+        assert_eq!(card.key, "parked:ab12cd34");
+        assert_eq!(
+            card.action,
+            NeedsYouAction::ParkedStep { id: "ab12cd34".into(), preview: Some("Now: old.txt (5 bytes)\nhello".into()) }
+        );
+        assert_eq!(b.needs_you[2].sentence, "I'd like to update my communication style.");
+    }
+
+    #[test]
+    fn resolved_parked_steps_are_logged() {
+        use aivyx_ipc::parked::ParkedState as S;
+        let mut f = base();
+        f.parked_resolved = [S::Approved, S::Denied, S::Lapsed, S::Failed]
+            .into_iter()
+            .enumerate()
+            .map(|(i, state)| ParkedResolvedFact { summary: "fs.delete a.txt".into(), state, at_unix: NOW - 100 + i as i64 })
+            .collect();
+        let b = compose(&f, NOW);
+        let lines: Vec<(&str, bool)> = b.log.iter().map(|l| (l.sentence.as_str(), l.warn)).collect();
+        assert_eq!(
+            lines,
+            vec![
+                ("You approved a parked step: fs.delete a.txt.", false),
+                ("You turned down a parked step: fs.delete a.txt.", false),
+                ("A parked step lapsed unreviewed: fs.delete a.txt.", true),
+                ("A parked step you approved failed: fs.delete a.txt.", true),
+            ]
+        );
     }
 
     #[test]

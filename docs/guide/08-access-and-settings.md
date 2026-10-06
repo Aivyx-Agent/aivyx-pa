@@ -41,22 +41,22 @@ Autonomy** or with `aivyx-pa autonomy set`:
 |---|---|
 | **Manual** | Every change it makes — saving a note, writing a file, running a command — asks first. Looking things up doesn't. |
 | **Assisted** *(default)* | Only irreversible steps ask. |
-| **Supervised** | As assisted, and it may work through its backlog on its own (the [autonomous loop](15-autonomy-and-routines.md)). |
+| **Supervised** | As assisted, and it may work through its backlog on its own (the [autonomous loop](15-autonomy-and-routines.md)); a step an unattended run would have to refuse is parked for your review instead. |
 | **Autonomous** | As supervised, and routines it creates start without waiting for your approval. |
 | **Unleashed** | For a dedicated, isolated machine only: as autonomous, and deletes and overwrites stop asking — unless you've set `confirm_destructive` under `[access]` yourself. |
 
 Two things hold at every level:
 
 - **Unattended runs never wait for an answer.** A routine, the loop or a team
-  mission that reaches an irreversible step refuses it rather than taking
-  it.
+  mission that reaches an irreversible step never takes it on its own: it
+  refuses it, or — at *supervised* — parks it for you to approve later.
 - **Only you can raise it.** The assistant can never change its own
   autonomy or access.
 
 You can also set a different level for one area — say, manual for email
 but unleashed for files — in the config file; see
-[Autonomy and routines](15-autonomy-and-routines.md). Batching approvals
-for later review at *supervised* is planned but not built yet.
+[Autonomy and routines](15-autonomy-and-routines.md), which also covers
+[reviewing parked steps](15-autonomy-and-routines.md#reviewing-parked-steps).
 
 ## Budgets
 

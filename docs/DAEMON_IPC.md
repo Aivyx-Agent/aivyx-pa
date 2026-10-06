@@ -488,7 +488,7 @@ briefing.rs`):
 | `spend_24h_usd` | Rolling 24 h `LlmCost` spend; `None` if the audit chain couldn't be read. |
 | `spend_untracked` | `true` when some model priced into `spend_24h_usd` has no known rate (`Pricing::cost_of`'s `priced: false`), so the total is a lower bound, not the real spend. A genuinely free local model (`priced: true, usd: 0.0`) does not set this. |
 | `memory_topics` | Operator-visible memory topic count; `None` without a memory substrate. |
-| `needs_you` | `Vec<NeedsYouItem>` — approvals, proposals, failures (a routine that failed several times is one item, "failed N times") and reminders coming up in the next 2 hours (plus any already due the reminder driver hasn't fired yet; soonest first, `detail` = "due in 25 min" / "due in 1 h 10 min" / "due now"), each with a `NeedsYouAction` (`MissionGate`, `TeamGate`, `Review`, `Reminder`, or `Look`) and a `link` to the screen that owns it. |
+| `needs_you` | `Vec<NeedsYouItem>` — approvals, proposals, failures (a routine that failed several times is one item, "failed N times") and reminders coming up in the next 2 hours (plus any already due the reminder driver hasn't fired yet; soonest first, `detail` = "due in 25 min" / "due in 1 h 10 min" / "due now"), each with a `NeedsYouAction` (`MissionGate`, `TeamGate`, `ParkedStep { id, preview }`, `Review`, `Reminder`, or `Look`) and a `link` to the screen that owns it. |
 | `log` | `Vec<LogEntry>`, oldest first, capped at 12 (`briefing::LOG_CAP`). Each has `at_unix`, a first-person `sentence`, `warn` (show the time in the warn colour), and a `link`. |
 | `log_more` | Older log lines left out of `log`; 0 when nothing was cut. |
 | `coming_up` | `Vec<UpcomingItem>` — `at_unix: Option<i64>` (`None` for work already in progress), `sentence`, `link`. |
@@ -498,6 +498,25 @@ which is also the one place that holds the operator-activity clock — not by
 the shared `handle_query` dispatcher the other `QueryPayload` variants go
 through. It is **read-only** and does not itself count as activity.
 
+**`GetParkedSteps`** (no fields) → `ParkedSteps { steps }`: every step an
+unattended run parked for review (its area is `supervised`), newest first,
+as `aivyx_ipc::parked::ParkedStep` — `id`, `tool`, `input` (the exact
+arguments), `summary`, `reason`, `area`, `origin` (the run that parked it),
+`trust_tier`, `parked_at`, `state` (`pending` | `approved` | `denied` |
+`lapsed` | `failed`), `resolved_at`, `result`, and for pending steps a fresh
+`preview` of what the step touches now. Pending steps older than
+`[autonomy] review_expiry_days` lapse when read.
+
+**`ResolveParkedStep { id, approve }`** → `ParkedStepResolved { step }`.
+Approve runs the step once, exactly as parked, at its original trust tier
+(`Agent::run_approved_call`, no model); the result lands in `state`
+(`approved` or `failed`) and `result`. Deny marks it `denied`. A step that
+isn't pending (or doesn't exist) gives `QueryError { code:
+"resolve_parked_step_failed" }`; with no area supervised both queries give
+`QueryError { code: "parked_steps_unavailable" }`. Both are answered by the
+connection loop, like `GetBriefing`; `ResolveParkedStep` is **operator
+activity**.
+
 ### Operator activity
 
 The daemon tracks one clock per process (`aivyx-channel::activity::
@@ -506,7 +525,7 @@ one of the things the operator actually *does* — `is_operator_action`'s
 list: `SubmitInput` (unless `headless: true` — an automated submit isn't the
 operator), `ResolveApproval`, `ResolveGate`,
 `ResolvePersonaProposal`, and the `Query` variants `ResolveTeamGate`,
-`CompleteReminder`, `SnoozeReminder`. Everything else, `GetBriefing` and
+`ResolveParkedStep`, `CompleteReminder`, `SnoozeReminder`. Everything else, `GetBriefing` and
 `GetReminders` included, is a read and never touches the clock.
 
 - **Visits.** Actions less than 30 minutes apart (`activity::

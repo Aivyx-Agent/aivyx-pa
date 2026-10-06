@@ -18,7 +18,8 @@ the agent cannot gain reach, or rewrite itself, without the operator.**
 | RN.3a | The **escalation primitive** — escalations carry their capability `scope`; `is_irreversible_base` classifies the dangerous bases. Groundwork, no behavior change. |
 | RN.5 | **Loop-arming** — `supervised`/`autonomous`/`unleashed` arm the autonomous loop (additive; arms availability only, a run still needs `aivyx-pa loop start`). The dial's first runtime effect. |
 | RN.6a / RN.6b | The **surfaces** — `aivyx-pa autonomy show/set` (CLI) and the Studio Settings "Autonomy" section (over `SetAutonomyLevel`, server-side confirm-first). |
-| Per-area (2026-10-06) | `[[autonomy.override]]` applied per call: an area is a capability's first word (`aivyx_capability::areas()`, validated at load; `schedules` aliases `schedule`; duplicates rejected). `manual` per area via `ConfirmAllAreas` in the turn loop; delete/overwrite confirmation per tool area (`fs`, `git`); looser-than-global overrides warn at start-up and show in `autonomy show` / Studio. Spec: `docs/superpowers/specs/2026-10-06-per-area-autonomy-design.md`. Supervised batching remains open. |
+| Per-area (2026-10-06) | `[[autonomy.override]]` applied per call: an area is a capability's first word (`aivyx_capability::areas()`, validated at load; `schedules` aliases `schedule`; duplicates rejected). `manual` per area via `ConfirmAllAreas` in the turn loop; delete/overwrite confirmation per tool area (`fs`, `git`); looser-than-global overrides warn at start-up and show in `autonomy show` / Studio. Spec: `docs/superpowers/specs/2026-10-06-per-area-autonomy-design.md`. |
+| Supervised batching (2026-10-07) | At `supervised` (per area), an unattended run (trigger fires, headless team missions — specialists ask through the lead's channel) parks a needs-approval call instead of refusing it: `ParkingChannel` answers `Approval::Parked { id }`, the turn carries on, and `StepParker` stores the exact call in `KeyDomain::ParkedSteps`. Review in the Command Center ("Needs you", with a fresh preview) or `aivyx-pa review`; approve runs it once via `Agent::run_approved_call` (no model) at its original trust tier; `[autonomy] review_expiry_days` (default 7) lapses the rest. Audited (`StepParked` / `StepParkFailed` / `ParkedStepResolved`). No supervised area ⇒ unchanged. Spec: `docs/superpowers/specs/2026-10-07-supervised-batching-design.md`. |
 
 **Deliberately not built (and why):**
 
@@ -370,8 +371,9 @@ auto-approve) and RN.5/RN.7.
 
 - ~~**Domain taxonomy for overrides.**~~ Resolved 2026-10-06: the capability
   base's first word, validated against `aivyx_capability::areas()`.
-- **Batched-approval mechanics (`supervised`).** Where the queue lives and how
-  the operator reviews a batch (a Studio inbox? a `aivyx-pa autonomy review`?).
+- ~~**Batched-approval mechanics (`supervised`).**~~ Resolved 2026-10-07: an
+  encrypted parked-steps queue, reviewed in the Command Center or with
+  `aivyx-pa review` (see the supervised-batching row above).
 - **Per-channel autonomy.** Beyond Local, can a *specific* trusted webhook
   carry its own tier? Likely an `[[autonomy.override]]` keyed by channel later.
 - **Hatch + teams.** Whether a Nonagon specialist can ever inherit the §6 hatch

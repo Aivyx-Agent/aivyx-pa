@@ -14,7 +14,7 @@ Autonomy is how much your assistant does without asking you. Set it on
 |---|---|
 | **Manual** | Every change it makes asks you first. It can still look things up. |
 | **Assisted** *(default)* | Only irreversible steps ask. |
-| **Supervised** | The autonomous loop may run (see below). |
+| **Supervised** | The autonomous loop may run (see below), and steps unattended runs can't take are parked for your review. |
 | **Autonomous** | As supervised, and routines it creates start without your approval. |
 | **Unleashed** | For a dedicated, isolated machine: as autonomous, and deletes and overwrites stop asking — unless you've set `confirm_destructive` under `[access]` yourself. |
 
@@ -51,10 +51,44 @@ error, so a typo can't quietly do nothing.
 
 ### Unattended work never waits
 
-When nobody is there to answer — a routine, a webhook, the autonomous loop,
-a team mission — an irreversible step is **refused**, not taken and not
-left hanging. The run says what it would have needed, and you can do it
-yourself or ask for it in a conversation.
+When nobody is there to answer — a routine, a webhook, a file watch, the
+autonomous loop, a team mission — an irreversible step is never taken on
+its own. Usually it is **refused**: the run says what it would have needed,
+and you can do it yourself or ask for it in a conversation. In an area at
+*supervised*, it is **parked** for your review instead.
+
+### Reviewing parked steps
+
+At *supervised* — globally, or for one area with `[[autonomy.override]]` —
+a step an unattended run would otherwise refuse is parked: deleting or
+overwriting a file, sending an email or another outbound write, a git
+commit, anything that would ask you in a conversation. The run carries on
+without it, knowing it didn't happen. Nothing new needs approval; steps
+just wait for you instead of being dropped.
+
+- **Where to review:** the Command Center lists each one under *Needs you*
+  — what it is, which run parked it, how long ago, and what it touches as
+  it is now (for a file, its current contents) — with **Approve** and
+  **Deny**. In a terminal: `aivyx-pa review`.
+- **Approve** runs the exact step once, as it was parked, under the
+  assistant's current permissions. If it can't run any more — the tool is
+  gone or the permission was removed — it is marked failed and nothing
+  happens. **Deny** drops it.
+- **You're told** on your default notification target when something parks.
+- **Steps don't wait forever:** one left unreviewed for
+  `review_expiry_days` (default 7) lapses and never runs.
+
+```toml
+[autonomy]
+level = "assisted"
+review_expiry_days = 7
+
+[[autonomy.override]]
+domain = "fs"
+level = "supervised"    # routines park file deletes for review
+```
+
+With no area at *supervised*, nothing is ever parked.
 
 ## Routines
 

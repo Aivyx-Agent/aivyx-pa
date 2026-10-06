@@ -329,7 +329,27 @@ fn NeedsYouCard(item: NeedsYouItem, view: Signal<View>) -> Element {
                 }
             }
         }
-        NeedsYouAction::ParkedStep { .. } => rsx! {},
+        NeedsYouAction::ParkedStep { id, .. } => {
+            let id2 = id.clone();
+            rsx! {
+                button {
+                    class: "btn",
+                    onclick: move |_| act(ws, state, action_query(QueryPayload::ResolveParkedStep {
+                        id: id.clone(),
+                        approve: true,
+                    })),
+                    "Approve"
+                }
+                button {
+                    class: "btn ghost",
+                    onclick: move |_| act(ws, state, action_query(QueryPayload::ResolveParkedStep {
+                        id: id2.clone(),
+                        approve: false,
+                    })),
+                    "Deny"
+                }
+            }
+        }
         NeedsYouAction::Reminder { id } => {
             let id2 = id.clone();
             rsx! {
@@ -357,6 +377,10 @@ fn NeedsYouCard(item: NeedsYouItem, view: Signal<View>) -> Element {
             p { class: "cc-sentence", "{item.sentence}" }
             if let Some(d) = &item.detail {
                 p { class: "muted", "{d}" }
+            }
+            // A parked step shows what it touches as it is now.
+            if let NeedsYouAction::ParkedStep { preview: Some(preview), .. } = &item.action {
+                pre { class: "cc-preview", "{preview}" }
             }
             div { class: "cc-actions", {buttons} }
         }

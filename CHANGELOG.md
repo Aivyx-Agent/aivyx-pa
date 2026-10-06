@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Supervised batching.** At the `supervised` autonomy level — globally or
+  for one area with `[[autonomy.override]]` — an unattended run (a routine,
+  webhook, file watch, the autonomous loop or a team mission) parks a step
+  that needs your approval instead of refusing it, and carries on without
+  it. Review parked steps under *Needs you* in the Command Center, which
+  shows what each one touches as it is now, or with `aivyx-pa review`; an
+  approved step runs once, exactly as parked. Your default notification
+  target hears when something parks, and steps left unreviewed lapse after
+  `[autonomy] review_expiry_days` (default 7). With no area at
+  `supervised`, nothing changes.
+
 ## [0.16.0] — 2026-10-06
 
 ### Added
