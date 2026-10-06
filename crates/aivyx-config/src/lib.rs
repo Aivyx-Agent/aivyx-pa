@@ -127,6 +127,19 @@ pub fn confirm_destructive_for(configured: &Sourced<bool>, posture: &AutonomyPos
     }
 }
 
+/// Whether third-party integration writes (sending email, writing to
+/// Drive, Calendar, Notion…) ask first: yes, unless the operator explicitly
+/// set `[access] confirm_destructive = false`. Unlike deletes and overwrites
+/// ([`confirm_destructive_for`]), the autonomy level never switches this off
+/// — outbound actions need the operator at every level, `unleashed`
+/// included (AUTONOMY.md §8).
+pub fn confirm_integration_writes_for(configured: &Sourced<bool>) -> bool {
+    match configured.source {
+        FieldSource::Default => true,
+        _ => configured.value,
+    }
+}
+
 // --------------------------------------------------------------------
 // FieldSource & Sourced<T>
 // --------------------------------------------------------------------

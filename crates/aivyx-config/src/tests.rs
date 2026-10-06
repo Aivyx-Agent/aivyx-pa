@@ -12541,3 +12541,14 @@ fn autonomy_decides_confirm_destructive_unless_the_config_says_otherwise() {
     assert!(confirm_destructive_for(&on, &posture(AutonomyLevel::Unleashed)));
     assert!(!confirm_destructive_for(&off, &posture(AutonomyLevel::Assisted)));
 }
+
+#[test]
+fn integration_writes_ask_at_every_autonomy_level_unless_explicitly_off() {
+    use crate::{confirm_integration_writes_for, FieldSource, Sourced};
+    // Unset — even where the access level's default is `false` (sandbox) —
+    // integration writes ask; only an explicit setting turns them off.
+    assert!(confirm_integration_writes_for(&Sourced::new(false, FieldSource::Default)));
+    assert!(confirm_integration_writes_for(&Sourced::new(true, FieldSource::Default)));
+    assert!(!confirm_integration_writes_for(&Sourced::new(false, FieldSource::Toml)));
+    assert!(confirm_integration_writes_for(&Sourced::new(true, FieldSource::Env)));
+}

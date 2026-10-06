@@ -83,7 +83,7 @@ impl TeamAssembly {
         // posture, threaded into `SpecialistFactory::with_confirm_destructive`
         // so every specialist (and the lead, when built through this same
         // factory) honors it, same as every other agent construction path.
-        confirm_destructive: bool,
+        confirm_integration_writes: bool,
     ) -> Result<Self, TeamError> {
         config.validate()?;
         let dialogue = config.dialogue.clone();
@@ -99,7 +99,7 @@ impl TeamAssembly {
             .with_injection_scan_exempt(injection_scan_exempt)
             // Task 4 fix round 1 — same `[access] confirm_destructive`
             // posture as every other agent construction path.
-            .with_confirm_destructive(confirm_destructive);
+            .with_confirm_integration_writes(confirm_integration_writes);
         let pool = Arc::new(SpecialistPool::new(
             factory,
             config.clone(),
@@ -361,7 +361,7 @@ mod tests {
     // A tool that requires a withheld-by-default destructive scope
     // (`email.send` — see `aivyx_capability::WITHHELD_INTEGRATION_BASES`).
     // Its `execute` would happily complete; the point of the test below is
-    // that `confirm_destructive` must stop the call before `execute` ever
+    // that `confirm_integration_writes` must stop the call before `execute` ever
     // runs.
     struct EmailSendTool(aivyx_core::ToolId);
     #[async_trait::async_trait]
@@ -397,15 +397,15 @@ mod tests {
 
     /// Task 4 fix round 3, I2 — `TeamAssembly::build` takes 15 positional
     /// parameters, three of them bare `bool`s (`broker_slot_hint_mode`,
-    /// `injection_scan_enabled`, `confirm_destructive`); a reviewer flagged
+    /// `injection_scan_enabled`, `confirm_integration_writes`); a reviewer flagged
     /// that shape as a real argument-swap risk. This proves
-    /// `confirm_destructive: true` reaches a real specialist's gate through
+    /// `confirm_integration_writes: true` reaches a real specialist's gate through
     /// the whole production path — `TeamAssembly::build` ->
     /// `SpecialistPool::run` -> `SpecialistFactory::with_confirm_destructive`
     /// -> `ConcreteAgent::with_confirm_destructive` — not just that the
     /// field is stored somewhere. Corrected (Task 4 final review, Minor):
     /// a swap with `broker_slot_hint_mode` (`false` in this call) would
-    /// make this test fail, since `confirm_destructive` would then receive
+    /// make this test fail, since `confirm_integration_writes` would then receive
     /// `false` and the call would complete instead of escalating. A swap
     /// with `injection_scan_enabled` specifically would NOT be caught by
     /// this test — both are `true` in this call, so either ordering passes
@@ -450,7 +450,7 @@ mod tests {
             aivyx_core::MessageOrigin::Operator,
             true,
             std::collections::BTreeSet::new(),
-            true, // confirm_destructive
+            true, // confirm_integration_writes
         )
         .expect("valid team");
 

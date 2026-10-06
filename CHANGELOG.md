@@ -21,6 +21,11 @@ All notable changes to Aivyx are recorded here. This project adheres to
   every level except `unleashed`. `aivyx-pa init` writes the key only when
   you decline confirmation, and `access show` and the start-up summary show
   the setting that's actually in effect.
+- **Emails and other integration writes keep asking at `unleashed`.**
+  Sending mail and writing to Drive, Calendar, Contacts, Notion, Obsidian
+  or n8n asks first at every autonomy level; only an explicit
+  `[access] confirm_destructive = false` turns that off. The Studio's
+  Settings now also shows the confirmation setting actually in effect.
 
 ## [0.15.0] — 2026-10-06
 

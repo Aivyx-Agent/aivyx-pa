@@ -187,7 +187,7 @@ pub struct SessionConfig {
     /// flag already wired into the tool-level `fs.write`/`fs.delete`/
     /// `git.commit` configs at the binary's construction sites. `false`
     /// keeps the loop byte-identical to pre-Task-4 behavior.
-    pub confirm_destructive: bool,
+    pub confirm_integration_writes: bool,
     /// `[agent] conversation_history_turns` — how many of this session's
     /// most recent messages are replayed into each turn, as the daemon
     /// does. `0` keeps turns fresh-context (no replay).
@@ -255,7 +255,7 @@ pub struct AgentStackSpec {
     /// arm (the other `AgentStackSpec` construction site) sets it directly,
     /// same pattern as `turn_safety`. `false` leaves the loop
     /// byte-identical to pre-Task-4 behavior.
-    pub confirm_destructive: bool,
+    pub confirm_integration_writes: bool,
     /// Replays the session's earlier messages into each turn. `None`
     /// keeps turns fresh-context; `run_session` sets it from
     /// `SessionConfig::conversation_history_turns`.
@@ -286,7 +286,7 @@ impl AgentStackSpec {
             rate_gate: c.rate_gate.clone(),
             turn_safety: c.turn_safety.clone(),
             checkpointer: None,
-            confirm_destructive: c.confirm_destructive,
+            confirm_integration_writes: c.confirm_integration_writes,
             conversation_seeder: None,
         }
     }
@@ -333,7 +333,7 @@ pub fn build_agent_stack(
         rate_gate,
         turn_safety,
         checkpointer,
-        confirm_destructive,
+        confirm_integration_writes,
         conversation_seeder,
     } = spec;
 
@@ -393,7 +393,7 @@ pub fn build_agent_stack(
     // the tool-level fs.write/fs.delete/git.commit gate; without this the
     // agent-level confirm-destructive gate in `run_tool_call` (D1) never
     // fires for the REPL/Local and voice agent stacks built here.
-    .with_confirm_destructive(confirm_destructive);
+    .with_confirm_integration_writes(confirm_integration_writes);
 
     // Apply the per-turn safety knobs (deadline + small-cycle breaker) through
     // the one shared choke point, so this path can't drift from the others.

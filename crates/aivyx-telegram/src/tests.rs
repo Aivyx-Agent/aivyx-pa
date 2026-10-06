@@ -1044,7 +1044,7 @@ async fn run_telegram_session_drives_two_scripted_turns() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
-        confirm_destructive: false,
+        confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
     };
@@ -1396,7 +1396,7 @@ async fn run_telegram_session_cancelled_turn_renders_and_continues() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
-        confirm_destructive: false,
+        confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
     };
@@ -1868,7 +1868,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             cycle_detection: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
-            confirm_destructive: false,
+            confirm_integration_writes: false,
             budget_gate: None,
             rate_gate: None,
         };
@@ -1885,7 +1885,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             cycle_detection: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
-            confirm_destructive: false,
+            confirm_integration_writes: false,
             budget_gate: None,
             rate_gate: None,
         };
@@ -2363,7 +2363,7 @@ async fn run_telegram_session_in_band_cancel_cancels_current_turn() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
-        confirm_destructive: false,
+        confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
     };
@@ -2626,7 +2626,7 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
-        confirm_destructive: false,
+        confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
     };
@@ -2935,7 +2935,7 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
             cycle_detection: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
-            confirm_destructive: false,
+            confirm_integration_writes: false,
             budget_gate: None,
             rate_gate: None,
         };
@@ -3384,7 +3384,7 @@ async fn telegram_dispatched_mutating_tool_produces_a_checkpoint() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
-        confirm_destructive: false,
+        confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
     };
@@ -3653,7 +3653,7 @@ async fn telegram_injection_scan_disabled_skips_escalation() {
         cycle_detection: None,
         injection_scan_enabled: false,
         injection_scan_exempt: std::collections::BTreeSet::new(),
-        confirm_destructive: false,
+        confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
     };

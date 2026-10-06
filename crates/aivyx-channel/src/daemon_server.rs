@@ -7215,7 +7215,7 @@ fn settings_snapshot(
     aivyx_ipc::protocol::SettingsSnapshot {
         access_level: cfg.access_level.value.as_str().to_string(),
         fs_root: cfg.fs_root.value.display().to_string(),
-        confirm_destructive: cfg.confirm_destructive.value,
+        confirm_destructive: cfg.effective_confirm_destructive(),
         provider: provider_label(cfg.provider.value).to_string(),
         model: cfg.model.value.clone(),
         num_ctx: cfg.ollama_options.num_ctx,
@@ -10235,7 +10235,7 @@ system_prompt = "You are a custom role."
         assert_eq!(snap.provider, "ollama");
         assert_eq!(snap.model, "qwen3:8b");
         assert_eq!(snap.num_ctx, Some(16384));
-        assert!(snap.confirm_destructive, "home is an expanded level");
+        assert!(snap.confirm_destructive, "assisted (the default) asks before deletes");
         assert_eq!(snap.budget.per_run_usd, Some(5.0));
         assert_eq!(snap.budget.on_exceeded, "deny");
         assert!(snap.embeddings_available);

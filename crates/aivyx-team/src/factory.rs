@@ -100,7 +100,7 @@ pub struct SpecialistFactory {
     /// mission's agent-level confirm-destructive gate in `run_tool_call`
     /// (D1) fires exactly like every other agent construction path. `false`
     /// (the default) preserves pre-Task-4 behavior.
-    confirm_destructive: bool,
+    confirm_integration_writes: bool,
 }
 
 impl SpecialistFactory {
@@ -124,7 +124,7 @@ impl SpecialistFactory {
             broker_slot_hint_mode: false,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
-            confirm_destructive: false,
+            confirm_integration_writes: false,
         }
     }
 
@@ -206,8 +206,8 @@ impl SpecialistFactory {
     /// Task 4 fix round 1 — the operator's `[access] confirm_destructive`
     /// posture, applied to every specialist this factory builds. `false`
     /// (the default) preserves pre-Task-4 behavior byte-for-byte.
-    pub fn with_confirm_destructive(mut self, confirm_destructive: bool) -> Self {
-        self.confirm_destructive = confirm_destructive;
+    pub fn with_confirm_integration_writes(mut self, confirm_integration_writes: bool) -> Self {
+        self.confirm_integration_writes = confirm_integration_writes;
         self
     }
 
@@ -289,7 +289,7 @@ impl SpecialistFactory {
         .with_memory_topic_override(memory_topic.map(String::from))
         // Task 4 fix round 1 — same `[access] confirm_destructive` posture
         // every other agent construction path threads through.
-        .with_confirm_destructive(self.confirm_destructive);
+        .with_confirm_integration_writes(self.confirm_integration_writes);
         // Team specialists run autonomously inside a mission — no human watches
         // each turn to `/cancel` a runaway — so they take the autonomous safety
         // posture: the small-cycle breaker as a built-in floor (always on, like

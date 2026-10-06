@@ -280,7 +280,7 @@ fn base_session_config(harness: &Harness, storage: Arc<dyn Storage>) -> SessionC
         system_prompt_refiner: None,
         prompt_refresher: None,
         turn_safety: Default::default(),
-        confirm_destructive: false,
+        confirm_integration_writes: false,
         conversation_history_turns: 0,
         budget_gate: None,
         rate_gate: None,
@@ -698,10 +698,10 @@ async fn scripted_fs_read_out_of_sandbox_path_routes_through_denial_recovery() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 3 — Task 4 fix round 1. Proves `SessionConfig.confirm_destructive`
+// Test 3 — Task 4 fix round 1. Proves `SessionConfig.confirm_integration_writes`
 // actually threads all the way through `run_session` →
 // `AgentStackSpec::from_session_config` → `build_agent_stack` →
-// `ConcreteAgent::with_confirm_destructive` into the D1 dispatch gate in
+// `ConcreteAgent::with_confirm_integration_writes` into the D1 dispatch gate in
 // `aivyx-core::agent::run_tool_call` — not just that the field exists and
 // compiles. `aivyx-core::agent::tests` already proves the gate itself
 // works on a directly-constructed `ConcreteAgent`
@@ -824,7 +824,7 @@ async fn scripted_withheld_scope_escalates_when_confirm_destructive_threads_from
         prompt_refresher: None,
         turn_safety: Default::default(),
         // The field under test.
-        confirm_destructive: true,
+        confirm_integration_writes: true,
         conversation_history_turns: 0,
         budget_gate: None,
         rate_gate: None,
@@ -859,7 +859,7 @@ async fn scripted_withheld_scope_escalates_when_confirm_destructive_threads_from
             );
         }
         other => panic!(
-            "expected TurnOutcome::Escalated — proves SessionConfig.confirm_destructive \
+            "expected TurnOutcome::Escalated — proves SessionConfig.confirm_integration_writes \
              actually reached the built ConcreteAgent's D1 gate through \
              build_agent_stack, not just that the field compiles; got {other:?}"
         ),
@@ -948,7 +948,7 @@ async fn in_process_chat_asks_and_runs_the_approved_call() {
         system_prompt_refiner: None,
         prompt_refresher: None,
         turn_safety: Default::default(),
-        confirm_destructive: true,
+        confirm_integration_writes: true,
         conversation_history_turns: 0,
         budget_gate: None,
         rate_gate: None,

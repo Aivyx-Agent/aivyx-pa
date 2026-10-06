@@ -179,7 +179,7 @@ pub struct TeamRunDeps {
     /// other agent construction path. `false` (the default) preserves
     /// pre-Task-4 behavior byte-for-byte — mirrors `injection_scan_enabled`
     /// above exactly.
-    pub confirm_destructive: bool,
+    pub confirm_integration_writes: bool,
     /// The daemon's own shared kvcache pool/store + served build hash (Task
     /// 5's binding, reused — not re-probed). Passed through to every
     /// specialist's `SpecialistFactory` so a team mission's specialist turns
@@ -1664,7 +1664,7 @@ fn assemble_runtime(
         message_origin,
         deps.injection_scan_enabled,
         deps.injection_scan_exempt.clone(),
-        deps.confirm_destructive,
+        deps.confirm_integration_writes,
     )?;
     Ok((assembly.runtime(), meter))
 }
@@ -2356,7 +2356,7 @@ pub(crate) mod tests {
             checkpointer: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
-            confirm_destructive: false,
+            confirm_integration_writes: false,
             kv_cache_handles: None,
             broker_slot_hint_mode: false,
         }
@@ -2397,7 +2397,7 @@ pub(crate) mod tests {
             checkpointer: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
-            confirm_destructive: false,
+            confirm_integration_writes: false,
             kv_cache_handles: None,
             broker_slot_hint_mode: false,
         }

@@ -356,7 +356,7 @@ fn base_session_config(harness: &MemoryHarness, storage: Arc<dyn Storage>) -> Se
         system_prompt_refiner: None,
         prompt_refresher: None,
         turn_safety: Default::default(),
-        confirm_destructive: false,
+        confirm_integration_writes: false,
         conversation_history_turns: 0,
         budget_gate: None,
         rate_gate: None,

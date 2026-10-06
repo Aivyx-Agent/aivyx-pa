@@ -7637,6 +7637,9 @@ async fn run_async(
         allow_egress_hosts.clone(),
     ));
     // Chapter N — confirm-first posture; see `confirm_destructive_for`.
+    // Integration writes (email, Drive, Calendar…) ask unless explicitly
+    // switched off — the autonomy level doesn't decide those.
+    let confirm_integration_writes = aivyx_config::confirm_integration_writes_for(&confirm_destructive);
     let confirm_destructive =
         aivyx_config::confirm_destructive_for(&confirm_destructive, &autonomy_posture);
     // aivyx-confine — the operator's `[confine]` posture, resolved once
@@ -9449,7 +9452,7 @@ async fn run_async(
             // Task 4 fix round 1 — same `[access] confirm_destructive`
             // posture as every other agent construction path in this
             // function.
-            confirm_destructive,
+            confirm_integration_writes,
         )
         .await;
     }
@@ -9888,7 +9891,7 @@ async fn run_async(
         // child's fs.write/fs.delete/git.commit configs; without this
         // the agent-level confirm-destructive gate in `run_tool_call`
         // (D1) never fires for role-switch child agents.
-        .with_confirm_destructive(confirm_destructive);
+        .with_confirm_integration_writes(confirm_integration_writes);
         // Model routing Part 3b — sensitive tools / channels taint the
         // (shared) session, like the parent.
         let child_agent = match &taint_for_factory {
@@ -10393,7 +10396,7 @@ async fn run_async(
                 // Task 4 fix round 1 — same `[access] confirm_destructive`
                 // posture as every other agent construction path in this
                 // function.
-                confirm_destructive,
+                confirm_integration_writes,
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`
@@ -10442,7 +10445,7 @@ async fn run_async(
                 // confirm-destructive gate in `run_tool_call` (D1) never
                 // fires for the daemon-run agent (every frontend: Local,
                 // Telegram, Web, ... talks to this one agent).
-                .with_confirm_destructive(confirm_destructive);
+                .with_confirm_integration_writes(confirm_integration_writes);
         // Model routing Part 3b — sensitive tools and channels taint the
         // conversation. The one choke point every frontend's turn crosses.
         let daemon_agent = match &taint_sink {
@@ -11244,7 +11247,7 @@ async fn run_async(
                 // posture as the tool-level fs.write/fs.delete/git.commit
                 // gate wired above from this same `confirm_destructive`
                 // local.
-                confirm_destructive,
+                confirm_integration_writes,
                 conversation_history_turns,
                 // Chapter K / Throttle — the same [budget] day cap and [rate_limit]
                 // caps the daemon and voice apply; in-process chat used to skip them.
@@ -11374,7 +11377,7 @@ async fn run_async(
                 // Task 4 security-audit fix round 3 — same [access]
                 // confirm_destructive posture as every other agent
                 // construction path in this function.
-                confirm_destructive,
+                confirm_integration_writes,
                 // Chapter K / Throttle — the same [budget] day cap and [rate_limit]
                 // caps the daemon and voice apply; in-process chat used to skip them.
                 budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
@@ -11509,7 +11512,7 @@ async fn run_async(
                 // Task 4 security-audit fix round 3 — same [access]
                 // confirm_destructive posture as every other agent
                 // construction path in this function.
-                confirm_destructive,
+                confirm_integration_writes,
                 // Chapter K / Throttle — the same [budget] day cap and [rate_limit]
                 // caps the daemon and voice apply; in-process chat used to skip them.
                 budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
@@ -11680,7 +11683,7 @@ async fn run_async(
                 // Task 4 security-audit fix round 3 — same [access]
                 // confirm_destructive posture as every other agent
                 // construction path in this function.
-                confirm_destructive,
+                confirm_integration_writes,
                 // Chapter K / Throttle — the same [budget] day cap and [rate_limit]
                 // caps the daemon and voice apply; in-process chat used to skip them.
                 budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
@@ -11836,7 +11839,7 @@ async fn run_async(
                     // Task 4 fix round 1 — same `[access] confirm_destructive`
                     // posture as the Local arm and the tool-level
                     // fs.write/fs.delete/git.commit gate.
-                    confirm_destructive,
+                    confirm_integration_writes,
                     conversation_seeder: None,
                 };
                 let agent = aivyx_channel::build_agent_stack(

@@ -458,7 +458,13 @@ impl ConcreteAgent {
         self
     }
 
-    pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
+    /// Whether third-party integration writes (`email.send`, `drive.write`,
+    /// … — `is_withheld_integration_base`) ask first. On unless the operator
+    /// explicitly set `[access] confirm_destructive = false`; the autonomy
+    /// level never switches it off (outbound actions need the operator at
+    /// every level, `unleashed` included). Deletes and overwrites are gated
+    /// separately, inside the fs/git tools.
+    pub fn with_confirm_integration_writes(mut self, confirm: bool) -> Self {
         self.confirm_destructive = confirm;
         self
     }
@@ -6238,7 +6244,7 @@ mod tests {
         ];
 
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan)
-            .with_confirm_destructive(true);
+            .with_confirm_integration_writes(true);
 
         let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
         let message = Message::text(channel.session, "send the email");
@@ -6301,7 +6307,7 @@ mod tests {
             NextStep::FinalMessage("sent".to_string()),
         ];
         let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan)
-            .with_confirm_destructive(true);
+            .with_confirm_integration_writes(true);
         let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
 
         let asked = agent.turn(Message::text(channel.session, "send it"), &channel).await;
