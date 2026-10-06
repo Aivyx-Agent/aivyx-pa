@@ -5,6 +5,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Different autonomy levels for different areas.** `[[autonomy.override]]`
+  now does what it says: `domain = "email"`, `level = "manual"` makes every
+  email change ask first, and `domain = "fs"`, `level = "unleashed"` stops
+  file deletes and overwrites asking, while the rest follow the global
+  level. An area is the first word of a capability (`fs`, `shell`, `git`,
+  `email`…); an unknown or repeated area is a config error, an override
+  looser than the global level is called out at start-up, and
+  `aivyx-pa autonomy show` and the Studio list them.
+
 ### Fixed
 
 - **Switching to the sandbox stopped deletes and overwrites asking.**

@@ -7228,6 +7228,11 @@ fn settings_snapshot(
         embeddings_available,
         cycle_detection: cfg.cycle_detection.unwrap_or(false),
         autonomy_level: cfg.autonomy_level.value.as_str().to_string(),
+        autonomy_overrides: cfg
+            .autonomy_overrides
+            .iter()
+            .map(|o| (o.domain.clone(), o.level.as_str().to_string()))
+            .collect(),
     }
 }
 

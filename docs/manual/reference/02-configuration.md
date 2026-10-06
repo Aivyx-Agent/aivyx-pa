@@ -242,8 +242,8 @@ How much the agent may do without asking you, with per-domain exceptions. See [A
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `domain` | string |  | The area this applies to. Today only `schedules` changes behaviour (whether routines the agent creates need approval); other domains are accepted and shown by `autonomy show`. |
-| `level` | `manual` \| `assisted` \| `supervised` \| `autonomous` \| `unleashed` |  | The autonomy level for calls in that domain. The most specific match wins. |
+| `domain` | string |  | The area this applies to: the first word of a capability (`fs`, `shell`, `git`, `email`…; `aivyx-pa autonomy show` lists them). An unknown area is an error; `schedules` also works. |
+| `level` | `manual` \| `assisted` \| `supervised` \| `autonomous` \| `unleashed` |  | The autonomy level for calls in that area: `manual` asks before every change there; `unleashed` stops deletes and overwrites asking for that area's tools. |
 
 #### `[autonomy.auto_approve]`
 

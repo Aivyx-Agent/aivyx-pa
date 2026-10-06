@@ -21,20 +21,33 @@ Autonomy is how much your assistant does without asking you. Set it on
 Raising it to *autonomous* or *unleashed* asks you to confirm. The assistant
 can never raise its own level.
 
-**Different levels for different areas** are on the way. The config file
-already accepts per-area overrides, but today only one area is applied:
-`schedules`, which decides whether routines the assistant creates need your
-approval. For example, to let it set up routines freely while keeping
-everything else at *assisted*:
+**Different levels for different areas.** "Autonomous at coding, manual on
+email" is a real need, so you can set a level per **area** in the config
+file. An area is the first word of what a tool does — `fs` (files),
+`shell`, `git`, `email`, `calendar`, `drive`, `mcp`, `memory`, `schedule`
+and so on; `aivyx-pa autonomy show` lists them all.
 
 ```toml
 [autonomy]
 level = "assisted"
 
 [[autonomy.override]]
-domain = "schedules"
-level = "autonomous"
+domain = "email"
+level = "manual"        # every email change asks first
+
+[[autonomy.override]]
+domain = "fs"
+level = "unleashed"     # file deletes and overwrites stop asking
 ```
+
+Per area, `manual` makes every change ask, and `unleashed` stops deletes
+and overwrites asking for that area's tools (files, or git commits).
+Sending email and other outbound actions still ask at every level. The
+`schedule` area also decides whether routines the assistant creates need
+your approval. The autonomous loop is switched on by the global level only.
+An override that gives an area *more* freedom than the global level is
+called out when the assistant starts, and an unknown area name is an
+error, so a typo can't quietly do nothing.
 
 ### Unattended work never waits
 

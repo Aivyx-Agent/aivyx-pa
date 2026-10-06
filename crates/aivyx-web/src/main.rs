@@ -6906,13 +6906,24 @@ fn SettingsPanel() -> Element {
                         option { value: "assisted", "assisted — irreversible steps ask you first (default)" }
                         option { value: "supervised", "supervised — may work its backlog on its own; irreversible steps still ask" }
                         option { value: "autonomous", "autonomous — works its backlog on its own, within caps; irreversible steps still ask" }
-                        option { value: "unleashed", "unleashed — acts without asking, even irreversibly (isolated machines only)" }
+                        option { value: "unleashed", "unleashed — deletes and overwrites run without asking; emails and other outbound actions still ask (isolated machines only)" }
                     }
                 }
                 p { class: "label-tech sub",
-                    "Per-domain overrides and the auto-approve allowlist are edited in "
+                    if snap.autonomy_overrides.is_empty() {
+                        "Per-area overrides: none. "
+                    } else {
+                        "Per-area overrides: "
+                    }
+                    for (area, lvl) in snap.autonomy_overrides.iter() {
+                        code { "{area} → {lvl}" }
+                        " "
+                    }
+                    "Overrides are edited in "
                     code { "aivyx-pa.toml" }
-                    " for now. Takes effect on the next restart."
+                    " ("
+                    code { "[[autonomy.override]]" }
+                    "). Takes effect on the next restart."
                 }
                 div { class: "actions",
                     button {

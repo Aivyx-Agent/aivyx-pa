@@ -184,10 +184,10 @@ aivyx-pa autonomy set <manual|assisted|supervised|autonomous|unleashed> [--yes]
 
 Batching approvals for review at `supervised` is designed but not built yet.
 Unattended runs (routines, the loop) never wait for an answer: an
-irreversible step there is refused. Per-domain exceptions live in
-`[[autonomy.override]]`; `autonomy show` displays them, but today only the
-`schedules` domain changes behaviour (whether agent-created routines need
-approval).
+irreversible step there is refused. Per-area exceptions live in
+`[[autonomy.override]]` (an area is the first word of a capability, such
+as `fs`, `shell` or `email`); `autonomy show` lists each override, what it
+changes, and the valid area names.
 
 `autonomous` and `unleashed` ask you to confirm unless `--yes`. The agent can
 never raise its own level. See [Autonomy and routines](../../guide/15-autonomy-and-routines.md)

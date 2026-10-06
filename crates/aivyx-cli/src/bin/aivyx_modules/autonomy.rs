@@ -111,10 +111,28 @@ fn render_autonomy_for_show(cfg: &AivyxConfig) -> String {
         out.push_str("  overrides = (none)\n");
     } else {
         out.push_str("  overrides:\n");
+        let looser = aivyx_config::looser_overrides(cfg.autonomy_level.value, &cfg.autonomy_overrides);
         for ov in &cfg.autonomy_overrides {
-            out.push_str(&format!("    [{}] → {}\n", ov.domain, ov.level));
+            let posture = ov.level.expand();
+            let effect = if matches!(posture.gate, aivyx_config::GatePosture::ConfirmAll) {
+                "asks before any change"
+            } else if posture.confirm_destructive {
+                "deletes and overwrites ask"
+            } else {
+                "deletes and overwrites run"
+            };
+            let note = if looser.iter().any(|o| o.domain == ov.domain) {
+                "; looser than global"
+            } else {
+                ""
+            };
+            out.push_str(&format!("    [{}] → {} ({effect}{note})\n", ov.domain, ov.level));
         }
     }
+    out.push_str(&format!(
+        "  areas: {}\n",
+        aivyx_capability::areas().into_iter().collect::<Vec<_>>().join(", ")
+    ));
 
     if cfg.autonomy_auto_approve.is_empty() {
         out.push_str("  auto_approve = (none)\n");
@@ -257,5 +275,27 @@ mod tests {
             "override shown: {out}"
         );
         assert!(out.contains("fs.write"), "allowlist shown: {out}");
+    }
+
+    #[test]
+    fn show_explains_each_area_override() {
+        let dir = std::env::temp_dir().join(format!("aivyx-autonomy-areas-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let toml = dir.join("aivyx-pa.toml");
+        std::fs::write(
+            &toml,
+            "[autonomy]\nlevel = \"assisted\"\n\
+             \n[[autonomy.override]]\ndomain = \"email\"\nlevel = \"manual\"\n\
+             \n[[autonomy.override]]\ndomain = \"fs\"\nlevel = \"unleashed\"\n",
+        )
+        .unwrap();
+        let out = render_autonomy_for_show(&load_config_for_inspection(&toml).unwrap());
+        assert!(out.contains("[email] → manual (asks before any change)"), "{out}");
+        assert!(
+            out.contains("[fs] → unleashed (deletes and overwrites run; looser than global)"),
+            "{out}"
+        );
+        assert!(out.contains("areas:") && out.contains("calendar"), "{out}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

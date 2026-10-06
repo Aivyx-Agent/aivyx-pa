@@ -1676,6 +1676,10 @@ pub struct SettingsSnapshot {
     /// Chapter Reins — `[autonomy] level` (`manual | assisted | supervised |
     /// autonomous | unleashed`; matches the dial). `assisted` is the default.
     pub autonomy_level: String,
+    /// Per-area `[[autonomy.override]]` entries as `(area, level)`, in config
+    /// order. Absent from an older daemon ⇒ none.
+    #[serde(default)]
+    pub autonomy_overrides: Vec<(String, String)>,
 }
 
 /// Chapter U — wire mirror of the `[budget]` caps (a plain-field copy of
@@ -4955,6 +4959,7 @@ mod tests {
             embeddings_available: false,
             cycle_detection: true,
             autonomy_level: "supervised".into(),
+            autonomy_overrides: vec![("email".into(), "manual".into())],
         }
     }
 
