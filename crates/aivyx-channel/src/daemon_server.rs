@@ -470,6 +470,10 @@ pub struct DaemonConfig {
     /// `TeamRun` / `TeamMissionList` / `TeamMissionStatus` / `ResolveTeamGate`
     /// IPC handlers operate on it. `None` disables the team-mission surface.
     pub team_missions: Option<crate::team_mission_driver::TeamMissionService>,
+    /// Supervised batching — parks needs-approval calls from unattended runs
+    /// in `supervised` areas, and answers the `GetParkedSteps` /
+    /// `ResolveParkedStep` queries. `None` when no area is supervised.
+    pub step_parker: Option<Arc<crate::parked_steps::StepParker>>,
     /// Chapter H — the daemon's default gate policy. `Interactive` (the
     /// default) parks an escalated turn behind an operator gate and waits;
     /// `RejectAndAbort` (headless) records the refusal and finalizes without a
@@ -814,6 +818,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         loop_state,
         loop_config,
         team_missions,
+        step_parker,
         gate_policy,
         workspace_journaling_interval,
         pricing,
@@ -922,6 +927,28 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
     trigger_dispatch = trigger_dispatch.with_default_notify_target(default_notify_target.clone());
     if let Some(ref nd) = notify_dispatcher {
         trigger_dispatch = trigger_dispatch.with_notify_dispatcher(Arc::clone(nd));
+    }
+    // Supervised batching — headless fires park needs-approval calls in
+    // `supervised` areas; an hourly sweep lapses ones left unreviewed.
+    if let Some(ref parker) = step_parker {
+        trigger_dispatch = trigger_dispatch.with_step_parker(Arc::clone(parker));
+        let parker = Arc::clone(parker);
+        let lapse_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        match parker.lapse_expired().await {
+                            Ok(0) => {}
+                            Ok(n) => eprintln!("aivyx-pa daemon: {n} parked step(s) lapsed unreviewed"),
+                            Err(e) => eprintln!("aivyx-pa daemon: couldn't check parked steps: {e}"),
+                        }
+                    }
+                    _ = lapse_shutdown.cancelled() => break,
+                }
+            }
+        });
     }
     // Phase 67 — audit auto-notify dispatches into the same
     // persistent chain that records TurnStarted/TurnEnded, so
@@ -1821,6 +1848,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             loop_state: loop_state.clone(),
             loop_config: loop_config.clone(),
             team_missions: team_missions.clone(),
+            step_parker: step_parker.clone(),
             gate_policy,
             channel_trigger_authz,
             config_toml_path: config_toml_path.clone(),
@@ -2127,6 +2155,8 @@ struct ConnectionContext {
     /// Chapter L (L.5) — the team-mission service for the `TeamRun` /
     /// `TeamMissionList` / `TeamMissionStatus` / `ResolveTeamGate` handlers.
     team_missions: Option<crate::team_mission_driver::TeamMissionService>,
+    /// Supervised batching — see `DaemonConfig::step_parker`.
+    step_parker: Option<Arc<crate::parked_steps::StepParker>>,
     gate_policy: GatePolicy,
     /// Piece C — per-channel-type authorization for `/team run`.
     channel_trigger_authz: ChannelTriggerAuthz,
@@ -2206,6 +2236,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         loop_state,
         loop_config,
         team_missions,
+        step_parker,
         gate_policy,
         channel_trigger_authz,
         config_toml_path,
@@ -3153,6 +3184,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     audit_log: audit_log.as_deref(),
                                     persona_proposals: persona_proposal_log.as_deref(),
                                     team_missions: team_missions.as_ref(),
+                                    parked: step_parker.as_deref(),
                                     reminders: reminder_store.as_ref(),
                                     memory: memory.as_ref(),
                                     pricing: &pricing,
@@ -3167,6 +3199,15 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 QueryResponsePayload::Briefing {
                                     briefing: crate::briefing::compose(&facts, now),
                                 }
+                            } else if let Some(r) = crate::parked_steps::handle_parked_query(
+                                &payload,
+                                step_parker.as_deref(),
+                                &agent,
+                                &channel_factory,
+                            )
+                            .await
+                            {
+                                r
                             } else {
                                 handle_query(
                                     payload,
@@ -4096,6 +4137,7 @@ async fn run_single_connection_daemon(
         loop_state: None,
         loop_config: None,
         team_missions: None,
+        step_parker: None,
         gate_policy: GatePolicy::default(),
         channel_trigger_authz: ChannelTriggerAuthz::default(),
         config_toml_path: None,
@@ -4197,6 +4239,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         loop_state: None,
         loop_config: None,
         team_missions: None,
+        step_parker: None,
         gate_policy: GatePolicy::default(),
         pricing: Default::default(),
         config_toml_path: None,

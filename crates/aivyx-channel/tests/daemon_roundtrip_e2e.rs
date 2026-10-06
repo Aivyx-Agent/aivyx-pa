@@ -896,6 +896,7 @@ async fn two_concurrent_connections() {
             loop_state: None,
             loop_config: None,
             team_missions: None,
+            step_parker: None,
             gate_policy: aivyx_core::GatePolicy::default(),
             workspace_journaling_interval: None,
             pricing: Default::default(),
@@ -1243,6 +1244,7 @@ async fn telegram_frontend_type_gets_telegram_channel() {
             loop_state: None,
             loop_config: None,
             team_missions: None,
+            step_parker: None,
             gate_policy: aivyx_core::GatePolicy::default(),
             workspace_journaling_interval: None,
             pricing: Default::default(),
@@ -1386,6 +1388,7 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
             loop_state: None,
             loop_config: None,
             team_missions: None,
+            step_parker: None,
             gate_policy: aivyx_core::GatePolicy::default(),
             workspace_journaling_interval: None,
             pricing: Default::default(),
@@ -1874,6 +1877,7 @@ async fn escalation_gate_wiring_approve_resumes_turn() {
             loop_state: None,
             loop_config: None,
             team_missions: None,
+            step_parker: None,
             gate_policy: aivyx_core::GatePolicy::default(),
             workspace_journaling_interval: None,
             pricing: Default::default(),
@@ -2197,6 +2201,7 @@ async fn escalation_gate_wiring_reject_fails_mission() {
             loop_state: None,
             loop_config: None,
             team_missions: None,
+            step_parker: None,
             gate_policy: aivyx_core::GatePolicy::default(),
             workspace_journaling_interval: None,
             pricing: Default::default(),
@@ -2739,6 +2744,7 @@ async fn mission_queries_round_trip_over_ipc() {
             loop_state: None,
             loop_config: None,
             team_missions: None,
+            step_parker: None,
             gate_policy: aivyx_core::GatePolicy::default(),
             workspace_journaling_interval: None,
             pricing: Default::default(),
@@ -3083,6 +3089,30 @@ async fn team_queries_without_service_return_query_error() {
         assert_eq!(code, "no_team_missions", "query {id}");
     }
 
+    // Supervised batching — with no area supervised, the parked-step queries
+    // are answered by the connection loop with a clear error.
+    for (id, payload) in [
+        ("parked-list", QueryPayload::GetParkedSteps),
+        ("parked-resolve", QueryPayload::ResolveParkedStep { id: "x".into(), approve: true }),
+    ] {
+        let q = FrontendMessage::Query { id: id.into(), payload };
+        writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+        let code = loop {
+            match decode_frame::<DaemonEnvelope>(&buf) {
+                Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
+                    buf.drain(..consumed);
+                    match payload {
+                        QueryResponsePayload::QueryError { code, .. } => break code,
+                        other => panic!("expected QueryError, got {other:?}"),
+                    }
+                }
+                Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+                other => panic!("expected QueryResponse, got {other:?}"),
+            }
+        };
+        assert_eq!(code, "parked_steps_unavailable", "query {id}");
+    }
+
     let _ = writer
         .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
         .await;
@@ -3211,6 +3241,7 @@ async fn audit_queries_round_trip_over_ipc() {
             loop_state: None,
             loop_config: None,
             team_missions: None,
+            step_parker: None,
             gate_policy: aivyx_core::GatePolicy::default(),
             workspace_journaling_interval: None,
             pricing: Default::default(),

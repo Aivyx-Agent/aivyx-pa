@@ -67,6 +67,20 @@ impl std::fmt::Display for TriggerSource {
     }
 }
 
+/// How a parked step names the run that parked it: `routine digest`,
+/// `webhook deploy`, `file watch inbox`, `autonomous loop`.
+pub fn origin_label(source: TriggerSource, trigger_id: &str) -> String {
+    let id = trigger_id.strip_prefix("cfg-").unwrap_or(trigger_id);
+    match source {
+        TriggerSource::Cron => format!("routine {id}"),
+        TriggerSource::Webhook => format!("webhook {id}"),
+        TriggerSource::FileWatch => format!("file watch {id}"),
+        TriggerSource::Reflection => "reflection".to_string(),
+        TriggerSource::Loop => "autonomous loop".to_string(),
+        TriggerSource::Mission => format!("mission {id}"),
+    }
+}
+
 impl From<TriggerSource> for TriggerKindSummary {
     /// Phase 67 — runtime trigger kind → audit summary kind.
     /// One-way conversion used by the audit-emission path in
@@ -163,6 +177,11 @@ pub struct TriggerDispatch {
     /// conversation through it before the turn runs; `None` (the default)
     /// ⇒ nothing is ever armed.
     arming: Option<Arc<dyn aivyx_core::EscalationArming>>,
+    /// Supervised batching — when set, a headless fire parks a
+    /// needs-approval call in a `supervised` area for the operator's review
+    /// instead of refusing it. `None` (no area is supervised) ⇒ refused as
+    /// before.
+    step_parker: Option<Arc<crate::parked_steps::StepParker>>,
 }
 
 /// Phase 73 — per-target retry + rate-limit policy snapshot.
@@ -280,7 +299,15 @@ impl TriggerDispatch {
             // Trigger fires are operator-absent → headless by default.
             gate_policy: GatePolicy::RejectAndAbort,
             arming: None,
+            step_parker: None,
         }
+    }
+
+    /// Supervised batching — park needs-approval calls in `supervised` areas
+    /// (headless fires only).
+    pub fn with_step_parker(mut self, parker: Arc<crate::parked_steps::StepParker>) -> Self {
+        self.step_parker = Some(parker);
+        self
     }
 
     /// Model routing Part 3b (A16) — attach the `on_failure` arming so
@@ -424,6 +451,19 @@ impl TriggerDispatch {
             } else {
                 (self.channel_factory)(FrontendType::Local)
             };
+        // Supervised batching — nobody is here to answer, so a
+        // needs-approval call in a `supervised` area is parked for the
+        // operator's review instead of refused.
+        let channel: Arc<dyn aivyx_core::ChannelContext + Send + Sync> = match &self.step_parker {
+            Some(parker) if self.gate_policy.is_headless() => {
+                Arc::new(crate::parked_steps::ParkingChannel::new(
+                    channel,
+                    Arc::clone(parker),
+                    origin_label(source, trigger_id),
+                ))
+            }
+            _ => channel,
+        };
         // Phase 67 — keep the session_id around so the audit
         // event can carry it; the same id is recorded on the
         // `TurnStarted` audit entry emitted from agent.turn().
@@ -998,6 +1038,134 @@ mod tests {
     // only: webhook now observes `Untrusted`, while another
     // operator-configured source (`Cron`) is unaffected and still
     // observes `Trusted`.
+
+    mod parking_tests {
+        use super::*;
+        use aivyx_capability::{CapabilitySet, TrustTier};
+        use aivyx_core::{
+            AgentId, Approval, ApprovalRequest, AreaFlags, CancellationToken as CoreCancellationToken,
+            ChannelContext, ChannelError, ChannelPlatform, StreamEvent,
+        };
+        use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+        use std::sync::Mutex as StdMutex;
+
+        /// Asks for approval of an `fs.delete` and records the answer.
+        struct AskingAgent {
+            id: AgentId,
+            caps: CapabilitySet,
+            answer: Arc<StdMutex<Option<Approval>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl Agent for AskingAgent {
+            fn id(&self) -> AgentId {
+                self.id
+            }
+            fn capabilities(&self) -> &CapabilitySet {
+                &self.caps
+            }
+            async fn turn(&self, _message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
+                let answer = channel
+                    .request_approval(&ApprovalRequest {
+                        tool: "fs.delete".into(),
+                        summary: "fs.delete old.txt".into(),
+                        input: serde_json::json!({"path": "old.txt"}),
+                        reason: "deleting can't be undone".into(),
+                        scope_base: "fs.delete".into(),
+                        trust_tier: channel.trust_tier(),
+                    })
+                    .await;
+                *self.answer.lock().unwrap() = Some(answer);
+                TurnOutcome::Completed {
+                    final_message: "ok".to_string(),
+                    tool_calls_made: 0,
+                    duration: Duration::from_millis(0),
+                }
+            }
+        }
+
+        struct LocalCantAsk;
+
+        #[async_trait::async_trait]
+        impl ChannelContext for LocalCantAsk {
+            fn channel_name(&self) -> &str {
+                "test-local"
+            }
+            fn platform(&self) -> ChannelPlatform {
+                ChannelPlatform::Local
+            }
+            fn trust_tier(&self) -> TrustTier {
+                TrustTier::Trusted
+            }
+            fn session_id(&self) -> SessionId {
+                SessionId::new()
+            }
+            async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            fn cancellation_token(&self) -> CoreCancellationToken {
+                CoreCancellationToken::new()
+            }
+        }
+
+        async fn answer_for(parker: Option<Arc<crate::parked_steps::StepParker>>, policy: GatePolicy) -> Approval {
+            let answer = Arc::new(StdMutex::new(None));
+            let channel_factory: ChannelFactory = Arc::new(|_ft: FrontendType| {
+                Arc::new(LocalCantAsk) as Arc<dyn ChannelContext + Send + Sync>
+            });
+            let mut dispatch = TriggerDispatch::new(
+                Arc::new(AskingAgent { id: AgentId::new(), caps: CapabilitySet::empty(), answer: Arc::clone(&answer) }),
+                channel_factory,
+            )
+            .with_gate_policy(policy);
+            if let Some(p) = parker {
+                dispatch = dispatch.with_step_parker(p);
+            }
+            dispatch
+                .fire(TriggerSource::Cron, "cfg-tidy", "tidy up", false, &[], aivyx_config::NotifyWhen::Always)
+                .await;
+            answer.lock().unwrap().clone().expect("the agent asked")
+        }
+
+        #[tokio::test]
+        async fn a_headless_fire_parks_a_supervised_call() {
+            let dir = std::env::temp_dir().join(format!("aivyx-trigger-park-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let storage: Arc<dyn Storage> = RedbStorage::open(
+                StorageConfig::new(dir.join("s.redb")),
+                aivyx_crypto::MasterKey::from_raw([5u8; 32]),
+            )
+            .await
+            .unwrap();
+            let mut fs = AreaFlags::everywhere(false);
+            fs.areas.insert("fs".into(), true);
+            let parker = Arc::new(crate::parked_steps::StepParker::new(storage.domain(KeyDomain::ParkedSteps), fs, 7));
+
+            let parked = answer_for(Some(Arc::clone(&parker)), GatePolicy::RejectAndAbort).await;
+            assert!(matches!(parked, Approval::Parked { .. }), "{parked:?}");
+            let steps = parker.list().await.unwrap();
+            assert_eq!(steps.len(), 1);
+            assert_eq!(steps[0].origin, "routine tidy");
+
+            // An attended (interactive) fire isn't parked.
+            let attended = answer_for(Some(Arc::clone(&parker)), GatePolicy::Interactive).await;
+            assert_eq!(attended, Approval::Unavailable);
+            // No parker: refused as before.
+            assert_eq!(answer_for(None, GatePolicy::RejectAndAbort).await, Approval::Unavailable);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn origin_labels_name_the_run() {
+            assert_eq!(origin_label(TriggerSource::Cron, "cfg-digest"), "routine digest");
+            assert_eq!(origin_label(TriggerSource::Webhook, "deploy"), "webhook deploy");
+            assert_eq!(origin_label(TriggerSource::FileWatch, "inbox"), "file watch inbox");
+            assert_eq!(origin_label(TriggerSource::Loop, "x"), "autonomous loop");
+        }
+    }
 
     mod tier_override_tests {
         use super::*;

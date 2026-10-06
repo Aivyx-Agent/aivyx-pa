@@ -123,6 +123,7 @@ pub fn is_operator_action(msg: &FrontendMessage) -> bool {
         FrontendMessage::Query { payload, .. } => matches!(
             payload,
             QueryPayload::ResolveTeamGate { .. }
+                | QueryPayload::ResolveParkedStep { .. }
                 | QueryPayload::CompleteReminder { .. }
                 | QueryPayload::SnoozeReminder { .. }
         ),
@@ -184,6 +185,10 @@ mod tests {
             FrontendMessage::Query {
                 id: "x".into(),
                 payload: QueryPayload::ResolveTeamGate { mission_id: "m".into(), step: "s".into(), approve: true },
+            },
+            FrontendMessage::Query {
+                id: "x".into(),
+                payload: QueryPayload::ResolveParkedStep { id: "p".into(), approve: false },
             },
         ];
         for m in &yes {

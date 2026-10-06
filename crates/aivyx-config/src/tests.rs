@@ -12257,6 +12257,24 @@ fn autonomy_per_domain_overrides_resolve() {
     drop(env);
 }
 
+/// Supervised batching — parked steps lapse after 7 days unless
+/// `[autonomy] review_expiry_days` says otherwise; 0 is an error.
+#[test]
+fn review_expiry_days_defaults_reads_and_rejects_zero() {
+    let env = EnvScope::new();
+    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).expect("load");
+    assert_eq!(cfg.autonomy_review_expiry_days, 7);
+    let cfg = load_with_toml("\n[autonomy]\nreview_expiry_days = 2\n", "review-expiry");
+    assert_eq!(cfg.autonomy_review_expiry_days, 2);
+    let err = load_with_toml_result("\n[autonomy]\nreview_expiry_days = 0\n", "review-expiry-zero")
+        .expect_err("0 days must error");
+    assert!(
+        matches!(err, ConfigError::Invalid { field, .. } if field == "autonomy.review_expiry_days"),
+        "{err:?}"
+    );
+    drop(env);
+}
+
 /// An `[[autonomy.override]]` with no `domain` is a typed `Invalid` error —
 /// invalid config never silently loads.
 #[test]

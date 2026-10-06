@@ -198,6 +198,11 @@ pub struct TeamRunDeps {
     /// `kv_cache_handles` in practice (see that field's own doc comment).
     /// `false` (the default) preserves pre-broker behavior.
     pub broker_slot_hint_mode: bool,
+    /// Supervised batching — when set, a headless mission parks a
+    /// needs-approval call (the lead's or a specialist's) in a `supervised`
+    /// area for the operator's review instead of refusing it. `None` (no area
+    /// is supervised) ⇒ refused as before.
+    pub step_parker: Option<Arc<crate::parked_steps::StepParker>>,
 }
 
 /// In-memory registry of daemon-run team missions, backed by the encrypted
@@ -716,7 +721,16 @@ pub async fn drive_registered(
         let (runtime, meter) =
             assemble_runtime(deps, config, message_origin, seed_tokens, seed_usd)?;
         let budget_guard = meter.map(|m| (m, deps.mission_budget.clone()));
-        let phase = drive(shared, runtime, id, policy, &deps.audit, budget_guard).await?;
+        let phase = drive(
+            shared,
+            runtime,
+            id,
+            policy,
+            &deps.audit,
+            budget_guard,
+            deps.step_parker.as_ref(),
+        )
+        .await?;
         // Only a completed mission is artifact-graded; anything else is terminal.
         if phase != TeamMissionPhase::Done || !deps.verify_missions {
             if let Some(record) = shared.snapshot(id) {
@@ -1721,6 +1735,8 @@ async fn drive(
     // tracks this mission's spend and the budget says when to halt. `None` ⇒
     // unbounded (the observer's `should_halt` stays the default no-op).
     budget_guard: Option<(crate::mission_meter::MissionMeter, aivyx_cost::MissionBudget)>,
+    // Supervised batching — see `TeamRunDeps::step_parker`.
+    step_parker: Option<&Arc<crate::parked_steps::StepParker>>,
 ) -> Result<TeamMissionPhase, MissionDriverError> {
     let mut record = shared
         .snapshot(id)
@@ -1764,10 +1780,20 @@ async fn drive(
         abort: Some(abort),
         pause: Some(Arc::clone(&pause)),
     };
-    let channel = MissionLeadChannel::new();
+    // Supervised batching — nobody is watching a headless mission, so a
+    // needs-approval call in a `supervised` area (specialists ask through
+    // the lead's channel) is parked for review instead of refused.
+    let channel: Arc<dyn ChannelContext + Send + Sync> = match step_parker {
+        Some(parker) if policy.is_headless() => Arc::new(crate::parked_steps::ParkingChannel::new(
+            Arc::new(MissionLeadChannel::new()),
+            Arc::clone(parker),
+            format!("team mission {id}"),
+        )),
+        _ => Arc::new(MissionLeadChannel::new()),
+    };
     let run = tokio::spawn(async move {
         runtime
-            .run_until_pause(&plan, checkpoint, &channel, &observer)
+            .run_until_pause(&plan, checkpoint, &*channel, &observer)
             .await
     });
 
@@ -2359,6 +2385,7 @@ pub(crate) mod tests {
             confirm_integration_writes: false,
             kv_cache_handles: None,
             broker_slot_hint_mode: false,
+            step_parker: None,
         }
     }
 
@@ -2400,6 +2427,7 @@ pub(crate) mod tests {
             confirm_integration_writes: false,
             kv_cache_handles: None,
             broker_slot_hint_mode: false,
+            step_parker: None,
         }
     }
 

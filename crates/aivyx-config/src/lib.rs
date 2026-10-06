@@ -976,6 +976,9 @@ pub struct AivyxConfig {
     /// reversible-action allowlist bounded `AutoApprove` consults (RN.3). Never
     /// widens irreversible/confirm-first auto-approval.
     pub autonomy_auto_approve: Vec<String>,
+    /// Supervised batching — `[autonomy] review_expiry_days`: how many days a
+    /// step parked for review waits before it lapses. Default 7, at least 1.
+    pub autonomy_review_expiry_days: u32,
     /// Chapter O — whether the agent's personal workspace subsystem is on
     /// (`workspace.*` tools, provisioning, journaling). Default true; absent
     /// `[workspace]` ⇒ enabled. `enabled = false` ⇒ no workspace at all.
@@ -4904,6 +4907,8 @@ struct RawAutonomy {
     overrides: Vec<RawAutonomyOverride>,
     #[serde(default)]
     auto_approve: RawAutoApprove,
+    #[serde(default)]
+    review_expiry_days: Option<u32>,
 }
 
 /// One `[[autonomy.override]]` entry: a domain label + the level that applies
@@ -6490,6 +6495,16 @@ impl AivyxConfig {
             });
         }
         let autonomy_auto_approve = toml.autonomy.auto_approve.scopes.clone();
+        let autonomy_review_expiry_days = match toml.autonomy.review_expiry_days {
+            None => 7,
+            Some(0) => {
+                return Err(ConfigError::Invalid {
+                    field: "autonomy.review_expiry_days",
+                    reason: "must be at least 1 (days)".to_string(),
+                });
+            }
+            Some(days) => days,
+        };
 
         // --- workspace (Chapter O) ----------------------------------
         // The agent's own always-available workspace, independent of
@@ -8262,6 +8277,7 @@ impl AivyxConfig {
             autonomy_level,
             autonomy_overrides,
             autonomy_auto_approve,
+            autonomy_review_expiry_days,
             workspace_enabled,
             workspace_path,
             workspace_journaling_enabled,

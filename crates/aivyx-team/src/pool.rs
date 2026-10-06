@@ -93,6 +93,44 @@ impl ChannelContext for SpecialistChannel {
     }
 }
 
+/// A specialist's channel whose approval requests go to the lead's channel —
+/// the specialist works on the lead's behalf, so the lead's channel decides
+/// (an unattended mission's lead channel parks them for review; an
+/// interactive one can't ask, as before). Everything else is the
+/// specialist's own channel.
+struct LeadApprovals<'a> {
+    inner: SpecialistChannel,
+    lead: &'a dyn ChannelContext,
+}
+
+#[async_trait]
+impl ChannelContext for LeadApprovals<'_> {
+    fn channel_name(&self) -> &str {
+        self.inner.channel_name()
+    }
+    fn platform(&self) -> ChannelPlatform {
+        self.inner.platform()
+    }
+    fn trust_tier(&self) -> TrustTier {
+        self.inner.trust_tier()
+    }
+    fn session_id(&self) -> SessionId {
+        self.inner.session_id()
+    }
+    async fn stream_event(&self, event: StreamEvent<'_>) -> Result<(), ChannelError> {
+        self.inner.stream_event(event).await
+    }
+    async fn finalize(&self, outcome: &TurnOutcome) -> Result<(), ChannelError> {
+        self.inner.finalize(outcome).await
+    }
+    fn cancellation_token(&self) -> CancellationToken {
+        self.inner.cancellation_token()
+    }
+    async fn request_approval(&self, request: &aivyx_core::ApprovalRequest) -> aivyx_core::Approval {
+        self.lead.request_approval(request).await
+    }
+}
+
 /// Constructs + runs attenuated specialists for one team.
 pub struct SpecialistPool {
     factory: SpecialistFactory,
@@ -283,7 +321,10 @@ impl SpecialistPool {
     ) -> Result<String, TeamError> {
         let member = self.resolve(specialist)?;
         let agent = self.factory.build(member, &self.ceiling, memory_topic)?;
-        let channel = self.specialist_channel(member, lead_channel);
+        let channel = LeadApprovals {
+            inner: self.specialist_channel(member, lead_channel),
+            lead: lead_channel,
+        };
         let mut msg = Message::text(channel.session_id(), task);
         if self.message_origin == aivyx_core::MessageOrigin::System {
             msg = msg.system_originated();
@@ -472,6 +513,64 @@ mod tests {
         fn cancellation_token(&self) -> CancellationToken {
             self.token.clone()
         }
+    }
+
+    /// A lead channel that parks every approval request.
+    struct ParkingLead(FakeLeadChannel);
+    #[async_trait]
+    impl ChannelContext for ParkingLead {
+        fn channel_name(&self) -> &str {
+            self.0.channel_name()
+        }
+        fn platform(&self) -> ChannelPlatform {
+            self.0.platform()
+        }
+        fn trust_tier(&self) -> TrustTier {
+            self.0.trust_tier()
+        }
+        fn session_id(&self) -> SessionId {
+            self.0.session_id()
+        }
+        async fn stream_event(&self, e: StreamEvent<'_>) -> Result<(), ChannelError> {
+            self.0.stream_event(e).await
+        }
+        async fn finalize(&self, o: &TurnOutcome) -> Result<(), ChannelError> {
+            self.0.finalize(o).await
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.0.cancellation_token()
+        }
+        async fn request_approval(&self, _: &aivyx_core::ApprovalRequest) -> aivyx_core::Approval {
+            aivyx_core::Approval::Parked { id: "lead-parked".into() }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_specialists_approval_request_goes_to_the_lead() {
+        let p = pool(
+            FakeProvider::says("x"),
+            vec![
+                member("lead", &[], TrustTier::Trusted),
+                member("spec", &["fs.read"], TrustTier::SemiTrusted),
+            ],
+            "lead",
+            vec![],
+            aivyx_core::MessageOrigin::Operator,
+        );
+        let lead = ParkingLead(FakeLeadChannel::at(TrustTier::Trusted));
+        let ch = LeadApprovals { inner: p.specialist_channel(p.resolve("spec").unwrap(), &lead), lead: &lead };
+        assert_eq!(ch.trust_tier(), TrustTier::SemiTrusted, "keeps the specialist's floored tier");
+        let answer = ch
+            .request_approval(&aivyx_core::ApprovalRequest {
+                tool: "fs.delete".into(),
+                summary: "fs.delete a.txt".into(),
+                input: serde_json::json!({"path": "a.txt"}),
+                reason: "deleting can't be undone".into(),
+                scope_base: "fs.delete".into(),
+                trust_tier: TrustTier::SemiTrusted,
+            })
+            .await;
+        assert_eq!(answer, aivyx_core::Approval::Parked { id: "lead-parked".into() });
     }
 
     // --- a tool that records the MessageOrigin it observed ---------------

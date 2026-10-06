@@ -1391,6 +1391,46 @@ pub async fn resolve_team_gate(
     }
 }
 
+/// Supervised batching — every parked step, newest first.
+pub async fn get_parked_steps(
+    socket_path: &Path,
+) -> Result<Vec<aivyx_ipc::parked::ParkedStep>, DaemonError> {
+    let payload = send_query(socket_path, "parked-steps", QueryPayload::GetParkedSteps).await?;
+    match payload {
+        QueryResponsePayload::ParkedSteps { steps } => Ok(steps),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ParkedSteps, got {other:?}"
+        ))),
+    }
+}
+
+/// Supervised batching — approve (run once) or deny a pending parked step.
+/// Returns the step after the decision.
+pub async fn resolve_parked_step(
+    socket_path: &Path,
+    id: String,
+    approve: bool,
+) -> Result<aivyx_ipc::parked::ParkedStep, DaemonError> {
+    let payload = send_query(
+        socket_path,
+        "resolve-parked-step",
+        QueryPayload::ResolveParkedStep { id, approve },
+    )
+    .await?;
+    match payload {
+        QueryResponsePayload::ParkedStepResolved { step } => Ok(step),
+        QueryResponsePayload::QueryError { code, message } => {
+            Err(DaemonError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(DaemonError::Protocol(format!(
+            "expected ParkedStepResolved, got {other:?}"
+        ))),
+    }
+}
+
 /// Chapter Belay — request that a running team mission halt. Returns the
 /// daemon's status message.
 pub async fn abort_team_mission(

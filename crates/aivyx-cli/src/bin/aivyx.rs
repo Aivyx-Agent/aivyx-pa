@@ -6410,22 +6410,41 @@ impl aivyx_tool::bridge::NotificationSink for ToolkitNotifySink {
     }
 }
 
-/// Which areas confirm every change — the `manual` autonomy level per area —
-/// from `[autonomy] level` and `[[autonomy.override]]`.
+/// A per-area on/off table from `[autonomy] level` and
+/// `[[autonomy.override]]`: `on` decides it from each area's posture.
+fn area_flags(
+    level: aivyx_config::AutonomyLevel,
+    overrides: &[aivyx_config::AutonomyOverride],
+    on: impl Fn(aivyx_config::AutonomyPosture) -> bool,
+) -> aivyx_core::AreaFlags {
+    aivyx_core::AreaFlags {
+        default: on(aivyx_config::resolve_posture(level, overrides, None)),
+        areas: overrides
+            .iter()
+            .map(|o| (o.domain.clone(), on(o.level.expand())))
+            .collect(),
+    }
+}
+
+/// Which areas confirm every change — the `manual` autonomy level per area.
 fn confirm_all_areas(
     level: aivyx_config::AutonomyLevel,
     overrides: &[aivyx_config::AutonomyOverride],
 ) -> aivyx_core::ConfirmAllAreas {
-    let manual = |posture: aivyx_config::AutonomyPosture| {
-        matches!(posture.gate, aivyx_config::GatePosture::ConfirmAll)
-    };
-    aivyx_core::ConfirmAllAreas {
-        default: manual(aivyx_config::resolve_posture(level, overrides, None)),
-        areas: overrides
-            .iter()
-            .map(|o| (o.domain.clone(), manual(o.level.expand())))
-            .collect(),
-    }
+    area_flags(level, overrides, |p| {
+        matches!(p.gate, aivyx_config::GatePosture::ConfirmAll)
+    })
+}
+
+/// Which areas are `supervised` — where an unattended run parks a
+/// needs-approval call for review instead of refusing it.
+fn supervised_areas(
+    level: aivyx_config::AutonomyLevel,
+    overrides: &[aivyx_config::AutonomyOverride],
+) -> aivyx_core::AreaFlags {
+    area_flags(level, overrides, |p| {
+        matches!(p.gate, aivyx_config::GatePosture::BatchIrreversible)
+    })
 }
 
 /// Whether deletes and overwrites ask, for tools in `area` — an explicit
@@ -6626,6 +6645,7 @@ async fn run_async(
         autonomy_level,
         autonomy_overrides,
         autonomy_auto_approve: _autonomy_auto_approve,
+        autonomy_review_expiry_days,
         // Chapter O — the agent's personal workspace. Provisioned + its
         // tools registered below; the journaling fields are consumed by the
         // proactive-journaling task (O.5).
@@ -10352,6 +10372,22 @@ async fn run_async(
         // before `tools` + `audit` are moved into the agent. The default
         // Nonagon is the team for L.5; vertical-pack configs are a later
         // increment.
+        // Supervised batching — built only when some area is `supervised`;
+        // with none, unattended runs refuse needs-approval calls as before.
+        let supervised = supervised_areas(autonomy_level.value, &autonomy_overrides);
+        let step_parker = supervised.any().then(|| {
+            let mut parker = aivyx_channel::parked_steps::StepParker::new(
+                storage.domain(KeyDomain::ParkedSteps),
+                supervised,
+                autonomy_review_expiry_days,
+            )
+            .with_audit_log(Arc::clone(&persistent_audit_for_query))
+            .with_preview_root(fs_root.clone());
+            if let Some(target) = &default_notify_target_name {
+                parker = parker.with_notify(Arc::clone(&notify_dispatcher), target.clone());
+            }
+            Arc::new(parker)
+        });
         let team_missions = {
             // Chapter Mission Control — share the same broadcaster the
             // desktop-notification path uses (web_ui_broadcaster, built
@@ -10446,6 +10482,9 @@ async fn run_async(
                 // posture as every other agent construction path in this
                 // function.
                 confirm_integration_writes,
+                // Supervised batching — headless missions park
+                // needs-approval calls in `supervised` areas.
+                step_parker: step_parker.clone(),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
             // operator's `[team] config_path` (or the conventional `team.toml`
@@ -10873,6 +10912,8 @@ async fn run_async(
             loop_escalate_on_failure,
             // Chapter L (L.5) — the team-mission service built above.
             team_missions,
+            // Supervised batching — `Some` only when some area is supervised.
+            step_parker: step_parker.clone(),
             // Chapter H — the daemon's default gate posture. Interactive for
             // now; the `--headless` flag + operator-absent drivers (H.4/H.5)
             // set RejectAndAbort per run.
@@ -16095,6 +16136,17 @@ mod tests {
         assert!(!t.for_base("shell.exec"));
         let t = confirm_all_areas(L::Manual, &ov);
         assert!(t.default && !t.for_base("shell.exec"));
+    }
+
+    #[test]
+    fn supervised_areas_follow_the_level_and_overrides() {
+        use aivyx_config::{AutonomyLevel as L, AutonomyOverride as O};
+        let ov = vec![O { domain: "fs".into(), level: L::Supervised }];
+        let t = supervised_areas(L::Assisted, &ov);
+        assert!(t.any() && t.for_base("fs.delete") && !t.for_base("email.send"));
+        assert!(!supervised_areas(L::Assisted, &[]).any(), "no supervised area ⇒ no parker");
+        let t = supervised_areas(L::Supervised, &[O { domain: "email".into(), level: L::Manual }]);
+        assert!(t.default && !t.for_base("email.send"));
     }
 
     #[test]
