@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-10-06
+
 ### Added
 
 - **Different autonomy levels for different areas.** `[[autonomy.override]]`
