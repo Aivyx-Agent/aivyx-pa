@@ -7,6 +7,11 @@
 > **drift-guarded** by `tools_catalog_documents_every_known_base` — adding a new
 > capability base fails CI until it's documented here. For *building* a tool, see
 > [`TOOL_SDK.md`](TOOL_SDK.md); for the design rationale, [`ATLAS.md`](ATLAS.md).
+>
+> This catalog is organised by **capability**, and lists representative tools
+> for each. The complete per-tool list, generated from the code, is
+> [`manual/reference/03-tools.md`](manual/reference/03-tools.md). A row whose
+> tool column is in *italics* is a capability with no tool of that name.
 
 ## How tools are delivered
 
@@ -19,7 +24,7 @@ computes the capability the call needs, which the daemon enforces **before**
 | **Substrate** | the irreducible in-process core, **capped at 13** (amendment-gated) | `aivyx-core` |
 | **Infrastructure** | in-process agent machinery (missions, schedules, reflection, …), uncapped | `aivyx-channel`, `aivyx-core` |
 | **Tool process** | out-of-process binaries over the Tool SDK; connected via `aivyx-pa connect <x>` | `aivyx-gmail`, `aivyx-calendar`, … |
-| **MCP** | external Model Context Protocol servers, bridged through one `mcp.call` tool | operator-configured |
+| **MCP** | external Model Context Protocol servers; their tools appear under their own names, each call needing `mcp.call:<server>:<tool>` | operator-configured |
 
 ## How to read the scope / tier columns
 
@@ -110,8 +115,8 @@ base, Trusted-tier only. See the Lattice addendum in
 
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
-| `llm.call` | `llm.call` | SemiTrusted | sub-call to the configured LLM |
-| `llm.embed` | `llm.embed` | SemiTrusted | embeddings for semantic memory |
+| *(LLM sub-call)* | `llm.call` | SemiTrusted | sub-call to the configured LLM (no model-callable tool of this name) |
+| *(embeddings)* | `llm.embed` | SemiTrusted | embeddings for semantic memory (no model-callable tool of this name) |
 
 ## Memory (substrate)
 
@@ -130,15 +135,14 @@ base, Trusted-tier only. See the Lattice addendum in
 | `notify.send` | `notify.send` | Trusted | push a message to the operator (Trusted-only — cross-boundary leak guard) |
 | *(daemon-side dispatch)* | `notify.dispatch` | Trusted | gates a tool process's own `DispatchNotification` wire frame — an unprompted, daemon-routed push (e.g. a toolkit watcher alerting on a detected condition) rather than a model-invoked tool call; no registered `Tool`, so it never appears in a live tool catalog. Trusted-only, same cross-boundary leak guard as `notify.send` — Phase 191 |
 | `turn.history` | `audit.read` | Trusted | read recent turn outcomes from the audit chain |
-| `daemon.state` | `audit.read` | Trusted | read daemon/agent status |
 | `tools.list` | `audit.read` | Trusted | **enumerate the agent's own tools** (name + description; `detail=true` for input schemas; optional `filter`). Live, ground-truth introspection — Chapter Atlas AT.2 |
 
 ## Config
 
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
-| `config.read` | `config.read` | SemiTrusted | read effective config |
-| `config.write` | `config.write` | Trusted | rewrite a config section (no registered `Tool` — gates the Settings-screen write IPC path only, so it never appears in a live tool catalog) |
+| *(config read)* | `config.read` | SemiTrusted | read the effective config (no model-callable tool of this name) |
+| *(config write)* | `config.write` | Trusted | rewrite a config section (no registered `Tool` — gates the Settings-screen write IPC path only, so it never appears in a live tool catalog) |
 | *(allowlist)* | `tool.allowlist` | Kernel | per-role tool allowlist (synthetic) |
 
 ## Skills, reflection & persona (infrastructure)
@@ -150,7 +154,7 @@ base, Trusted-tier only. See the Lattice addendum in
 | `skill_defaults.list` / `skill_defaults.read` | `skill_defaults.list`, `skill_defaults.read` | Trusted | enumerate / render compiled-in default skill library (Aivyx-Skills Part 3) |
 | `routing.status` / `routing.explain` | `routing.status`, `routing.read` | Trusted | model router's candidates / a session's last routing decision (model routing Part 3a; registered only when `[routing] enabled`) |
 | `reflection.propose` / `reflection.apply` | `reflection.propose`, `reflection.apply` | Trusted | self-improvement proposals |
-| `persona.propose` | `persona.propose` | Trusted | persona-evolution proposals |
+| *(via `reflection.propose`)* | `persona.propose` | Trusted | needed when a `reflection.propose` call carries persona changes |
 | `role.switch` | `role.switch` | Trusted | sub-agent role switching |
 | `role.update` | `role.update` | Trusted | update a role definition |
 
@@ -166,7 +170,7 @@ base, Trusted-tier only. See the Lattice addendum in
 | *(file-watch)* | `file_watch.create`, `file_watch.list`, `file_watch.delete` | Trusted | filesystem-change triggers |
 | `loop.next` / `.complete` / `.note` | `loop.next`, `loop.complete`, `loop.note` | Trusted | the autonomous (Ralph) loop |
 | `remind.set` / `.list` / `.cancel` | `remind.write`, `remind.read` | Trusted | reminders (everyday-PA) |
-| `mcp.call` | `mcp.call` | Trusted | bridge to an external MCP server tool (`<server>:<tool>`) |
+| *(each MCP server's tools)* | `mcp.call` | Trusted | an MCP server's tools appear under their own names; each call needs `mcp.call:<server>:<tool>` |
 
 ## Local-model management (infrastructure)
 
@@ -240,7 +244,7 @@ base, Trusted-tier only. See the Lattice addendum in
 
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
-| `kitchen.read` / `kitchen.write` | `kitchen.read`, `kitchen.write` | Trusted | KitchenDB read/write |
+| `kitchen.*` (inventory, recipes, batches, suppliers, orders) | `kitchen.read`, `kitchen.write` | Trusted | KitchenDB read/write |
 | `kitchen.order.send` | `kitchen.order.send` | Trusted | submit an order |
 | `kitchen.haccp.log` | `kitchen.haccp.log` | Trusted | HACCP compliance log |
 
