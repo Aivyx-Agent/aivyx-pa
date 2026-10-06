@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-10-07
+
 ### Added
 
 - **Supervised batching.** At the `supervised` autonomy level — globally or
