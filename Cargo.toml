@@ -44,7 +44,6 @@ members = [
     # ignores matches without a Cargo.toml, so an empty dir builds fine.
     "crates/verticals-private/*",
     "crates/aivyx-cost",
-    "crates/aivyx-pack",
     "crates/aivyx-web",
     # Native desktop shell — links a system webview (WebKitGTK), so like
     # aivyx-web it's kept OUT of default-members; build it explicitly with
@@ -338,6 +337,12 @@ aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "4ee
 # commit SHA, same pattern as aivyx-checkpoint/aivyx-confine/aivyx-kvcache/
 # aivyx-injection-guard/aivyx-skills above.
 aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "d387a52bbcc3925064cab17c4e6b1964d044a66f" }
+
+# The signed pack-bundle format (Chapter Freight), shared with aivyx-coder.
+# Extracted from crates/aivyx-pack into its own repo 2026-10-07. Not on
+# crates.io — pinned by commit SHA, same as the shared crates above.
+# MUST stay a public repo — see the aivyx-confine entry above for why.
+aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "6240c4fd142c3aec89b520fd8c5d47763c4131bf" }
 
 # Standalone generation backends for the aivyx-vision tool process's
 # vision.generate_svg / vision.generate_image / vision.generate_3d

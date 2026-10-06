@@ -262,6 +262,25 @@ pub fn render_manifest(m: &PackManifest) -> String {
 mod tests {
     use super::*;
 
+    /// A config pack (format 2) needs a newer aivyx-pa: building one and
+    /// reading it back the way `inspect`/`install` do refuses it clearly.
+    #[test]
+    fn a_config_pack_is_refused_with_a_clear_message() {
+        let dir = std::env::temp_dir().join(format!("aivyx-pa-cfgpack-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("pa")).unwrap();
+        std::fs::write(
+            dir.join("manifest.toml"),
+            "format = 2\nname = \"bm\"\nversion = \"0.1.0\"\npublisher = \"Aivyx\"\n\
+             products = [\"pa\"]\n\n[pa]\nmin_version = \"0.18.0\"\ntemplate = \"pa/aivyx-pa.toml\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("pa/aivyx-pa.toml"), "[profile]\n").unwrap();
+        let payload = build_payload(&dir).unwrap();
+        let err = read_manifest(&payload).unwrap_err().to_string();
+        assert!(err.contains("format 2"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn manifest() -> PackManifest {
         PackManifest::parse(
             r#"

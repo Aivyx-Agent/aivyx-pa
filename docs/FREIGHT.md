@@ -8,6 +8,15 @@
 > `aivyx-pa pack install` verifies and wires it the Mise way. Development
 > stays in the in-tree private workspace glob; customers only ever see
 > binaries. Kitchen is the free worked example proving the format.
+>
+> **2026-10-07:** the format now lives in its own shared crate,
+> [`aivyx-pack`](https://github.com/Aivyx-Agent/aivyx-pack), used by
+> aivyx-pa and aivyx-coder alike, with a publisher command (`aivyx-pack
+> keygen/build/inspect`). It adds **format 2, config packs** —
+> configuration only, for aivyx-pa and/or aivyx-coder, one file for every
+> platform. This release refuses a format-2 pack with a clear "needs a
+> newer version" message; installing them comes next. Everything below
+> describes format 1, which is unchanged.
 
 ## 1. The bundle format (locked)
 
@@ -35,7 +44,7 @@ optional `team_config` (a `config/`-relative path wired
 
 - Verification requires the publisher key to appear in
   `[pack] trusted_publishers` (base64 Ed25519 keys, operator config) —
-  **unioned with** the compiled-in `AIVYX_PA_PUBLISHER_KEYS` (empty until
+  **unioned with** the compiled-in `AIVYX_PUBLISHER_KEYS` (empty until
   the v1.0 web presence establishes the real publisher key; documented
   TODO, not a placeholder key).
 - The signature proves **authenticity and integrity** (protects the

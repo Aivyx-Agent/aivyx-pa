@@ -92,7 +92,7 @@ aivyx-kitchen-toolkit = { path = "../verticals/aivyx-kitchen-toolkit" }
 # Chapter K — cost governance. `aivyx cost` prices the chain's LlmCost events.
 aivyx-cost = { path = "../aivyx-cost" }
 aivyx-config = { path = "../aivyx-config" }
-aivyx-pack = { path = "../aivyx-pack" }
+aivyx-pack = { workspace = true }
 aivyx-crypto = { path = "../aivyx-crypto" }
 aivyx-storage = { path = "../aivyx-storage" }
 aivyx-audit = { path = "../aivyx-audit" }

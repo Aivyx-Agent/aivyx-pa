@@ -70,7 +70,6 @@ narrow a role but never widen past its tier.
 | `aivyx-tool` | The tool-process bridge and sandbox wrapper |
 | `aivyx-cost` | Token pricing, the spend ledger, budgets and rate limits |
 | `aivyx-federation` | Agent identity and signed envelopes across machines |
-| `aivyx-pack` | The signed pack-bundle format |
 | `aivyx-team`, `aivyx-team-types` | Multi-agent team missions |
 | `aivyx-cli` | The `aivyx-pa` binary; subcommands under `src/bin/aivyx_modules/` |
 | `aivyx-tui` | The terminal UI (the workspace's only ratatui dependency) |
@@ -82,7 +81,8 @@ narrow a role but never widen past its tier.
 Several building blocks are shared with aivyx-coder and come from their
 own repositories as pinned git dependencies: `aivyx-confine` (Landlock +
 seccomp), `aivyx-checkpoint`, `aivyx-kvcache`, `aivyx-route` (model
-routing), `aivyx-skills` (the default skill library),
+routing), `aivyx-skills` (the default skill library), `aivyx-pack` (the
+signed pack-bundle format),
 `aivyx-injection-guard` (Picket's scanner), `aivyx-vision` (image and SVG
 generation) and `aivyx-yubi` (hardware-backed signing keys). `aivyx-broker`
 is a separate daemon reached over HTTP (`provider = "broker"`).

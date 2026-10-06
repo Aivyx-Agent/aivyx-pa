@@ -5,6 +5,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **The pack format moved to its own shared crate,
+  [`aivyx-pack`](https://github.com/Aivyx-Agent/aivyx-pack)**, so aivyx-pa
+  and aivyx-coder verify packs with the same code. Packs install exactly as
+  before; a newer config-only pack (format 2) is refused with a clear
+  message until this release learns to install it.
+
 ## [0.17.0] — 2026-10-07
 
 ### Added

@@ -101,7 +101,7 @@ socket is the operator").
 | `aivyx-tool` | Tool-process IPC bridge + sandbox wrapper for out-of-process tools |
 | `aivyx-cost` | LLM token pricing, a priced ledger over the audit chain, `[budget]` caps (Chapter K) |
 | `aivyx-federation` | Cross-boundary agent identity/trust — Ed25519 keypairs + signed envelopes (Chapter Passport) |
-| `aivyx-pack` | Signed binary pack-bundle format (build/sign/verify/unpack) underlying vertical packs (Chapter Freight) |
+| `aivyx-pack` *(own repo, `Aivyx-Agent/aivyx-pack`, pinned git dep)* | Signed pack-bundle format (build/sign/verify/unpack) underlying vertical packs (Chapter Freight); shared with aivyx-coder |
 | `aivyx-dataread` | Structured-data readers (csv/xlsx/pdf) layered over `fs.read`'s sandbox (Chapter Sheaf) |
 | `aivyx-apps` | Opt-in desktop-app control (Linux/X11 via `xdotool`), a sandboxed tool subprocess (Chapter Deckhand) |
 | `aivyx-team` / `aivyx-team-types` | Multi-agent "Nonagon" team missions (lead decomposes → delegates → verifies → synthesizes) |
