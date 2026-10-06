@@ -35,6 +35,10 @@ use crate::notify_dispatcher::NotifyDispatcher;
 
 /// How many resolved steps are kept for the record.
 pub const KEEP_RESOLVED: usize = 200;
+/// How many steps may wait for review at once. Past this, a new step is
+/// refused as before (and audited) — a flood of unattended runs can't grow
+/// the queue without bound.
+pub const MAX_PENDING: usize = 100;
 /// How much of a file a preview shows.
 const PREVIEW_CHARS: usize = 1500;
 const DAY_SECS: i64 = 24 * 3600;
@@ -47,6 +51,8 @@ pub enum ParkError {
     NotFound(String),
     #[error("parked step `{id}` is already {state}")]
     NotPending { id: String, state: &'static str },
+    #[error("{MAX_PENDING} steps are already waiting for review")]
+    Full,
 }
 
 fn now_unix() -> i64 {
@@ -179,6 +185,9 @@ impl StepParker {
             s.state == ParkedState::Pending && s.tool == req.tool && s.input == req.input
         }) {
             return Ok((same.id.clone(), false));
+        }
+        if existing.iter().filter(|s| s.state == ParkedState::Pending).count() >= MAX_PENDING {
+            return Err(ParkError::Full);
         }
         let id = loop {
             let candidate = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
@@ -668,6 +677,22 @@ mod tests {
         assert_eq!(steps.len(), KEEP_RESOLVED);
         assert!(steps.iter().any(|s| s.id == id), "the newest is kept");
         assert!(!steps.iter().any(|s| s.id == "old00000"), "the oldest went");
+    }
+
+    #[tokio::test]
+    async fn a_full_queue_refuses_new_steps() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        for i in 0..MAX_PENDING {
+            park_id(&p, &req("fs.delete", "fs.delete", &format!("{i}.txt"))).await;
+        }
+        let answer = p.park(&req("fs.delete", "fs.delete", "one-more.txt"), "routine tidy").await;
+        assert_eq!(answer, Approval::Unavailable);
+        // An identical pending step still dedupes to its id.
+        assert!(matches!(
+            p.park(&req("fs.delete", "fs.delete", "0.txt"), "routine tidy").await,
+            Approval::Parked { .. }
+        ));
     }
 
     /// An inner channel that can't ask (as an unattended run's).

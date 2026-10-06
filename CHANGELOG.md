@@ -15,7 +15,7 @@ All notable changes to Aivyx are recorded here. This project adheres to
   shows what each one touches as it is now, or with `aivyx-pa review`; an
   approved step runs once, exactly as parked. Your default notification
   target hears when something parks, and steps left unreviewed lapse after
-  `[autonomy] review_expiry_days` (default 7). With no area at
+  `[autonomy] review_expiry_days` (default 7); at most 100 wait at once. With no area at
   `supervised`, nothing changes.
 
 ## [0.16.0] — 2026-10-06

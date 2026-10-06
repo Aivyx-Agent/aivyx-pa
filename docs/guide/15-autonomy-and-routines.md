@@ -77,6 +77,8 @@ just wait for you instead of being dropped.
 - **You're told** on your default notification target when something parks.
 - **Steps don't wait forever:** one left unreviewed for
   `review_expiry_days` (default 7) lapses and never runs.
+- **At most 100 wait at once.** Past that, a new step is refused as it
+  would be without batching, so a flood of runs can't pile up.
 
 ```toml
 [autonomy]
