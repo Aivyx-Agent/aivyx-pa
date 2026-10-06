@@ -45,7 +45,8 @@ pub mod textual_tool_call;
 pub mod tools;
 
 pub use agent::{
-    BudgetGate, ConcreteAgent, CycleConfig, MAX_STEPS_PER_TURN, RateGate, TurnBudgetGuard,
+    BudgetGate, ConcreteAgent, ConfirmAllAreas, CycleConfig, MAX_STEPS_PER_TURN, RateGate,
+    TurnBudgetGuard,
     TurnSafety,
 };
 pub use gate_policy::GatePolicy;

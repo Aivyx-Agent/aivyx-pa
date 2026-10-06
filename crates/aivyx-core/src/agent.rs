@@ -281,10 +281,11 @@ pub struct ConcreteAgent {
     /// opens a later turn in which that tool may run once
     /// (`aivyx_core::confirm`).
     confirms: crate::confirm::OperatorConfirmations,
-    /// The `manual` autonomy level: every tool call that can change
+    /// The `manual` autonomy level, per area: a tool call that can change
     /// something (anything outside `aivyx_capability::is_read_only_base`)
-    /// asks the operator first, in operator-originated turns. Off by default.
-    confirm_all: bool,
+    /// asks the operator first, in operator-originated turns, when its area
+    /// confirms every change. Off everywhere by default.
+    confirm_all: ConfirmAllAreas,
     /// Model routing Part 3b — where this agent marks a conversation
     /// routing-tainted (so it never escalates to a cloud endpoint). `None`
     /// (the default) runs no taint machinery at all: the daemon attaches
@@ -330,7 +331,7 @@ impl ConcreteAgent {
             injection_scan_exempt: std::collections::BTreeSet::new(),
             confirm_destructive: false,
             confirms: Default::default(),
-            confirm_all: false,
+            confirm_all: ConfirmAllAreas::everywhere(false),
             taint: None,
             taint_tool_prefixes: Vec::new(),
             taint_channels: Vec::new(),
@@ -452,9 +453,14 @@ impl ConcreteAgent {
     /// withheld-integration-scope confirm gate. See the
     /// [`Self::confirm_destructive`] field doc for the full contract.
     /// `false` (the default) preserves pre-Task-4 behavior byte-for-byte.
-    /// The `manual` autonomy level (see the `confirm_all` field).
-    pub fn with_confirm_all(mut self, on: bool) -> Self {
-        self.confirm_all = on;
+    /// The `manual` autonomy level everywhere (see the `confirm_all` field).
+    pub fn with_confirm_all(self, on: bool) -> Self {
+        self.with_confirm_all_areas(ConfirmAllAreas::everywhere(on))
+    }
+
+    /// The `manual` autonomy level per area (`[[autonomy.override]]`).
+    pub fn with_confirm_all_areas(mut self, areas: ConfirmAllAreas) -> Self {
+        self.confirm_all = areas;
         self
     }
 
@@ -1272,6 +1278,31 @@ impl CycleConfig {
     }
 }
 
+/// Which areas confirm every change — the `manual` autonomy level, per area.
+/// An area is the first word of a capability base (`fs.write` → `fs`).
+/// Built by the daemon from `[autonomy] level` and `[[autonomy.override]]`;
+/// `aivyx-core` keeps its own type so it doesn't depend on `aivyx-config`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConfirmAllAreas {
+    /// Whether an area with no entry confirms every change (the global level).
+    pub default: bool,
+    /// Areas whose setting differs from `default`: area → confirm every change?
+    pub areas: std::collections::BTreeMap<String, bool>,
+}
+
+impl ConfirmAllAreas {
+    /// The same setting for every area.
+    pub fn everywhere(on: bool) -> Self {
+        Self { default: on, areas: Default::default() }
+    }
+
+    /// Whether a call needing capability `base` confirms every change.
+    pub fn for_base(&self, base: &str) -> bool {
+        let area = base.split('.').next().unwrap_or(base);
+        self.areas.get(area).copied().unwrap_or(self.default)
+    }
+}
+
 /// The per-turn safety knobs — the wall-clock deadline ([`ConcreteAgent::
 /// with_turn_timeout`]), the small-cycle breaker ([`ConcreteAgent::
 /// with_cycle_detection`]), and the Chapter Picket injection-scan posture
@@ -1288,8 +1319,8 @@ pub struct TurnSafety {
     cycle_config: Option<CycleConfig>,
     injection_scan_enabled: bool,
     injection_scan_exempt: std::collections::BTreeSet<String>,
-    /// The `manual` autonomy level: every change asks first.
-    confirm_all: bool,
+    /// The `manual` autonomy level, per area: every change there asks first.
+    confirm_all: ConfirmAllAreas,
 }
 
 impl Default for TurnSafety {
@@ -1307,7 +1338,7 @@ impl Default for TurnSafety {
             cycle_config: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
-            confirm_all: false,
+            confirm_all: ConfirmAllAreas::everywhere(false),
         }
     }
 }
@@ -1333,14 +1364,19 @@ impl TurnSafety {
                 .then(CycleConfig::default_enabled),
             injection_scan_enabled,
             injection_scan_exempt,
-            confirm_all: false,
+            confirm_all: ConfirmAllAreas::everywhere(false),
         }
     }
 
     /// The `manual` autonomy level: every tool call that can change
     /// something asks the operator first (operator-originated turns only).
-    pub fn with_confirm_all(mut self, on: bool) -> Self {
-        self.confirm_all = on;
+    pub fn with_confirm_all(self, on: bool) -> Self {
+        self.with_confirm_all_areas(ConfirmAllAreas::everywhere(on))
+    }
+
+    /// Per-area `manual` (`[[autonomy.override]]`).
+    pub fn with_confirm_all_areas(mut self, areas: ConfirmAllAreas) -> Self {
+        self.confirm_all = areas;
         self
     }
 
@@ -1360,7 +1396,7 @@ impl TurnSafety {
             cycle_config: Some(CycleConfig::default_enabled()),
             injection_scan_enabled,
             injection_scan_exempt,
-            confirm_all: false,
+            confirm_all: ConfirmAllAreas::everywhere(false),
         }
     }
 
@@ -1369,7 +1405,7 @@ impl TurnSafety {
     /// `TurnSafety::<posture>(...).apply(agent)`.
     pub fn apply(&self, agent: ConcreteAgent) -> ConcreteAgent {
         let agent = agent.with_cycle_detection(self.cycle_config.clone());
-        let agent = agent.with_confirm_all(self.confirm_all);
+        let agent = agent.with_confirm_all_areas(self.confirm_all.clone());
         let agent = agent
             .with_injection_scan_enabled(self.injection_scan_enabled)
             .with_injection_scan_exempt(self.injection_scan_exempt.clone());
@@ -1909,13 +1945,14 @@ impl ConcreteAgent {
                  action Aivyx PA never takes unasked).",
                 needed.base()
             ))
-        } else if self.confirm_all
+        } else if self.confirm_all.for_base(needed.base())
             && message_origin == MessageOrigin::Operator
             && !aivyx_capability::is_read_only_base(needed.base())
         {
+            let area = needed.base().split('.').next().unwrap_or(needed.base());
             Some(format!(
-                "{tool_name} would change something, and the autonomy level is manual: \
-                 every change needs approval first."
+                "{tool_name} would change something, and the autonomy level for `{area}` \
+                 is manual: every change there needs approval first."
             ))
         } else {
             None
@@ -6577,6 +6614,48 @@ mod tests {
         let out = agent.turn(msg, &channel).await;
         assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
         assert!(channel.asked.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn confirm_all_areas_looks_up_the_call_area() {
+        let mut t = ConfirmAllAreas::everywhere(false);
+        t.areas.insert("email".into(), true);
+        assert!(t.for_base("email.send"));
+        assert!(!t.for_base("fs.write"));
+        let mut m = ConfirmAllAreas::everywhere(true);
+        m.areas.insert("shell".into(), false);
+        assert!(!m.for_base("shell.exec"));
+        assert!(m.for_base("fs.write"));
+    }
+
+    #[tokio::test]
+    async fn a_manual_area_asks_under_a_relaxed_global_level() {
+        let tool = Arc::new(FakeTool::new_bare("memory.write", "memory.write"));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let mut areas = ConfirmAllAreas::everywhere(false);
+        areas.areas.insert("memory".into(), true);
+        let agent = make_agent(caps, vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()))
+            .with_confirm_all_areas(areas);
+        let channel = ApprovingChannel::new(&[crate::Approval::Approved]);
+        let out = agent.turn(Message::text(channel.session_id(), "note it"), &channel).await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        let asked = channel.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1, "the memory area is manual");
+        assert!(asked[0].reason.contains("`memory`"), "{}", asked[0].reason);
+    }
+
+    #[tokio::test]
+    async fn a_relaxed_area_doesnt_ask_under_a_manual_global_level() {
+        let tool = Arc::new(FakeTool::new_bare("memory.write", "memory.write"));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let mut areas = ConfirmAllAreas::everywhere(true);
+        areas.areas.insert("memory".into(), false);
+        let agent = make_agent(caps, vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()))
+            .with_confirm_all_areas(areas);
+        let channel = ApprovingChannel::new(&[]);
+        let out = agent.turn(Message::text(channel.session_id(), "note it"), &channel).await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        assert!(channel.asked.lock().unwrap().is_empty(), "the memory area isn't manual");
     }
 
     #[tokio::test]
