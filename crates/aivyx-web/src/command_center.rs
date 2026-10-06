@@ -329,6 +329,7 @@ fn NeedsYouCard(item: NeedsYouItem, view: Signal<View>) -> Element {
                 }
             }
         }
+        NeedsYouAction::ParkedStep { .. } => rsx! {},
         NeedsYouAction::Reminder { id } => {
             let id2 = id.clone();
             rsx! {

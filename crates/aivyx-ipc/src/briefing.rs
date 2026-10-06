@@ -53,6 +53,9 @@ pub enum NeedsYouAction {
     MissionGate { mission_id: String, gate_id: String },
     /// Approve / Deny → `QueryPayload::ResolveTeamGate`.
     TeamGate { mission_id: String, step: String },
+    /// Approve / Deny → `QueryPayload::ResolveParkedStep`; `preview` shows
+    /// what the step touches as it is now.
+    ParkedStep { id: String, preview: Option<String> },
     /// Review → open `link`.
     Review,
     /// Done / Snooze 1 h → `CompleteReminder` / `SnoozeReminder`.

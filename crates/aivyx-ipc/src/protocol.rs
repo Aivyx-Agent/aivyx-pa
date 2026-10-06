@@ -495,6 +495,15 @@ pub enum QueryPayload {
         step: String,
         approve: bool,
     },
+    /// Supervised batching — every parked step, newest first (pending ones
+    /// with a fresh preview). Responds with
+    /// [`QueryResponsePayload::ParkedSteps`].
+    GetParkedSteps,
+    /// Supervised batching — approve (run it once, exactly as parked) or deny
+    /// a pending parked step. Responds with
+    /// [`QueryResponsePayload::ParkedStepResolved`], or a `QueryError` when the
+    /// step isn't pending.
+    ResolveParkedStep { id: String, approve: bool },
     /// Chapter Belay — request that a running mission halt at its next wave
     /// boundary. Responds with [`QueryResponsePayload::TeamMissionAborted`].
     AbortTeamMission {
@@ -1468,6 +1477,11 @@ pub enum QueryResponsePayload {
         mission_id: String,
         phase: crate::TeamMissionPhase,
     },
+    /// Response to [`QueryPayload::GetParkedSteps`].
+    ParkedSteps { steps: Vec<crate::parked::ParkedStep> },
+    /// Response to [`QueryPayload::ResolveParkedStep`]: the step after the
+    /// decision (`approved` / `failed` with its result, or `denied`).
+    ParkedStepResolved { step: crate::parked::ParkedStep },
     /// Chapter Belay — response to [`QueryPayload::AbortTeamMission`]. A short
     /// human-readable status (the mission will halt at its next wave boundary).
     TeamMissionAborted {

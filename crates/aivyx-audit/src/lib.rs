@@ -135,6 +135,34 @@ pub enum AuditEvent {
         outcome: String,
     },
 
+    /// Supervised batching — an unattended run parked a needs-approval call
+    /// for the operator's review instead of refusing it. Additive.
+    StepParked {
+        id: String,
+        tool: String,
+        summary: String,
+        area: String,
+        /// Which run parked it (`routine digest`, `team mission tm-…`).
+        origin: String,
+    },
+
+    /// Supervised batching — a call that should have parked couldn't be
+    /// stored, so it was refused as before. Additive.
+    StepParkFailed {
+        tool: String,
+        origin: String,
+        reason: String,
+    },
+
+    /// Supervised batching — a parked step was resolved: `approved` (ran),
+    /// `denied`, `lapsed` (not reviewed in time) or `failed` (approved but
+    /// couldn't run, or the tool failed). Additive.
+    ParkedStepResolved {
+        id: String,
+        tool: String,
+        outcome: String,
+    },
+
     /// Turn started. Correlates with `TurnEnded` via `turn_id`.
     TurnStarted {
         turn_id: TurnId,
@@ -2525,6 +2553,33 @@ mod tests {
             assert_eq!(json["kind"], "HeadlessRefusal");
             let decoded: AuditEvent = serde_json::from_value(json).expect("decode");
             assert_eq!(decoded, event, "round-trip must be lossless for {surface:?}");
+        }
+    }
+
+    #[test]
+    fn parked_step_events_round_trip_through_canonical_json() {
+        for event in [
+            AuditEvent::StepParked {
+                id: "ab12cd34".into(),
+                tool: "fs.delete".into(),
+                summary: "fs.delete old.txt".into(),
+                area: "fs".into(),
+                origin: "routine tidy".into(),
+            },
+            AuditEvent::StepParkFailed {
+                tool: "fs.delete".into(),
+                origin: "routine tidy".into(),
+                reason: "storage error".into(),
+            },
+            AuditEvent::ParkedStepResolved {
+                id: "ab12cd34".into(),
+                tool: "fs.delete".into(),
+                outcome: "approved".into(),
+            },
+        ] {
+            let bytes = serde_jcs::to_vec(&event).expect("jcs must accept");
+            let decoded: AuditEvent = serde_json::from_slice(&bytes).expect("decode");
+            assert_eq!(decoded, event);
         }
     }
 

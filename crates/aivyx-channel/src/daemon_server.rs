@@ -4778,6 +4778,12 @@ async fn handle_query(
             code: "briefing_unavailable".into(),
             message: "the briefing is answered by the connection loop".into(),
         },
+        QueryPayload::GetParkedSteps | QueryPayload::ResolveParkedStep { .. } => {
+            QueryResponsePayload::QueryError {
+                code: "parked_steps_unavailable".into(),
+                message: "parked steps are answered by the connection loop".into(),
+            }
+        }
         QueryPayload::AllowCloudEscalation { session_id } => {
             let Ok(uuid) = session_id.parse::<uuid::Uuid>() else {
                 return QueryResponsePayload::QueryError {
@@ -8122,6 +8128,9 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::ProfileHintApplied { .. } => "ProfileHintApplied",
         aivyx_audit::AuditEvent::RoleDraftImported { .. } => "RoleDraftImported",
         aivyx_audit::AuditEvent::HeadlessRefusal { .. } => "HeadlessRefusal",
+        aivyx_audit::AuditEvent::StepParked { .. } => "StepParked",
+        aivyx_audit::AuditEvent::StepParkFailed { .. } => "StepParkFailed",
+        aivyx_audit::AuditEvent::ParkedStepResolved { .. } => "ParkedStepResolved",
         aivyx_audit::AuditEvent::ConfigChanged { .. } => "ConfigChanged",
         aivyx_audit::AuditEvent::PersonaSeeded { .. } => "PersonaSeeded",
         aivyx_audit::AuditEvent::DocumentMutated { .. } => "DocumentMutated",

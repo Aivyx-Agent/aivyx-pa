@@ -18,6 +18,9 @@ pub mod insights;
 pub mod ledgers;
 pub mod loop_state;
 pub mod persona;
+/// Supervised batching — steps unattended runs parked for the operator's
+/// review (`ParkedStep` / `ParkedState`).
+pub mod parked;
 /// The daemon ↔ client IPC envelope + frame codec (Chapter M.2f): the
 /// `FrontendMessage` / `DaemonMessage` / `QueryPayload` / `QueryResponsePayload`
 /// protocol, the `*Summary` wire structs, and `encode_frame` / `decode_frame`.

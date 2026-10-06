@@ -250,6 +250,10 @@ pub enum KeyDomain {
     /// endpoint, across restarts and compaction (G6). Isolated so the taint
     /// set is HKDF-separated from the session rows it shadows.
     RoutingTaint,
+    /// Supervised batching — tool calls that unattended runs parked for the
+    /// operator's review (areas at the `supervised` autonomy level). One row
+    /// per step, keyed by its short id, holding the step as JSON.
+    ParkedSteps,
 }
 
 impl KeyDomain {
@@ -288,6 +292,7 @@ impl KeyDomain {
             KeyDomain::LoopState => b"loop-state",
             KeyDomain::ConflictDismissals => b"conflict-dismissals",
             KeyDomain::RoutingTaint => b"routing-taint",
+            KeyDomain::ParkedSteps => b"parked-steps",
         }
     }
 
@@ -337,12 +342,13 @@ impl KeyDomain {
                 "aivyx_conflict_dismissals_v1"
             }
             KeyDomain::RoutingTaint => "aivyx_routing_taint_v1",
+            KeyDomain::ParkedSteps => "aivyx_parked_steps_v1",
         }
     }
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 27] = [
+    pub const ALL: [KeyDomain; 28] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -370,6 +376,7 @@ impl KeyDomain {
         KeyDomain::LoopState,
         KeyDomain::ConflictDismissals,
         KeyDomain::RoutingTaint,
+        KeyDomain::ParkedSteps,
     ];
 }
 
@@ -578,7 +585,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 27],
+    subkeys: [SubKey; 28],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -655,7 +662,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 27], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 28], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -699,6 +706,7 @@ impl RedbStorage {
                 KeyDomain::ConflictDismissals.as_bytes(),
             )?,
             master.derive_subkey(KeyDomain::RoutingTaint.as_bytes())?,
+            master.derive_subkey(KeyDomain::ParkedSteps.as_bytes())?,
         ])
     }
 
@@ -734,6 +742,7 @@ impl RedbStorage {
             KeyDomain::LoopState => &self.subkeys[24],
             KeyDomain::ConflictDismissals => &self.subkeys[25],
             KeyDomain::RoutingTaint => &self.subkeys[26],
+            KeyDomain::ParkedSteps => &self.subkeys[27],
         }
     }
 }
@@ -1128,7 +1137,7 @@ mod tests {
         // "Encrypted storage domains" row + the `aivyx-storage` line in
         // `README.md`, and the storage-domain figure in
         // `docs/BACKEND_AUDIT_*.md`.**
-        assert_eq!(KeyDomain::ALL.len(), 27, "encrypted storage domain count");
+        assert_eq!(KeyDomain::ALL.len(), 28, "encrypted storage domain count");
     }
 
     #[test]
@@ -1195,7 +1204,8 @@ mod tests {
                 | KeyDomain::SkillHelpfulnessLedger
                 | KeyDomain::LoopState
                 | KeyDomain::ConflictDismissals
-                | KeyDomain::RoutingTaint => {}
+                | KeyDomain::RoutingTaint
+                | KeyDomain::ParkedSteps => {}
             }
         }
     }
@@ -1458,6 +1468,15 @@ mod tests {
             Some(b"a pair row".to_vec()),
             "CooccurrenceLedger returned the helpfulness value"
         );
+    }
+
+    // ---- Supervised batching — ParkedSteps domain -------------------
+
+    #[test]
+    fn parked_steps_domain_has_stable_metadata() {
+        assert_eq!(KeyDomain::ParkedSteps.as_bytes(), b"parked-steps");
+        assert_eq!(KeyDomain::ParkedSteps.table_name(), "aivyx_parked_steps_v1");
+        assert!(KeyDomain::ALL.contains(&KeyDomain::ParkedSteps));
     }
 
     // ---- Model routing Part 3b — RoutingTaint domain ---------------
