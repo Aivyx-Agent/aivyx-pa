@@ -113,6 +113,20 @@ pub use autonomy::{
     resolve_posture, AutonomyLevel, AutonomyOverride, AutonomyPosture, GatePosture, GrowthAdoption,
 };
 
+/// Whether deletes and overwrites need an operator-confirmed `confirmed: true`
+/// (Chapter N). An explicit `[access] confirm_destructive` wins; otherwise the
+/// autonomy level decides — on for every level short of `unleashed`, so even
+/// the sandbox (where the operator's own files now live) asks before deleting.
+/// The access level's own default (`configured.value` when unset) plays no
+/// part: it once did, which kept `unleashed` from ever switching confirmation
+/// off above the sandbox.
+pub fn confirm_destructive_for(configured: &Sourced<bool>, posture: &AutonomyPosture) -> bool {
+    match configured.source {
+        FieldSource::Default => posture.confirm_destructive,
+        _ => configured.value,
+    }
+}
+
 // --------------------------------------------------------------------
 // FieldSource & Sourced<T>
 // --------------------------------------------------------------------
@@ -6144,6 +6158,12 @@ impl AivyxConfig {
     /// `[autonomy]` ⇒ `Assisted` ⇒ [`AutonomyPosture::todays_default`].
     pub fn effective_autonomy(&self, domain: Option<&str>) -> AutonomyPosture {
         resolve_posture(self.autonomy_level.value, &self.autonomy_overrides, domain)
+    }
+
+    /// Whether deletes and overwrites actually ask first — see
+    /// [`confirm_destructive_for`].
+    pub fn effective_confirm_destructive(&self) -> bool {
+        confirm_destructive_for(&self.confirm_destructive, &self.effective_autonomy(None))
     }
 
     /// First-run coherence A2 — where the daemon serves the Studio, or

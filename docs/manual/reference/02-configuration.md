@@ -224,7 +224,7 @@ How far the agent can reach on your machine and network: the access level, plus 
 |---|---|---|---|
 | `level` | `sandbox` \| `workspace` \| `home` \| `full` \| `custom` |  | How far the agent reaches: `sandbox` (its own directory), `workspace` (a directory you choose), `home`, `full`, or `custom`. |
 | `root` | path |  | The directory for the `workspace` and `custom` levels (required for those). |
-| `confirm_destructive` | bool |  | Ask before irreversible actions (delete, overwrite, destructive shell, outbound messages). On by default above `sandbox`. |
+| `confirm_destructive` | bool |  | Ask before irreversible actions (delete, overwrite, destructive shell, outbound messages). Unset — the usual case — means the autonomy level decides: on at every level except `unleashed`. Set it only to override that. |
 | `guard_sensitive_paths` | bool |  | Master switch for the sensitive-path read guard. Unset ⇒ on (privacy-by-default). |
 | `allow_sensitive_paths` | list of string |  | Paths the operator allows the agent to read despite the built-in secret set (e.g. a project's own `.env`). `~` is expanded. |
 | `allow_private_egress` | bool |  | Allow the network tools to reach loopback / private / link-local addresses. Unset ⇒ false (SSRF guard on). |

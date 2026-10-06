@@ -129,8 +129,11 @@ fn render_access_for_show(cfg: &AivyxConfig) -> String {
     ));
     out.push_str(&format!(
         "  confirm_destructive = {} ({})\n",
-        cfg.confirm_destructive.value,
-        src(cfg.confirm_destructive.source),
+        cfg.effective_confirm_destructive(),
+        match cfg.confirm_destructive.source {
+            FieldSource::Default => "from the autonomy level",
+            other => src(other),
+        },
     ));
     out.push_str(
         "  (the access level applies to the local operator; remote channels \
@@ -205,8 +208,9 @@ mod tests {
 
     #[test]
     fn set_writes_access_section_and_drops_stale_root() {
-        // `set home --yes` writes [access] level=home + confirm, and
-        // removes a stale [access] root, in an isolated temp cwd.
+        // `set home --yes` writes [access] level=home, leaves confirmation to
+        // the autonomy level, and removes a stale [access] root, in an
+        // isolated temp cwd.
         let dir = std::env::temp_dir().join(format!("aivyx-access-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let toml = dir.join("aivyx-pa.toml");
@@ -218,7 +222,7 @@ mod tests {
         res.unwrap();
         let written = std::fs::read_to_string(&toml).unwrap();
         assert!(written.contains("level = \"home\""), "{written}");
-        assert!(written.contains("confirm_destructive = true"), "{written}");
+        assert!(!written.contains("confirm_destructive"), "{written}");
         assert!(
             !written.contains("/old"),
             "stale root must be dropped: {written}"

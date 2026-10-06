@@ -180,7 +180,7 @@ aivyx-pa autonomy set <manual|assisted|supervised|autonomous|unleashed> [--yes]
 | `assisted` *(default)* | irreversible steps ask you first; the loop is off |
 | `supervised` | the loop may work its backlog on its own; irreversible steps still ask |
 | `autonomous` | as `supervised`, and routines the agent creates start without your approval |
-| `unleashed` | for an isolated machine: as `autonomous`, and delete/overwrite confirmation is off — but only at the `sandbox` access level unless you also set `[access] confirm_destructive = false` |
+| `unleashed` | for an isolated machine: as `autonomous`, and delete/overwrite confirmation is off (an explicit `[access] confirm_destructive` still wins) |
 
 Batching approvals for review at `supervised` is designed but not built yet.
 Unattended runs (routines, the loop) never wait for an answer: an

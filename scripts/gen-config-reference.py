@@ -165,7 +165,7 @@ MEANINGS = {
     "fs.root": "The directory the file tools may work in.",
     "access.level": "How far the agent reaches: `sandbox` (its own directory), `workspace` (a directory you choose), `home`, `full`, or `custom`.",
     "access.root": "The directory for the `workspace` and `custom` levels (required for those).",
-    "access.confirm_destructive": "Ask before irreversible actions (delete, overwrite, destructive shell, outbound messages). On by default above `sandbox`.",
+    "access.confirm_destructive": "Ask before irreversible actions (delete, overwrite, destructive shell, outbound messages). Unset — the usual case — means the autonomy level decides: on at every level except `unleashed`. Set it only to override that.",
     "autonomy.level": "The global autonomy level.",
     "autonomy.override.domain": "The area this applies to. Today only `schedules` changes behaviour (whether routines the agent creates need approval); other domains are accepted and shown by `autonomy show`.",
     "autonomy.override.level": "The autonomy level for calls in that domain. The most specific match wins.",

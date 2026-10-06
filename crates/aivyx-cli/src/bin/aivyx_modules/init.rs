@@ -1485,10 +1485,12 @@ fn render_toml(cfg: &InitConfig) -> String {
             if matches!(level, AccessLevel::Workspace | AccessLevel::Custom) {
                 out.push_str(&format!("root = \"{}\"\n", cfg.fs_root));
             }
-            out.push_str(&format!(
-                "confirm_destructive = {}\n",
-                cfg.confirm_destructive
-            ));
+            // Confirmation on is the autonomy level's own default; write the
+            // key only for a deliberate opt-out, so a later `unleashed` can
+            // still switch confirmation off.
+            if !cfg.confirm_destructive {
+                out.push_str("confirm_destructive = false\n");
+            }
         }
     }
     // [storage] section
@@ -4648,7 +4650,9 @@ mod tests {
         let toml = render_toml(&cfg);
         assert!(toml.contains("[access]"));
         assert!(toml.contains("level = \"home\""));
-        assert!(toml.contains("confirm_destructive = true"));
+        // Keeping confirmation on is the autonomy level's default: nothing
+        // to write, so a later `unleashed` can still switch it off.
+        assert!(!toml.contains("confirm_destructive"));
         // fs_root is derived from the level — no [fs] root, no explicit root.
         assert!(!toml.contains("[fs]"));
         assert!(!toml.contains("\nroot = "));
@@ -4665,11 +4669,12 @@ mod tests {
             false,
         );
         cfg.access_level = AccessLevel::Workspace;
-        cfg.confirm_destructive = true;
+        cfg.confirm_destructive = false;
         let toml = render_toml(&cfg);
         assert!(toml.contains("level = \"workspace\""));
         assert!(toml.contains("root = \"/home/user/project\""));
-        assert!(toml.contains("confirm_destructive = true"));
+        // Declining confirmation is a deliberate opt-out, so it is written.
+        assert!(toml.contains("confirm_destructive = false"));
         assert!(
             !toml.contains("[fs]"),
             "workspace carries its root via [access]"

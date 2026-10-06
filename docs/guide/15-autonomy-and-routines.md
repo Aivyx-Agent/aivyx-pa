@@ -16,7 +16,7 @@ Autonomy is how much your assistant does without asking you. Set it on
 | **Assisted** *(default)* | Only irreversible steps ask. |
 | **Supervised** | The autonomous loop may run (see below). |
 | **Autonomous** | As supervised, and routines it creates start without your approval. |
-| **Unleashed** | For a dedicated, isolated machine: as autonomous, and deletes and overwrites stop asking. (Today that applies at the sandbox access level; at wider access, also set `confirm_destructive = false` under `[access]`.) |
+| **Unleashed** | For a dedicated, isolated machine: as autonomous, and deletes and overwrites stop asking — unless you've set `confirm_destructive` under `[access]` yourself. |
 
 Raising it to *autonomous* or *unleashed* asks you to confirm. The assistant
 can never raise its own level.

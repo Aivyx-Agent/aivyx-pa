@@ -136,9 +136,9 @@ impl std::error::Error for ConfigWriteError {}
 /// Rewrite the `[access]` section of the TOML file at `path`, preserving every
 /// other section and the operator's comments.
 ///
-/// Sets `level`, sets-or-clears `root` (per the level's root rules), and sets
-/// `confirm_destructive = is_expanded()` — exactly what `aivyx-pa access set`
-/// wrote before Chapter U. A missing file is treated as empty (the section is
+/// Sets `level`, sets-or-clears `root` (per the level's root rules), and
+/// removes `confirm_destructive` so the autonomy level decides whether deletes
+/// and overwrites ask. A missing file is treated as empty (the section is
 /// created). The result is written at `0600`.
 ///
 /// The caller is responsible for the **confirm-first** decision on expanded
@@ -174,7 +174,13 @@ pub fn write_access_section(
             }
         }
     }
-    doc["access"]["confirm_destructive"] = value(level.is_expanded());
+    // Whether deletes and overwrites ask is the autonomy level's call, not the
+    // access level's. Drop any `confirm_destructive` here — including one an
+    // older version wrote (`false` for sandbox silently switched confirmation
+    // off at every autonomy level) — so the autonomy level decides again.
+    if let Some(t) = doc.get_mut("access").and_then(|a| a.as_table_mut()) {
+        t.remove("confirm_destructive");
+    }
 
     write_toml_0600(path, &doc.to_string())
 }
@@ -1787,13 +1793,16 @@ mod tests {
     }
 
     #[test]
-    fn access_writes_level_confirm_and_drops_stale_root() {
+    fn access_writes_level_and_drops_stale_root() {
         let path = temp_toml("access");
         std::fs::write(&path, "[access]\nlevel = \"workspace\"\nroot = \"/old\"\n").unwrap();
         write_access_section(&path, AccessLevel::Home, None).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(out.contains("level = \"home\""), "{out}");
-        assert!(out.contains("confirm_destructive = true"), "{out}");
+        assert!(
+            !out.contains("confirm_destructive"),
+            "the autonomy level decides confirmation, not the access level: {out}"
+        );
         assert!(!out.contains("/old"), "stale root must be dropped: {out}");
         std::fs::remove_file(&path).ok();
     }
@@ -1821,12 +1830,16 @@ mod tests {
     }
 
     #[test]
-    fn access_sandbox_clears_confirm() {
+    fn access_set_hands_confirmation_back_to_autonomy() {
+        // An older `access set sandbox` wrote `confirm_destructive = false`,
+        // silently switching off delete/overwrite confirmation at every
+        // autonomy level. Changing access now removes the key instead.
         let path = temp_toml("sandbox");
+        std::fs::write(&path, "[access]\nlevel = \"home\"\nconfirm_destructive = false\n").unwrap();
         write_access_section(&path, AccessLevel::Sandbox, None).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(out.contains("level = \"sandbox\""), "{out}");
-        assert!(out.contains("confirm_destructive = false"), "{out}");
+        assert!(!out.contains("confirm_destructive"), "{out}");
         std::fs::remove_file(&path).ok();
     }
 

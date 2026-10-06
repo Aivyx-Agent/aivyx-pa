@@ -5,6 +5,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Switching to the sandbox stopped deletes and overwrites asking.**
+  `aivyx-pa access set` (and the Studio's *Apply access level*) wrote
+  `confirm_destructive` into `[access]` — `false` for `sandbox` — and an
+  explicit setting beats the autonomy level, so after moving to the sandbox
+  nothing asked, at any autonomy level. Changing the access level now
+  removes the key instead, so the autonomy level decides again; run
+  `aivyx-pa access set <your level>` once to clear an old one.
+- **`unleashed` didn't switch confirmation off above the sandbox.** The
+  access level's own default was combined with the autonomy level, so at
+  `workspace`, `home` or `full` deletes still asked. Now, unless you set
+  `confirm_destructive` yourself, the autonomy level alone decides: on at
+  every level except `unleashed`. `aivyx-pa init` writes the key only when
+  you decline confirmation, and `access show` and the start-up summary show
+  the setting that's actually in effect.
+
 ## [0.15.0] — 2026-10-06
 
 ### Added

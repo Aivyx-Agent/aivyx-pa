@@ -43,7 +43,7 @@ Autonomy** or with `aivyx-pa autonomy set`:
 | **Assisted** *(default)* | Only irreversible steps ask. |
 | **Supervised** | As assisted, and it may work through its backlog on its own (the [autonomous loop](15-autonomy-and-routines.md)). |
 | **Autonomous** | As supervised, and routines it creates start without waiting for your approval. |
-| **Unleashed** | For a dedicated, isolated machine only: as autonomous, and deletes and overwrites stop asking. Today that applies at the sandbox access level; at wider access, also set `confirm_destructive = false` under `[access]`. |
+| **Unleashed** | For a dedicated, isolated machine only: as autonomous, and deletes and overwrites stop asking — unless you've set `confirm_destructive` under `[access]` yourself. |
 
 Two things hold at every level:
 

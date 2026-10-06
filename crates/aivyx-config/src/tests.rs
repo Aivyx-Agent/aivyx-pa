@@ -12519,3 +12519,25 @@ fn resolve_config_path_from_for_named_instance() {
     let path = resolve_config_path_from_for(Some("/etc/custom.toml"), None, &research);
     assert_eq!(path, std::path::PathBuf::from("/etc/custom.toml"));
 }
+
+#[test]
+fn autonomy_decides_confirm_destructive_unless_the_config_says_otherwise() {
+    use crate::{confirm_destructive_for, AutonomyLevel, FieldSource, Sourced};
+    let posture = |level: AutonomyLevel| level.expand();
+    // Unset: the autonomy level alone decides, whatever the access level's
+    // default value was (`false` at sandbox, `true` above it).
+    for default_value in [false, true] {
+        let unset = Sourced::new(default_value, FieldSource::Default);
+        assert!(confirm_destructive_for(&unset, &posture(AutonomyLevel::Assisted)));
+        assert!(confirm_destructive_for(&unset, &posture(AutonomyLevel::Autonomous)));
+        assert!(
+            !confirm_destructive_for(&unset, &posture(AutonomyLevel::Unleashed)),
+            "unleashed turns confirmation off at every access level"
+        );
+    }
+    // Set explicitly in the config: that wins either way.
+    let on = Sourced::new(true, FieldSource::Toml);
+    let off = Sourced::new(false, FieldSource::Toml);
+    assert!(confirm_destructive_for(&on, &posture(AutonomyLevel::Unleashed)));
+    assert!(!confirm_destructive_for(&off, &posture(AutonomyLevel::Assisted)));
+}
