@@ -51,6 +51,9 @@ pub enum TemplateSource {
     /// Read from the user-dir override at
     /// `~/.local/share/aivyx-pa/templates/<name>.toml`.
     User,
+    /// A config pack's template, handed to the setup wizard by
+    /// `aivyx-pa pack install`.
+    Pack,
 }
 
 impl TemplateSource {
@@ -58,6 +61,7 @@ impl TemplateSource {
         match self {
             TemplateSource::Bundled => "bundled",
             TemplateSource::User => "user",
+            TemplateSource::Pack => "pack",
         }
     }
 }

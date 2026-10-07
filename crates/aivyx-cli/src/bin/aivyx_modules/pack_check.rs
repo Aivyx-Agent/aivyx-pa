@@ -18,6 +18,9 @@ pub const KNOWN_INTEGRATIONS: &[&str] = &[
     "gmail", "calendar", "drive", "contacts", "notion", "obsidian", "n8n", "toolkit", "vision",
 ];
 
+/// The integrations `aivyx-pa connect` sets up.
+pub const CONNECTABLE: &[&str] = &["gmail", "calendar", "drive", "contacts"];
+
 /// What a good aivyx-pa part holds.
 #[derive(Debug)]
 pub struct PaPartSummary {

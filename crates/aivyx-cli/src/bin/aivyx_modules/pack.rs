@@ -25,7 +25,12 @@ use aivyx_pack::{
     load_signing_key, read_bundle, read_manifest, unpack_payload, verify_bundle,
 };
 
+use aivyx_instance::{BaseDirs, InstanceName, InstancePaths};
+use aivyx_pack::{ConfigPackManifest, Manifest, read_any_manifest};
+
 use super::connect::{append_tool_process, find_aivyx_toml, tool_process_present};
+use super::init_templates::{Template, TemplateSource};
+use super::pack_check::{PaPartSummary, check_pa_part};
 use super::connect_kitchen::set_team_config_path_if_absent;
 use crate::PackSubcommand;
 
@@ -171,6 +176,264 @@ fn install(file: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Config packs (format 2): a pack becomes a new agent
+// ---------------------------------------------------------------------------
+
+/// Everything decided before the setup wizard runs.
+pub struct ConfigInstall {
+    pub instance: InstanceName,
+    /// `…/packs/<name>/<version>`, the unpacked pack.
+    pub pack_dir: PathBuf,
+    /// The pack's template with the installer's keys spliced in.
+    pub template: Template,
+    pub summary: PaPartSummary,
+}
+
+/// The instance a config pack installs as: the selected one, or — when
+/// none was chosen (`default`) — one named after the pack.
+fn target_instance(
+    manifest: &ConfigPackManifest,
+    selected: &InstanceName,
+) -> Result<InstanceName, String> {
+    if selected.is_default() {
+        InstanceName::parse(&manifest.name).map_err(|e| {
+            format!(
+                "the pack's name `{}` can't be an instance name ({e}) — pick one with \
+                 `aivyx-pa --instance <name> pack install …`",
+                manifest.name
+            )
+        })
+    } else {
+        Ok(selected.clone())
+    }
+}
+
+/// For `main`, before the runtime exists: the instance a config pack will
+/// install as, or `None` for a tool pack (installed the old way).
+pub fn config_pack_target(
+    file: &Path,
+    selected: &InstanceName,
+) -> Result<Option<InstanceName>, String> {
+    let bundle = read_bundle(file).map_err(|e| e.to_string())?;
+    match read_any_manifest(&bundle.payload).map_err(|e| e.to_string())? {
+        Manifest::Binary(_) => Ok(None),
+        Manifest::Config(m) => target_instance(&m, selected).map(Some),
+    }
+}
+
+/// Set `[table] key = value`, creating the table as a `[table]` header.
+fn set_key(doc: &mut toml_edit::DocumentMut, table: &str, key: &str, value: &str) {
+    if !doc.contains_table(table) {
+        doc[table] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    doc[table][key] = toml_edit::value(value);
+}
+
+/// Verify-free preparation (the caller verified `payload`): check the
+/// version and the target instance, unpack into the instance's packs dir
+/// via a temporary folder, run the product checks, and splice the
+/// template. Leaves nothing behind on failure.
+pub fn prepare_config_install(
+    payload: &[u8],
+    manifest: &ConfigPackManifest,
+    selected: &InstanceName,
+    dirs: &BaseDirs,
+    existing: &[InstanceName],
+) -> Result<ConfigInstall, String> {
+    let pa = manifest
+        .pa
+        .as_ref()
+        .ok_or("this pack has no aivyx-pa part — it's for aivyx-coder")?;
+    daemon_version_ok(&pa.min_version, env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())?;
+    let instance = target_instance(manifest, selected)?;
+    if instance.is_default() {
+        return Err("a pack installs as a new agent, not into `default` — pick a name with \
+                    `aivyx-pa --instance <name> pack install …`"
+            .into());
+    }
+    if existing.contains(&instance) {
+        return Err(format!(
+            "instance `{instance}` already exists — pick another with \
+             `aivyx-pa --instance <name> pack install …`"
+        ));
+    }
+
+    let packs = InstancePaths::new(instance.clone(), dirs.clone())
+        .packs_dir()
+        .ok_or("can't resolve the instance's folder (is HOME set?)")?
+        .join(&manifest.name);
+    let tmp = packs.join(format!(
+        ".tmp-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let pack_dir = packs.join(&manifest.version);
+    let staged = (|| -> Result<PaPartSummary, String> {
+        std::fs::create_dir_all(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
+        unpack_payload(payload, &tmp).map_err(|e| e.to_string())?;
+        let summary = check_pa_part(&tmp).map_err(|problems| {
+            format!("the pack doesn't pass its checks:\n  - {}", problems.join("\n  - "))
+        })?;
+        if pack_dir.exists() {
+            std::fs::remove_dir_all(&pack_dir)
+                .map_err(|e| format!("remove {}: {e}", pack_dir.display()))?;
+        }
+        std::fs::rename(&tmp, &pack_dir)
+            .map_err(|e| format!("move into {}: {e}", pack_dir.display()))?;
+        Ok(summary)
+    })();
+    let summary = match staged {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&tmp);
+            remove_if_empty(&packs);
+            return Err(e);
+        }
+    };
+
+    let spliced = (|| -> Result<Template, String> {
+        let text = std::fs::read_to_string(pack_dir.join(&pa.template))
+            .map_err(|e| format!("read the template: {e}"))?;
+        let mut doc: toml_edit::DocumentMut =
+            text.parse().map_err(|e| format!("the template isn't valid TOML: {e}"))?;
+        set_key(&mut doc, "pack", "source", &format!("{}@{}", manifest.name, manifest.version));
+        if let Some(rel) = &pa.team_config {
+            set_key(&mut doc, "team", "config_path", &pack_dir.join(rel).display().to_string());
+        }
+        if let Some(rel) = &pa.skills {
+            set_key(
+                &mut doc,
+                "skill_defaults",
+                "project_dir",
+                &pack_dir.join(rel).display().to_string(),
+            );
+        }
+        Ok(Template {
+            name: manifest.name.clone(),
+            description: format!("pack {} v{}", manifest.name, manifest.version),
+            source: TemplateSource::Pack,
+            toml_content: doc.to_string(),
+        })
+    })();
+    match spliced {
+        Ok(template) => Ok(ConfigInstall { instance, pack_dir, template, summary }),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&pack_dir);
+            remove_if_empty(&packs);
+            Err(e)
+        }
+    }
+}
+
+/// Remove `dir` and its now-empty parents up to the instance home, so a
+/// failed install leaves no empty `packs/<name>` behind.
+fn remove_if_empty(dir: &Path) {
+    let mut d = Some(dir);
+    while let Some(p) = d {
+        if std::fs::remove_dir(p).is_err() {
+            break;
+        }
+        d = p.parent().filter(|p| p.file_name().is_some_and(|n| n == "packs"));
+    }
+}
+
+/// Publishers trusted for a new agent: the default instance's `[pack]
+/// trusted_publishers` (the operator's existing setup) when it has a
+/// config; the compiled-in keys always apply.
+fn install_trusted_publishers(dirs: &BaseDirs) -> Result<Vec<String>, String> {
+    let Some(config) = InstancePaths::new(InstanceName::default_instance(), dirs.clone())
+        .config_file()
+        .filter(|c| c.exists())
+    else {
+        return Ok(Vec::new());
+    };
+    let opts = LoadOptions {
+        toml_path: Some(config.clone()),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    AivyxConfig::load_from_env_and_toml(&opts)
+        .map(|cfg| cfg.pack_trusted_publishers)
+        .map_err(|e| format!("failed to load {}: {e}", config.display()))
+}
+
+/// What to do after a config pack installs.
+pub fn next_steps(instance: &InstanceName, summary: &PaPartSummary, port: u16) -> String {
+    let m = &summary.manifest;
+    let pa = m.pa.as_ref().expect("checked: has a pa part");
+    let mut out = format!(
+        "Installed {} v{} as instance `{instance}` (Studio port {port}).\nNext:\n",
+        m.name, m.version
+    );
+    let connect: Vec<&str> = pa
+        .requires
+        .iter()
+        .map(String::as_str)
+        .filter(|r| crate::pack_check::CONNECTABLE.contains(r))
+        .collect();
+    if let Some((first, rest)) = connect.split_first() {
+        out.push_str(&format!("  aivyx-pa --instance {instance} connect {first}"));
+        if !rest.is_empty() {
+            out.push_str(&format!("      (also: {})", rest.join(", ")));
+        }
+        out.push('\n');
+    }
+    for r in pa.requires.iter().filter(|r| !connect.contains(&r.as_str())) {
+        out.push_str(&format!("  add the {r} as a [[tool_process]] — see docs/INSTALL.md\n"));
+    }
+    if !pa.optional.is_empty() {
+        out.push_str(&format!("  optional: {}\n", pa.optional.join(", ")));
+    }
+    out.push_str(&format!(
+        "Start it with `aivyx-pa --instance {instance} daemon start`.\n"
+    ));
+    out
+}
+
+/// `aivyx-pa pack install <file>` for a config pack. `main` has already
+/// selected the target instance (`AIVYX_PA_INSTANCE`) so the setup wizard
+/// writes the new agent's config, store and keyring entry.
+pub async fn run_config_install(file: &Path) -> Result<(), String> {
+    let dirs = BaseDirs::from_process();
+    let bundle = read_bundle(file).map_err(|e| e.to_string())?;
+    verify_bundle(&bundle, &install_trusted_publishers(&dirs)?).map_err(|e| e.to_string())?;
+    let Manifest::Config(manifest) = read_any_manifest(&bundle.payload).map_err(|e| e.to_string())?
+    else {
+        return Err("this is a tool pack; install it into an existing agent".into());
+    };
+    let selected = InstanceName::from_env()?;
+    let existing = aivyx_instance::list_instances(&dirs);
+    let install = prepare_config_install(&bundle.payload, &manifest, &selected, &dirs, &existing)?;
+    println!(
+        "Setting up `{}` from pack {} v{}.\n",
+        install.instance, manifest.name, manifest.version
+    );
+
+    let config = InstancePaths::new(install.instance.clone(), dirs.clone()).config_file();
+    let undo = |why: String| -> String {
+        let _ = std::fs::remove_dir_all(&install.pack_dir);
+        if let Some(parent) = install.pack_dir.parent() {
+            remove_if_empty(parent);
+        }
+        why
+    };
+    crate::init::run_init_wizard(Some(&install.template)).await.map_err(&undo)?;
+    let Some(config) = config.filter(|c| c.exists()) else {
+        return Err(undo("setup didn't finish, so nothing was installed".into()));
+    };
+    let port = crate::instances::pick_port();
+    crate::instances::write_port(&config, port)?;
+    print!("\n{}", next_steps(&install.instance, &install.summary, port));
+    Ok(())
+}
+
 /// Resolve a manifest's `bin` path under `install_dir/bin`. Rejects any
 /// `bin` value that would escape `install_dir` (e.g. `../../../../usr/bin/curl`)
 /// using the same check that already guards pack archive extraction.
@@ -262,6 +525,162 @@ pub fn render_manifest(m: &PackManifest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Config packs (format 2) ----
+
+    use crate::pack_check::tests::{good_pack, rewrite, tmp};
+
+    fn base_dirs(tag: &str) -> BaseDirs {
+        let home = tmp(tag);
+        BaseDirs { home: Some(home), xdg_config_home: None, xdg_data_home: None, xdg_runtime_dir: None }
+    }
+
+    fn config_payload(dir: &Path) -> (Vec<u8>, ConfigPackManifest) {
+        let payload = build_payload(dir).unwrap();
+        let Manifest::Config(m) = read_any_manifest(&payload).unwrap() else { panic!("config pack") };
+        (payload, m)
+    }
+
+    fn name(n: &str) -> InstanceName {
+        InstanceName::parse(n).unwrap()
+    }
+
+    fn packs_root(dirs: &BaseDirs, instance: &str) -> PathBuf {
+        InstancePaths::new(name(instance), dirs.clone()).packs_dir().unwrap()
+    }
+
+    #[test]
+    fn a_config_pack_prepares_a_new_instance() {
+        let (payload, m) = config_payload(&good_pack("prep"));
+        let dirs = base_dirs("prep-home");
+        let c = prepare_config_install(&payload, &m, &InstanceName::default_instance(), &dirs, &[])
+            .unwrap();
+        assert_eq!(c.instance.as_str(), "business-manager");
+        assert!(c.pack_dir.ends_with("instances/business-manager/packs/business-manager/0.1.0"));
+        assert!(c.pack_dir.join("pa/skills/example/SKILL.md").is_file());
+        let doc: toml_edit::DocumentMut = c.template.toml_content.parse().unwrap();
+        assert_eq!(doc["pack"]["source"].as_str(), Some("business-manager@0.1.0"));
+        assert!(doc["team"]["config_path"].as_str().unwrap().ends_with("0.1.0/pa/team.toml"));
+        assert!(doc["skill_defaults"]["project_dir"].as_str().unwrap().ends_with("0.1.0/pa/skills"));
+        assert_eq!(doc["profile"]["assistant_name"].as_str(), Some("Manager"), "the rest is kept");
+        assert_eq!(c.template.source, TemplateSource::Pack);
+        let leftovers: Vec<_> = std::fs::read_dir(c.pack_dir.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "no temporary folder left");
+    }
+
+    #[test]
+    fn the_selected_instance_name_wins() {
+        let (payload, m) = config_payload(&good_pack("selected"));
+        let dirs = base_dirs("selected-home");
+        let c = prepare_config_install(&payload, &m, &name("shop"), &dirs, &[]).unwrap();
+        assert_eq!(c.instance.as_str(), "shop");
+        assert!(c.pack_dir.starts_with(packs_root(&dirs, "shop")));
+    }
+
+    #[test]
+    fn an_existing_instance_is_refused_and_nothing_is_left() {
+        let (payload, m) = config_payload(&good_pack("existing"));
+        let dirs = base_dirs("existing-home");
+        let err = prepare_config_install(
+            &payload,
+            &m,
+            &InstanceName::default_instance(),
+            &dirs,
+            &[name("business-manager")],
+        )
+        .err()
+        .unwrap();
+        assert!(err.contains("already exists"), "{err}");
+        assert!(!packs_root(&dirs, "business-manager").exists());
+    }
+
+    #[test]
+    fn a_pack_that_fails_its_checks_leaves_nothing() {
+        let dir = good_pack("failing");
+        rewrite(&dir, "pa/aivyx-pa.toml", |t| {
+            t.replace(r#"level = "assisted""#, r#"level = "unleashed""#)
+        });
+        let (payload, m) = config_payload(&dir);
+        let dirs = base_dirs("failing-home");
+        let err = prepare_config_install(&payload, &m, &InstanceName::default_instance(), &dirs, &[])
+            .err()
+            .unwrap();
+        assert!(err.contains("supervised"), "{err}");
+        assert!(
+            !packs_root(&dirs, "business-manager").join("business-manager").exists(),
+            "the pack folder was removed"
+        );
+    }
+
+    #[test]
+    fn a_pack_needing_a_newer_aivyx_pa_is_refused() {
+        let dir = good_pack("newer");
+        rewrite(&dir, "manifest.toml", |t| t.replace(r#"min_version = "0.17.0""#, r#"min_version = "99.0.0""#));
+        let (payload, m) = config_payload(&dir);
+        let err = prepare_config_install(&payload, &m, &InstanceName::default_instance(), &base_dirs("newer-home"), &[])
+            .err()
+            .unwrap();
+        assert!(err.contains("upgrade"), "{err}");
+    }
+
+    #[test]
+    fn a_coder_only_pack_is_explained() {
+        let dir = tmp("coderonly");
+        std::fs::create_dir_all(dir.join("coder")).unwrap();
+        std::fs::write(dir.join("coder/AGENTS.md"), "# Instructions\n").unwrap();
+        std::fs::write(
+            dir.join("manifest.toml"),
+            "format = 2\nname = \"c\"\nversion = \"0.1.0\"\npublisher = \"A\"\nproducts = [\"coder\"]\n\n\
+             [coder]\nmin_version = \"0.5.0\"\nagents_file = \"coder/AGENTS.md\"\n",
+        )
+        .unwrap();
+        let (payload, m) = config_payload(&dir);
+        let err = prepare_config_install(&payload, &m, &InstanceName::default_instance(), &base_dirs("coderonly-home"), &[])
+            .err()
+            .unwrap();
+        assert!(err.contains("no aivyx-pa part"), "{err}");
+    }
+
+    #[test]
+    fn config_pack_target_tells_tool_packs_apart() {
+        let dir = tmp("target");
+        let key = dir.join("key.bin");
+        aivyx_pack::keygen_to_file(&key).unwrap();
+        let signing = load_signing_key(&key).unwrap();
+        let bundle = dir.join("bm.aivyxpack");
+        aivyx_pack::write_bundle(&build_payload(&good_pack("target-pack")).unwrap(), &signing, &bundle)
+            .unwrap();
+        assert_eq!(
+            config_pack_target(&bundle, &InstanceName::default_instance()).unwrap(),
+            Some(name("business-manager"))
+        );
+        assert_eq!(config_pack_target(&bundle, &name("shop")).unwrap(), Some(name("shop")));
+
+        let tool = tmp("target-tool");
+        std::fs::create_dir_all(tool.join("bin")).unwrap();
+        std::fs::write(
+            tool.join("manifest.toml"),
+            "name = \"k\"\nversion = \"1.0.0\"\ntarget = \"x\"\nmin_daemon_version = \"0.8.0\"\npublisher = \"A\"\n",
+        )
+        .unwrap();
+        let tool_bundle = dir.join("k.aivyxpack");
+        aivyx_pack::write_bundle(&build_payload(&tool).unwrap(), &signing, &tool_bundle).unwrap();
+        assert_eq!(config_pack_target(&tool_bundle, &InstanceName::default_instance()).unwrap(), None);
+    }
+
+    #[test]
+    fn next_steps_say_what_to_connect() {
+        let summary = check_pa_part(&good_pack("next")).unwrap();
+        let text = next_steps(&name("shop"), &summary, 7845);
+        assert!(text.starts_with("Installed business-manager v0.1.0 as instance `shop` (Studio port 7845)."), "{text}");
+        assert!(text.contains("aivyx-pa --instance shop connect gmail\n"), "{text}");
+        assert!(text.contains("optional: notion"), "{text}");
+        assert!(text.contains("aivyx-pa --instance shop daemon start"), "{text}");
+    }
 
     /// A config pack (format 2) needs a newer aivyx-pa: building one and
     /// reading it back the way `inspect`/`install` do refuses it clearly.

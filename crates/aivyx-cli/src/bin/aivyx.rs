@@ -695,6 +695,25 @@ fn run() -> Result<(), String> {
         });
     }
 
+    // ---- Config packs: `pack install` makes a new agent -------------------
+    // A config pack (format 2) installs as a new named instance through the
+    // setup wizard, so — like `instances create` — select that instance
+    // before anything else runs. Tool packs fall through to `run_pack`.
+    if let CliMode::Pack(PackSubcommand::Install { ref file }) = mode {
+        let selected = aivyx_instance::InstanceName::from_env()?;
+        if let Some(name) = pack::config_pack_target(std::path::Path::new(file), &selected)? {
+            // SAFETY: no runtime or other thread exists yet in this process
+            // (the tokio runtime is built just below), so nothing can be
+            // reading the environment concurrently.
+            unsafe { std::env::set_var(aivyx_instance::ENV_INSTANCE, name.as_str()) }
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+            return rt.block_on(pack::run_config_install(std::path::Path::new(file)));
+        }
+    }
+
     // ---- Phase 182: guided credential onboarding ------------------------
     // Like init, `connect` needs only a minimal runtime — it writes a
     // per-tool-process config.toml and shells out to the service's

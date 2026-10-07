@@ -70,7 +70,7 @@ fn configured_port(paths: &InstancePaths) -> u16 {
 
 /// Write `[daemon] web_ui_port = <port>` into `config`, keeping everything
 /// else (comments included) as it is.
-fn write_port(config: &Path, port: u16) -> Result<(), String> {
+pub(crate) fn write_port(config: &Path, port: u16) -> Result<(), String> {
     let text = std::fs::read_to_string(config)
         .map_err(|e| format!("read {}: {e}", config.display()))?;
     let mut doc: toml_edit::DocumentMut = text
@@ -127,6 +127,16 @@ fn used_ports(dirs: &BaseDirs) -> Vec<u16> {
         .collect()
 }
 
+/// The Studio port for a new named instance: the lowest one no instance
+/// uses and nothing is listening on.
+pub(crate) fn pick_port() -> u16 {
+    let used = used_ports(&BaseDirs::from_process());
+    let busy: Vec<u16> = (FIRST_NAMED_PORT..FIRST_NAMED_PORT + 64)
+        .filter(|p| port_is_busy(*p))
+        .collect();
+    choose_port(&used, &busy)
+}
+
 /// Validate `name` for `create`: not `default`, not already an instance.
 pub fn check_creatable(name: &InstanceName, existing: &[InstanceName]) -> Result<(), String> {
     if name.is_default() {
@@ -146,11 +156,7 @@ pub fn check_creatable(name: &InstanceName, existing: &[InstanceName]) -> Result
 pub async fn run_create(name: &InstanceName) -> Result<(), String> {
     let dirs = BaseDirs::from_process();
     check_creatable(name, &list_instances(&dirs))?;
-    let used = used_ports(&dirs);
-    let busy: Vec<u16> = (FIRST_NAMED_PORT..FIRST_NAMED_PORT + 64)
-        .filter(|p| port_is_busy(*p))
-        .collect();
-    let port = choose_port(&used, &busy);
+    let port = pick_port();
     println!("Setting up instance `{name}` (Studio port {port}).\n");
 
     crate::init::run_init_wizard(None).await?;

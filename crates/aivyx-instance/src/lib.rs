@@ -284,6 +284,11 @@ impl InstancePaths {
             .map(|h| h.join("tool-processes").join(tool))
     }
 
+    /// Installed packs: `home_dir/packs` (`<name>/<version>/` inside).
+    pub fn packs_dir(&self) -> Option<PathBuf> {
+        self.home_dir().map(|h| h.join("packs"))
+    }
+
     /// Sandbox directory: `~/aivyx-pa-sandbox[-<n>]`
     pub fn sandbox_dir(&self) -> Option<PathBuf> {
         self.dirs.home.as_ref().map(|h| {
@@ -413,6 +418,14 @@ mod tests {
         assert_eq!(d.home_data_dir().unwrap(), PathBuf::from("/h/.local/share/aivyx-pa"));
         let r = p("research", dirs(Some("/h"), None, Some("/d"), None));
         assert_eq!(r.home_data_dir().unwrap(), PathBuf::from("/h/.local/share/aivyx-pa/instances/research"));
+    }
+
+    #[test]
+    fn packs_dir_sits_in_the_instance_home() {
+        let d = p("default", dirs(Some("/h"), None, None, None));
+        assert_eq!(d.packs_dir().unwrap(), PathBuf::from("/h/.aivyx-pa/packs"));
+        let r = p("shop", dirs(Some("/h"), None, None, None));
+        assert_eq!(r.packs_dir().unwrap(), PathBuf::from("/h/.aivyx-pa/instances/shop/packs"));
     }
 
     #[test]
