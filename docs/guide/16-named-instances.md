@@ -19,6 +19,21 @@ This picks a free Studio port for it, then runs the same setup you did the
 first time — model, passphrase, [creating its identity](03-create-your-agent.md).
 Names are 1–32 letters, digits and `-`, not starting or ending with `-`.
 
+### From a pack
+
+A **pack** sets up a ready-made assistant for one kind of work — say,
+running a small business. Installing it creates a new instance for it:
+
+```sh
+aivyx-pa pack inspect business-manager.aivyxpack     # what it contains
+aivyx-pa pack install business-manager.aivyxpack     # instance `business-manager`
+aivyx-pa --instance shop pack install business-manager.aivyxpack   # or name it
+```
+
+You go through the same setup, with the pack's answers pre-filled, and it
+tells you which accounts to connect afterwards. `aivyx-pa instances list`
+shows which pack each instance came from.
+
 ## Use it
 
 Add `--instance <name>` to any command:

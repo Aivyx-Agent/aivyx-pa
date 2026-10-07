@@ -32,6 +32,16 @@ existing KitchenDB.
 > makes a marketplace of packs maintainable, and the exact line a separate
 > verticals repo would later cut along.
 
+> **Config packs (2026-10-07).** Besides the tool packs this document
+> describes, a pack can now be **configuration only** (`format = 2`): a
+> starter config, a team, skills and routines over the tools Aivyx PA
+> already has, for aivyx-pa and/or aivyx-coder. It installs as a **new
+> named instance** (`aivyx-pa pack install`), is checked by
+> `aivyx-pa pack check`, and can't set autonomy above `supervised`. See
+> [`manual/developer/05-vertical-packs.md`](manual/developer/05-vertical-packs.md)
+> and the shared [`aivyx-pack`](https://github.com/Aivyx-Agent/aivyx-pack)
+> crate for the format.
+
 ---
 
 ## 1. Why packs, not forks

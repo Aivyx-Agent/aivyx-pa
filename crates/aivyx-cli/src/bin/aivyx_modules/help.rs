@@ -290,7 +290,8 @@ pub const COMMANDS: &[CommandHelp] = &[
             "aivyx-pa pack keygen <keyfile>",
             "aivyx-pa pack build <staging-dir> --key <keyfile> --out <file>",
             "aivyx-pa pack inspect <bundle-file> [--allow-untrusted]",
-            "aivyx-pa pack install <bundle-file>",
+            "aivyx-pa pack check <pack-dir>",
+            "aivyx-pa [--instance <name>] pack install <bundle-file>",
         ],
     },
     CommandHelp {

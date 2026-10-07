@@ -358,6 +358,7 @@ Publisher keys you trust for `aivyx-pa pack install`, on top of the built-in Aiv
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `trusted_publishers` | list of string |  | Base64 Ed25519 public keys of pack publishers you trust. |
+| `source` | string |  | The config pack this assistant was installed from (`<name>@<version>`). Written by `aivyx-pa pack install`; shown by `aivyx-pa instances list`. |
 
 ## Memory and learning
 

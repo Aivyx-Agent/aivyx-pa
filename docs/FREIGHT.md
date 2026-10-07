@@ -14,8 +14,8 @@
 > aivyx-pa and aivyx-coder alike, with a publisher command (`aivyx-pack
 > keygen/build/inspect`). It adds **format 2, config packs** —
 > configuration only, for aivyx-pa and/or aivyx-coder, one file for every
-> platform. This release refuses a format-2 pack with a clear "needs a
-> newer version" message; installing them comes next. Everything below
+> platform. `aivyx-pa pack install` installs one as a new named instance
+> (see `docs/manual/developer/05-vertical-packs.md`). Everything below
 > describes format 1, which is unchanged.
 
 ## 1. The bundle format (locked)

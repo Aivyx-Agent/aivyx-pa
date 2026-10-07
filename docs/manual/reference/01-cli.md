@@ -414,17 +414,34 @@ See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
 
 ### `aivyx-pa pack`
 
-Vertical packs: signed bundles that add a domain-specific team and tools.
+Vertical packs: signed bundles that turn an assistant into a domain
+specialist.
 
 ```
 aivyx-pa pack keygen <keyfile>
 aivyx-pa pack build <staging-dir> --key <keyfile> --out <file>
 aivyx-pa pack inspect <bundle-file> [--allow-untrusted]
-aivyx-pa pack install <bundle-file>
+aivyx-pa pack check <pack-dir>
+aivyx-pa [--instance <name>] pack install <bundle-file>
 ```
 
-`inspect` verifies the signature and shows the contents before you install;
-`--allow-untrusted` inspects a pack signed by a key you haven't trusted yet.
+There are two kinds of pack:
+
+- **Config packs** carry configuration only — a starter config, a team,
+  skills, routines. Installing one creates a **new assistant** (a
+  [named instance](../../guide/16-named-instances.md)) named after the pack,
+  or after `--instance <name>`; an existing instance is never changed. It
+  runs the usual setup, pre-filled from the pack, then says what to connect
+  (`aivyx-pa --instance <name> connect gmail`, …). A pack can't set autonomy
+  above `supervised`.
+- **Tool packs** (such as Kitchen) add tool processes and a team to your
+  current assistant.
+
+`inspect` verifies the signature and shows the contents before you install
+— for a config pack, its routines and autonomy and whether it passes its
+checks; `--allow-untrusted` inspects a pack signed by a key you haven't
+trusted yet. `check` runs those checks on a pack's folder, for pack
+authors. `instances list` shows which pack each assistant came from.
 See [Vertical packs](../developer/05-vertical-packs.md).
 
 ### `aivyx-pa notify`

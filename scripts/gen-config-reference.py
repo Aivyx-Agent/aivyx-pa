@@ -178,6 +178,7 @@ MEANINGS = {
     "git.repos": "Paths to the repositories the git tools may read. Each must exist and contain `.git`.",
     "team.config_path": "Path to a team-config TOML file. Unset means the built-in team.",
     "pack.trusted_publishers": "Base64 Ed25519 public keys of pack publishers you trust.",
+    "pack.source": "The config pack this assistant was installed from (`<name>@<version>`). Written by `aivyx-pa pack install`; shown by `aivyx-pa instances list`.",
     "proactive.signal_recall_cluster": "Surface a topic whose memories have proved consistently helpful.",
     "proactive.signal_due_reminder": "Surface a reminder whose time has arrived.",
     "persona_lifecycle.signal_decay": "Retire Persona facets that keep proving unhelpful.",

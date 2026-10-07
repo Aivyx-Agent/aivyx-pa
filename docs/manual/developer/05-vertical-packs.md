@@ -48,5 +48,28 @@ aivyx-pa pack install <bundle-file>
 
 `install` checks the signature against the built-in Aivyx key and any keys
 listed in `[pack] trusted_publishers`, refuses a bundle built for a
-different platform, and wires the pack in. `just pack-kitchen` builds the
+different platform, and wires the pack in.
+
+## Config packs
+
+A **config pack** (manifest `format = 2`) carries configuration only — no
+binaries, one file for every platform — so it can only use tools Aivyx PA
+already has. Its aivyx-pa part is a starter `aivyx-pa.toml` (profile,
+persona seed, roles, `[[schedule]]` routines, `[autonomy]`), an optional
+team config, `SKILL.md` skill folders, and the integrations it `requires`
+or can use (`optional`). The format lives in the shared
+[`aivyx-pack`](https://github.com/Aivyx-Agent/aivyx-pack) crate, whose
+`aivyx-pack` command builds and signs packs for aivyx-pa and aivyx-coder
+alike.
+
+`aivyx-pa pack check <dir>` checks a pack's aivyx-pa part and lists every
+problem: the template must load as a real config, autonomy (global and per
+area) can't go above `supervised`, the team config and skills must load,
+and integrations must be ones Aivyx PA knows (`gmail`, `calendar`, `drive`,
+`contacts`, `notion`, `obsidian`, `n8n`, `toolkit`, `vision`).
+
+`aivyx-pa pack install` makes a config pack a **new named instance**: it
+unpacks into the instance's `packs/<name>/<version>/`, runs the same checks,
+points the template at the installed team and skills, records
+`[pack] source`, and runs the setup wizard with it. `just pack-kitchen` builds the
 kitchen pack with a development key, as a worked example of the format.

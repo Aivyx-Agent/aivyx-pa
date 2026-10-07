@@ -405,7 +405,8 @@ pub fn next_steps(instance: &InstanceName, summary: &PaPartSummary, port: u16) -
         out.push_str(&format!("  optional: {}\n", pa.optional.join(", ")));
     }
     out.push_str(&format!(
-        "Start it with `aivyx-pa --instance {instance} daemon start`.\n"
+        "Start it with `aivyx-pa --instance {instance} daemon run` \
+         (or `daemon install` to run it as a service).\n"
     ));
     out
 }
@@ -437,7 +438,7 @@ pub async fn run_config_install(file: &Path) -> Result<(), String> {
         }
         why
     };
-    crate::init::run_init_wizard(Some(&install.template)).await.map_err(&undo)?;
+    crate::init::run_init_wizard(Some(&install.template)).await.map_err(undo)?;
     let Some(config) = config.filter(|c| c.exists()) else {
         return Err(undo("setup didn't finish, so nothing was installed".into()));
     };
@@ -754,7 +755,7 @@ mod tests {
         assert!(text.starts_with("Installed business-manager v0.1.0 as instance `shop` (Studio port 7845)."), "{text}");
         assert!(text.contains("aivyx-pa --instance shop connect gmail\n"), "{text}");
         assert!(text.contains("optional: notion"), "{text}");
-        assert!(text.contains("aivyx-pa --instance shop daemon start"), "{text}");
+        assert!(text.contains("aivyx-pa --instance shop daemon run"), "{text}");
     }
 
     /// A config pack (format 2) needs a newer aivyx-pa: building one and

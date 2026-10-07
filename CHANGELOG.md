@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Config packs.** A pack can now be configuration only — a starter
+  config, a team, skills and routines over the tools Aivyx PA already has.
+  `aivyx-pa pack install` makes one a **new assistant** (a named instance,
+  named after the pack or `--instance <name>`): it runs the usual setup
+  pre-filled from the pack, then says which accounts to connect. A pack
+  can't set autonomy above `supervised`, and an existing instance is never
+  changed. `aivyx-pa pack inspect` shows a config pack's routines, autonomy
+  and whether it passes its checks; `aivyx-pa pack check <dir>` runs those
+  checks for pack authors; `aivyx-pa instances list` shows which pack each
+  assistant came from.
+
 ### Changed
 
 - **The pack format moved to its own shared crate,
