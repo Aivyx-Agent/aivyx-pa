@@ -77,6 +77,7 @@ pub fn run_pack(sub: PackSubcommand) -> Result<(), String> {
             Ok(())
         }
         PackSubcommand::Install { file } => install(Path::new(&file)),
+        PackSubcommand::Check { dir } => crate::pack_check::run_check(Path::new(&dir)),
     }
 }
 

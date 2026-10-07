@@ -144,6 +144,8 @@ mod loop_cli;
 mod mcp_recipes;
 #[path = "aivyx_modules/review.rs"]
 mod review;
+#[path = "aivyx_modules/pack_check.rs"]
+mod pack_check;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
 #[path = "aivyx_modules/memory.rs"]
@@ -2503,6 +2505,8 @@ enum PackSubcommand {
     Inspect { file: String, allow_untrusted: bool },
     /// `aivyx-pa pack install <file>`
     Install { file: String },
+    /// `aivyx-pa pack check <dir>` — check a config pack's aivyx-pa part.
+    Check { dir: String },
 }
 
 /// Phase 173 — `aivyx-pa loop <subcommand>` variants.
@@ -3812,6 +3816,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "install" => PackSubcommand::Install {
                 file: take_one("a <bundle-file>")?,
+            },
+            "check" => PackSubcommand::Check {
+                dir: take_one("a <pack-dir>")?,
             },
             other => {
                 return Err(format!(
@@ -14778,6 +14785,10 @@ mod tests {
             CliMode::Pack(PackSubcommand::Keygen {
                 keyfile: "k.bin".into()
             })
+        );
+        assert_eq!(
+            parse_cli_args_from(&argv(&["pack", "check", "bm/"])).unwrap().mode,
+            CliMode::Pack(PackSubcommand::Check { dir: "bm/".into() })
         );
         // Spec A3 — the inline "Supported: keygen, build, ..." list is
         // gone; the error now points at `--help` instead.
