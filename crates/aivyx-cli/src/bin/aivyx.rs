@@ -6869,6 +6869,7 @@ async fn run_async(
         // Chapter Freight — pack trust is read by the `aivyx-pa pack` CLI
         // path, not the daemon.
         pack_trusted_publishers: _,
+        pack_source: _,
         memory_ttl_secs,
         // Phase 74 — per-topic-glob retention rules. Threaded
         // into the daemon's memory-GC timer below so the hourly

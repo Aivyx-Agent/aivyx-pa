@@ -1454,6 +1454,9 @@ pub struct AivyxConfig {
     /// compiled-in publisher set at verify time). Validated at load:
     /// every entry must be base64 of exactly 32 bytes.
     pub pack_trusted_publishers: Vec<String>,
+    /// `[pack] source`: the config pack this agent was installed from
+    /// (`<name>@<version>`), written by `aivyx-pa pack install`.
+    pub pack_source: Option<String>,
 }
 
 /// A named bundle of role-scoped configuration loaded from a single
@@ -4308,6 +4311,7 @@ struct RawTeam {
 #[derive(Debug, Default, Deserialize)]
 struct RawPack {
     trusted_publishers: Option<Vec<String>>,
+    source: Option<String>,
 }
 
 /// `[profile]` section in the TOML file. Phase 57 (PRODUCT.md P13).
@@ -8411,6 +8415,7 @@ impl AivyxConfig {
                 }
                 entries
             },
+            pack_source: toml.pack.source.clone(),
         })
     }
 

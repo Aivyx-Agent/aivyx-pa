@@ -4452,6 +4452,16 @@ fn daemon_web_ui_host_parses_bind_all() {
 // ---- Chapter Gatehouse — the exposure interlock ------------------------
 
 #[test]
+fn pack_source_records_where_an_agent_came_from() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n[pack]\nsource = \"bm@0.1.0\"\n", "pack-source");
+    assert_eq!(cfg.pack_source.as_deref(), Some("bm@0.1.0"));
+    let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).expect("load");
+    assert_eq!(cfg.pack_source, None);
+    drop(env);
+}
+
+#[test]
 fn pack_trusted_publishers_validates_key_shape() {
     // Chapter Freight — entries must be base64 of exactly 32 bytes.
     let env = EnvScope::new();

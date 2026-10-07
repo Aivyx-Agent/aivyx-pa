@@ -54,13 +54,21 @@ pub fn run_pack(sub: PackSubcommand) -> Result<(), String> {
         PackSubcommand::Build { staging, key, out } => {
             let signing_key = load_signing_key(Path::new(&key)).map_err(|e| e.to_string())?;
             let payload = build_payload(Path::new(&staging)).map_err(|e| e.to_string())?;
-            let manifest = read_manifest(&payload).map_err(|e| e.to_string())?;
+            let manifest = read_any_manifest(&payload).map_err(|e| e.to_string())?;
             aivyx_pack::write_bundle(&payload, &signing_key, Path::new(&out))
                 .map_err(|e| e.to_string())?;
-            println!(
-                "built {out}: pack {} v{} for {} (min daemon {})",
-                manifest.name, manifest.version, manifest.target, manifest.min_daemon_version,
-            );
+            match &manifest {
+                Manifest::Binary(m) => println!(
+                    "built {out}: pack {} v{} for {} (min daemon {})",
+                    m.name, m.version, m.target, m.min_daemon_version,
+                ),
+                Manifest::Config(_) => println!(
+                    "built {out}: pack {} v{} ({})",
+                    manifest.name(),
+                    manifest.version(),
+                    aivyx_pack::describe::kind(&manifest)
+                ),
+            }
             Ok(())
         }
         PackSubcommand::Inspect {
@@ -77,8 +85,13 @@ pub fn run_pack(sub: PackSubcommand) -> Result<(), String> {
                 }
                 Err(e) => return Err(e.to_string()),
             }
-            let manifest = read_manifest(&bundle.payload).map_err(|e| e.to_string())?;
-            print!("{}", render_manifest(&manifest));
+            match read_any_manifest(&bundle.payload).map_err(|e| e.to_string())? {
+                Manifest::Binary(manifest) => print!("{}", render_manifest(&manifest)),
+                Manifest::Config(manifest) => {
+                    let check = manifest.pa.as_ref().map(|_| check_payload(&bundle.payload));
+                    print!("{}", render_config_inspect(&Manifest::Config(manifest), check.as_ref()));
+                }
+            }
             Ok(())
         }
         PackSubcommand::Install { file } => install(Path::new(&file)),
@@ -498,6 +511,53 @@ fn dirs_home() -> Result<PathBuf, String> {
         .ok_or_else(|| "HOME is not set".to_string())
 }
 
+/// Unpack a config pack to a scratch folder and run the aivyx-pa checks on
+/// it, so `inspect` can show routines and autonomy and flag problems
+/// before anything is installed.
+fn check_payload(payload: &[u8]) -> Result<PaPartSummary, Vec<String>> {
+    let dir = std::env::temp_dir().join(format!(
+        "aivyx-pa-inspect-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let result = unpack_payload(payload, &dir)
+        .map_err(|e| vec![e.to_string()])
+        .and_then(|()| check_pa_part(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+/// `pack inspect` for a config pack: the shared description, then — for
+/// an aivyx-pa part — what the checks found.
+pub fn render_config_inspect(
+    manifest: &Manifest,
+    check: Option<&Result<PaPartSummary, Vec<String>>>,
+) -> String {
+    let mut out = aivyx_pack::describe::describe(manifest);
+    match check {
+        None => {}
+        Some(Ok(s)) => out.push_str(&format!(
+            "  routines: {}\n  autonomy: {}\n  checks: OK\n",
+            s.routines,
+            super::pack_check::autonomy_line(s)
+        )),
+        Some(Err(problems)) => {
+            out.push_str(&format!(
+                "  checks: {} problem{} — this pack won't install\n",
+                problems.len(),
+                if problems.len() == 1 { "" } else { "s" }
+            ));
+            for p in problems {
+                out.push_str(&format!("    - {p}\n"));
+            }
+        }
+    }
+    out
+}
+
 /// Pure renderer for `pack inspect`.
 pub fn render_manifest(m: &PackManifest) -> String {
     let mut out = format!(
@@ -670,6 +730,21 @@ mod tests {
         let tool_bundle = dir.join("k.aivyxpack");
         aivyx_pack::write_bundle(&build_payload(&tool).unwrap(), &signing, &tool_bundle).unwrap();
         assert_eq!(config_pack_target(&tool_bundle, &InstanceName::default_instance()).unwrap(), None);
+    }
+
+    #[test]
+    fn inspect_shows_a_config_packs_routines_and_autonomy() {
+        let (payload, m) = config_payload(&good_pack("inspect"));
+        let text = render_config_inspect(&Manifest::Config(m), Some(&check_payload(&payload)));
+        assert!(text.contains("kind:        config pack"), "{text}");
+        assert!(text.contains("  requires: gmail\n"), "{text}");
+        assert!(text.contains("  routines: 1\n  autonomy: assisted (fs: supervised)\n  checks: OK"), "{text}");
+
+        let bad = good_pack("inspect-bad");
+        rewrite(&bad, "pa/aivyx-pa.toml", |t| t.replace(r#"level = "assisted""#, r#"level = "unleashed""#));
+        let (payload, m) = config_payload(&bad);
+        let text = render_config_inspect(&Manifest::Config(m), Some(&check_payload(&payload)));
+        assert!(text.contains("checks: 1 problem — this pack won't install"), "{text}");
     }
 
     #[test]

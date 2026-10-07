@@ -106,7 +106,7 @@ pub async fn run_list() -> Result<(), String> {
         println!("No instances yet. Run `aivyx-pa init` to set up the default one.");
         return Ok(());
     }
-    println!("{:<20} {:<9} {:<7} CONFIG", "INSTANCE", "RUNNING", "STUDIO");
+    println!("{:<20} {:<9} {:<7} {:<24} CONFIG", "INSTANCE", "RUNNING", "STUDIO", "PACK");
     for name in names {
         let paths = paths_for(name.clone());
         let running = if is_running(&paths).await { "yes" } else { "no" };
@@ -114,9 +114,29 @@ pub async fn run_list() -> Result<(), String> {
             .config_file()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "-".into());
-        println!("{:<20} {:<9} {:<7} {config}", name.as_str(), running, configured_port(&paths));
+        let pack = paths
+            .config_file()
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .map(|text| pack_source_of(&text))
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "{:<20} {:<9} {:<7} {:<24} {config}",
+            name.as_str(),
+            running,
+            configured_port(&paths),
+            pack
+        );
     }
     Ok(())
+}
+
+/// The config pack an instance came from (`[pack] source`), or `-`.
+pub fn pack_source_of(config_text: &str) -> String {
+    config_text
+        .parse::<toml_edit::DocumentMut>()
+        .ok()
+        .and_then(|doc| doc.get("pack")?.get("source")?.as_str().map(str::to_string))
+        .unwrap_or_else(|| "-".into())
 }
 
 /// The ports every existing instance's config uses.
@@ -220,6 +240,13 @@ mod tests {
 
     fn name(n: &str) -> InstanceName {
         InstanceName::parse(n).unwrap()
+    }
+
+    #[test]
+    fn pack_source_is_read_from_the_config() {
+        assert_eq!(pack_source_of("[pack]\nsource = \"bm@0.1.0\"\n"), "bm@0.1.0");
+        assert_eq!(pack_source_of("[profile]\n"), "-");
+        assert_eq!(pack_source_of("not = [toml"), "-");
     }
 
     #[test]
