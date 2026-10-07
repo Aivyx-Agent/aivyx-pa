@@ -93,6 +93,17 @@ pub fn check_pa_part(dir: &Path) -> Result<PaPartSummary, Vec<String>> {
                     autonomy_overrides.push((o.domain.clone(), o.level));
                 }
                 routines = cfg.schedules.len();
+                // The config loader accepts any cron text; a bad pattern
+                // would only fail once the scheduler runs, so check here.
+                for s in &cfg.schedules {
+                    if let Err(e) = aivyx_channel::schedule::validate_cron(&s.cron) {
+                        problems.push(format!(
+                            "routine `{}`: {e} — use 6 or 7 fields, seconds first \
+                             (e.g. `0 30 7 * * Mon-Fri`)",
+                            s.name
+                        ));
+                    }
+                }
             }
         }
     }
@@ -247,7 +258,7 @@ level = "supervised"
 
 [[schedule]]
 name = "morning-briefing"
-cron = "30 7 * * 1-5"
+cron = "0 30 7 * * Mon-Fri"
 prompt = "Prepare the morning briefing."
 "#;
 
@@ -355,6 +366,14 @@ trust_ceiling = "Trusted"
         let problems = check_pa_part(&d).unwrap_err();
         assert_eq!(problems.len(), 3, "{problems:?}");
         assert!(render_problems(&problems).starts_with("✗ 3 problems in the aivyx-pa part:\n"));
+    }
+
+    #[test]
+    fn a_bad_routine_schedule_is_refused() {
+        let d = good_pack("cron");
+        rewrite(&d, "pa/aivyx-pa.toml", |t| t.replace("0 30 7 * * Mon-Fri", "30 7 * * 1-5"));
+        let problems = check_pa_part(&d).unwrap_err();
+        assert!(problems.iter().any(|p| p.starts_with("routine `morning-briefing`")), "{problems:?}");
     }
 
     #[test]
