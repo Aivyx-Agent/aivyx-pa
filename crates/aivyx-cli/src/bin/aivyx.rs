@@ -1062,7 +1062,7 @@ fn run() -> Result<(), String> {
         return run_mcp_status();
     }
 
-    // Chapter J — `aivyx-pa team roster`: render the default Nonagon. Pure
+    // Chapter J — `aivyx-pa team roster`: render the installed team. Pure
     // stdout, no storage/provider/daemon (like `mcp recipes`). `team run`
     // takes the run_async path below — it needs the live provider + audit.
     if let CliMode::Team(TeamSubcommand::Roster { config }) = &mode {
@@ -2437,7 +2437,9 @@ enum KeyringSubcommand {
 
 /// Chapter J — `aivyx-pa team <subcommand>` variants. The optional
 /// `--config <path.toml>` loads a **vertical pack's** customised `TeamConfig`
-/// (e.g. the kitchen BOH Nonagon); omitted, the default 9-role Nonagon runs.
+/// (e.g. the kitchen BOH Nonagon); omitted, the installed team runs — the
+/// daemon's (`[team] config_path`, else `team.toml` beside `aivyx-pa.toml`,
+/// else the default 9-role Nonagon).
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum TeamSubcommand {
     /// `aivyx-pa team roster [--config <path>]` — render a team. Offline.

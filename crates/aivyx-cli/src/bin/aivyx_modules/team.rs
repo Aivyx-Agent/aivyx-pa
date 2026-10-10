@@ -79,11 +79,46 @@ fn trust_label(t: TrustTier) -> &'static str {
 /// Load the team to run: a vertical pack's `TeamConfig` from `--config
 /// <path.toml>`, or the default 9-role Nonagon when none is given.
 fn load_team(config: Option<&str>) -> Result<TeamConfig, String> {
+    load_team_from(config, &aivyx_config::resolve_config_path())
+}
+
+/// `--config <path>` when given; otherwise the installed team — the one
+/// the daemon runs (see [`installed_team_at`]), so `team run`/`roster`
+/// without `--config` don't quietly use a different team.
+fn load_team_from(config: Option<&str>, toml_path: &Path) -> Result<TeamConfig, String> {
     match config {
         Some(path) => TeamConfig::load(path)
             .map_err(|e| format!("failed to load team config from {path:?}: {e}")),
-        None => Ok(default_nonagon()),
+        None => Ok(installed_team_at(toml_path)),
     }
+}
+
+/// The daemon's startup team for the `aivyx-pa.toml` at `toml_path`:
+/// its `[team] config_path`, else `team.toml` beside it, else the default
+/// Nonagon ([`resolve_daemon_team_config`]). A config that doesn't load
+/// counts as setting no path.
+fn installed_team_at(toml_path: &Path) -> TeamConfig {
+    let configured = toml_path
+        .exists()
+        .then(|| {
+            aivyx_config::AivyxConfig::load_from_env_and_toml(&aivyx_config::LoadOptions {
+                toml_path: Some(toml_path.to_path_buf()),
+                require_api_key: false,
+                require_telegram_token: false,
+                require_discord_token: false,
+                require_slack_tokens: false,
+                role_override: None,
+            })
+            .ok()
+        })
+        .flatten()
+        .and_then(|cfg| cfg.team_config_path);
+    let base_dir = toml_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    resolve_daemon_team_config(configured.as_deref(), &base_dir)
 }
 
 /// Load a team config, then clamp the lead's (and every specialist's)
@@ -505,6 +540,20 @@ mod tests {
         write_custom_team(&abs);
         let team = resolve_daemon_team_config(Some(&abs), &dir);
         assert_eq!(team.name, "custom-team");
+    }
+
+    #[test]
+    fn without_config_the_cli_uses_the_installed_team() {
+        let dir = scratch("installed");
+        write_custom_team(&dir.join("my-team.toml"));
+        let toml = dir.join("aivyx-pa.toml");
+        std::fs::write(&toml, "[team]\nconfig_path = \"my-team.toml\"\n").unwrap();
+        assert_eq!(installed_team_at(&toml).name, "custom-team");
+        assert_eq!(load_team_from(None, &toml).unwrap().name, "custom-team");
+
+        // No config file at all: the default Nonagon, as before.
+        let empty = scratch("no-config");
+        assert_eq!(installed_team_at(&empty.join("aivyx-pa.toml")).name, "default-nonagon");
     }
 
     #[test]

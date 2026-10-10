@@ -274,6 +274,9 @@ aivyx-pa team abort|pause|resume <mission-id>
 - `init` — write a team config to customise (from the default team or a pack).
 - `run` — run a mission in the foreground; `start` — hand it to the daemon
   (from a goal, or a prepared plan file).
+- Without `--config`, `roster`, `run` and `start` use the installed team —
+  the one the daemon runs: `[team] config_path`, else `team.toml` beside
+  `aivyx-pa.toml`, else the default team.
 - `list`, `status` — running and finished missions.
 - `approve`/`reject` — answer a step waiting for you; `abort`/`pause`/`resume`
   — control a mission.
