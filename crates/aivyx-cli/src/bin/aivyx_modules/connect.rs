@@ -70,6 +70,23 @@ pub const SERVICES: &[ConnectService] = &[
 ];
 
 /// Look up a service by its key (case-insensitive).
+/// For an integration that runs as a tool process (a pack may list
+/// `toolkit`, `notion`, … in `requires` beside the ones `connect` signs in
+/// to), how to set it up instead — `None` for anything else.
+pub fn tool_process_hint(key: &str) -> Option<String> {
+    let k = key.trim().to_ascii_lowercase();
+    let tool_process = crate::pack_check::KNOWN_INTEGRATIONS.contains(&k.as_str())
+        && !crate::pack_check::CONNECTABLE.contains(&k.as_str());
+    tool_process.then(|| {
+        format!(
+            "`{k}` has nothing to sign in to here: it runs as a tool process. Install \
+             `aivyx-{k}` and add it to aivyx-pa.toml:\n\n[[tool_process]]\nname = \"{k}\"\n\
+             command = \"aivyx-{k}\"\n\nThen restart the daemon. See docs/INSTALL.md for \
+             its own settings."
+        )
+    })
+}
+
 pub fn find_service(key: &str) -> Option<&'static ConnectService> {
     let k = key.trim().to_ascii_lowercase();
     SERVICES.iter().find(|s| s.key == k)
@@ -381,6 +398,9 @@ pub async fn run_connect(service: Option<&str>) -> Result<(), String> {
     if key.trim().eq_ignore_ascii_case("kitchen") {
         return crate::connect_kitchen::run_connect_kitchen(&mut reader, &mut writer, &home).await;
     }
+    if let Some(hint) = tool_process_hint(key) {
+        return Err(hint);
+    }
     let svc = find_service(key).ok_or_else(|| {
         let known = SERVICES
             .iter()
@@ -650,6 +670,20 @@ mod tests {
             Some("http://127.0.0.1:8765/callback")
         );
         assert!(doc.get("scopes").is_none());
+    }
+
+    #[test]
+    fn a_tool_process_integration_gets_setup_steps_not_unknown_service() {
+        let hint = tool_process_hint("Toolkit").expect("toolkit is a known integration");
+        assert!(hint.contains("[[tool_process]]\nname = \"toolkit\"\ncommand = \"aivyx-toolkit\""), "{hint}");
+        assert!(hint.contains("docs/INSTALL.md"), "{hint}");
+        assert!(!hint.contains("unknown service"), "{hint}");
+        for key in ["notion", "obsidian", "n8n", "vision"] {
+            assert!(tool_process_hint(key).is_some(), "{key}");
+        }
+        for key in ["gmail", "calendar", "nonsense"] {
+            assert!(tool_process_hint(key).is_none(), "{key}");
+        }
     }
 
     #[test]
