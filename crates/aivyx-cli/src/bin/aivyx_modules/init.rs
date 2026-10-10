@@ -1846,6 +1846,21 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
     out
 }
 
+/// What to tell a cloud-provider user about routines, if anything.
+fn routines_notice(local: bool, from_pack: bool) -> Option<&'static str> {
+    match (local, from_pack) {
+        (true, _) => None,
+        (false, false) => Some(
+            "Background routines are written to it disabled, since each run spends \
+             tokens — set `enabled = true` under any [[schedule]] you want.",
+        ),
+        (false, true) => Some(
+            "This pack's routines are on, and each run spends tokens — set \
+             `enabled = false` under any [[schedule]] you don't want.",
+        ),
+    }
+}
+
 /// The starter routines a new agent gets: none for a config pack, which
 /// brings its own; otherwise [`render_default_schedules`].
 fn starter_routines(cfg: &InitConfig, from_pack: bool) -> String {
@@ -3163,11 +3178,8 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
             config_file.display()
         );
     }
-    if !cfg.provider.is_local() {
-        eprintln!(
-            "Background routines are written to it disabled, since each run spends \
-             tokens — set `enabled = true` under any [[schedule]] you want."
-        );
+    if let Some(n) = routines_notice(cfg.provider.is_local(), from_pack) {
+        eprintln!("{n}");
     }
 
     // First-run D2 — the passphrase, chosen now.
@@ -4115,6 +4127,14 @@ mod tests {
         assert!(with.contains("  • each night, tidying up its memory"), "{with}");
         assert!(with.contains("web scan of your interests"), "{with}");
         assert!(!without.contains("web scan"), "{without}");
+    }
+
+    #[test]
+    fn routines_notice_matches_what_was_written() {
+        assert_eq!(routines_notice(true, false), None);
+        assert_eq!(routines_notice(true, true), None);
+        assert!(routines_notice(false, false).unwrap().contains("disabled"));
+        assert!(routines_notice(false, true).unwrap().contains("routines are on"));
     }
 
     #[test]
