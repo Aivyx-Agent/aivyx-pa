@@ -132,11 +132,15 @@ fi
 
 section "encrypted store + audit chain"
 
-base="$(audit_count)"
-if [[ "$base" == "0" ]]; then
-    pass "fresh encrypted store verifies — 0 events (chain empty)"
+# No store exists yet: --verify-only refuses rather than creating one
+# (cd932693), so the chain starts from 0 events.
+out="$(aivyx_run --verify-only </dev/null 2>&1)"; rc=$?
+if [[ $rc -ne 0 ]] && grep -q 'no store exists yet' <<<"$out"; then
+    pass "fresh state has no store — --verify-only refuses cleanly"
+    base=0
 else
-    fail "fresh store baseline expected 0 events, got '${base:-<none>}'"
+    fail "fresh state: expected --verify-only to refuse (no store), got rc=$rc"
+    base="$(audit_count)"
 fi
 
 # A plain chat turn writes audit entries regardless of tool calls, so
@@ -186,9 +190,14 @@ fi
 echo "scratch — delete me" > "$DEV_DIR/sandbox/delete-probe.txt"
 del_prompt='Call the fs.delete tool now to delete the file delete-probe.txt from your sandbox. After the tool call returns, reply DONE.'
 echo "dev-verify: running the fs.delete turn..."
-printf '%s\n' "$del_prompt" | aivyx_turn >/dev/null 2>&1
+del_out="$(printf '%s\n' "$del_prompt" | aivyx_turn 2>&1)"
 if [[ ! -e "$DEV_DIR/sandbox/delete-probe.txt" ]]; then
     pass "fs.delete tool path works (sandbox file removed)"
+elif grep -q 'fs.delete requires escalation' <<<"$del_out"; then
+    # The model called the tool; the gate held the irreversible step for
+    # the operator's approval, which a piped stdin can't give.
+    pass "fs.delete reached the tool and was held for approval (safety gate)"
+    rm -f "$DEV_DIR/sandbox/delete-probe.txt"
 else
     warn "fs.delete probe: file still present — local model likely skipped the tool call"
     rm -f "$DEV_DIR/sandbox/delete-probe.txt"
