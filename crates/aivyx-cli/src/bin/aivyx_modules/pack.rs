@@ -76,7 +76,12 @@ pub fn run_pack(sub: PackSubcommand) -> Result<(), String> {
             allow_untrusted,
         } => {
             let bundle = read_bundle(Path::new(&file)).map_err(|e| e.to_string())?;
-            let trusted = trusted_publishers()?;
+            // Before any agent is set up, only the compiled-in keys apply —
+            // the same rule `pack install` uses for a config pack.
+            let trusted = match find_aivyx_toml() {
+                Some(_) => trusted_publishers()?,
+                None => Vec::new(),
+            };
             match verify_bundle(&bundle, &trusted) {
                 Ok(_) => println!("signature: VERIFIED (trusted publisher)"),
                 Err(e @ PackError::UntrustedPublisher { .. }) if allow_untrusted => {
