@@ -35,8 +35,10 @@ python3 -m unittest discover examples/python-tool/tests
 # Install the pre-commit hook once per clone (runs the clippy sweep before every commit)
 ./scripts/install-hooks.sh
 
-# Local interactive dev run against a fully local Ollama backend, disposable state under .dev-run/
+# Local interactive dev run against a local Ollama (default) or llama-server
+# backend; disposable state (HOME/XDG dirs included) under .dev-run/
 ./scripts/dev-run.sh                     # debug build, interactive session
+./scripts/dev-run.sh --provider llamacpp # llama-server on 127.0.0.1:8080
 ./scripts/dev-run.sh --release --reset
 ./scripts/dev-run.sh -- --verify-only    # scripted verification pass (dev-verify.sh)
 ```

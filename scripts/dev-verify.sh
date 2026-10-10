@@ -4,13 +4,15 @@
 #
 # `dev-run.sh` proves an interactive chat session works. This script
 # is its non-interactive sibling: a scripted battery that drives the
-# real `aivyx-pa` binary against a real local Ollama backend and checks
+# real `aivyx-pa` binary against a real local model server (Ollama or
+# llama-server) and checks
 # the subsystems a human cannot reliably smoke-test by hand — the
 # audit chain, the encrypted store, the memory/fs tool paths, and
 # daemon mode.
 #
-# It shares dev-run.sh's posture exactly: Ollama backend, all state
-# under a gitignored `.dev-run/`, a throwaway dev passphrase. The
+# It shares dev-run.sh's posture exactly: a local backend, all state
+# under a gitignored `.dev-run/` (HOME and the XDG directories too, so
+# nothing lands in the real home), a throwaway dev passphrase. The
 # daemon socket is additionally isolated under `.dev-run/run/` (an
 # overridden `XDG_RUNTIME_DIR`) so this pass never collides with a
 # real daemon the operator may be running.
@@ -25,7 +27,13 @@
 #     FAIL — it indicts the model, not the substrate.
 #
 # Usage:
-#   ./scripts/dev-verify.sh [--model <name>] [--ollama-url <url>] [--keep]
+#   ./scripts/dev-verify.sh [--provider ollama|llamacpp] [--model <name>]
+#                           [--url <url>] [--keep]
+#
+#   --provider  ollama (default) or llamacpp (llama-server)
+#   --url       Backend URL (default: http://localhost:11434 for Ollama,
+#               http://127.0.0.1:8080 for llama-server); --ollama-url
+#               is the same flag
 #
 #   --keep   Do not wipe .dev-run/ first (default: wipe for a clean
 #            baseline — the 0-events audit assertion needs it).
@@ -39,8 +47,9 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 DEV_DIR="$REPO_ROOT/.dev-run"
 RUN_DIR="$DEV_DIR/run"
 
-MODEL="${AIVYX_PA_MODEL:-llama3.1}"
-OLLAMA_URL="${AIVYX_PA_OLLAMA_URL:-http://localhost:11434}"
+DEV_PROVIDER="${AIVYX_PA_DEV_PROVIDER:-ollama}"
+DEV_MODEL="${AIVYX_PA_MODEL:-}"
+DEV_URL="${AIVYX_PA_OLLAMA_URL:-}"
 PASSPHRASE="${AIVYX_PA_DEV_PASSPHRASE:-aivyx-dev-throwaway}"
 KEEP=0
 # Generous — a cold local model can take a while on the first turn.
@@ -48,10 +57,11 @@ TURN_TIMEOUT=180
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --model)      MODEL="${2:?--model requires a value}"; shift 2 ;;
-        --ollama-url) OLLAMA_URL="${2:?--ollama-url requires a value}"; shift 2 ;;
+        --provider)   DEV_PROVIDER="${2:?--provider requires a value}"; shift 2 ;;
+        --model)      DEV_MODEL="${2:?--model requires a value}"; shift 2 ;;
+        --url|--ollama-url) DEV_URL="${2:?$1 requires a value}"; shift 2 ;;
         --keep)       KEEP=1; shift ;;
-        -h|--help)    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help)    sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)            echo "dev-verify: unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -62,16 +72,11 @@ fail()    { echo "  FAIL  $*" >&2; FAIL=$((FAIL + 1)); }
 warn()    { echo "  WARN  $*"; WARN=$((WARN + 1)); }
 section() { echo; echo "--- $* ---"; }
 
-# --- preflight: Ollama -----------------------------------------------
-echo "dev-verify: checking Ollama at $OLLAMA_URL"
-if ! TAGS="$(curl -fsS --max-time 4 "$OLLAMA_URL/api/tags" 2>/dev/null)"; then
-    echo "dev-verify: ERROR — Ollama not reachable at $OLLAMA_URL (ollama serve)" >&2
-    exit 1
-fi
-if ! grep -qE "\"name\"[[:space:]]*:[[:space:]]*\"${MODEL}(:|\")" <<<"$TAGS"; then
-    echo "dev-verify: ERROR — model '$MODEL' not pulled (ollama pull $MODEL)" >&2
-    exit 1
-fi
+# --- preflight: backend --------------------------------------------
+# shellcheck source=dev-backend.sh
+source "$REPO_ROOT/scripts/dev-backend.sh"
+dev_backend_defaults || exit 2
+dev_backend_preflight dev-verify || exit 1
 
 # --- clean baseline + build ------------------------------------------
 if [[ $KEEP -eq 0 ]]; then
@@ -86,17 +91,19 @@ if ! cargo build --bin aivyx-pa; then
     exit 1
 fi
 BIN="$REPO_ROOT/target/debug/aivyx-pa"
-echo "dev-verify: model=$MODEL  ollama=$OLLAMA_URL"
+echo "dev-verify: provider=$DEV_PROVIDER  model=$DEV_MODEL  backend=$DEV_URL"
 
 # The whole dev environment, exported once so every invocation below
 # inherits it. CWD is pinned to .dev-run/ inside the helpers.
-export AIVYX_PA_PROVIDER=ollama
-export AIVYX_PA_MODEL="$MODEL"
-export AIVYX_PA_OPENAI_BASE_URL="$OLLAMA_URL"
+export AIVYX_PA_PROVIDER="$DEV_PROVIDER"
+export AIVYX_PA_MODEL="$DEV_MODEL"
+export AIVYX_PA_OPENAI_BASE_URL="$DEV_URL"
 export AIVYX_PA_FS_ROOT="$DEV_DIR/sandbox"
 export AIVYX_PA_STORAGE_PATH="$DEV_DIR/store.redb"
 export AIVYX_PA_PASSPHRASE="$PASSPHRASE"
 export XDG_RUNTIME_DIR="$RUN_DIR"
+# After the build: cargo needs the real HOME.
+while IFS= read -r kv; do export "$kv"; done < <(dev_home_env "$DEV_DIR")
 
 # Fast, non-LLM invocations — flags and subcommands. stdin is the
 # caller's; redirect /dev/null for the no-session paths.

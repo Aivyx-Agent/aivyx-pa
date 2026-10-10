@@ -32,8 +32,13 @@
 #   ./scripts/dev-run.sh [options] [-- <args passed to aivyx-pa>]
 #
 # Options:
-#   --model <name>      Ollama model to use      (default: llama3.1)
-#   --ollama-url <url>  Ollama base URL          (default: http://localhost:11434)
+#   --provider <p>      ollama or llamacpp       (default: ollama)
+#   --model <name>      Model to use             (default: llama3.1 on Ollama;
+#                                                 llama-server's own model)
+#   --url <url>         Backend base URL         (default: http://localhost:11434
+#                                                 for Ollama, http://127.0.0.1:8080
+#                                                 for llama-server)
+#   --ollama-url <url>  Same as --url
 #   --release           Build with --release     (default: debug)
 #   --reset             Wipe .dev-run/ first for a clean store/sandbox
 #   --verify            Run the scripted verification pass instead of
@@ -49,6 +54,11 @@
 #   ./scripts/dev-run.sh                       # interactive session
 #   ./scripts/dev-run.sh --model llama3.2 --reset
 #   ./scripts/dev-run.sh --release
+#   ./scripts/dev-run.sh --provider llamacpp   # llama-server on :8080
+#
+# HOME and the XDG directories point inside .dev-run/ for the binary, so
+# nothing it derives from them (~/.aivyx-pa, ~/.local/share/aivyx-pa)
+# lands in your real home.
 
 set -euo pipefail
 
@@ -56,8 +66,9 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 DEV_DIR="$REPO_ROOT/.dev-run"
 
 # --- defaults (each overridable via the matching flag) ---------------
-MODEL="${AIVYX_PA_MODEL:-llama3.1}"
-OLLAMA_URL="${AIVYX_PA_OLLAMA_URL:-http://localhost:11434}"
+DEV_PROVIDER="${AIVYX_PA_DEV_PROVIDER:-ollama}"
+DEV_MODEL="${AIVYX_PA_MODEL:-}"
+DEV_URL="${AIVYX_PA_OLLAMA_URL:-}"
 # Dev-only throwaway. See header — never a real secret.
 PASSPHRASE="${AIVYX_PA_DEV_PASSPHRASE:-aivyx-dev-throwaway}"
 BUILD_PROFILE="debug"
@@ -65,13 +76,17 @@ DO_RESET=0
 DO_VERIFY=0
 PASSTHROUGH=()
 
-usage() { sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,61p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# shellcheck source=dev-backend.sh
+source "$REPO_ROOT/scripts/dev-backend.sh"
 
 # --- argument parsing ------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --model)      MODEL="${2:?--model requires a value}"; shift 2 ;;
-        --ollama-url) OLLAMA_URL="${2:?--ollama-url requires a value}"; shift 2 ;;
+        --provider)   DEV_PROVIDER="${2:?--provider requires a value}"; shift 2 ;;
+        --model)      DEV_MODEL="${2:?--model requires a value}"; shift 2 ;;
+        --url|--ollama-url) DEV_URL="${2:?$1 requires a value}"; shift 2 ;;
         --release)    BUILD_PROFILE="release"; shift ;;
         --reset)      DO_RESET=1; shift ;;
         --verify)     DO_VERIFY=1; shift ;;
@@ -85,29 +100,14 @@ done
 # `--verify` is a thin alias so the verification battery is reachable
 # from the same entry point as the interactive launcher. dev-verify.sh
 # owns its own preflight, build, and clean-baseline handling.
+dev_backend_defaults || exit 2
 if [[ $DO_VERIFY -eq 1 ]]; then
-    exec "$REPO_ROOT/scripts/dev-verify.sh" \
-        --model "$MODEL" --ollama-url "$OLLAMA_URL"
+    exec "$REPO_ROOT/scripts/dev-verify.sh" --provider "$DEV_PROVIDER" \
+        --url "$DEV_URL" ${DEV_MODEL:+--model "$DEV_MODEL"}
 fi
 
-# --- preflight: Ollama reachable ------------------------------------
-echo "dev-run: checking Ollama at $OLLAMA_URL"
-if ! TAGS="$(curl -fsS --max-time 4 "$OLLAMA_URL/api/tags" 2>/dev/null)"; then
-    echo "dev-run: ERROR — Ollama is not reachable at $OLLAMA_URL" >&2
-    echo "dev-run:   start it with:  ollama serve" >&2
-    echo "dev-run:   or point elsewhere with:  --ollama-url <url>" >&2
-    exit 1
-fi
-
-# --- preflight: requested model pulled ------------------------------
-# /api/tags reports names as e.g. "llama3.1:latest"; a bare "llama3.1"
-# request must match the "llama3.1:" prefix or an exact-with-tag name.
-if ! grep -qE "\"name\"[[:space:]]*:[[:space:]]*\"${MODEL}(:|\")" <<<"$TAGS"; then
-    echo "dev-run: ERROR — model '$MODEL' is not pulled on this Ollama instance" >&2
-    echo "dev-run:   pull it with:  ollama pull $MODEL" >&2
-    echo "dev-run:   or pick another with:  --model <name>" >&2
-    exit 1
-fi
+# --- preflight: backend reachable (and, on Ollama, the model pulled) -
+dev_backend_preflight dev-run || exit 1
 
 # --- disposable state directory -------------------------------------
 if [[ $DO_RESET -eq 1 ]]; then
@@ -127,8 +127,9 @@ BIN="$REPO_ROOT/target/$BUILD_PROFILE/aivyx-pa"
 
 # --- launch ----------------------------------------------------------
 echo "dev-run: launching"
-echo "dev-run:   provider = ollama   model = $MODEL"
-echo "dev-run:   ollama   = $OLLAMA_URL"
+echo "dev-run:   provider = $DEV_PROVIDER   model = $DEV_MODEL"
+echo "dev-run:   backend  = $DEV_URL"
+echo "dev-run:   home     = $DEV_DIR/home"
 echo "dev-run:   sandbox  = $DEV_DIR/sandbox"
 echo "dev-run:   store    = $DEV_DIR/store.redb"
 echo "dev-run:   args     = ${PASSTHROUGH[*]:-(none)}"
@@ -139,10 +140,12 @@ echo
 # dev role config is wanted; nothing in the repo gets picked up by
 # accident.
 cd "$DEV_DIR"
+mapfile -t HOME_ENV < <(dev_home_env "$DEV_DIR")
 exec env \
-    AIVYX_PA_PROVIDER=ollama \
-    AIVYX_PA_MODEL="$MODEL" \
-    AIVYX_PA_OPENAI_BASE_URL="$OLLAMA_URL" \
+    "${HOME_ENV[@]}" \
+    AIVYX_PA_PROVIDER="$DEV_PROVIDER" \
+    AIVYX_PA_MODEL="$DEV_MODEL" \
+    AIVYX_PA_OPENAI_BASE_URL="$DEV_URL" \
     AIVYX_PA_FS_ROOT="$DEV_DIR/sandbox" \
     AIVYX_PA_STORAGE_PATH="$DEV_DIR/store.redb" \
     AIVYX_PA_PASSPHRASE="$PASSPHRASE" \
