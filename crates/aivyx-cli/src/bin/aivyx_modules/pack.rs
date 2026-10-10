@@ -543,24 +543,29 @@ pub fn render_config_inspect(
     check: Option<&Result<PaPartSummary, Vec<String>>>,
 ) -> String {
     let mut out = aivyx_pack::describe::describe(manifest);
+    let mut pa_lines = String::new();
     match check {
         None => {}
-        Some(Ok(s)) => out.push_str(&format!(
+        Some(Ok(s)) => pa_lines.push_str(&format!(
             "  routines: {}\n  autonomy: {}\n  checks: OK\n",
             s.routines,
             super::pack_check::autonomy_line(s)
         )),
         Some(Err(problems)) => {
-            out.push_str(&format!(
+            pa_lines.push_str(&format!(
                 "  checks: {} problem{} — this pack won't install\n",
                 problems.len(),
                 if problems.len() == 1 { "" } else { "s" }
             ));
             for p in problems {
-                out.push_str(&format!("    - {p}\n"));
+                pa_lines.push_str(&format!("    - {p}\n"));
             }
         }
     }
+    // They describe the aivyx-pa part, so they go at its end — before the
+    // aivyx-coder part `describe` prints after it, when there is one.
+    let at = out.find("\naivyx-coder part").unwrap_or(out.len());
+    out.insert_str(at, &pa_lines);
     out
 }
 
@@ -751,6 +756,23 @@ mod tests {
         let (payload, m) = config_payload(&bad);
         let text = render_config_inspect(&Manifest::Config(m), Some(&check_payload(&payload)));
         assert!(text.contains("checks: 1 problem — this pack won't install"), "{text}");
+    }
+
+    #[test]
+    fn inspect_puts_the_pa_checks_under_the_pa_part() {
+        let dir = good_pack("inspect-both");
+        rewrite(&dir, "manifest.toml", |t| {
+            t.replace(r#"products = ["pa"]"#, r#"products = ["pa", "coder"]"#)
+                + "\n[coder]\nmin_version = \"0.5.0\"\nagents_file = \"coder/AGENTS.md\"\n"
+        });
+        std::fs::create_dir_all(dir.join("coder")).unwrap();
+        std::fs::write(dir.join("coder/AGENTS.md"), "# Working here\n").unwrap();
+        let (payload, m) = config_payload(&dir);
+        let text = render_config_inspect(&Manifest::Config(m), Some(&check_payload(&payload)));
+        let checks = text.find("  checks: OK").expect(&text);
+        let coder = text.find("aivyx-coder part").expect(&text);
+        assert!(checks < coder, "PA checks belong under the aivyx-pa part:\n{text}");
+        assert!(text.ends_with("  instructions: coder/AGENTS.md\n"), "{text}");
     }
 
     #[test]
