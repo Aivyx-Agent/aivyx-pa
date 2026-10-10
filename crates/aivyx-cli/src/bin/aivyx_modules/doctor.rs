@@ -36,6 +36,9 @@ pub async fn check_provider_for_init() -> Result<bool, String> {
         ProviderKind::Lemonade => check_lemonade(&cfg).await,
         ProviderKind::Broker => check_broker(&cfg).await,
         ProviderKind::MistralRs => check_mistralrs(&cfg),
+        local @ (ProviderKind::LlamaCpp | ProviderKind::Jan) => {
+            check_local_openai_server(local, &cfg).await
+        }
         other => check_cloud(other, &cfg),
     })
 }
@@ -66,6 +69,9 @@ pub async fn run_doctor() -> Result<(), String> {
         ProviderKind::Lemonade => check_lemonade(&cfg).await,
         ProviderKind::Broker => check_broker(&cfg).await,
         ProviderKind::MistralRs => check_mistralrs(&cfg),
+        local @ (ProviderKind::LlamaCpp | ProviderKind::Jan) => {
+            check_local_openai_server(local, &cfg).await
+        }
         other => check_cloud(other, &cfg),
     };
 
@@ -556,6 +562,136 @@ async fn check_lemonade_at(base_url: &str, model: &str) -> bool {
 /// How long doctor waits on a local server before calling it unreachable.
 const LOCAL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// Why a local server's model list couldn't be read.
+#[derive(Debug, PartialEq, Eq)]
+enum ProbeError {
+    /// 401/403: the server was started with an API key.
+    Unauthorized,
+    Other(String),
+}
+
+/// What doctor concluded about a local OpenAI-compatible server
+/// (llama.cpp's `llama-server`, Jan), split out as pure logic.
+#[derive(Debug, PartialEq, Eq)]
+enum LocalServerVerdict {
+    Unreachable(String),
+    NeedsKey,
+    /// Reachable, but it doesn't serve the configured model.
+    ModelMissing { served: Vec<String> },
+    Ready { note: Option<String> },
+}
+
+fn local_server_verdict(
+    provider: ProviderKind,
+    models: Result<Vec<String>, ProbeError>,
+    model: &str,
+) -> LocalServerVerdict {
+    let served = match models {
+        Ok(served) => served,
+        Err(ProbeError::Unauthorized) => return LocalServerVerdict::NeedsKey,
+        Err(ProbeError::Other(why)) => return LocalServerVerdict::Unreachable(why),
+    };
+    if served.is_empty() || served.iter().any(|m| m == model) {
+        return LocalServerVerdict::Ready { note: None };
+    }
+    match provider {
+        // llama-server serves the one model it was started with, whatever
+        // name a request carries — `[agent] model` is just a label there.
+        ProviderKind::LlamaCpp => LocalServerVerdict::Ready {
+            note: Some(format!("it serves `{}` (requests use that, whatever the name)", served.join("`, `"))),
+        },
+        _ => LocalServerVerdict::ModelMissing { served },
+    }
+}
+
+/// llama.cpp / Jan: a local server, so no API key is needed unless it was
+/// started with one — check it answers and serves the model instead.
+async fn check_local_openai_server(provider: ProviderKind, cfg: &AivyxConfig) -> bool {
+    let default = match provider {
+        ProviderKind::Jan => crate::init::DEFAULT_JAN_BASE_URL,
+        _ => crate::init::DEFAULT_LLAMACPP_BASE_URL,
+    };
+    let base_url = cfg
+        .openai_base_url
+        .as_ref()
+        .map(|s| s.value.clone())
+        .unwrap_or_else(|| default.to_string());
+    let model = cfg.model.value.clone();
+    println!("Provider: {provider} (model `{model}`, {base_url})\n");
+    let key = cfg
+        .openai_api_key
+        .as_ref()
+        .map(|k| secrecy::ExposeSecret::expose_secret(&k.value).to_string());
+    check_local_openai_server_at(provider, &base_url, &model, key.as_deref()).await
+}
+
+async fn check_local_openai_server_at(
+    provider: ProviderKind,
+    base_url: &str,
+    model: &str,
+    api_key: Option<&str>,
+) -> bool {
+    let name = match provider {
+        ProviderKind::Jan => "Jan",
+        _ => "llama.cpp server",
+    };
+    // Same joining the OpenAI provider uses for chat: `{base}/v1/...`.
+    let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+    let models: Result<Vec<String>, ProbeError> = async {
+        let mut request = reqwest::Client::new().get(&url).timeout(LOCAL_PROBE_TIMEOUT);
+        if let Some(key) = api_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request.send().await.map_err(|e| ProbeError::Other(e.to_string()))?;
+        if matches!(response.status().as_u16(), 401 | 403) {
+            return Err(ProbeError::Unauthorized);
+        }
+        let body: serde_json::Value = response
+            .error_for_status()
+            .map_err(|e| ProbeError::Other(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProbeError::Other(e.to_string()))?;
+        Ok(body["data"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(str::to_string)).collect())
+            .unwrap_or_default())
+    }
+    .await;
+    match local_server_verdict(provider, models, model) {
+        LocalServerVerdict::Unreachable(why) => {
+            fail(
+                &format!("{name} is not reachable at {base_url} ({why})"),
+                "Start it, or set `[openai] base_url` to where it listens.",
+            );
+            false
+        }
+        LocalServerVerdict::NeedsKey => {
+            fail(
+                &format!("{name} at {base_url} asks for an API key"),
+                "It was started with one: put the same key in `[openai] api_key` \
+                 (or AIVYX_PA_OPENAI_API_KEY).",
+            );
+            false
+        }
+        LocalServerVerdict::ModelMissing { served } => {
+            fail(
+                &format!("{name} doesn't serve model `{model}` (serves: {})", served.join(", ")),
+                "Set `[agent] model` to one of those, or load it in the server.",
+            );
+            false
+        }
+        LocalServerVerdict::Ready { note } => {
+            pass(&format!("{name} is running"));
+            println!("  no API key needed — it runs on this machine");
+            if let Some(note) = note {
+                println!("  {note}");
+            }
+            true
+        }
+    }
+}
+
 /// aivyx-broker checks: the broker answers `GET /status`, and the
 /// llama-server it proxies to answers `GET /health` (a running broker in
 /// front of a stopped llama-server is the likely failure). Returns `true`
@@ -699,9 +835,7 @@ fn check_cloud(provider: ProviderKind, cfg: &AivyxConfig) -> bool {
     println!("Provider: {provider} (model `{}`)\n", cfg.model.value);
     let has_key = match provider {
         ProviderKind::Anthropic => cfg.anthropic_api_key.is_some(),
-        ProviderKind::OpenAi | ProviderKind::LlamaCpp | ProviderKind::Jan => {
-            cfg.openai_api_key.is_some()
-        }
+        ProviderKind::OpenAi => cfg.openai_api_key.is_some(),
         _ => true,
     };
     if has_key {
@@ -1173,6 +1307,39 @@ mod tests {
                 loaded: Some("b".into())
             }
         );
+    }
+
+    #[test]
+    fn a_local_openai_server_needs_no_api_key() {
+        use LocalServerVerdict::*;
+        let models = |ids: &[&str]| Ok(ids.iter().map(|s| s.to_string()).collect());
+        assert_eq!(
+            local_server_verdict(ProviderKind::LlamaCpp, models(&["qwen.gguf"]), "qwen.gguf"),
+            Ready { note: None }
+        );
+        // llama-server answers whatever model name it's sent.
+        assert!(matches!(
+            local_server_verdict(ProviderKind::LlamaCpp, models(&["qwen.gguf"]), "other"),
+            Ready { note: Some(n) } if n.contains("qwen.gguf")
+        ));
+        // Jan serves the model it's asked for, so a missing one fails.
+        assert!(matches!(
+            local_server_verdict(ProviderKind::Jan, models(&["a"]), "b"),
+            ModelMissing { served } if served == vec!["a".to_string()]
+        ));
+        assert_eq!(
+            local_server_verdict(ProviderKind::LlamaCpp, Err(ProbeError::Unauthorized), "m"),
+            NeedsKey
+        );
+        assert!(matches!(
+            local_server_verdict(ProviderKind::Jan, Err(ProbeError::Other("refused".into())), "m"),
+            Unreachable(w) if w == "refused"
+        ));
+    }
+
+    #[tokio::test]
+    async fn check_local_openai_server_fails_when_unreachable() {
+        assert!(!check_local_openai_server_at(ProviderKind::LlamaCpp, "http://127.0.0.1:1", "m", None).await);
     }
 
     #[tokio::test]

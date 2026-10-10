@@ -1108,12 +1108,12 @@ fn choose_provider(
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// llama-server's default, as the `LlamaCpp` arm in `aivyx.rs` resolves it.
-const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
+pub(crate) const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
 
 /// Jan's default, as the `Jan` arm in `aivyx.rs` resolves it (its server
 /// root: the OpenAI provider appends `/v1/chat/completions` itself, and a
 /// trailing `/v1` in a configured address is dropped).
-const DEFAULT_JAN_BASE_URL: &str = "http://localhost:1337";
+pub(crate) const DEFAULT_JAN_BASE_URL: &str = "http://localhost:1337";
 
 /// Where `init` looks for each local runtime. The base URL is the one the
 /// provider would use (so it is what gets written when non-default); each
