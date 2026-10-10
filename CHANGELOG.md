@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-10-10
+
 ### Added
 
 - **Config packs.** A pack can now be configuration only — a starter
@@ -25,6 +27,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
   and aivyx-coder verify packs with the same code. Packs install exactly as
   before; a newer config-only pack (format 2) is refused with a clear
   message until this release learns to install it.
+
+### Fixed
+
+- **`aivyx-pa pack inspect` works before any assistant is set up.** On a
+  fresh machine it refused to read a pack at all; it now checks the
+  signature against the built-in publisher keys, as `pack install` does.
+- **`aivyx-pa pack check` checks routine schedules.** A routine whose
+  schedule isn't a valid 6- or 7-field pattern (seconds first) is reported
+  by the check instead of failing later in the scheduler.
+- **A pack's assistant gets only the pack's routines.** Installing a config
+  pack no longer also adds the five starter routines or asks about them;
+  on a cloud model, setup says the pack's routines are on and each run
+  costs tokens.
 
 ## [0.17.0] — 2026-10-07
 
