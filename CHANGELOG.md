@@ -5,6 +5,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-10-10
+
+### Security
+
+- `rustls` bumped to 0.23.45 (Dependabot alert: TLS 1.3 handshake messages
+  were accepted across encryption-level boundaries), with the newer
+  `aws-lc-rs` it needs.
+
 ## [0.18.0] — 2026-10-10
 
 ### Added
