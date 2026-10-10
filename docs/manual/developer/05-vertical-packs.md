@@ -71,5 +71,5 @@ and integrations must be ones Aivyx PA knows (`gmail`, `calendar`, `drive`,
 `aivyx-pa pack install` makes a config pack a **new named instance**: it
 unpacks into the instance's `packs/<name>/<version>/`, runs the same checks,
 points the template at the installed team and skills, records
-`[pack] source`, and runs the setup wizard with it. `just pack-kitchen` builds the
+`[pack] source`, and runs the setup wizard with it. The pack's routines replace the starter routines a new agent otherwise gets. `just pack-kitchen` builds the
 kitchen pack with a development key, as a worked example of the format.

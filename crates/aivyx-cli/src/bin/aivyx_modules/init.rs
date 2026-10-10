@@ -1846,6 +1846,12 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
     out
 }
 
+/// The starter routines a new agent gets: none for a config pack, which
+/// brings its own; otherwise [`render_default_schedules`].
+fn starter_routines(cfg: &InitConfig, from_pack: bool) -> String {
+    if from_pack { String::new() } else { render_default_schedules(cfg) }
+}
+
 // ---------------------------------------------------------------------------
 // Phase 181 — the guided first-launch identity builder.
 // ---------------------------------------------------------------------------
@@ -2359,6 +2365,9 @@ struct TemplateDefaults {
     template_doc: Option<toml_edit::DocumentMut>,
     /// Source-of-truth name for diagnostics + the success banner.
     template_name: Option<String>,
+    /// The template came from a config pack, which brings its own
+    /// routines: the starter routines are neither offered nor added.
+    from_pack: bool,
 }
 
 impl TemplateDefaults {
@@ -2373,6 +2382,7 @@ impl TemplateDefaults {
             communication_style: None,
             template_doc: None,
             template_name: None,
+            from_pack: false,
         }
     }
 
@@ -2433,6 +2443,7 @@ impl TemplateDefaults {
             communication_style,
             template_doc: Some(doc),
             template_name: Some(template.name.clone()),
+            from_pack: template.source == super::init_templates::TemplateSource::Pack,
         })
     }
 }
@@ -3055,7 +3066,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
 
     // First-run D3 — the starter routines run on their own, so ask (a cloud
     // provider writes them disabled anyway: each run spends tokens).
-    let enable_routines = if provider.is_local() {
+    let enable_routines = if !template_defaults.from_pack && provider.is_local() {
         writeln!(writer, "{}", routines_question_intro(enable_web_search))
             .map_err(|e| format!("write error: {e}"))?;
         prompt_yes_no("Turn these on?", true, &mut reader, &mut writer)?
@@ -3128,6 +3139,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // answers into the template document so the role declarations,
     // MCP servers, commented sections, and structure all survive.
     // Otherwise use the existing minimal `render_toml` synthesis.
+    let from_pack = template_defaults.from_pack;
     let mut toml = match (
         template_defaults.template_doc,
         &template_defaults.template_name,
@@ -3135,9 +3147,8 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         (Some(doc), Some(name)) => render_with_template(&cfg, name, doc),
         _ => render_toml(&cfg),
     };
-    // Default starter routines (cron-scheduled). Appended to both the plain and
-    // template render paths so every new agent gets them.
-    toml.push_str(&render_default_schedules(&cfg));
+    // Default starter routines (cron-scheduled), except for a config pack, which brings its own.
+    toml.push_str(&starter_routines(&cfg, from_pack));
     write_config(&config_file, &toml)?;
 
     // 7. Success message + next steps. This is the moment that shapes the
@@ -5402,6 +5413,27 @@ mod tests {
         let out = render_with_template(&cfg, "t", minimal_template_doc());
         let loaded = load_generated(&out, "fr5-template-broker");
         assert_eq!(loaded.broker_base_url.as_deref(), Some("http://127.0.0.1:9900"));
+    }
+
+    #[test]
+    fn a_pack_template_gets_no_starter_routines() {
+        let cfg = local_cfg(Provider::LlamaCpp, "m");
+        assert_eq!(starter_routines(&cfg, true), "");
+        assert_eq!(starter_routines(&cfg, false), render_default_schedules(&cfg));
+    }
+
+    #[test]
+    fn template_defaults_know_a_pack_template() {
+        use super::super::init_templates::{Template, TemplateSource};
+        let t = |source| Template {
+            name: "p".into(),
+            description: "d".into(),
+            source,
+            toml_content: "[agent]\nprovider = \"ollama\"\n".into(),
+        };
+        assert!(TemplateDefaults::from_template(&t(TemplateSource::Pack)).unwrap().from_pack);
+        assert!(!TemplateDefaults::from_template(&t(TemplateSource::Bundled)).unwrap().from_pack);
+        assert!(!TemplateDefaults::empty().from_pack);
     }
 
     #[test]
