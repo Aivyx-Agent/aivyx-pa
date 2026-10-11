@@ -25,8 +25,6 @@ pub struct MatrixChannel<T: MatrixTransport + 'static> {
 }
 
 impl<T: MatrixTransport + 'static> MatrixChannel<T> {
-    // used by the session loop, Task 5
-    #[allow(dead_code)]
     pub(crate) fn new(name: impl Into<String>, room_id: String, transport: Arc<T>) -> Self {
         MatrixChannel {
             name: name.into(),
@@ -38,14 +36,6 @@ impl<T: MatrixTransport + 'static> MatrixChannel<T> {
         }
     }
 
-    // used by the session loop, Task 5
-    #[allow(dead_code)]
-    pub(crate) fn room_id(&self) -> &str {
-        &self.room_id
-    }
-
-    // used by the session loop, Task 5
-    #[allow(dead_code)]
     pub(crate) fn reset_cancellation(&self) {
         *self.token.lock().expect("token mutex poisoned") = CancellationToken::new();
     }
