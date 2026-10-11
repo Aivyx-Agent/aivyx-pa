@@ -545,20 +545,95 @@ team_command_allowed_senders = ["@me:example"]
     drop(env);
 }
 
-#[test]
-fn matrix_requires_https_and_well_formed_ids() {
-    let env = EnvScope::new();
-    for bad in [
-        "[matrix]\nhomeserver = \"http://matrix.example\"\nuser_id = \"@pa:x\"\nroom_filter = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n",
-        "[matrix]\nhomeserver = \"https://matrix.example\"\nuser_id = \"pa\"\nroom_filter = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n",
-        "[matrix]\nhomeserver = \"https://matrix.example\"\nuser_id = \"@pa:x\"\nroom_filter = \"#alias:x\"\nallowed_senders = [\"@me:x\"]\n",
-        "[matrix]\nhomeserver = \"https://matrix.example\"\nuser_id = \"@pa:x\"\nroom_filter = \"!r:x\"\nallowed_senders = []\n",
-    ] {
-        assert!(load_with_toml_result(bad, "matrix-bad").is_err(), "should reject:\n{bad}");
+/// A `[matrix]` section with the given fields. `senders` is the TOML
+/// array body, e.g. `"\"@me:x\""`.
+fn matrix_toml(homeserver: &str, user_id: &str, room: &str, senders: &str) -> String {
+    format!(
+        "[matrix]\nhomeserver = \"{homeserver}\"\n\
+         user_id = \"{user_id}\"\nroom_filter = \"{room}\"\n\
+         allowed_senders = [{senders}]\n"
+    )
+}
+
+/// The `ConfigError::Invalid` field for a rejected `[matrix]` section.
+fn matrix_invalid_field(body: &str, tag: &str) -> &'static str {
+    match load_with_toml_result(body, tag) {
+        Err(ConfigError::Invalid { field, .. }) => field,
+        other => panic!("expected Invalid for:\n{body}\ngot {other:?}"),
     }
-    // A homeserver on this machine may be plain http (a local test server).
-    let local = "[matrix]\nhomeserver = \"http://127.0.0.1:6167\"\nuser_id = \"@pa:x\"\nroom_filter = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n";
-    assert!(load_with_toml_result(local, "matrix-local").is_ok());
+}
+
+#[test]
+fn matrix_rejects_bad_homeserver_and_ids() {
+    let env = EnvScope::new();
+    let me = "\"@me:x\"";
+    // (homeserver, user_id, room_filter, allowed_senders, expected field)
+    let cases: &[(&str, &str, &str, &str, &str)] = &[
+        ("http://matrix.example", "@pa:x", "!r:x", me, "matrix.homeserver"),
+        ("http://localhost.evil.com", "@pa:x", "!r:x", me, "matrix.homeserver"),
+        ("http://127.0.0.1.evil.com", "@pa:x", "!r:x", me, "matrix.homeserver"),
+        ("http://localhost@evil.com", "@pa:x", "!r:x", me, "matrix.homeserver"),
+        ("http://localhost:8008.evil.com", "@pa:x", "!r:x", me, "matrix.homeserver"),
+        ("http://[::1]:8008.evil.com", "@pa:x", "!r:x", me, "matrix.homeserver"),
+        ("https://matrix.example", "pa", "!r:x", me, "matrix.user_id"),
+        ("https://matrix.example", "@:x", "!r:x", me, "matrix.user_id"),
+        ("https://matrix.example", "@pa:", "!r:x", me, "matrix.user_id"),
+        ("https://matrix.example", "@pa:x", "#alias:x", me, "matrix.room_filter"),
+        ("https://matrix.example", "@pa:x", "!:x", me, "matrix.room_filter"),
+        ("https://matrix.example", "@pa:x", "!r:x", "", "matrix.allowed_senders"),
+        ("https://matrix.example", "@pa:x", "!r:x", "\"me\"", "matrix.allowed_senders"),
+        ("https://matrix.example", "@pa:x", "!r:x", "\"@:x\"", "matrix.allowed_senders"),
+        ("https://matrix.example", "@pa:x", "!r:x", "\"@x:\"", "matrix.allowed_senders"),
+    ];
+    for (hs, user, room, senders, field) in cases {
+        let body = matrix_toml(hs, user, room, senders);
+        assert_eq!(matrix_invalid_field(&body, "matrix-bad"), *field, "for:\n{body}");
+    }
+    drop(env);
+}
+
+#[test]
+fn matrix_rejects_missing_user_id_and_room_filter() {
+    let env = EnvScope::new();
+    let no_user = "[matrix]\nhomeserver = \"https://matrix.example\"\n\
+                   room_filter = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n";
+    assert_eq!(matrix_invalid_field(no_user, "matrix-no-user"), "matrix.user_id");
+    let no_room = "[matrix]\nhomeserver = \"https://matrix.example\"\n\
+                   user_id = \"@pa:x\"\nallowed_senders = [\"@me:x\"]\n";
+    assert_eq!(matrix_invalid_field(no_room, "matrix-no-room"), "matrix.room_filter");
+    drop(env);
+}
+
+#[test]
+fn matrix_rejects_malformed_team_command_senders() {
+    let env = EnvScope::new();
+    let body = "[matrix]\nhomeserver = \"https://matrix.example\"\n\
+                user_id = \"@pa:x\"\nroom_filter = \"!r:x\"\n\
+                allowed_senders = [\"@me:x\"]\n\
+                team_command_allowed_senders = [\"me\"]\n";
+    assert_eq!(
+        matrix_invalid_field(body, "matrix-bad-team"),
+        "matrix.team_command_allowed_senders"
+    );
+    drop(env);
+}
+
+#[test]
+fn matrix_accepts_loopback_http_homeservers() {
+    let env = EnvScope::new();
+    for hs in [
+        "http://localhost:8008",
+        "http://localhost",
+        "http://127.0.0.1:6167/",
+        "http://127.0.0.1:6167",
+        "http://[::1]:8008",
+    ] {
+        let body = matrix_toml(hs, "@pa:x", "!r:x", "\"@me:x\"");
+        assert!(
+            load_with_toml_result(&body, "matrix-local").is_ok(),
+            "should accept {hs}"
+        );
+    }
     drop(env);
 }
 

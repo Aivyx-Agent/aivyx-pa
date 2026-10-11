@@ -5091,6 +5091,38 @@ struct RawDiscord {
     team_command_allowed_senders: Vec<u64>,
 }
 
+/// True when `url` is plain `http://` to a host that is exactly
+/// `localhost`, `127.0.0.1` or `[::1]`, with an optional `:port` and an
+/// optional path/query/fragment. Userinfo (`@`) and any other host, such as
+/// `localhost.evil.com`, are not loopback. Hand-rolled because aivyx-config
+/// has no URL parser dependency.
+fn plain_http_is_loopback(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    if authority.contains('@') {
+        return false;
+    }
+    let (host, port) = if let Some(v6) = authority.strip_prefix('[') {
+        // `[::1]` or `[::1]:port`: the host runs through the closing bracket.
+        match v6.split_once(']') {
+            Some((addr, after)) => (&authority[..addr.len() + 2], after),
+            None => return false,
+        }
+    } else {
+        match authority.split_once(':') {
+            Some((h, _)) => (h, &authority[h.len()..]),
+            None => (authority, ""),
+        }
+    };
+    let port_ok = port.is_empty()
+        || port
+            .strip_prefix(':')
+            .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    port_ok && matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+}
+
 /// `[matrix]` TOML section. Credentials are never here: they live in the
 /// sealed `<data dir>/matrix/session.enc` written by `connect matrix`.
 #[derive(Debug, Default, Deserialize)]
@@ -6877,16 +6909,18 @@ impl AivyxConfig {
         let matrix = match toml.matrix.homeserver.clone() {
             None => None,
             Some(homeserver) => {
-                let local = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
-                    .iter()
-                    .any(|p| homeserver.starts_with(p));
-                if !(homeserver.starts_with("https://") || local) {
+                if !(homeserver.starts_with("https://") || plain_http_is_loopback(&homeserver)) {
                     return Err(ConfigError::Invalid {
                         field: "matrix.homeserver",
-                        reason: "must be an https:// URL".into(),
+                        reason: "must be an https:// URL (plain http only for localhost)".into(),
                     });
                 }
-                let is_id = |s: &str, sigil: char| s.starts_with(sigil) && s[1..].contains(':');
+                // `sigil` + non-empty localpart + `:` + non-empty server.
+                let is_id = |s: &str, sigil: char| {
+                    s.strip_prefix(sigil)
+                        .and_then(|r| r.split_once(':'))
+                        .is_some_and(|(local, server)| !local.is_empty() && !server.is_empty())
+                };
                 let user_id = toml.matrix.user_id.clone().unwrap_or_default();
                 if !is_id(&user_id, '@') {
                     return Err(ConfigError::Invalid {
@@ -6907,6 +6941,12 @@ impl AivyxConfig {
                     return Err(ConfigError::Invalid {
                         field: "matrix.allowed_senders",
                         reason: "list at least one Matrix ID like @you:server".into(),
+                    });
+                }
+                if !toml.matrix.team_command_allowed_senders.iter().all(|s| is_id(s, '@')) {
+                    return Err(ConfigError::Invalid {
+                        field: "matrix.team_command_allowed_senders",
+                        reason: "each entry must be a Matrix ID like @you:server".into(),
                     });
                 }
                 Some(MatrixConfig {
