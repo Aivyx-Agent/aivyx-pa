@@ -276,8 +276,8 @@ mod tests {
         let back: RecallEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(back.query_text, "fix the auth bug");
         // Pre-178 shape (no query_text) → default "".
-        let old = r#"{"ts_secs":5,"session_id":""#.to_string()
-            + &ev.session_id.to_string()
+        let old: String = r#"{"ts_secs":5,"session_id":""#.to_string()
+            + ev.session_id.to_string().as_str()
             + r#"","hits":[]}"#;
         let decoded: RecallEvent = serde_json::from_str(&old).unwrap();
         assert_eq!(decoded.query_text, "");

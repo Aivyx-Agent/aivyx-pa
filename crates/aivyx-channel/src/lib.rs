@@ -187,6 +187,7 @@ pub mod telegram_daemon_frontend;
 // `gate_command.rs` is shared between all three (Telegram +
 // Discord + Slack) daemon-frontends.
 pub mod discord_daemon_frontend;
+pub mod matrix_daemon_frontend;
 pub mod gate_command;
 pub mod team_command;
 pub mod team_dispatch;

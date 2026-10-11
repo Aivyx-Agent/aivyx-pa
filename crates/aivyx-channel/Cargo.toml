@@ -152,6 +152,7 @@ aivyx-telegram = { path = "../aivyx-telegram" }
 # `--channel discord` path and the daemon's
 # `discord_daemon_frontend` consumes the IPC types directly.
 aivyx-discord = { path = "../aivyx-discord" }
+aivyx-matrix = { path = "../aivyx-matrix" }
 # Phase 108 — Slack channel adapter. Same binary-only-import
 # pattern as `aivyx-telegram` and `aivyx-discord`. The
 # production transport is currently stubbed (Phase-108-internal

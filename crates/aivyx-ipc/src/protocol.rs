@@ -87,6 +87,10 @@ pub enum FrontendType {
     /// an `IpcChannelBridge` when a `FrontendType::Slack`
     /// connection arrives.
     Slack,
+    /// Matrix adapter daemon-frontend. The frontend process holds the
+    /// Matrix client and applies the policy; only policy-approved turns
+    /// reach the daemon over this connection.
+    Matrix,
 }
 
 // ---------------------------------------------------------------------------
