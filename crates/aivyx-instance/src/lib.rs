@@ -289,6 +289,13 @@ impl InstancePaths {
         self.home_dir().map(|h| h.join("packs"))
     }
 
+    /// Matrix channel state: `data_dir/matrix` — the `matrix-sdk` SQLite
+    /// store and the sealed `session.enc`. Per instance, so each named
+    /// instance is its own Matrix device.
+    pub fn matrix_dir(&self) -> Option<PathBuf> {
+        self.data_dir().map(|d| d.join("matrix"))
+    }
+
     /// Sandbox directory: `~/aivyx-pa-sandbox[-<n>]`
     pub fn sandbox_dir(&self) -> Option<PathBuf> {
         self.dirs.home.as_ref().map(|h| {
@@ -426,6 +433,26 @@ mod tests {
         assert_eq!(d.packs_dir().unwrap(), PathBuf::from("/h/.aivyx-pa/packs"));
         let r = p("shop", dirs(Some("/h"), None, None, None));
         assert_eq!(r.packs_dir().unwrap(), PathBuf::from("/h/.aivyx-pa/instances/shop/packs"));
+    }
+
+    #[test]
+    fn matrix_dir_is_under_the_instance_data_dir() {
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/h")),
+            xdg_config_home: None,
+            xdg_data_home: None,
+            xdg_runtime_dir: None,
+        };
+        let default = InstancePaths::new(InstanceName::default_instance(), dirs.clone());
+        assert_eq!(
+            default.matrix_dir(),
+            Some(PathBuf::from("/h/.local/share/aivyx-pa/matrix"))
+        );
+        let work = InstancePaths::new(InstanceName::parse("work").unwrap(), dirs);
+        assert_eq!(
+            work.matrix_dir(),
+            Some(PathBuf::from("/h/.local/share/aivyx-pa/instances/work/matrix"))
+        );
     }
 
     #[test]
