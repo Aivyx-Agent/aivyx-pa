@@ -68,6 +68,16 @@ area) can't go above `supervised`, the team config and skills must load,
 and integrations must be ones Aivyx PA knows (`gmail`, `calendar`, `drive`,
 `contacts`, `notion`, `obsidian`, `n8n`, `toolkit`, `vision`).
 
+The template may only set `[agent]`, `[profile]`, `[persona_seed]`,
+`[[role]]`, `[autonomy]`, `[[schedule]]`, `[team]`, `[memory]` and
+`[skill_defaults]` — who the assistant is and what it does. Anything else
+is the operator's to set after install and fails the check: how far it
+reaches (`[access]`, `[fs]`, `[confine]`), whether its Studio is exposed
+(`[daemon]`), which programs it runs (`[[tool_process]]`,
+`[[mcp_server]]`), where its requests go (`[openai]`, `[providers]`, …)
+and whom it trusts (`[pack]`). In `[agent]`, `injection_scan_enabled` and
+`injection_scan_exempt` are the operator's too.
+
 `aivyx-pa pack install` makes a config pack a **new named instance**: it
 unpacks into the instance's `packs/<name>/<version>/`, runs the same checks,
 points the template at the installed team and skills, records

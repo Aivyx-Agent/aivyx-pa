@@ -37,7 +37,9 @@ existing KitchenDB.
 > starter config, a team, skills and routines over the tools Aivyx PA
 > already has, for aivyx-pa and/or aivyx-coder. It installs as a **new
 > named instance** (`aivyx-pa pack install`), is checked by
-> `aivyx-pa pack check`, and can't set autonomy above `supervised`. See
+> `aivyx-pa pack check`, can't set autonomy above `supervised`, and can't
+> set what's the operator's (access, the Studio, programs to run, providers
+> — see the developer guide). See
 > [`manual/developer/05-vertical-packs.md`](manual/developer/05-vertical-packs.md)
 > and the shared [`aivyx-pack`](https://github.com/Aivyx-Agent/aivyx-pack)
 > crate for the format.

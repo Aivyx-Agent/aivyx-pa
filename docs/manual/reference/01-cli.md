@@ -436,7 +436,9 @@ There are two kinds of pack:
   or after `--instance <name>`; an existing instance is never changed. It
   runs the usual setup, pre-filled from the pack, then says what to connect
   (`aivyx-pa --instance <name> connect gmail`, …). A pack can't set autonomy
-  above `supervised`.
+  above `supervised`, and can't set how far the assistant reaches, whether
+  its Studio is exposed, which programs it runs or where its requests go —
+  those stay yours.
 - **Tool packs** (such as Kitchen) add tool processes and a team to your
   current assistant.
 
