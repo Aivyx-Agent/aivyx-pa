@@ -116,7 +116,11 @@ run while the daemon is up (stop it first).
    a successful `matrix verify` signs the operator's master key with it and
    waits until the homeserver returns that signature. The effect: one
    verification trusts every device the operator has cross-signed, now or
-   later; devices they haven't cross-signed are never trusted.)
+   later; devices they haven't cross-signed are never trusted. Replies are
+   encrypted only to cross-signed devices (`CollectStrategy::
+   IdentityBasedStrategy`), so a device added by the homeserver or a
+   password holder can't read them — nor, by the same rule, can the
+   operator's own un-cross-signed device read the "please verify" reply.)
 3. Room invites are accepted only from `allowed_senders`; others are
    declined.
 

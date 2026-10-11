@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 use aivyx_matrix::credentials::{self, MatrixKeys, Session};
 use aivyx_matrix::policy::{decide, Action, MatrixPolicy};
 use aivyx_matrix::sdk::SdkTransport;
-use aivyx_matrix::transport::{Inbound, IncomingMessage, MatrixTransport};
+use aivyx_matrix::transport::{Inbound, IncomingMessage, MatrixTransport, OutgoingMessage};
 use futures_util::StreamExt;
 use matrix_sdk::{
     config::SyncSettings,
@@ -47,12 +47,16 @@ use matrix_sdk::{
     ruma::{
         api::client::{account::register::v3::Request as Register, room::create_room::v3::Request as CreateRoom, uiaa},
         events::{
-            room::{encryption::RoomEncryptionEventContent, message::RoomMessageEventContent},
+            room::{
+                encrypted::OriginalSyncRoomEncryptedEvent,
+                encryption::RoomEncryptionEventContent,
+                message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+            },
             InitialStateEvent,
         },
-        OwnedDeviceId, OwnedUserId,
+        OwnedDeviceId, OwnedUserId, RoomId,
     },
-    Client, Room,
+    Client, Room, RoomMemberships,
 };
 
 const HS: &str = "http://127.0.0.1:6167";
@@ -205,6 +209,61 @@ async fn send_and_receive(operator: &Client, room: &Room, transport: &SdkTranspo
     }
 }
 
+/// The assistant replies in `room_id`; returns what the operator's client
+/// made of it: `Some(text)` if it decrypted, `None` if it could not.
+async fn operator_reads_reply(operator: &Client, transport: &SdkTransport, room_id: &str, text: &str, sync_inline: bool) -> Option<String> {
+    let bot = transport_user(operator, room_id).await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<String>>();
+    let (tx_plain, bot_plain) = (tx.clone(), bot.clone());
+    let plain = operator.add_event_handler(move |ev: OriginalSyncRoomMessageEvent| {
+        let (tx, bot) = (tx_plain.clone(), bot_plain.clone());
+        async move {
+            if ev.sender == bot {
+                let _ = tx.send(Some(ev.content.body().to_string()));
+            }
+        }
+    });
+    let enc = operator.add_event_handler(move |ev: OriginalSyncRoomEncryptedEvent| {
+        let (tx, bot) = (tx.clone(), bot.clone());
+        async move {
+            if ev.sender == bot {
+                let _ = tx.send(None);
+            }
+        }
+    });
+    transport
+        .send_message(OutgoingMessage { room_id: room_id.to_string(), text: text.to_string() })
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let seen = loop {
+        assert!(Instant::now() < deadline, "the operator never saw the assistant's reply");
+        if sync_inline {
+            operator.sync_once(SyncSettings::default().timeout(Duration::from_secs(1))).await.unwrap();
+        }
+        if let Ok(Some(item)) = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
+            break item;
+        }
+    };
+    operator.remove_event_handler(plain);
+    operator.remove_event_handler(enc);
+    println!("operator read the reply as: {seen:?}");
+    seen
+}
+
+/// The assistant's user ID: the room's other joined member.
+async fn transport_user(operator: &Client, room_id: &str) -> OwnedUserId {
+    let room = operator.get_room(<&RoomId>::try_from(room_id).unwrap()).expect("operator is in the room");
+    let me = operator.user_id().unwrap();
+    room.members(RoomMemberships::JOIN)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.user_id().to_owned())
+        .find(|u| u != me)
+        .expect("the assistant joined")
+}
+
 #[tokio::test]
 #[ignore = "needs a local Conduit homeserver in Docker — see the module doc"]
 async fn an_encrypted_message_reaches_the_transport() {
@@ -230,6 +289,12 @@ async fn an_encrypted_message_reaches_the_transport() {
     let m = send_and_receive(&operator, &room, &transport, "hello from live", true).await;
     assert_eq!(m.text, "hello from live");
     assert!(!m.verified, "an unverified operator device must not count as verified");
+
+    // Replies go only to cross-signed devices: this operator has no
+    // cross-signing, so their device can't read what the assistant sends.
+    let room_id = room.room_id().to_string();
+    let seen = operator_reads_reply(&operator, &transport, &room_id, "reply to an unsigned device", true).await;
+    assert_eq!(seen, None, "an unsigned device must not receive the room key");
 }
 
 #[tokio::test]
@@ -316,5 +381,10 @@ async fn after_verification_the_operator_drives_a_turn() {
     assert_eq!(m.text, "hello verified");
     assert!(m.verified, "a cross-signed device of a verified operator must count as verified");
     let policy = MatrixPolicy { room_filter: room_id, allowed_senders: vec![operator_id.to_string()] };
+    let room_id = policy.room_filter.clone();
     assert!(matches!(decide(&policy, Inbound::Message(m)), Action::Turn(_)), "the policy must make it a turn");
+
+    // The reply reaches the operator's cross-signed device and decrypts.
+    let seen = operator_reads_reply(&operator, &transport, &room_id, "verified reply", false).await;
+    assert_eq!(seen.as_deref(), Some("verified reply"));
 }

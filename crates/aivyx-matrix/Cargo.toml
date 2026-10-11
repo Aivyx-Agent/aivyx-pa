@@ -27,6 +27,9 @@ tokio = { workspace = true }
 # Apache-2.0. No default features: we want E2EE + the encrypted SQLite
 # store + rustls on aws-lc-rs (the TLS stack the rest of pa uses).
 matrix-sdk = { version = "0.19", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-aws-lc-rs"] }
+# Already in the tree via matrix-sdk (same version); named directly only
+# for `CollectStrategy`, which matrix-sdk doesn't re-export.
+matrix-sdk-crypto = { version = "0.19", default-features = false }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }

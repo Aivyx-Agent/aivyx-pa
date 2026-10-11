@@ -93,6 +93,11 @@ Good to know:
   refused: no turn runs, and the assistant replies once asking you to
   verify. If your account has no cross-signing, `matrix verify` says so and
   fails.
+- **Replies go only to your cross-signed devices.** Someone who adds a
+  device to your account (with your password, or a hostile homeserver)
+  can't read them. It also means a device you haven't cross-signed sees
+  the assistant's messages — including the "please verify" one — as
+  "unable to decrypt"; cross-sign it from one of your other devices.
 - **Encrypted rooms only.** The assistant refuses to start if the
   `room_filter` room isn't encrypted.
 - **Homeserver address.** It must be `https://`. Plain `http://` is accepted

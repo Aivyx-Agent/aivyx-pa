@@ -23,15 +23,22 @@ use matrix_sdk::{
     store::RoomLoadSettings,
     Client, Room, RoomState, SessionMeta, SessionTokens,
 };
+use matrix_sdk_crypto::CollectStrategy;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::AbortHandle;
 
 use crate::credentials::Session;
 use crate::transport::{Inbound, IncomingMessage, MatrixTransport, OutgoingMessage, TransportError};
 
+/// Every client shares room keys only with devices their owner has
+/// cross-signed (`IdentityBasedStrategy`), not the SDK's default of every
+/// device in the room: a malicious homeserver, or someone with the
+/// operator's password, can add a device to the operator's account but
+/// can't cross-sign it, so it never receives the keys for a reply.
 async fn client(homeserver: &str, store_path: &Path, passphrase: &str) -> Result<Client, String> {
     Client::builder()
         .homeserver_url(homeserver)
+        .with_room_key_recipient_strategy(CollectStrategy::IdentityBasedStrategy)
         .sqlite_store(store_path, Some(passphrase))
         .build()
         .await

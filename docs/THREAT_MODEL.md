@@ -818,7 +818,12 @@ only in end-to-end-encrypted rooms and refuses to start if
 only on loopback. Credentials are sealed under the master key
 (`session.enc`); the `matrix-sdk` store is encrypted with a master-key
 subkey. A stolen Matrix password or a malicious homeserver cannot
-produce a verified device, so it cannot impersonate the operator.
+produce a verified device, so it cannot impersonate the operator. Nor can
+it read replies by adding a device to the operator's account: the
+assistant shares room keys only with devices their owner has cross-signed
+(`matrix-sdk`'s identity-based strategy), not with every device in the
+room. The flip side: a device the operator hasn't cross-signed can't read
+anything the assistant sends, including the one "please verify" reply.
 
 ### 5.9 Adversarial co-tenants
 
