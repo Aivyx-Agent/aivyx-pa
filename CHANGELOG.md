@@ -5,6 +5,49 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.18.2] — 2026-10-11
+
+### Security
+
+- **Tool packs can't write outside the packs folder.** A pack's version
+  became part of its install path unchecked, so a signed pack could unpack
+  its files anywhere in your home — for example a program onto your PATH.
+  A pack's version must now be `x.y.z`.
+- **Config packs can't change what's yours to decide.** A pack's starter
+  config may only set who the assistant is and what it does (its model,
+  profile, persona, roles, autonomy within `supervised`, routines, team,
+  memory and skills). A pack that sets how far it reaches, whether its
+  Studio is open to the network, which programs it runs, where its requests
+  go, whom it trusts, or the prompt-injection check now fails `pack check`,
+  `pack inspect` and `pack install`.
+- **`web.fetch` blocks more private addresses:** Tailscale and other
+  carrier-grade NAT addresses (`100.64.0.0/10`), `0.0.0.0/8`, broadcast,
+  multicast, and IPv6 forms that wrap a private IPv4 address.
+- **`pack inspect` shows a pack's text escaped**, so a pack can't hide part
+  of what you read before installing it.
+- Dependency updates clear every `cargo audit` vulnerability, including
+  the XML parser behind the xlsx reader (a crafted spreadsheet could stall
+  it).
+
+### Fixed
+
+- **The terminal says why a turn stopped.** It showed only
+  `[turn escalated]` or `[turn failed]`; it now gives the reason or the
+  error. With the model server down, a turn showed `[turn completed]` and
+  nothing else — it now fails and says the server couldn't be reached
+  (`--headless` exits 1). Notes the assistant adds after its reply are
+  shown too.
+- Reading a named pipe with `fs.read` or the data readers is refused
+  instead of hanging the turn.
+- An MCP server can't make the daemon hold a single message over 64 MiB.
+- `team run` and `team roster` use the installed team (a pack's, or
+  `team.toml` beside your config) without `--config`, like the daemon.
+- `doctor` and the end of `init` check llama.cpp and Jan as local servers
+  instead of asking for an API key.
+- `connect toolkit` (and notion, obsidian, n8n, vision) explains that the
+  integration runs as a tool process instead of saying "unknown service".
+- `pack inspect` shows a pack's aivyx-pa checks under its aivyx-pa part.
+
 ## [0.18.1] — 2026-10-10
 
 ### Security
