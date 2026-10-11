@@ -571,24 +571,30 @@ pub fn render_config_inspect(
 
 /// Pure renderer for `pack inspect`.
 pub fn render_manifest(m: &PackManifest) -> String {
+    use aivyx_pack::describe::shown;
     let mut out = format!(
         "pack {} v{}\n  publisher : {}\n  target    : {}\n  min daemon: {}\n",
-        m.name, m.version, m.publisher, m.target, m.min_daemon_version,
+        m.name,
+        m.version,
+        shown(&m.publisher),
+        shown(&m.target),
+        m.min_daemon_version,
     );
     for tp in &m.tool_processes {
-        out.push_str(&format!(
-            "  tool proc : {} (bin/{}{})\n",
-            tp.name,
-            tp.bin,
-            if tp.args.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", tp.args.join(" "))
-            },
-        ));
+        // Each argument shown escaped, and quoted when it has spaces, so
+        // one argument can't read as several.
+        let args: String = tp
+            .args
+            .iter()
+            .map(|a| {
+                let a = shown(a);
+                if a.is_empty() || a.contains(char::is_whitespace) { format!(" '{a}'") } else { format!(" {a}") }
+            })
+            .collect();
+        out.push_str(&format!("  tool proc : {} (bin/{}{args})\n", shown(&tp.name), shown(&tp.bin)));
     }
     if let Some(tc) = &m.team_config {
-        out.push_str(&format!("  team cfg  : config/{tc} (wired if absent)\n"));
+        out.push_str(&format!("  team cfg  : config/{} (wired if absent)\n", shown(tc)));
     }
     out
 }
@@ -596,6 +602,19 @@ pub fn render_manifest(m: &PackManifest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_manifest_shows_pack_text_escaped_and_args_quoted() {
+        let mut m = PackManifest::parse(
+            "name = \"k\"\nversion = \"1.0.0\"\npublisher = \"P\\u001b[2K\"\ntarget = \"t\"\nmin_daemon_version = \"0.1.0\"\n\n[[tool_process]]\nname = \"tk\"\nbin = \"tk\"\nargs = [\"--root\", \"a b\"]\n",
+        )
+        .unwrap();
+        m.publisher.push('\n');
+        let text = render_manifest(&m);
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(text.contains("publisher : P\\u{1b}[2K\\n"), "{text}");
+        assert!(text.contains("(bin/tk --root 'a b')"), "{text}");
+    }
 
     // ---- Config packs (format 2) ----
 
