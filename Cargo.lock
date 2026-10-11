@@ -637,6 +637,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "hex",
+ "libc",
  "matrix-sdk",
  "matrix-sdk-crypto",
  "rand 0.8.6",

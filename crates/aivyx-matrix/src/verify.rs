@@ -1,5 +1,6 @@
 //! SAS (emoji) verification, run from the operator's terminal while the
-//! channel is stopped: the operator starts verification from their Matrix
+//! channel is stopped (it holds the store lock, so it refuses while
+//! `aivyx-pa --channel matrix` runs): the operator starts verification from their Matrix
 //! client, compares the emoji shown here, and confirms on both sides.
 
 use std::path::Path;
@@ -46,6 +47,7 @@ pub async fn run(
     allowed_senders: Vec<String>,
     confirm: Confirm,
 ) -> Result<bool, String> {
+    let _lock = crate::lock::acquire(store_dir)?;
     let client = crate::sdk::restore(session, store_dir, passphrase).await?;
     // The SDK ignores a verification request from a device it doesn't know.
     // The assistant may share no room with the operator yet (the invite is

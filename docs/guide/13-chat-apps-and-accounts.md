@@ -70,7 +70,8 @@ homeserver you choose (or run yourself).
 
 3. `aivyx-pa connect matrix` — logs the assistant in once (the password isn't
    kept).
-4. `aivyx-pa matrix verify` (stop the daemon first if it's running) — then,
+4. `aivyx-pa matrix verify` (stop `aivyx-pa --channel matrix` first if it's
+   running) — then,
    in your Matrix app, open the assistant and choose **Verify**; compare the
    emoji and confirm on both sides. Once is enough: your other cross-signed
    devices are trusted too.
@@ -107,10 +108,12 @@ Good to know:
   Matrix data directory, not deleted, and you must verify the new device with
   `aivyx-pa matrix verify`. A failed login (wrong password, unreachable
   server) leaves your existing setup untouched.
-- **With the daemon running.** `connect matrix` works, but the daemon keeps
-  its old device until you restart it: `aivyx-pa daemon stop`, then
-  `aivyx-pa daemon run`. `matrix verify` refuses to run while the daemon is
-  up.
+- **One process at a time.** Only the `aivyx-pa --channel matrix` process
+  opens the assistant's Matrix store (the daemon never does, in either
+  mode). While it runs, `connect matrix` and `matrix verify` refuse with
+  "the Matrix channel is running in another process": stop it, run them,
+  then start `aivyx-pa --channel matrix` again so it uses the new device.
+  The daemon can stay up.
 - **If the device is logged out** (say, from your Matrix app), the channel
   stops and tells you to run `aivyx-pa connect matrix` again. It doesn't
   retry.

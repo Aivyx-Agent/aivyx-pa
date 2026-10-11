@@ -9,6 +9,7 @@
 #![recursion_limit = "256"]
 
 pub mod credentials;
+pub mod lock;
 pub mod matrix_channel;
 pub mod policy;
 pub mod sdk;

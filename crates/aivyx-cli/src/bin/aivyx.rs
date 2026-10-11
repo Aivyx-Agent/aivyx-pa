@@ -1488,14 +1488,10 @@ fn run() -> Result<(), String> {
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt.block_on(async {
+            // No daemon check: the daemon never opens the Matrix store.
+            // Both commands take the store lock, which refuses while
+            // `aivyx-pa --channel matrix` holds it.
             if mode == CliMode::MatrixVerify {
-                if let Ok(sp) = default_socket_path()
-                    && aivyx_channel::daemon_client::daemon_is_running(&sp).await
-                {
-                    return Err("stop the daemon first (`aivyx-pa daemon stop`) — \
-                                verification opens the Matrix store the daemon uses"
-                        .to_string());
-                }
                 matrix_cli::run_verify(&config, &keys, &dir).await
             } else {
                 matrix_cli::run_connect(&config, &keys, &dir).await

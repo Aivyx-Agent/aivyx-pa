@@ -91,6 +91,9 @@ pub async fn login(
     user: &str,
     password: &str,
 ) -> Result<(Session, Option<PathBuf>), String> {
+    // Held through the login and the store swap: no other process may have
+    // the store open while it is replaced.
+    let _lock = crate::lock::acquire(store_dir)?;
     let ts = unix_ts();
     let scratch = store_dir.join(format!("store.new-{ts}"));
     let result = async {
@@ -167,7 +170,19 @@ fn classify_sdk(e: &matrix_sdk::Error) -> TransportError {
     classify(e.client_api_error_kind(), e.to_string())
 }
 
+/// Refuses a session whose store is gone: opening a missing store would
+/// silently create a fresh one with a new device identity (e.g. after a
+/// crash between the renames in `swap_in_new_store`).
+fn require_store(store_dir: &Path) -> Result<(), String> {
+    if !store_dir.join("store").exists() && store_dir.join(crate::credentials::SESSION_FILE).exists() {
+        return Err("the Matrix store is missing — run `aivyx-pa connect matrix` again".into());
+    }
+    Ok(())
+}
+
+/// Callers hold the store lock (`crate::lock`).
 pub(crate) async fn restore(session: &Session, store_dir: &Path, passphrase: &str) -> Result<Client, String> {
+    require_store(store_dir)?;
     let client = client(&session.homeserver, &store_dir.join("store"), passphrase).await?;
     let user_id: OwnedUserId = session.user_id.as_str().try_into().map_err(|e| format!("{e}"))?;
     let device_id: OwnedDeviceId = session.device_id.as_str().into();
@@ -201,6 +216,8 @@ pub struct SdkTransport {
     client: Client,
     inbound: Mutex<mpsc::UnboundedReceiver<Result<Inbound, TransportError>>>,
     sync_task: AbortHandle,
+    // Last, so it is released after the client is dropped.
+    _lock: crate::lock::StoreLock,
 }
 
 impl Drop for SdkTransport {
@@ -215,6 +232,7 @@ impl SdkTransport {
     /// from that sync's token. A transient sync failure is reported on the
     /// channel and retried with backoff; an unknown token ends the loop.
     pub async fn connect(session: &Session, store_dir: &Path, passphrase: &str) -> Result<Arc<Self>, String> {
+        let lock = crate::lock::acquire(store_dir)?;
         let client = restore(session, store_dir, passphrase).await?;
         // Unbounded on purpose: handlers run inline inside `sync_once` (and
         // nothing drains the channel until `connect` returns), so a bounded
@@ -270,7 +288,7 @@ impl SdkTransport {
                 }
             }
         });
-        Ok(Arc::new(SdkTransport { client, inbound: Mutex::new(rx), sync_task: task.abort_handle() }))
+        Ok(Arc::new(SdkTransport { client, inbound: Mutex::new(rx), sync_task: task.abort_handle(), _lock: lock }))
     }
 
     fn room(&self, room_id: &str) -> Result<Room, TransportError> {
@@ -404,6 +422,53 @@ mod tests {
         // no store.new-7: the second rename fails
         assert!(swap_in_new_store(&d, 7).is_err());
         assert_eq!(std::fs::read_to_string(d.join("store/marker")).unwrap(), "old");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_session_without_its_store_is_refused() {
+        let d = scratch("missing-store");
+        // Fresh setup (no session yet): fine.
+        assert!(require_store(&d).is_ok());
+        std::fs::write(d.join(crate::credentials::SESSION_FILE), b"sealed").unwrap();
+        let err = require_store(&d).unwrap_err();
+        assert!(err.contains("store is missing") && err.contains("connect matrix"), "{err}");
+        std::fs::create_dir_all(d.join("store")).unwrap();
+        assert!(require_store(&d).is_ok());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_a_missing_store_before_touching_the_network() {
+        let d = scratch("missing-store-restore");
+        std::fs::write(d.join(crate::credentials::SESSION_FILE), b"sealed").unwrap();
+        let session = Session {
+            homeserver: "http://127.0.0.1:9".into(),
+            user_id: "@bot:x".into(),
+            device_id: "D".into(),
+            access_token: "t".into(),
+        };
+        let err = restore(&session, &d, "pass").await.unwrap_err();
+        assert!(err.contains("store is missing"), "{err}");
+        assert!(!d.join("store").exists(), "no fresh store may be created");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn connect_and_login_refuse_while_another_process_holds_the_store() {
+        let d = scratch("locked");
+        let _held = crate::lock::acquire(&d).unwrap();
+        let session = Session {
+            homeserver: "http://127.0.0.1:9".into(),
+            user_id: "@bot:x".into(),
+            device_id: "D".into(),
+            access_token: "t".into(),
+        };
+        let err = SdkTransport::connect(&session, &d, "pass").await.err().expect("must refuse");
+        assert_eq!(err, crate::lock::BUSY);
+        let err = login("http://127.0.0.1:9", &d, "pass", "@bot:x", "pw").await.unwrap_err();
+        assert_eq!(err, crate::lock::BUSY);
+        assert!(std::fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with("store")));
         let _ = std::fs::remove_dir_all(&d);
     }
 

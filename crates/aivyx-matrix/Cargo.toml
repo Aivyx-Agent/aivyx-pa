@@ -31,6 +31,10 @@ matrix-sdk = { version = "0.19", default-features = false, features = ["e2e-encr
 # for `CollectStrategy`, which matrix-sdk doesn't re-export.
 matrix-sdk-crypto = { version = "0.19", default-features = false }
 
+# flock(2) for the store lock (`lock.rs`); already a workspace dependency.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 aivyx-audit = { path = "../aivyx-audit" }

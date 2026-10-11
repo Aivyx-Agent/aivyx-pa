@@ -94,8 +94,15 @@ session.enc`, sealed (ChaCha20-Poly1305, random nonce) with
 `MasterKey::derive_subkey(b"aivyx-pa matrix session")` — not in pa's redb
 store, which the running daemon holds locked. Writing them needs only the
 operator's passphrase, so `connect matrix` works with or without the
-daemon. `matrix verify` opens the Matrix store itself, so it refuses to
-run while the daemon is up (stop it first).
+daemon. The daemon never opens the Matrix store — only the
+`aivyx-pa --channel matrix` process does, in both modes — so every process
+that opens it (`--channel matrix`, `connect matrix`, `matrix verify`) holds
+an exclusive lock on `<matrix dir>/lock` while it does, and the others
+refuse with "the Matrix channel is running in another process — stop it
+first". (Review correction, 2026-10-12: this first said `matrix verify`
+refuses while the daemon is up, which guarded the wrong process.) A
+missing `store` next to an existing `session.enc` is refused too, so a
+crash mid-login can't silently reset the device identity.
 
 ## Setup
 

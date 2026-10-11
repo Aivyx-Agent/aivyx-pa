@@ -38,9 +38,8 @@ pub async fn run_connect(config: &AivyxConfig, keys: &MatrixKeys, dir: &Path) ->
         session.device_id, session.user_id
     );
     eprintln!(
-        "If the daemon is already running the Matrix channel, restart it \
-         (`aivyx-pa daemon stop`, then start it again with `aivyx-pa daemon run`) \
-         so it uses the new device."
+        "If you stopped `aivyx-pa --channel matrix` to run this, start it again \
+         after verifying so it uses the new device. The daemon doesn't need a restart."
     );
     Ok(())
 }
