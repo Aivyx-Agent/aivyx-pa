@@ -30,7 +30,7 @@ A new crate, `crates/aivyx-matrix`, shaped like `aivyx-discord`:
 
 - `transport.rs` — `MatrixTransport` trait: receive messages (with room,
   sender, sender device, verification state and encryption state), send a
-  reply, join or decline an invite, typing notice. Two implementations: the
+  reply, join or decline an invite, and whether a room is encrypted. Two implementations: the
   real one over `matrix-sdk` 0.19 (Apache-2.0; features `e2e-encryption`,
   `sqlite`, `rustls-aws-lc-rs`; no default features), and a scripted
   transport for tests, as the other chat crates have.
@@ -45,7 +45,8 @@ A new crate, `crates/aivyx-matrix`, shaped like `aivyx-discord`:
   operator's Matrix IDs), and the same `team_run_channel`,
   `team_trigger_rate_limit`, `team_command_allowed_senders` as Discord and
   Slack. The access token and device id are **not** config: they live in
-  pa's encrypted store, written by `aivyx-pa connect matrix`.
+  the sealed session file (see Credentials), written by
+  `aivyx-pa connect matrix`.
 - Paths — the `matrix-sdk` SQLite store lives under the instance's data
   directory, built only through `aivyx-instance` (`InstancePaths`), so each
   named instance is its own Matrix device. The no-stray-paths guard test
@@ -53,15 +54,25 @@ A new crate, `crates/aivyx-matrix`, shaped like `aivyx-discord`:
 
 ## Trust
 
-A message gets `SemiTrusted` — the tier an allowlisted chat gets on
-Telegram, Discord and Slack — only when **all** of these hold:
+A message becomes a turn — at `SemiTrusted`, the tier an allowlisted chat
+gets on Telegram, Discord and Slack — only when **all** of these hold:
 
 1. it is in the `room_filter` room;
 2. its sender is in `allowed_senders`;
 3. it came from a device the assistant has verified.
 
-Anything else is `Untrusted` (public memory only): another room, another
-sender, or the operator's own account from an unverified device.
+Nothing else becomes a turn, in either mode:
+
+- the operator's own account (an `allowed_senders` ID in the
+  `room_filter` room) from an unverified device gets one reply per room —
+  "I only answer your verified devices — run `aivyx-pa matrix verify`";
+- any other sender or room is ignored.
+
+(Planning refinement, 2026-10-11: the brainstormed design ran other
+senders as `Untrusted` turns. In daemon mode the tier belongs to the
+whole daemon connection, not to each message, so that would have needed a
+second connection kind for strangers; and a private channel has no reason
+to answer strangers at all. Ignoring them is stricter and simpler.)
 
 ## Encryption
 
@@ -71,15 +82,27 @@ sender, or the operator's own account from an unverified device.
   (`MasterKey::derive_subkey(b"aivyx-pa matrix store")`), so the store is
   encrypted at rest and useless without the operator's pa passphrase.
   Nothing new is written in the clear.
-- A message that can't be decrypted gets one reply per room ("I couldn't
-  read that — verify my device with `aivyx-pa matrix verify`"), not one per
-  message, and never a silent drop.
+- A message that can't be decrypted, from an `allowed_senders` ID in the
+  `room_filter` room, gets one reply per room ("I couldn't read that —
+  verify my device with `aivyx-pa matrix verify`"), not one per message,
+  and never a silent drop. From anyone else it is ignored.
+
+## Credentials
+
+The access token and device id are kept in `<instance data dir>/matrix/
+session.enc`, sealed (ChaCha20-Poly1305, random nonce) with
+`MasterKey::derive_subkey(b"aivyx-pa matrix session")` — not in pa's redb
+store, which the running daemon holds locked. Writing them needs only the
+operator's passphrase, so `connect matrix` works with or without the
+daemon. `matrix verify` opens the Matrix store itself, so it refuses to
+run while the daemon is up (stop it first).
 
 ## Setup
 
 1. `aivyx-pa connect matrix` asks for the homeserver, the assistant's
    Matrix ID and its password; logs in once; stores the access token and
-   device id in the encrypted store; discards the password.
+   device id in the sealed session file (see Credentials); discards the
+  password.
 2. `aivyx-pa matrix verify` runs SAS (emoji) verification in the terminal:
    the operator starts verification from their Matrix client, compares the
    emoji, and confirms on both sides. The assistant then trusts that device.
