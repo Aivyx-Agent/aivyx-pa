@@ -641,7 +641,7 @@ The Telegram bot channel. See [Chat apps and accounts](../../guide/13-chat-apps-
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `token` | string |  | The bot token from @BotFather. Prefer the encrypted store (`aivyx-pa connect`) over writing it here. |
-| `chat_id` | integer |  | Your chat with the bot. Only messages from this chat are handled. |
+| `chat_id` | integer |  | Your chat with the bot. When set, only messages from this chat are handled. Unset, any chat can talk to the bot, at the `Untrusted` tier (public memory only). |
 | `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` from this channel. Unset/false: the command is recognized but always replies with a capability-denial message, both client-side (fail-fast UX) and server-side (the real enforcement). |
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour from this channel (client-side enforced). Unset = unlimited. |
 | `team_command_allowed_senders` | list of integer |  | The Telegram user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run) from this channel. Empty/unset: no sender is authorized — deny by default, closing a real gap (previously, any sender in a connected chat could act). |

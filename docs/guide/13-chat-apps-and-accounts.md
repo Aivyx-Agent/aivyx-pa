@@ -45,6 +45,10 @@ but doesn't start the bot by itself — step 3 does.
 
 4. Run `aivyx-pa --channel telegram` and message your bot.
 
+Keep `chat_id` set: it's the allowlist. Without it, anyone who finds your bot
+can talk to it — only at the `Untrusted` tier, which can read nothing but
+public memory, but on your model and your budget.
+
 ### Discord and Slack
 
 Both follow the same pattern with a few more steps on the chat app's side
@@ -52,7 +56,7 @@ Both follow the same pattern with a few more steps on the chat app's side
 and two tokens). The
 [install guide](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md#running-aivyx-pa-on-discord-phase-107)
 walks through each click, and the allowlist setting is `channel_filter` instead
-of `chat_id`.
+of `chat_id` — the same advice applies.
 
 ## Google accounts: Gmail, Calendar, Drive, Contacts
 

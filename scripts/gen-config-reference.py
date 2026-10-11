@@ -242,7 +242,7 @@ MEANINGS = {
     "reflection_schedule.role_override": "Run the reflection as this role instead of the built-in reflection setup.",
     "reflection_schedule.skip_when_idle": "Skip a run when little has happened since the last one. Off by default.",
     "reflection_schedule.min_audit_entries_to_fire": "With `skip_when_idle`, the fewest new audit entries that still count as activity. Default 1.",
-    "telegram.chat_id": "Your chat with the bot. Only messages from this chat are handled.",
+    "telegram.chat_id": "Your chat with the bot. When set, only messages from this chat are handled. Unset, any chat can talk to the bot, at the `Untrusted` tier (public memory only).",
     "notify_target.retry_count": "Retries after a transient failure (network error, timeout, or a 5xx reply). Default 0.",
     "proactive.max_per_window": "Most proactive messages per `window_secs`, whatever the signals say. Default 3.",
     "budget.per_mission_usd": "Most USD one team mission started by the loop may spend across all its specialists. Unset means no cap.",
