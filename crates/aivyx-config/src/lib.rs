@@ -1039,6 +1039,9 @@ pub struct AivyxConfig {
     /// passed). Filled in whenever any Discord field is set
     /// so the startup banner can warn about orphan config.
     pub discord: Option<DiscordConfig>,
+    /// `[matrix]` channel config. `None` unless `[matrix]` sets
+    /// `homeserver`; see [`MatrixConfig`].
+    pub matrix: Option<MatrixConfig>,
     /// Phase 108 — Slack channel config. `None` when no
     /// Slack field is set. Filled in whenever any Slack
     /// field is set so the startup banner can warn about
@@ -1798,6 +1801,26 @@ pub struct DiscordConfig {
     /// ids allowed to issue any `/team ...` command from this channel.
     /// Empty: no sender is authorized (deny by default).
     pub team_command_allowed_senders: Vec<u64>,
+}
+
+/// The Matrix channel (`--channel matrix`). Credentials are not config:
+/// `aivyx-pa connect matrix` seals them under the instance's data dir.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatrixConfig {
+    /// Your homeserver's URL, e.g. `https://matrix.org`. Must be https (plain http only for a server on this machine).
+    pub homeserver: String,
+    /// The assistant's own Matrix ID, e.g. `@my-assistant:matrix.org`.
+    pub user_id: String,
+    /// The one room the assistant answers in (its room ID, `!…:server`). Must be end-to-end encrypted.
+    pub room_filter: String,
+    /// Your Matrix IDs. Only these, from a device the assistant has verified, in `room_filter`, can talk to it; invites are accepted only from them.
+    pub allowed_senders: Vec<String>,
+    /// Operator opt-in for `/team run <goal>` from this room.
+    pub team_run_channel: bool,
+    /// Max `/team run` confirmations accepted per rolling hour. Unset = unlimited.
+    pub team_trigger_rate_limit: Option<u32>,
+    /// The Matrix IDs allowed to issue `/team ...` commands. Empty: nobody.
+    pub team_command_allowed_senders: Vec<String>,
 }
 
 /// Phase 109 — `[git]` configuration for the `git.status` /
@@ -4083,6 +4106,8 @@ struct RawToml {
     #[serde(default)]
     discord: RawDiscord,
     #[serde(default)]
+    matrix: RawMatrix,
+    #[serde(default)]
     slack: RawSlack,
     #[serde(default)]
     git: RawGit,
@@ -5064,6 +5089,26 @@ struct RawDiscord {
     /// (previously, any sender in a connected chat could act).
     #[serde(default)]
     team_command_allowed_senders: Vec<u64>,
+}
+
+/// `[matrix]` TOML section. Credentials are never here: they live in the
+/// sealed `<data dir>/matrix/session.enc` written by `connect matrix`.
+#[derive(Debug, Default, Deserialize)]
+struct RawMatrix {
+    #[serde(default)]
+    homeserver: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    room_filter: Option<String>,
+    #[serde(default)]
+    allowed_senders: Vec<String>,
+    #[serde(default)]
+    team_run_channel: bool,
+    #[serde(default)]
+    team_trigger_rate_limit: Option<u32>,
+    #[serde(default)]
+    team_command_allowed_senders: Vec<String>,
 }
 
 /// Phase 108 — `[slack]` TOML section deserialize target.
@@ -6824,6 +6869,58 @@ impl AivyxConfig {
             None
         };
 
+        // --- matrix ------------------------------------------------
+        // `[matrix]` is `Some` only when `homeserver` is set. Credentials
+        // are never read from here: `connect matrix` seals them under the
+        // instance data dir. Validation fails closed on anything that
+        // would let the channel run unsafely.
+        let matrix = match toml.matrix.homeserver.clone() {
+            None => None,
+            Some(homeserver) => {
+                let local = ["http://127.0.0.1", "http://localhost", "http://[::1]"]
+                    .iter()
+                    .any(|p| homeserver.starts_with(p));
+                if !(homeserver.starts_with("https://") || local) {
+                    return Err(ConfigError::Invalid {
+                        field: "matrix.homeserver",
+                        reason: "must be an https:// URL".into(),
+                    });
+                }
+                let is_id = |s: &str, sigil: char| s.starts_with(sigil) && s[1..].contains(':');
+                let user_id = toml.matrix.user_id.clone().unwrap_or_default();
+                if !is_id(&user_id, '@') {
+                    return Err(ConfigError::Invalid {
+                        field: "matrix.user_id",
+                        reason: "must look like @name:server".into(),
+                    });
+                }
+                let room_filter = toml.matrix.room_filter.clone().unwrap_or_default();
+                if !is_id(&room_filter, '!') {
+                    return Err(ConfigError::Invalid {
+                        field: "matrix.room_filter",
+                        reason: "must be a room ID like !abc:server (not an #alias)".into(),
+                    });
+                }
+                if toml.matrix.allowed_senders.is_empty()
+                    || !toml.matrix.allowed_senders.iter().all(|s| is_id(s, '@'))
+                {
+                    return Err(ConfigError::Invalid {
+                        field: "matrix.allowed_senders",
+                        reason: "list at least one Matrix ID like @you:server".into(),
+                    });
+                }
+                Some(MatrixConfig {
+                    homeserver,
+                    user_id,
+                    room_filter,
+                    allowed_senders: toml.matrix.allowed_senders.clone(),
+                    team_run_channel: toml.matrix.team_run_channel,
+                    team_trigger_rate_limit: toml.matrix.team_trigger_rate_limit,
+                    team_command_allowed_senders: toml.matrix.team_command_allowed_senders.clone(),
+                })
+            }
+        };
+
         // --- slack (Phase 108) -------------------------------------
         // Same shape as Telegram + Discord: SlackConfig is
         // constructed whenever any Slack source fires. Both
@@ -8295,6 +8392,7 @@ impl AivyxConfig {
             passphrase,
             telegram,
             discord,
+            matrix,
             slack,
             git,
             email,

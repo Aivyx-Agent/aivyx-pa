@@ -519,6 +519,49 @@ fn discord_and_slack_team_run_channel_round_trip_from_toml() {
     drop(env);
 }
 
+#[test]
+fn matrix_section_parses_and_absent_means_none() {
+    let env = EnvScope::new();
+    let toml = r#"
+[matrix]
+homeserver = "https://matrix.example"
+user_id = "@pa:example"
+room_filter = "!home:example"
+allowed_senders = ["@me:example"]
+team_command_allowed_senders = ["@me:example"]
+"#;
+    let cfg = load_with_toml(toml, "matrix-parse");
+    let m = cfg.matrix.expect("[matrix] with a homeserver is Some");
+    assert_eq!(m.homeserver, "https://matrix.example");
+    assert_eq!(m.user_id, "@pa:example");
+    assert_eq!(m.room_filter, "!home:example");
+    assert_eq!(m.allowed_senders, vec!["@me:example".to_string()]);
+    assert_eq!(
+        m.team_command_allowed_senders,
+        vec!["@me:example".to_string()]
+    );
+    assert!(!m.team_run_channel);
+    assert!(load_with_toml("", "matrix-absent").matrix.is_none());
+    drop(env);
+}
+
+#[test]
+fn matrix_requires_https_and_well_formed_ids() {
+    let env = EnvScope::new();
+    for bad in [
+        "[matrix]\nhomeserver = \"http://matrix.example\"\nuser_id = \"@pa:x\"\nroom_filter = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n",
+        "[matrix]\nhomeserver = \"https://matrix.example\"\nuser_id = \"pa\"\nroom_filter = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n",
+        "[matrix]\nhomeserver = \"https://matrix.example\"\nuser_id = \"@pa:x\"\nroom_filter = \"#alias:x\"\nallowed_senders = [\"@me:x\"]\n",
+        "[matrix]\nhomeserver = \"https://matrix.example\"\nuser_id = \"@pa:x\"\nroom_filter = \"!r:x\"\nallowed_senders = []\n",
+    ] {
+        assert!(load_with_toml_result(bad, "matrix-bad").is_err(), "should reject:\n{bad}");
+    }
+    // A homeserver on this machine may be plain http (a local test server).
+    let local = "[matrix]\nhomeserver = \"http://127.0.0.1:6167\"\nuser_id = \"@pa:x\"\nroom_filter = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n";
+    assert!(load_with_toml_result(local, "matrix-local").is_ok());
+    drop(env);
+}
+
 // ------------------------------------------------------------------
 // Security-audit fix (Task 10, 2026-09-16) — Discord/Slack
 // `channel_filter`, mirroring Telegram's `chat_filter`. Consumed by

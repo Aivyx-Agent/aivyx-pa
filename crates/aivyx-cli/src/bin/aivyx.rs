@@ -6721,6 +6721,9 @@ async fn run_async(
         // `ChannelKind::Discord` dispatch arm below; carries
         // the bot token through to `run_discord_session`.
         discord,
+        // `[matrix]` is parsed here; its channel dispatch arm lands
+        // in a later task of the Matrix channel plan.
+        matrix: _,
         // Phase 108 — `slack` config consumed by the
         // `ChannelKind::Slack` dispatch arm below; carries
         // the bot + app tokens through to
