@@ -15,7 +15,7 @@ These work with any command.
 |---|---|
 | `--instance <name>` | Use a named instance — a separate agent with its own config, store and Studio. Same as setting `AIVYX_PA_INSTANCE`; the flag wins. Without it you get the `default` instance. See [Named instances](../../guide/16-named-instances.md). |
 | `--verify-only` | Verify the audit chain and exit (forensic check; no session). |
-| `--channel <kind>` | Run the session on a channel instead of the terminal: `local`, `telegram`, `discord`, `slack` or `voice`. |
+| `--channel <kind>` | Run the session on a channel instead of the terminal: `local`, `telegram`, `discord`, `slack`, `matrix` or `voice`. |
 | `--role <name>` | Use a named role (from `[[role]]` in your config) for this session. |
 | `--print-role <name>` | Print a role's full capability envelope and exit. |
 | `--no-daemon` | Chat in-process: don't connect to a running daemon or start one. |
@@ -415,16 +415,33 @@ aivyx-pa connect <service>    # walk through connecting one
 
 See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
 
+### `aivyx-pa connect matrix`
+
+Logs the assistant in to your Matrix homeserver once, using the `[matrix]`
+section of your config. It asks for the assistant's password and doesn't keep
+it. Running it again creates a new device: the old encrypted store is moved
+aside to `store.old-<timestamp>` (not deleted) and you must verify the new
+device again. A failed login leaves the existing setup untouched. It works
+while the daemon is running, but the daemon keeps its old device until you
+run `aivyx-pa daemon stop` and `aivyx-pa daemon run`.
+
+```
+aivyx-pa connect matrix
+```
+
 ### `aivyx-pa matrix`
 
 Verifies the assistant's Matrix device after `aivyx-pa connect matrix`. It
 waits for you to start verification from your Matrix app, shows the emoji,
-and confirms only if you say they match. Stop the daemon first.
+and confirms only if you say they match. Your Matrix account needs
+cross-signing (Element and most clients set it up by default). Stop the
+daemon first: it refuses to run while the daemon is up.
 
 ```
-aivyx-pa connect matrix       # log the assistant in once (password not stored)
 aivyx-pa matrix verify
 ```
+
+Then run the channel with `aivyx-pa --channel matrix`.
 
 ### `aivyx-pa pack`
 

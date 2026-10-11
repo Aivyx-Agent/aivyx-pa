@@ -53,7 +53,7 @@ the trust tiers in `aivyx-capability/src/lib.rs:503` (D5):
 |---|---|---|---|
 | `Kernel` | Aivyx PA itself | the turn loop, audit writer | unconditional (internal use only) |
 | `Trusted` | the operator at their own keyboard | Local CLI, Web UI on `127.0.0.1` | near-total, with extra audit on destructive ops |
-| `SemiTrusted` | the operator over a remote, authenticated channel | their own Telegram bot, with chat-id allowlisted | narrowed — no unqualified shell, no `fs.delete`, qualifier required on `fs.*` and `net.post` |
+| `SemiTrusted` | the operator over a remote, authenticated channel | their own Telegram bot, with chat-id allowlisted; the Matrix home room, from a verified operator device | narrowed — no unqualified shell, no `fs.delete`, qualifier required on `fs.*` and `net.post` |
 | `Untrusted` | anyone the operator has not authenticated | webhook requests, unallowlisted senders | near-empty — read public memory, that's it |
 
 A turn loop computes the **effective capability set** exactly
@@ -795,6 +795,21 @@ classify them as `SemiTrusted` (because the chat-id allowlist
 matches) and run them within the tier ceiling. The damage is
 bounded by `CEILING_SEMITRUSTED`, but it is not zero. This is the
 trade for using third-party messaging platforms at all.
+
+**Matrix.** A message is a turn only from `allowed_senders`, in
+`room_filter`, from a device the assistant has verified by SAS (emoji)
+and that `matrix-sdk` reports as `Verified`. That last condition needs
+cross-signing on the operator's Matrix account; without it nothing is
+ever treated as verified, so the channel fails closed (no turn runs, and
+the assistant asks once for verification). An unverified device, or an
+undecryptable message, from the operator gets one explanation per room;
+anything else is ignored, not run as `Untrusted`. The assistant talks
+only in end-to-end-encrypted rooms and refuses to start if
+`room_filter` is not encrypted. Plain `http://` homeservers are accepted
+only on loopback. Credentials are sealed under the master key
+(`session.enc`); the `matrix-sdk` store is encrypted with a master-key
+subkey. A stolen Matrix password or a malicious homeserver cannot
+produce a verified device, so it cannot impersonate the operator.
 
 ### 5.9 Adversarial co-tenants
 

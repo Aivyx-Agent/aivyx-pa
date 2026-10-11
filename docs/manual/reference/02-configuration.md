@@ -673,6 +673,20 @@ The Slack bot channel (Socket Mode). See [Chat apps and accounts](../../guide/13
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour from this channel (client-side enforced). Unset = unlimited. |
 | `team_command_allowed_senders` | list of string |  | The Slack user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run) from this channel. Empty/unset: no sender is authorized — deny by default, closing a real gap (previously, any sender in a connected chat could act). |
 
+### `[matrix]`
+
+The Matrix channel: an end-to-end-encrypted room with your assistant. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
+
+| Key | Type | Example | Meaning |
+|---|---|---|---|
+| `homeserver` | string |  | Your homeserver's URL, e.g. `https://matrix.org`. |
+| `user_id` | string |  | The assistant's own Matrix ID, e.g. `@my-assistant:matrix.org`. |
+| `room_filter` | string |  | The one room the assistant answers in (its room ID, `!…:server`). Must be end-to-end encrypted. |
+| `allowed_senders` | list of string |  | Your Matrix IDs. Only these, from a device the assistant has verified, in `room_filter`, can talk to it; invites are accepted only from them. |
+| `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` from this room. |
+| `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour. Unset = unlimited. |
+| `team_command_allowed_senders` | list of string |  | The Matrix IDs allowed to issue `/team...` commands. Empty: nobody. |
+
 ### `[voice]`
 
 The voice channel (`--channel voice`): speech recognition and text-to-speech engines and devices.

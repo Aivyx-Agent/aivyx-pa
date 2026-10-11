@@ -69,7 +69,7 @@ GROUPS = [
         "skill_refinement", "skill_authoring", "skill_defaults", "tool_relevance",
         "reflection_schedule",
     ]),
-    ("Chat apps and voice", ["telegram", "discord", "slack", "voice", "email"]),
+    ("Chat apps and voice", ["telegram", "discord", "slack", "matrix", "voice", "email"]),
     ("Tools and integrations", ["mcp_server", "tool_process", "applications"]),
     ("Routines and the autonomous loop", [
         "schedule", "webhook", "file_watch", "notify_target", "reminders", "proactive", "loop",
@@ -129,6 +129,7 @@ INTROS = {
     "telegram": f"The Telegram bot channel. See [Chat apps and accounts]({GUIDE}/13-chat-apps-and-accounts.md).",
     "discord": f"The Discord bot channel. See [Chat apps and accounts]({GUIDE}/13-chat-apps-and-accounts.md).",
     "slack": f"The Slack bot channel (Socket Mode). See [Chat apps and accounts]({GUIDE}/13-chat-apps-and-accounts.md).",
+    "matrix": f"The Matrix channel: an end-to-end-encrypted room with your assistant. See [Chat apps and accounts]({GUIDE}/13-chat-apps-and-accounts.md).",
     "voice": "The voice channel (`--channel voice`): speech recognition and text-to-speech engines and devices.",
     "email": "Outgoing mail (SMTP) for the email tools and notifications.",
     "mcp_server": "MCP servers whose tools the agent can use. One block per server.",

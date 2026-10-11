@@ -49,6 +49,60 @@ Keep `chat_id` set: it's the allowlist. Without it, anyone who finds your bot
 can talk to it — only at the `Untrusted` tier, which can read nothing but
 public memory, but on your model and your budget.
 
+### Matrix
+
+Matrix gives you an end-to-end-encrypted room with your assistant, on a
+homeserver you choose (or run yourself).
+
+1. Create a Matrix account for the assistant (e.g. `@my-assistant:matrix.org`),
+   and from your own account create a room, **turn on encryption**, and invite
+   it. Copy the room's ID (`!…:server`, in the room's advanced settings). Use
+   the ID, not an alias like `#room:server`.
+2. Add to your config:
+
+   ```toml
+   [matrix]
+   homeserver = "https://matrix.org"
+   user_id = "@my-assistant:matrix.org"
+   room_filter = "!abcdef:matrix.org"
+   allowed_senders = ["@you:matrix.org"]
+   ```
+
+3. `aivyx-pa connect matrix` — logs the assistant in once (the password isn't
+   kept).
+4. `aivyx-pa matrix verify` — then, in your Matrix app, open the assistant and
+   choose **Verify**; compare the emoji and confirm on both sides. Repeat for
+   each device you'll use.
+5. `aivyx-pa --channel matrix`.
+
+It answers only you (`allowed_senders`), only in that room, and only from
+devices you've verified — a stolen password or the homeserver can't
+impersonate you. From an unverified device it tells you once to verify;
+everyone else is ignored.
+
+Good to know:
+
+- **Your account needs cross-signing.** Element and other modern clients set
+  it up by default. Without it, even a device you verified by emoji is
+  refused. It fails closed: no turn runs, and the assistant replies once
+  asking you to verify.
+- **Encrypted rooms only.** The assistant refuses to start if the
+  `room_filter` room isn't encrypted.
+- **Homeserver address.** It must be `https://`. Plain `http://` is accepted
+  only on this machine (`localhost`, `127.0.0.1`, `[::1]`).
+- **Running `connect matrix` again creates a new device.** The old device's
+  encrypted store is moved aside to `store.old-<timestamp>` in the instance's
+  Matrix data directory, not deleted, and you must verify the new device with
+  `aivyx-pa matrix verify`. A failed login (wrong password, unreachable
+  server) leaves your existing setup untouched.
+- **With the daemon running.** `connect matrix` works, but the daemon keeps
+  its old device until you restart it: `aivyx-pa daemon stop`, then
+  `aivyx-pa daemon run`. `matrix verify` refuses to run while the daemon is
+  up.
+- **If the device is logged out** (say, from your Matrix app), the channel
+  stops and tells you to run `aivyx-pa connect matrix` again. It doesn't
+  retry.
+
 ### Discord and Slack
 
 Both follow the same pattern with a few more steps on the chat app's side
