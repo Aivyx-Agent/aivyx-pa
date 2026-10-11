@@ -154,12 +154,23 @@ pub(crate) fn filter_public_addrs(
 }
 
 /// Whether an IP is one the egress guard blocks by default: loopback,
-/// link-local (incl. the `169.254.169.254` cloud-metadata IP), private, or
-/// IPv6 unique-local (`fc00::/7`).
+/// link-local (incl. the `169.254.169.254` cloud-metadata IP), private,
+/// carrier-grade NAT (`100.64.0.0/10`, where Tailscale puts tailnet
+/// machines), `0.0.0.0/8`, broadcast, multicast, IPv6 unique-local
+/// (`fc00::/7`), and the IPv6 forms that wrap an IPv4 address (mapped,
+/// IPv4-compatible, NAT64, 6to4), judged by the address they wrap.
 pub(crate) fn is_blocked_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            let [a, b, ..] = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                // 0.0.0.0/8 ("this network"), not just 0.0.0.0.
+                || a == 0
+                || (a == 100 && (b & 0xc0) == 64)
+                || v4.is_broadcast()
+                || v4.is_multicast()
         }
         IpAddr::V6(v6) => {
             // An IPv4-mapped address (::ffff:a.b.c.d) must be judged by
@@ -170,12 +181,29 @@ pub(crate) fn is_blocked_ip(ip: &IpAddr) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return is_blocked_ip(&IpAddr::V4(v4));
             }
-            v6.is_loopback()
-                || v6.is_unspecified()
-                // Unique-local fc00::/7.
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
+            if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
+                return true;
+            }
+            // IPv4-compatible (::a.b.c.d), NAT64 (64:ff9b::/96 and the
+            // local-use 64:ff9b:1::/48) and 6to4 (2002::/16, the address in
+            // the next 32 bits) all reach the IPv4 they carry.
+            let seg = v6.segments();
+            let v4 = |hi: u16, lo: u16| {
+                IpAddr::V4(std::net::Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo)))
+            };
+            if seg[..6] == [0; 6]
+                || seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0]
+                || seg[..3] == [0x64, 0xff9b, 1]
+            {
+                return is_blocked_ip(&v4(seg[6], seg[7]));
+            }
+            if seg[0] == 0x2002 {
+                return is_blocked_ip(&v4(seg[1], seg[2]));
+            }
+            // Unique-local fc00::/7.
+            (seg[0] & 0xfe00) == 0xfc00
                 // Link-local fe80::/10.
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || (seg[0] & 0xffc0) == 0xfe80
         }
     }
 }
@@ -191,6 +219,41 @@ fn is_local_hostname(host_l: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn blocked(ip: &str) -> bool {
+        is_blocked_ip(&ip.parse().unwrap())
+    }
+
+    #[test]
+    fn shared_and_special_ipv4_ranges_are_blocked() {
+        // 100.64.0.0/10: carrier-grade NAT — Tailscale gives tailnet
+        // machines (and its 100.100.100.100 resolver) addresses here.
+        assert!(blocked("100.64.0.1"));
+        assert!(blocked("100.100.100.100"));
+        assert!(blocked("100.127.255.254"));
+        assert!(!blocked("100.128.0.1"));
+        // The rest of 0.0.0.0/8 (reaches local services on Linux),
+        // broadcast and multicast.
+        assert!(blocked("0.1.2.3"));
+        assert!(blocked("255.255.255.255"));
+        assert!(blocked("224.0.0.1"));
+        assert!(!blocked("8.8.8.8"));
+    }
+
+    #[test]
+    fn ipv6_forms_wrapping_a_private_ipv4_are_blocked() {
+        // NAT64 (well-known and local-use prefixes), 6to4, IPv4-compatible.
+        assert!(blocked("64:ff9b::7f00:1"));
+        assert!(blocked("64:ff9b::a9fe:a9fe"));
+        assert!(blocked("64:ff9b:1::c0a8:101"));
+        assert!(blocked("2002:7f00:1::1"));
+        assert!(blocked("::10.0.0.1"));
+        // The same forms around a public IPv4 stay allowed.
+        assert!(!blocked("64:ff9b::808:808"));
+        assert!(!blocked("2002:808:808::1"));
+        assert!(blocked("ff02::1"));
+        assert!(!blocked("2606:4700::1111"));
+    }
 
     #[test]
     fn blocks_metadata_and_local_targets_by_default() {

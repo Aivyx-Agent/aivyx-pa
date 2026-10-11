@@ -288,6 +288,9 @@ security failure:
 - **Network egress — SSRF/metadata guarded, public exfil is not (Chapter
   Rampart).** The network tools (`web.fetch` / `web.extract` / `web.post`)
   refuse loopback / link-local / private / unique-local targets by default —
+  plus carrier-grade NAT (`100.64.0.0/10`, where Tailscale puts tailnet
+  machines), `0.0.0.0/8`, broadcast, multicast, and IPv6 forms that wrap a
+  blocked IPv4 address (mapped, IPv4-compatible, NAT64, 6to4) —
   on the initial URL *and* every redirect hop — so a (possibly injected) agent
   cannot reach `169.254.169.254` (cloud-metadata → credential theft) or
   `localhost:7843` (the daemon itself) / LAN services. `[access]
