@@ -12,7 +12,7 @@ use matrix_sdk::{
     config::SyncSettings,
     deserialized_responses::{EncryptionInfo, VerificationState},
     ruma::{
-        api::error::ErrorKind,
+        api::{client::uiaa, error::ErrorKind},
         events::room::{
             encrypted::OriginalSyncRoomEncryptedEvent,
             member::StrippedRoomMemberEvent,
@@ -93,6 +93,7 @@ pub async fn login(
             .initial_device_display_name("Aivyx PA")
             .await
             .map_err(|e| format!("matrix login failed: {e}"))?;
+        bootstrap_cross_signing(&client, r.user_id.as_str(), password).await?;
         Ok::<Session, String>(Session {
             homeserver: homeserver.to_string(),
             user_id: r.user_id.to_string(),
@@ -108,6 +109,36 @@ pub async fn login(
             Err(e)
         }
     }
+}
+
+/// Creates the assistant's own cross-signing identity (master, self-signing
+/// and user-signing keys) and signs this device with it. Without it the
+/// assistant can't sign the operator's identity during verification, and
+/// `matrix-sdk` never reports the operator's messages as `Verified`.
+///
+/// The upload needs user-interactive auth: the first attempt goes without
+/// auth (some servers accept that for a first identity); if the server
+/// answers with a UIAA challenge, retry once with the password and the
+/// challenge's session. The private keys stay in the encrypted store. The
+/// password is only borrowed for the call; it isn't logged or kept.
+async fn bootstrap_cross_signing(client: &Client, user_id: &str, password: &str) -> Result<(), String> {
+    let e = match client.encryption().bootstrap_cross_signing(None).await {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+    let Some(uiaa) = e.as_uiaa_response() else {
+        return Err(format!("matrix cross-signing setup failed: {e}"));
+    };
+    let mut auth = uiaa::Password::new(
+        uiaa::UserIdentifier::Matrix(uiaa::MatrixUserIdentifier::new(user_id.to_string())),
+        password.to_string(),
+    );
+    auth.session = uiaa.session.clone();
+    client
+        .encryption()
+        .bootstrap_cross_signing(Some(uiaa::AuthData::Password(auth)))
+        .await
+        .map_err(|e| format!("matrix cross-signing setup failed: {e}"))
 }
 
 /// Backoff before the next sync attempt: 1 s doubling, capped at 60 s.
@@ -146,6 +177,13 @@ pub(crate) async fn restore(session: &Session, store_dir: &Path, passphrase: &st
             err @ TransportError::Unauthorized(_) => err.to_string(),
             TransportError::Platform(_) => format!("matrix session restore failed: {e}"),
         })?;
+    // Logins made before the assistant created its own cross-signing
+    // identity can never see the operator as verified: make it explicit.
+    if !client.encryption().cross_signing_status().await.is_some_and(|s| s.is_complete()) {
+        return Err("the assistant's Matrix device has no cross-signing identity — run \
+                    `aivyx-pa connect matrix` again"
+            .into());
+    }
     Ok(client)
 }
 

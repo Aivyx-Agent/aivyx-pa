@@ -72,7 +72,8 @@ homeserver you choose (or run yourself).
    kept).
 4. `aivyx-pa matrix verify` (stop the daemon first if it's running) — then,
    in your Matrix app, open the assistant and choose **Verify**; compare the
-   emoji and confirm on both sides. Repeat for each device you'll use.
+   emoji and confirm on both sides. Once is enough: your other cross-signed
+   devices are trusted too.
 5. `aivyx-pa --channel matrix`. The assistant accepts your invite and joins
    the room once the channel is running, not before.
 
@@ -85,9 +86,13 @@ else is ignored.
 Good to know:
 
 - **Your account needs cross-signing.** Element and other modern clients set
-  it up by default. Without it, even a device you verified by emoji is
-  refused. It fails closed: no turn runs, and the assistant replies once
-  asking you to verify.
+  it up by default. `connect matrix` gives the assistant its own
+  cross-signing identity, and verifying signs *your* identity with it — so
+  you verify once, and every device you've cross-signed (including ones you
+  add and cross-sign later) is trusted. A device you haven't cross-signed is
+  refused: no turn runs, and the assistant replies once asking you to
+  verify. If your account has no cross-signing, `matrix verify` says so and
+  fails.
 - **Encrypted rooms only.** The assistant refuses to start if the
   `room_filter` room isn't encrypted.
 - **Homeserver address.** It must be `https://`. Plain `http://` is accepted

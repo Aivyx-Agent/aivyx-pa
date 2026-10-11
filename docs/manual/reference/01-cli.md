@@ -418,8 +418,8 @@ See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
 ### `aivyx-pa connect matrix`
 
 Logs the assistant in to your Matrix homeserver once, using the `[matrix]`
-section of your config. It asks for the assistant's password and doesn't keep
-it. Running it again creates a new device: the old encrypted store is moved
+section of your config, and creates the assistant's own cross-signing
+identity. It asks for the assistant's password and doesn't keep it. Running it again creates a new device: the old encrypted store is moved
 aside to `store.old-<timestamp>` (not deleted) and you must verify the new
 device again. A failed login leaves the existing setup untouched. It works
 while the daemon is running, but the daemon keeps its old device until you
@@ -433,8 +433,10 @@ aivyx-pa connect matrix
 
 Verifies the assistant's Matrix device after `aivyx-pa connect matrix`. It
 waits for you to start verification from your Matrix app, shows the emoji,
-and confirms only if you say they match. Your Matrix account needs
-cross-signing (Element and most clients set it up by default). Stop the
+and confirms only if you say they match. On success the assistant has signed
+your Matrix identity, so every device you've cross-signed is trusted. Your
+Matrix account needs cross-signing (Element and most clients set it up by
+default). Stop the
 daemon first: it refuses to run while the daemon is up.
 
 ```

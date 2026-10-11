@@ -797,11 +797,20 @@ bounded by `CEILING_SEMITRUSTED`, but it is not zero. This is the
 trade for using third-party messaging platforms at all.
 
 **Matrix.** A message is a turn only from `allowed_senders`, in
-`room_filter`, from a device the assistant has verified by SAS (emoji)
-and that `matrix-sdk` reports as `Verified`. That last condition needs
-cross-signing on the operator's Matrix account; without it nothing is
-ever treated as verified, so the channel fails closed (no turn runs, and
-the assistant asks once for verification). An unverified device, or an
+`room_filter`, from a device that `matrix-sdk` reports as `Verified`.
+That is cross-signing trust, two links long: `aivyx-pa connect matrix`
+creates the assistant's own cross-signing identity, and `aivyx-pa matrix
+verify` (an SAS emoji comparison) has the assistant sign the operator's
+master key with its user-signing key; the operator's own self-signing key
+in turn signs each of their devices. So every device the operator has
+cross-signed counts as verified, including one they cross-sign later,
+without running `matrix verify` again; a device they haven't cross-signed
+never does. The operator's account therefore needs cross-signing (a
+verification against an account without it is reported as failed); a new
+`connect matrix` makes a new assistant identity that must be verified
+again. Without that trust nothing is ever treated as verified, so the
+channel fails closed (no turn runs, and the assistant asks once for
+verification). An unverified device, or an
 undecryptable message, from the operator gets one explanation per room;
 anything else is ignored, not run as `Untrusted`. The assistant talks
 only in end-to-end-encrypted rooms and refuses to start if

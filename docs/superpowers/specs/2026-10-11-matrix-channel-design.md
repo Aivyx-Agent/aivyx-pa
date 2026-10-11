@@ -106,6 +106,17 @@ run while the daemon is up (stop it first).
 2. `aivyx-pa matrix verify` runs SAS (emoji) verification in the terminal:
    the operator starts verification from their Matrix client, compares the
    emoji, and confirms on both sides. The assistant then trusts that device.
+
+   (Review refinement, 2026-10-12: `matrix-sdk` reports a message as
+   `Verified` only through cross-signing — a device is trusted when its
+   owner's self-signing key signed it and the owner's master key is signed
+   by the assistant's own user-signing key. A locally-trusted device alone
+   never yields `Verified`. So `connect matrix` also creates the assistant's
+   own cross-signing identity (UIAA with the password it already has), and
+   a successful `matrix verify` signs the operator's master key with it and
+   waits until the homeserver returns that signature. The effect: one
+   verification trusts every device the operator has cross-signed, now or
+   later; devices they haven't cross-signed are never trusted.)
 3. Room invites are accepted only from `allowed_senders`; others are
    declined.
 
@@ -142,5 +153,4 @@ CLI reference (`connect matrix`, `matrix verify`), and THREAT_MODEL.md
 
 ## Out of scope
 
-Key backup and recovery, cross-signing the operator's whole identity,
-voice/video, file attachments, and editing replies in place.
+Key backup and recovery, voice/video, file attachments, and editing replies in place.
