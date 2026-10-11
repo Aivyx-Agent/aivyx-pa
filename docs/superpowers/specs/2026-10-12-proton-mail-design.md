@@ -79,17 +79,23 @@ Telegram, Discord, Slack and Matrix — only when **all** hold:
      Proton's own DMARC result passes for that From's domain. Proton's
      receiving server adds one `Authentication-Results` value per check
      (`dmarc`, `spf`, `arc`, `dkim`), each stamped `mail.protonmail.ch`,
-     ahead of any value the sender wrote; Bridge preserves the order of a
-     header's values. So: take the `Authentication-Results` values in
-     order, keep the leading run stamped `mail.protonmail.ch`, and use the
-     **first** `dmarc=` result in it — it must be `dmarc=pass` with
-     `header.from` equal to the From address's domain (case-insensitive).
-     No Proton DMARC result in that run → not trusted. A sender-written
-     `mail.protonmail.ch; dmarc=pass` line can only come after Proton's own
-     result and is never the first.
+     DMARC first, ahead of any value the sender wrote; Bridge preserves the
+     order of a header's values. So: the **first** `Authentication-Results`
+     value must be stamped `mail.protonmail.ch` and be a `dmarc=` result —
+     `dmarc=pass` with `header.from` equal to the From address's domain
+     (case-insensitive). Anything else → not trusted. A sender-written
+     `mail.protonmail.ch; dmarc=pass` line always comes after Proton's own
+     values, so it is never first. (Requiring DMARC to be the very first
+     value, not merely the first `dmarc=` in Proton's run, also covers a
+     message where Proton wrote no DMARC result at all and a forged one
+     follows its other results; if Proton ever reorders its results the
+     channel fails closed.)
 3. **addressed to the channel:** `channel_address` is matched against
    `Delivered-To` / `X-Original-To`, which Proton's receiving server sets
-   for the actual delivery — not `To:`, which the sender writes.
+   for the actual delivery — not `To:`, which the sender writes. For mail
+   **from you** (already proven by Sent-folder membership) `To` / `Cc` also
+   count, since mail between two addresses of the same account may never
+   pass Proton's receiving server and so may carry no `Delivered-To`.
 
 Planning research (2026-10-12, Proton Bridge source at b9c5dac): Bridge
 serves Proton's stored headers (`ParsedHeaders`) in their original order
@@ -131,8 +137,10 @@ as ordinary email. THREAT_MODEL.md says so.
   `channel_address` to the sender, as `Re: <subject>` with `In-Reply-To` /
   `References`, so it threads in Proton Mail. To the operator's own Proton
   address it stays end-to-end encrypted inside Proton.
-- **Handled mail:** marked read and moved, with the assistant's reply, to
-  `folder` (default `Aivyx`, created if missing).
+- **Handled mail:** marked read and moved, with a copy of the assistant's
+  reply, to `folder` (default `Aivyx`, created if missing). Bridge shows
+  Proton folders as `Folders/<name>`, so the IMAP mailbox is
+  `Folders/Aivyx`.
 - **Commands:** `/team …` on the email's first line, gated exactly as on
   the other channels. No `/cancel` (an email arrives after the turn is
   usually over).
