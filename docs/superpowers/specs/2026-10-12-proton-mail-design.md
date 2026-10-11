@@ -1,6 +1,6 @@
 # Proton Mail channel and tools — design
 
-Status: approved in brainstorming, 2026-10-12. Sub-project 2 of 3 of the
+Status: approved, 2026-10-12. Sub-project 2 of 3 of the
 private-channels work (Matrix — done; Proton — this spec; Signal — next).
 
 ## Goal
@@ -15,7 +15,8 @@ so mail is decrypted only on the operator's machine.
 
 - **One mailbox — the operator's own.** Bridge serves the operator's
   account. The tools act on that mailbox; the channel listens only on a
-  dedicated address of the operator's (e.g. `you+assistant@proton.me`).
+  dedicated address on the operator's account — an extra address (e.g.
+  `you_aivyx@proton.me`) or a `+` alias (`you+assistant@proton.me`).
 - **Trust:** a turn only for mail from the operator inside Proton, or from
   an allowlisted external address that passes DMARC (below).
 - **Architecture:** a new crate `crates/aivyx-proton` holding both the
@@ -96,10 +97,11 @@ message's headers, recorded with the address redacted as the fixture
 Proton's authserv-id is `mail.protonmail.ch`; it adds separate
 `dmarc` / `spf` / `arc` / `dkim` results, with DMARC first and recording
 the policy (`dmarc=pass (p=reject dis=none) header.from=<domain>`); and it
-sets `Delivered-To` / `X-Original-To`. Still to confirm on the operator's
-account before the channel's trust code is written: mail you send to your
-own `+assistant` address appears in both INBOX and Sent. If not, the plan
-stops and this section is revisited.
+sets `Delivered-To` / `X-Original-To`. Also confirmed (2026-10-12): mail
+the operator sends from their main address to a second address on the same
+account (`you.assistant@proton.me`, an extra address rather than a
+`+` alias — either works as `channel_address`) appears in both INBOX and
+Sent of the one mailbox.
 
 Both kinds of sender run at the same tier: daemon mode fixes the tier per
 connection. Everything else is **ignored silently** — no auto-reply, which
