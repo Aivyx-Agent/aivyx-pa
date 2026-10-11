@@ -4,6 +4,7 @@
 //! sealed credentials (`credentials`) and SAS verification (`verify`).
 //! See `docs/superpowers/specs/2026-10-11-matrix-channel-design.md`.
 
+pub mod matrix_channel;
 pub mod policy;
 pub mod transport;
 
