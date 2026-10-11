@@ -255,3 +255,22 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
         }
     }
 }
+
+/// Production entry point: restore the sealed session, sync once so room
+/// state is known, then run the loop.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_matrix_session(
+    session: &crate::credentials::Session,
+    store_dir: &std::path::Path,
+    passphrase: &str,
+    policy: MatrixPolicy,
+    config: MatrixSessionConfig,
+    provider: Arc<dyn LlmProvider>,
+    audit: Arc<dyn AuditHook>,
+    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
+    shutdown: CancellationToken,
+) -> Result<MatrixSessionReport, String> {
+    let transport = crate::sdk::SdkTransport::connect(session, store_dir, passphrase).await?;
+    transport.sync_once().await?;
+    run_matrix_session_with_transport(transport, policy, config, provider, audit, checkpointer, shutdown).await
+}
