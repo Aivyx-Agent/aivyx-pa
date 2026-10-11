@@ -256,8 +256,8 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
     }
 }
 
-/// Production entry point: restore the sealed session, sync once so room
-/// state is known, then run the loop.
+/// Production entry point: restore the sealed session (`connect` does the
+/// initial sync so room state is known), then run the loop.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_matrix_session(
     session: &crate::credentials::Session,
@@ -271,6 +271,5 @@ pub async fn run_matrix_session(
     shutdown: CancellationToken,
 ) -> Result<MatrixSessionReport, String> {
     let transport = crate::sdk::SdkTransport::connect(session, store_dir, passphrase).await?;
-    transport.sync_once().await?;
     run_matrix_session_with_transport(transport, policy, config, provider, audit, checkpointer, shutdown).await
 }

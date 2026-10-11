@@ -83,6 +83,12 @@ async fn drive(request: VerificationRequest, confirm: Confirm, done: mpsc::Sende
                 let mut sas_changes = sas.changes();
                 while let Some(s) = sas_changes.next().await {
                     match s {
+                        SasState::KeysExchanged { emojis: None, .. } => {
+                            // Emoji comparison is required; refuse to confirm blind.
+                            let _ = sas.mismatch().await;
+                            let _ = done.send(false).await;
+                            return;
+                        }
                         SasState::KeysExchanged { emojis: Some(emojis), .. } => {
                             let shown = emojis
                                 .emojis
@@ -90,7 +96,8 @@ async fn drive(request: VerificationRequest, confirm: Confirm, done: mpsc::Sende
                                 .map(|e| format!("{} {}", e.symbol, e.description))
                                 .collect::<Vec<_>>()
                                 .join("   ");
-                            if confirm(shown) {
+                            let confirm = confirm.clone();
+                            if tokio::task::spawn_blocking(move || confirm(shown)).await.unwrap_or(false) {
                                 let _ = sas.confirm().await;
                             } else {
                                 let _ = sas.mismatch().await;

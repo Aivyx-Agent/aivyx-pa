@@ -33,7 +33,7 @@ impl MatrixKeys {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub homeserver: String,
     pub user_id: String,
@@ -41,9 +41,29 @@ pub struct Session {
     pub access_token: String,
 }
 
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("homeserver", &self.homeserver)
+            .field("user_id", &self.user_id)
+            .field("device_id", &self.device_id)
+            .field("access_token", &"<redacted>")
+            .finish()
+    }
+}
+
 pub fn save(keys: &MatrixKeys, dir: &Path, session: &Session) -> Result<(), String> {
     use rand::RngCore;
-    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    }
     let mut nonce = [0u8; 12];
     rand::rngs::OsRng.fill_bytes(&mut nonce);
     let plain = serde_json::to_vec(session).map_err(|e| e.to_string())?;
@@ -138,5 +158,21 @@ mod tests {
         assert_eq!(keys().store_passphrase().len(), 64);
         let other = MatrixKeys::derive(&aivyx_crypto::MasterKey::from_raw([4u8; 32])).unwrap();
         assert_ne!(keys().store_passphrase(), other.store_passphrase());
+    }
+
+    #[test]
+    fn debug_output_redacts_the_access_token() {
+        let shown = format!("{:?}", sample());
+        assert!(!shown.contains("syt_secret"));
+        assert!(shown.contains("<redacted>"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_matrix_dir_is_created_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("dirmode");
+        save(&keys(), &dir, &sample()).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
     }
 }

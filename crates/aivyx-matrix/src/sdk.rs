@@ -4,6 +4,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use matrix_sdk::{
@@ -11,6 +12,7 @@ use matrix_sdk::{
     config::SyncSettings,
     deserialized_responses::{EncryptionInfo, VerificationState},
     ruma::{
+        api::error::ErrorKind,
         events::room::{
             encrypted::OriginalSyncRoomEncryptedEvent,
             member::StrippedRoomMemberEvent,
@@ -37,6 +39,12 @@ async fn client(homeserver: &str, store_dir: &Path, passphrase: &str) -> Result<
 
 /// Logs in once with a password and returns the session to seal. The
 /// password is not kept.
+///
+/// Always starts from a fresh crypto store: an existing `store_dir/store`
+/// (from an earlier, since logged-out device) would fail with a mismatched
+/// account, so it is renamed to `store.old-<unix timestamp>` first (never
+/// deleted). Call [`archived_store_path`] beforehand to tell the operator
+/// where it will go.
 pub async fn login(
     homeserver: &str,
     store_dir: &Path,
@@ -44,6 +52,10 @@ pub async fn login(
     user: &str,
     password: &str,
 ) -> Result<Session, String> {
+    if let Some(old) = archived_store_path(store_dir) {
+        std::fs::rename(store_dir.join("store"), &old)
+            .map_err(|e| format!("move old store aside to {}: {e}", old.display()))?;
+    }
     let client = client(homeserver, store_dir, passphrase).await?;
     let r = client
         .matrix_auth()
@@ -57,6 +69,27 @@ pub async fn login(
         device_id: r.device_id.to_string(),
         access_token: r.access_token,
     })
+}
+
+/// Where `login` will move an existing store to, or `None` if there is none.
+pub fn archived_store_path(store_dir: &Path) -> Option<std::path::PathBuf> {
+    if !store_dir.join("store").exists() {
+        return None;
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Some(store_dir.join(format!("store.old-{ts}")))
+}
+
+/// Backoff before the next sync attempt: 1 s doubling, capped at 60 s.
+pub(crate) fn backoff(failures: u32) -> Duration {
+    Duration::from_secs((1u64 << failures.min(6)).min(60))
+}
+
+fn is_unknown_token(e: &matrix_sdk::Error) -> bool {
+    matches!(e.client_api_error_kind(), Some(ErrorKind::UnknownToken { .. }))
 }
 
 pub(crate) async fn restore(session: &Session, store_dir: &Path, passphrase: &str) -> Result<Client, String> {
@@ -83,33 +116,43 @@ pub struct SdkTransport {
 }
 
 impl SdkTransport {
+    /// Restores the session, does one initial sync (so rooms and their
+    /// encryption state are known), then keeps syncing in the background
+    /// from that sync's token. A transient sync failure is reported on the
+    /// channel and retried with backoff; an unknown token ends the loop.
     pub async fn connect(session: &Session, store_dir: &Path, passphrase: &str) -> Result<Arc<Self>, String> {
         let client = restore(session, store_dir, passphrase).await?;
         let (tx, rx) = mpsc::channel(64);
         install_handlers(&client, tx.clone());
+        let first = client
+            .sync_once(SyncSettings::default())
+            .await
+            .map_err(|e| format!("matrix sync: {e}"))?;
+        let mut token = first.next_batch;
         let sync_client = client.clone();
         tokio::spawn(async move {
-            if let Err(e) = sync_client.sync(SyncSettings::default()).await {
-                let text = e.to_string();
-                let err = if text.contains("M_UNKNOWN_TOKEN") {
-                    TransportError::Unauthorized(text)
-                } else {
-                    TransportError::Platform(format!("sync stopped: {text}"))
-                };
-                let _ = tx.send(Err(err)).await;
+            let mut failures: u32 = 0;
+            loop {
+                match sync_client.sync_once(SyncSettings::default().token(token.clone())).await {
+                    Ok(resp) => {
+                        token = resp.next_batch;
+                        failures = 0;
+                    }
+                    Err(e) if is_unknown_token(&e) => {
+                        let _ = tx.send(Err(TransportError::Unauthorized(e.to_string()))).await;
+                        return;
+                    }
+                    Err(e) => {
+                        if tx.send(Err(TransportError::Platform(format!("sync: {e}")))).await.is_err() {
+                            return;
+                        }
+                        tokio::time::sleep(backoff(failures)).await;
+                        failures = failures.saturating_add(1);
+                    }
+                }
             }
         });
         Ok(Arc::new(SdkTransport { client, inbound: Mutex::new(rx) }))
-    }
-
-    /// One sync round so room state (membership, encryption) is known
-    /// before the first `room_is_encrypted` call.
-    pub async fn sync_once(&self) -> Result<(), String> {
-        self.client
-            .sync_once(SyncSettings::default())
-            .await
-            .map(|_| ())
-            .map_err(|e| format!("matrix sync: {e}"))
     }
 
     fn room(&self, room_id: &str) -> Result<Room, TransportError> {
@@ -195,5 +238,29 @@ impl MatrixTransport for SdkTransport {
             .await
             .map_err(|e| TransportError::Platform(format!("encryption state: {e}")))?
             .is_encrypted())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_doubles_from_one_second_and_caps_at_sixty() {
+        let secs: Vec<u64> = (0..8).map(|n| backoff(n).as_secs()).collect();
+        assert_eq!(secs, [1, 2, 4, 8, 16, 32, 60, 60]);
+        assert_eq!(backoff(u32::MAX).as_secs(), 60);
+    }
+
+    #[test]
+    fn archived_store_path_is_none_without_a_store_and_stamped_with_one() {
+        let d = std::env::temp_dir().join(format!("aivyx-matrix-sdk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(archived_store_path(&d).is_none());
+        std::fs::create_dir_all(d.join("store")).unwrap();
+        let p = archived_store_path(&d).unwrap();
+        assert!(p.file_name().unwrap().to_string_lossy().starts_with("store.old-"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
