@@ -128,8 +128,11 @@ Two more ways to trigger a prompt, configured in the file (the assistant
 can also create them, with its `webhook.*` and `file_watch.*` tools):
 
 - **`[[webhook]]`** — runs when something posts to
-  `http://127.0.0.1:<port>/trigger/<id>` on your machine; handy for linking
-  other tools to your assistant.
+  `http://127.0.0.1:<port>/trigger/<id>` on your machine with the
+  webhook's secret (`Authorization: Bearer <secret>`); handy for linking
+  other tools to your assistant. A wrong secret and an unknown id get the
+  same `401`; a post while that webhook's last run is still going gets
+  `429` instead of starting another.
 - **`[[file_watch]]`** — runs when a file or folder changes.
 
 ## Notifications

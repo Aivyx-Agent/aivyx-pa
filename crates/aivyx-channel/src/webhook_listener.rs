@@ -45,6 +45,7 @@ pub async fn run_webhook_listener(
     eprintln!("aivyx-pa webhook: listening on http://{addr}");
 
     let store = Arc::new(store);
+    let in_flight = InFlight::default();
 
     loop {
         let (stream, _remote) = tokio::select! {
@@ -62,13 +63,15 @@ pub async fn run_webhook_listener(
 
         let dispatch = dispatch.clone();
         let store = Arc::clone(&store);
+        let in_flight = in_flight.clone();
         let conn_shutdown = shutdown.clone();
 
         tokio::spawn(async move {
             let svc = service_fn(move |req| {
                 let dispatch = dispatch.clone();
                 let store = Arc::clone(&store);
-                async move { handle_request(req, &dispatch, &store).await }
+                let in_flight = in_flight.clone();
+                async move { handle_request(req, &dispatch, &store, &in_flight).await }
             });
 
             let io = TokioIo::new(stream);
@@ -92,10 +95,39 @@ pub async fn run_webhook_listener(
 /// — the body is never read on any code path here, so no `Body` trait bound
 /// is needed. Production always instantiates `B = Incoming` via the
 /// `service_fn` closure in `run_webhook_listener`.
+/// The webhooks whose fired turn is still running. A webhook isn't started
+/// again until its last run ends — the same no-overlap rule as a routine —
+/// so a caller with the secret can't pile up turns.
+#[derive(Clone, Default)]
+pub(crate) struct InFlight(Arc<std::sync::Mutex<std::collections::HashSet<String>>>);
+
+impl InFlight {
+    /// Marks `id` running; `false` if it already is.
+    fn start(&self, id: &str) -> bool {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id.to_string())
+    }
+
+    fn finish(&self, id: &str) {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(id);
+    }
+
+    #[cfg(test)]
+    fn is_running(&self, id: &str) -> bool {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(id)
+    }
+}
+
+/// The one answer for an unknown id and a wrong or missing secret, so a
+/// caller can't tell which webhook ids exist.
+fn unauthorized() -> Response<Full<Bytes>> {
+    json_response(StatusCode::UNAUTHORIZED, r#"{"error":"unauthorized"}"#)
+}
+
 async fn handle_request<B>(
     req: Request<B>,
     dispatch: &TriggerDispatch,
     store: &DomainHandle,
+    in_flight: &InFlight,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     let path = req.uri().path().to_owned();
     let method = req.method().clone();
@@ -122,12 +154,7 @@ async fn handle_request<B>(
         // request must never reach the agent turn loop.
         let record = match webhook::get_webhook(store, webhook_id).await {
             Ok(Some(r)) => r,
-            Ok(None) => {
-                return Ok(json_response(
-                    StatusCode::NOT_FOUND,
-                    r#"{"error":"webhook not found"}"#,
-                ));
-            }
+            Ok(None) => return Ok(unauthorized()),
             Err(e) => {
                 eprintln!("aivyx-pa webhook: storage error looking up {webhook_id:?}: {e}");
                 return Ok(json_response(
@@ -138,13 +165,10 @@ async fn handle_request<B>(
         };
 
         if !authorized(&req, &record.secret) {
-            return Ok(json_response(
-                StatusCode::UNAUTHORIZED,
-                r#"{"error":"unauthorized"}"#,
-            ));
+            return Ok(unauthorized());
         }
 
-        return Ok(fire_webhook_record(dispatch, store, record).await);
+        return Ok(fire_webhook_record(dispatch, store, record, in_flight).await);
     }
 
     // Health check endpoint
@@ -187,6 +211,7 @@ async fn fire_webhook_record(
     dispatch: &TriggerDispatch,
     store: &DomainHandle,
     record: webhook::WebhookRecord,
+    in_flight: &InFlight,
 ) -> Response<Full<Bytes>> {
     if !record.enabled {
         return json_response(
@@ -194,6 +219,20 @@ async fn fire_webhook_record(
             r#"{"error":"webhook is disabled"}"#,
         );
     }
+    if !in_flight.start(&record.webhook_id) {
+        return json_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":"this webhook's last run hasn't finished"}"#,
+        );
+    }
+    // Released when the spawned run ends, however it ends.
+    struct Running(InFlight, String);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.finish(&self.1);
+        }
+    }
+    let running = Running(in_flight.clone(), record.webhook_id.clone());
 
     // Fire asynchronously — the HTTP response returns immediately
     // with "accepted", and the turn runs in the background.
@@ -204,6 +243,7 @@ async fn fire_webhook_record(
     let notify_when = record.notify_when;
     let store_clone = store.clone();
     tokio::spawn(async move {
+        let _running = running;
         dispatch
             .fire(
                 TriggerSource::Webhook,
@@ -461,7 +501,7 @@ mod tests {
             .body(())
             .unwrap();
 
-        let resp = handle_request(req, &dispatch, &store).await.unwrap();
+        let resp = handle_request(req, &dispatch, &store, &InFlight::default()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -479,7 +519,7 @@ mod tests {
             .body(())
             .unwrap();
 
-        let resp = handle_request(req, &dispatch, &store).await.unwrap();
+        let resp = handle_request(req, &dispatch, &store, &InFlight::default()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -497,16 +537,14 @@ mod tests {
             .body(())
             .unwrap();
 
-        let resp = handle_request(req, &dispatch, &store).await.unwrap();
+        let resp = handle_request(req, &dispatch, &store, &InFlight::default()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
-    async fn fire_webhook_unknown_id_returns_not_found_not_unauthorized() {
-        // Pre-existing 404-for-unknown-id behavior must survive the Task 1
-        // refactor unchanged: the lookup now happens before the auth check
-        // (needed to find the record's secret at all), so a request against
-        // an ID that was never created still 404s rather than 401ing.
+    async fn fire_webhook_unknown_id_looks_like_a_wrong_secret() {
+        // A 404 for an unknown id (and 401 for a known one) told any local
+        // caller which webhook ids exist; both are now the same 401.
         let (_dir, store) = test_store().await;
         let dispatch = test_dispatch();
 
@@ -516,7 +554,83 @@ mod tests {
             .body(())
             .unwrap();
 
-        let resp = handle_request(req, &dispatch, &store).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let resp = handle_request(req, &dispatch, &store, &InFlight::default()).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
+        assert_eq!(&body[..], br#"{"error":"unauthorized"}"#);
+    }
+
+    /// A turn that runs until the test releases it.
+    struct HeldAgent {
+        id: AgentId,
+        caps: CapabilitySet,
+        release: std::sync::Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl aivyx_core::Agent for HeldAgent {
+        fn id(&self) -> AgentId {
+            self.id
+        }
+
+        fn capabilities(&self) -> &CapabilitySet {
+            &self.caps
+        }
+
+        async fn turn(&self, _message: Message, _channel: &dyn ChannelContext) -> TurnOutcome {
+            self.release.notified().await;
+            TurnOutcome::Completed {
+                final_message: "held turn".to_string(),
+                tool_calls_made: 0,
+                duration: std::time::Duration::from_millis(0),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_webhook_still_running_isnt_started_again() {
+        // Each accepted POST used to spawn a turn, however many were
+        // already running for that webhook.
+        let (_dir, store) = test_store().await;
+        let secret = "test-secret-abc123".to_string();
+        webhook::create_webhook_for_test(&store, "wh1", "do the thing", secret.clone()).await;
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let channel_factory: ChannelFactory = std::sync::Arc::new(|_ft: FrontendType| {
+            std::sync::Arc::new(StubChannel) as std::sync::Arc<dyn ChannelContext + Send + Sync>
+        });
+        let dispatch = TriggerDispatch::new(
+            std::sync::Arc::new(HeldAgent {
+                id: AgentId::new(),
+                caps: CapabilitySet::empty(),
+                release: std::sync::Arc::clone(&release),
+            }),
+            channel_factory,
+        );
+        let in_flight = InFlight::default();
+        let post = || {
+            Request::builder()
+                .method("POST")
+                .uri("/trigger/wh1")
+                .header(hyper::header::AUTHORIZATION, format!("Bearer {secret}"))
+                .body(())
+                .unwrap()
+        };
+
+        let first = handle_request(post(), &dispatch, &store, &in_flight).await.unwrap();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        let second = handle_request(post(), &dispatch, &store, &in_flight).await.unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // Once the running turn ends, the webhook can fire again.
+        release.notify_one();
+        for _ in 0..200 {
+            if !in_flight.is_running("wh1") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let third = handle_request(post(), &dispatch, &store, &in_flight).await.unwrap();
+        assert_eq!(third.status(), StatusCode::ACCEPTED);
+        release.notify_one();
     }
 }
