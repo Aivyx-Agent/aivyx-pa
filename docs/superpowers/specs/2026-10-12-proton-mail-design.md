@@ -22,8 +22,12 @@ so mail is decrypted only on the operator's machine.
 - **Architecture:** a new crate `crates/aivyx-proton` holding both the
   channel and the tools (approach A). Proton-specific header logic is
   confined to the policy module so the IMAP/SMTP code stays reusable.
-- **Bridge credential:** the OS keyring, with a `0600` file fallback on a
-  headless machine — the same posture as pa's master passphrase.
+- **Bridge credential:** a `0600` file in the instance's Proton tool folder
+  (`tool-processes/proton/credentials.toml`), the same posture as Gmail's
+  OAuth tokens. Not the OS keyring: the `proton.*` tools run under the
+  bundled bubblewrap sandbox, which hides `$HOME` except that folder and has
+  no session bus, so a keyring would be unreachable from them (decided
+  2026-10-12). The Bridge password only works against the local Bridge.
 
 ## Architecture
 
@@ -49,10 +53,11 @@ so mail is decrypted only on the operator's machine.
 - `tools/` + a tool-process binary — `proton.search`, `proton.read`,
   `proton.draft`, `proton.send`, wired via `[[tool_process]]` and sandboxed
   like Gmail.
-- `credentials.rs` — the keyring/`0600` storage of the Bridge username,
-  bridge password and certificate pin; keyring account names and file
-  paths built only through `aivyx-instance` (`InstancePaths`), so each
-  named instance has its own.
+- `credentials.rs` — the `0600` `credentials.toml` holding the Bridge
+  username, bridge password and certificate pin, read by both the channel
+  and the tool process; its path built only through `aivyx-instance`
+  (`InstancePaths::tool_process_dir("proton")`), so each named instance has
+  its own.
 
 ## Trust
 
@@ -115,7 +120,9 @@ as ordinary email. THREAT_MODEL.md says so.
 
 - **Start:** the first run begins at "now" (the inbox's next UID), so
   existing mail is never processed. The last handled UID is remembered
-  (instance data dir), so a restart neither repeats nor misses mail.
+  (`<instance data dir>/proton/state.json`, next to a per-process lock so
+  two `--channel proton` runs can't both answer), so a restart neither
+  repeats nor misses mail.
 - **Input:** the `text/plain` part, else HTML converted to text; quoted
   history stripped; subject included; capped at 32 KiB (the reply says if
   it was cut). Attachments are not read; the reply says they were ignored.
@@ -163,7 +170,7 @@ credential and certificate pin are never config.
 2. Add `[proton]` (and the `[[tool_process]]` entry for the tools).
 3. `aivyx-pa connect proton` — asks for the Bridge username and password,
    captures and pins Bridge's certificate, tests IMAP and SMTP, and stores
-   the credential in the keyring (or the `0600` fallback).
+   the credential in `credentials.toml` (`0600`).
 4. `aivyx-pa --channel proton`.
 
 ## Errors
