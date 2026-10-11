@@ -56,6 +56,11 @@ pub enum NextStep {
     /// empty final message. Used by planners that finish without a
     /// natural "final message" signal.
     Stop,
+
+    /// The planner can't go on — its model call failed (server down, bad
+    /// key, …). Terminates with `TurnOutcome::Failed`, so every frontend
+    /// shows the error and the audit chain records a failed turn.
+    Failed(crate::AivyxError),
 }
 
 /// A single tool call within a [`NextStep::ToolCalls`] batch. Carries the

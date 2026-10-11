@@ -140,7 +140,12 @@ fn render_finalize_human(w: &mut dyn Write, outcome: &TurnOutcome) -> io::Result
         TurnOutcomeSummary::Looping => "stopped: repeated tool call",
         TurnOutcomeSummary::Failed => "failed",
     };
-    writeln!(w, "\n[turn {marker}]")
+    // Why it escalated or failed: nothing else in the terminal says so.
+    match outcome {
+        TurnOutcome::Escalated { reason, .. } => writeln!(w, "\n[turn {marker}: {reason}]"),
+        TurnOutcome::Failed(error) => writeln!(w, "\n[turn {marker}: {error}]"),
+        _ => writeln!(w, "\n[turn {marker}]"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -372,10 +377,13 @@ mod tests {
         });
 
         assert!(completed.contains("[turn completed]"));
-        assert!(escalated.contains("[turn escalated]"));
+        // Escalations and failures say why — the terminal shows nothing
+        // else about them.
+        assert!(escalated.contains("[turn escalated: needs kernel]"), "{escalated}");
+        assert!(failed.contains("[turn failed: "), "{failed}");
+        assert!(failed.contains("boom"), "{failed}");
         assert!(timed_out.contains("[turn timed out]"));
         assert!(cancelled.contains("[turn cancelled]"));
-        assert!(failed.contains("[turn failed]"));
         assert!(looping.contains("[turn stopped: repeated tool call]"));
         assert!(max_steps.contains("[turn max steps exceeded]"));
         // Bridle's loop marker must read differently from max-steps.

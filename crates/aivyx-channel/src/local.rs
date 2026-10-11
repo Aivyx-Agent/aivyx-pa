@@ -68,6 +68,10 @@ pub struct LocalChannel<W: Write + Send + 'static> {
     /// Chat approvals in-process: answers a paused tool call (the binary
     /// installs a terminal prompt). `None` → the channel can't ask.
     approver: Option<Approver>,
+    /// The reply text streamed this turn, so `finalize` can show what the
+    /// final message adds (notes the agent appends after the model's
+    /// reply, a message no stream carried) without repeating the rest.
+    streamed: Arc<Mutex<String>>,
 }
 
 /// Answers an approval prompt for [`LocalChannel`].
@@ -86,6 +90,7 @@ impl<W: Write + Send + 'static> LocalChannel<W> {
             token: Arc::new(Mutex::new(CancellationToken::new())),
             writer: Arc::new(Mutex::new(writer)),
             approver: None,
+            streamed: Arc::default(),
         }
     }
 
@@ -156,6 +161,9 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
 
         render_stream_event(RenderMode::Human, &mut *writer, &event)
             .map_err(|e| ChannelError::Send(format!("LocalChannel write failed: {e}")))?;
+        if let StreamEvent::Text(text) = &event {
+            self.streamed.lock().expect("streamed mutex poisoned").push_str(text);
+        }
         writer
             .flush()
             .map_err(|e| ChannelError::Send(format!("LocalChannel flush failed: {e}")))?;
@@ -169,6 +177,13 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
             .lock()
             .map_err(|e| ChannelError::Send(format!("LocalChannel writer poisoned: {e}")))?;
 
+        let streamed = std::mem::take(&mut *self.streamed.lock().expect("streamed mutex poisoned"));
+        if let TurnOutcome::Completed { final_message, .. } = outcome
+            && let Some(rest) = unshown_part(&streamed, final_message)
+        {
+            writeln!(writer, "\n{rest}")
+                .map_err(|e| ChannelError::Send(format!("LocalChannel finalize failed: {e}")))?;
+        }
         render_finalize(RenderMode::Human, &mut *writer, outcome)
             .map_err(|e| ChannelError::Send(format!("LocalChannel finalize failed: {e}")))?;
         writer
@@ -296,6 +311,17 @@ impl ChannelContext for TierOverride {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// What of `final_message` the stream didn't already show: all of it when
+/// nothing was streamed, what follows the streamed reply when it extends
+/// it, and nothing when they differ some other way (better to show the
+/// streamed reply alone than to print it twice).
+fn unshown_part<'a>(streamed: &str, final_message: &'a str) -> Option<&'a str> {
+    let shown = streamed.trim();
+    let message = final_message.trim();
+    let rest = if shown.is_empty() { message } else { message.strip_prefix(shown)?.trim() };
+    (!rest.is_empty()).then_some(rest)
+}
+
 #[cfg(test)]
 mod tests {
     //! Tests here focus on what `LocalChannel` *specifically owns* —
@@ -334,6 +360,40 @@ mod tests {
         let s1 = channel.session_id();
         let s2 = channel.session_id();
         assert_eq!(s1, s2, "session_id must be stable across calls");
+    }
+
+    fn completed(final_message: &str) -> TurnOutcome {
+        TurnOutcome::Completed {
+            final_message: final_message.to_string(),
+            tool_calls_made: 0,
+            duration: std::time::Duration::ZERO,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_final_message_that_was_never_streamed_is_shown() {
+        // Notes the agent adds after the model's reply (an unfulfilled
+        // claim, a recovery hint) reach the final message but not the
+        // stream — the terminal must still show them, once.
+        let (channel, handle) = mem_channel();
+        channel.stream_event(StreamEvent::Text("Saved the file.")).await.unwrap();
+        channel
+            .finalize(&completed("Saved the file.\n\nNote: no tool wrote a file this turn."))
+            .await
+            .unwrap();
+        let out = read_output(&handle);
+        assert_eq!(out.matches("Saved the file.").count(), 1, "{out}");
+        assert!(out.contains("Note: no tool wrote a file this turn."), "{out}");
+
+        // Nothing streamed at all: the whole message is shown — and a
+        // fully streamed one isn't repeated.
+        let (channel, handle) = mem_channel();
+        channel.finalize(&completed("Only in the outcome.")).await.unwrap();
+        assert!(read_output(&handle).contains("Only in the outcome."));
+        let (channel, handle) = mem_channel();
+        channel.stream_event(StreamEvent::Text("All streamed.")).await.unwrap();
+        channel.finalize(&completed("All streamed.")).await.unwrap();
+        assert_eq!(read_output(&handle).matches("All streamed.").count(), 1);
     }
 
     #[tokio::test]

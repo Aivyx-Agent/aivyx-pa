@@ -779,6 +779,10 @@ impl ConcreteAgent {
                     loop_outcome = LoopOutcome::Completed;
                     break;
                 }
+                NextStep::Failed(error) => {
+                    loop_outcome = LoopOutcome::Failed(error);
+                    break;
+                }
                 NextStep::ToolCall {
                     tool_id,
                     input,
@@ -1094,6 +1098,7 @@ impl ConcreteAgent {
                 scope,
                 tool_calls_made,
             },
+            LoopOutcome::Failed(error) => TurnOutcome::Failed(error),
         };
 
         // Audit M1 fix — finalize first, then emit TurnEnded
@@ -1236,6 +1241,8 @@ enum LoopOutcome {
         /// stamped `ToolOutcome::RequiresEscalation` onto `TurnOutcome::Escalated`.
         scope: Option<Scope>,
     },
+    /// The planner couldn't continue (`NextStep::Failed`).
+    Failed(AivyxError),
 }
 
 // ---------------------------------------------------------------------------
@@ -8209,6 +8216,23 @@ mod tests {
         assert!(arm_entries(&log).is_empty());
         assert_eq!(channel.seen(), Some("done".to_string()), "no hint appended");
         assert_eq!((count(&log, "begin:"), count(&log, "end:")), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn a_planner_failure_fails_the_turn() {
+        // The LLM planner reports a provider error as `NextStep::Failed`;
+        // the turn must say it failed, not complete with nothing to show.
+        let audit = RecordingAudit::new();
+        let err = AivyxError::Llm(aivyx_llm::LlmError::Transport("connection refused".into()));
+        let agent = make_agent(CapabilitySet::empty(), vec![], audit, vec![NextStep::Failed(err)]);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let outcome = agent.turn(Message::text(channel.session, "hi"), &channel).await;
+        match outcome {
+            TurnOutcome::Failed(AivyxError::Llm(e)) => {
+                assert!(e.to_string().contains("connection refused"), "{e}")
+            }
+            other => panic!("expected Failed(Llm), got {other:?}"),
+        }
     }
 
     #[tokio::test]

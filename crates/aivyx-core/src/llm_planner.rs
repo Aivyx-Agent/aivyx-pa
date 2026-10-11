@@ -1533,15 +1533,18 @@ impl TurnPlanner for LlmPlanner {
                     // as a completed turn.
                     return NextStep::Stop;
                 }
-                Err(e) => {
-                    // Any other provider error terminates the turn
-                    // cleanly from the loop's perspective. We surface
-                    // it as a FinalMessage carrying the error text so
-                    // audit still sees a Completed turn. A future
-                    // enhancement could plumb `AivyxError::Llm`
-                    // through a new NextStep variant, but that's a
-                    // bigger change.
+                Err(e @ LlmError::NeedsCloudConsent(_)) => {
+                    // Not a failure: the turn stops to ask the operator.
+                    // The daemon finds the consent request's lead in this
+                    // message and rewords it for the channel.
                     return NextStep::FinalMessage(format!("LLM error: {e}"));
+                }
+                Err(e) => {
+                    // Any other provider error fails the turn. (It used
+                    // to be a FinalMessage — a "completed" turn the
+                    // terminal showed as `[turn completed]` and nothing
+                    // else, since the message was never streamed.)
+                    return NextStep::Failed(crate::AivyxError::Llm(e));
                 }
             };
 
@@ -3790,7 +3793,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_error_surfaces_as_final_message() {
+    async fn provider_error_fails_the_turn() {
+        // An unreachable model server used to come back as a "completed"
+        // turn whose only text ("LLM error: …") the terminal never showed.
         let script: Vec<FakeStep> = vec![]; // immediately exhausted
         let provider = FakeLlmProvider::new(script);
         let registry = Arc::new(ToolRegistry::new(vec![]));
@@ -3806,7 +3811,41 @@ mod tests {
             .await;
         let step = planner.next_step(&[], &channel).await;
         match step {
-            NextStep::FinalMessage(m) => assert!(m.starts_with("LLM error:")),
+            NextStep::Failed(crate::AivyxError::Llm(_)) => {}
+            other => panic!("expected Failed(Llm), got {other:?}"),
+        }
+    }
+
+    /// Stops every call to ask for cloud consent.
+    struct ConsentProvider;
+
+    #[async_trait]
+    impl LlmProvider for ConsentProvider {
+        async fn chat_stream(
+            &self,
+            _request: LlmRequest<'_>,
+            _cancellation: &crate::CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            Err(LlmError::NeedsCloudConsent("may I use the cloud model?".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cloud_consent_stop_is_a_message_not_a_failure() {
+        // The turn stops to ask the operator; the daemon finds the consent
+        // request's lead in this message and rewords it for the channel.
+        let registry = Arc::new(ToolRegistry::new(vec![]));
+        let mut planner = LlmPlanner::new(
+            Arc::new(ConsentProvider),
+            registry,
+            LlmPlannerConfig::new("claude-haiku-4-5-20251001"),
+        );
+        let channel = RecChannel::new();
+        planner
+            .begin_turn(&Message::text(channel.session, "hi"), TurnId::new())
+            .await;
+        match planner.next_step(&[], &channel).await {
+            NextStep::FinalMessage(m) => assert!(m.contains("may I use the cloud model?"), "{m}"),
             other => panic!("expected FinalMessage, got {other:?}"),
         }
     }
