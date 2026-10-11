@@ -157,7 +157,7 @@ async fn settle(
 ) -> Result<DaemonSession, DaemonError> {
     match result {
         Ok(()) => Ok(session),
-        Err(e @ TransportError::Unauthorized(_)) => {
+        Err(e) if e.is_fatal() => {
             let _ = session.disconnect().await;
             Err(DaemonError::ChannelFatal(e.to_string()))
         }
@@ -209,9 +209,10 @@ pub async fn run_matrix_daemon_session<T: MatrixTransport + 'static>(
                     backoff = std::time::Duration::from_secs(1);
                     i
                 }
-                Err(TransportError::Unauthorized(e)) => {
+                // Logged out, or the sync died: no retry can help.
+                Err(e) if e.is_fatal() => {
                     let _ = session.disconnect().await;
-                    return Err(DaemonError::ChannelFatal(TransportError::Unauthorized(e).to_string()));
+                    return Err(DaemonError::ChannelFatal(e.to_string()));
                 }
                 Err(e) => {
                     eprintln!("aivyx-matrix(daemon): {e}; retrying in {}s", backoff.as_secs());
@@ -441,6 +442,34 @@ mod tests {
         let e = r.expect_err("must be Err");
         assert!(matches!(e, DaemonError::ChannelFatal(_)), "{e:?}");
         assert!(e.to_string().contains("connect matrix"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn a_closed_inbound_stream_ends_the_session() {
+        let (sock, _srv) = fake_daemon().await;
+        let t = Arc::new(
+            ScriptedTransport::with_queue(vec![])
+                .encrypted_rooms(vec!["!home:x"])
+                .then_fail(|| TransportError::Closed),
+        );
+        let r = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_matrix_daemon_session(
+                t,
+                policy(),
+                sock,
+                None,
+                CancellationToken::new(),
+                false,
+                None,
+                vec![],
+            ),
+        )
+        .await
+        .expect("must end, not back off forever");
+        let e = r.expect_err("must be Err");
+        assert!(matches!(e, DaemonError::ChannelFatal(_)), "{e:?}");
+        assert!(e.to_string().contains("sync stopped"), "{e}");
     }
 
     #[tokio::test]

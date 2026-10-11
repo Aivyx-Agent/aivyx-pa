@@ -43,6 +43,17 @@ pub enum TransportError {
     /// out. The channel stops; the operator runs `connect matrix` again.
     #[error("matrix rejected the assistant's login ({0}) — run `aivyx-pa connect matrix` again")]
     Unauthorized(String),
+    /// The inbound stream is closed for good (the background sync task
+    /// ended without a logout, e.g. it panicked). Retrying can't help.
+    #[error("the Matrix sync stopped unexpectedly — restart `aivyx-pa --channel matrix`")]
+    Closed,
+}
+
+impl TransportError {
+    /// Ends the session: no retry or backoff can recover from it.
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, TransportError::Unauthorized(_) | TransportError::Closed)
+    }
 }
 
 #[async_trait]
@@ -173,6 +184,14 @@ mod transport_tests {
         let t = ScriptedTransport::with_queue(vec![]).encrypted_rooms(vec!["!e:x"]);
         assert!(t.room_is_encrypted("!e:x").await.unwrap());
         assert!(!t.room_is_encrypted("!plain:x").await.unwrap());
+    }
+
+    #[test]
+    fn only_logout_and_a_closed_stream_are_fatal() {
+        assert!(TransportError::Unauthorized("x".into()).is_fatal());
+        assert!(TransportError::Closed.is_fatal());
+        assert!(!TransportError::Platform("x".into()).is_fatal());
+        assert!(TransportError::Closed.to_string().contains("--channel matrix"));
     }
 
     #[test]

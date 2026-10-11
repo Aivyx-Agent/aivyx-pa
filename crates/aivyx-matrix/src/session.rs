@@ -169,9 +169,7 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
                     backoff = std::time::Duration::from_secs(1);
                     i
                 }
-                Err(TransportError::Unauthorized(e)) => {
-                    return Err(TransportError::Unauthorized(e).to_string());
-                }
+                Err(e) if e.is_fatal() => return Err(e.to_string()),
                 Err(e) => {
                     eprintln!("aivyx-matrix: {e}; retrying in {}s", backoff.as_secs());
                     tokio::select! {
@@ -189,7 +187,7 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
                 Ok(Routed::Turn(m)) if m.text.trim() == "/cancel" => continue,
                 Ok(Routed::Turn(m)) => pending.push_back(m),
                 Ok(Routed::Handled) => continue,
-                Err(e @ TransportError::Unauthorized(_)) => return Err(e.to_string()),
+                Err(e) if e.is_fatal() => return Err(e.to_string()),
                 Err(e) => {
                     eprintln!("aivyx-matrix: {e}");
                     continue;
@@ -219,15 +217,16 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
                 res = transport.next_inbound() => {
                     let inbound = match res {
                         Ok(i) => i,
-                        Err(e @ TransportError::Unauthorized(_)) => {
-                            // Logged out mid-turn: finish this turn, then fail.
+                        Err(e) if e.is_fatal() => {
+                            // Logged out (or the sync died) mid-turn: finish
+                            // this turn, then fail.
                             fatal = Some(e.to_string());
                             let _ = (&mut turn).await;
                             break;
                         }
-                        // Any other error (e.g. a dead sync task) would
-                        // return instantly on every poll: stop polling for
-                        // this turn; the outer loop applies its backoff.
+                        // A transient error could return instantly on every
+                        // poll: stop polling for this turn; the outer loop
+                        // applies its backoff.
                         Err(_) => {
                             let _ = (&mut turn).await;
                             break;
@@ -239,7 +238,7 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
                         }
                         Ok(Routed::Turn(next)) => pending.push_back(next),
                         Ok(Routed::Handled) => {}
-                        Err(e @ TransportError::Unauthorized(_)) => {
+                        Err(e) if e.is_fatal() => {
                             fatal = Some(e.to_string());
                             let _ = (&mut turn).await;
                             break;

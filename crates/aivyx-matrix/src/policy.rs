@@ -57,8 +57,10 @@ pub fn decide(policy: &MatrixPolicy, inbound: Inbound) -> Action {
                 Action::Ignore
             }
         }
+        // Joined only when it is the operator inviting the assistant to the
+        // home room; the assistant has no use for any other room.
         Inbound::Invite { room_id, inviter } => {
-            if policy.is_operator(&inviter) {
+            if policy.is_operator(&inviter) && room_id == policy.room_filter {
                 Action::Join { room_id }
             } else {
                 Action::Decline { room_id }
@@ -149,21 +151,27 @@ mod tests {
     }
 
     #[test]
-    fn invites_are_accepted_only_from_allowed_senders() {
-        let inv = |inviter: &str| Inbound::Invite {
-            room_id: "!r:x".into(),
+    fn invites_are_accepted_only_from_allowed_senders_to_the_home_room() {
+        let inv = |room: &str, inviter: &str| Inbound::Invite {
+            room_id: room.into(),
             inviter: inviter.into(),
         };
         assert_eq!(
-            decide(&policy(), inv("@me:x")),
+            decide(&policy(), inv("!home:x", "@me:x")),
             Action::Join {
-                room_id: "!r:x".into()
+                room_id: "!home:x".into()
             }
         );
         assert_eq!(
-            decide(&policy(), inv("@stranger:x")),
+            decide(&policy(), inv("!home:x", "@stranger:x")),
             Action::Decline {
-                room_id: "!r:x".into()
+                room_id: "!home:x".into()
+            }
+        );
+        assert_eq!(
+            decide(&policy(), inv("!other:x", "@me:x")),
+            Action::Decline {
+                room_id: "!other:x".into()
             }
         );
     }

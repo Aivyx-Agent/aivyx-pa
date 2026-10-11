@@ -271,9 +271,13 @@ async fn an_unverified_device_is_asked_to_verify_once() {
 }
 
 #[tokio::test]
-async fn invites_are_joined_or_declined_by_inviter() {
+async fn only_the_operators_invite_to_the_home_room_is_joined() {
     let transport = Arc::new(
         ScriptedTransport::with_queue(vec![
+            Inbound::Invite {
+                room_id: "!home:x".into(),
+                inviter: "@me:x".into(),
+            },
             Inbound::Invite {
                 room_id: "!a:x".into(),
                 inviter: "@me:x".into(),
@@ -289,8 +293,8 @@ async fn invites_are_joined_or_declined_by_inviter() {
     run_until_sent(Arc::clone(&transport), vec![final_step(&["hi"], "hi")], 1)
         .await
         .unwrap();
-    assert_eq!(transport.joined().await, vec!["!a:x".to_string()]);
-    assert_eq!(transport.declined().await, vec!["!b:x".to_string()]);
+    assert_eq!(transport.joined().await, vec!["!home:x".to_string()]);
+    assert_eq!(transport.declined().await, vec!["!a:x".to_string(), "!b:x".to_string()]);
 }
 
 #[tokio::test]
@@ -309,6 +313,20 @@ async fn a_logout_between_turns_ends_the_session_with_an_error() {
     );
     let err = run_until_sent(transport, vec![], 1).await.unwrap_err();
     assert!(err.contains("connect matrix"), "{err}");
+}
+
+#[tokio::test]
+async fn a_closed_inbound_stream_ends_the_session_instead_of_backing_off_forever() {
+    let transport = Arc::new(
+        ScriptedTransport::with_queue(vec![])
+            .encrypted_rooms(vec!["!home:x"])
+            .then_fail(|| TransportError::Closed),
+    );
+    let err = tokio::time::timeout(Duration::from_secs(5), run_until_sent(transport, vec![], 1))
+        .await
+        .expect("must end, not back off")
+        .unwrap_err();
+    assert!(err.contains("sync stopped"), "{err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +501,21 @@ async fn a_transport_error_mid_turn_still_completes_the_turn() {
     run.shutdown.cancel(); // also interrupts the reconnect backoff
     let report = run.finish().await.unwrap();
     assert_eq!(report.turns_run, 1);
+    assert_eq!(transport.sent().await[0].text, "done");
+}
+
+#[tokio::test]
+async fn a_closed_stream_mid_turn_finishes_the_turn_then_ends_with_an_error() {
+    let transport = Arc::new(
+        ScriptedTransport::with_queue(vec![msg("!home:x", "@me:x", "hi", true)])
+            .encrypted_rooms(vec!["!home:x"])
+            .then_fail(|| TransportError::Closed),
+    );
+    let run = start_gated(Arc::clone(&transport), vec![final_step(&["done"], "done")]).await;
+    run.turn_started().await;
+    run.gate.release.notify_one();
+    let err = run.finish().await.unwrap_err();
+    assert!(err.contains("sync stopped"), "{err}");
     assert_eq!(transport.sent().await[0].text, "done");
 }
 

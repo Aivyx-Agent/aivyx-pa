@@ -17,7 +17,7 @@ use matrix_sdk::{
         events::room::{
             encrypted::OriginalSyncRoomEncryptedEvent,
             member::StrippedRoomMemberEvent,
-            message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+            message::{MessageType, OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent},
         },
         OwnedDeviceId, OwnedUserId, RoomId,
     },
@@ -198,7 +198,7 @@ pub(crate) async fn restore(session: &Session, store_dir: &Path, passphrase: &st
         .await
         .map_err(|e| match classify_sdk(&e) {
             err @ TransportError::Unauthorized(_) => err.to_string(),
-            TransportError::Platform(_) => format!("matrix session restore failed: {e}"),
+            _ => format!("matrix session restore failed: {e}"),
         })?;
     // Logins made before the assistant created its own cross-signing
     // identity can never see the operator as verified: make it explicit.
@@ -244,7 +244,7 @@ impl SdkTransport {
             let err = classify_sdk(&e);
             match err {
                 TransportError::Unauthorized(_) => err.to_string(),
-                TransportError::Platform(_) => format!("matrix sync: {e}"),
+                _ => format!("matrix sync: {e}"),
             }
         })?;
         // An invite that arrived while another process held the store (say
@@ -284,6 +284,8 @@ impl SdkTransport {
                             tokio::time::sleep(backoff(failures)).await;
                             failures = failures.saturating_add(1);
                         }
+                        // `classify` never yields it; dropping `tx` reports it.
+                        TransportError::Closed => return,
                     },
                 }
             }
@@ -306,6 +308,9 @@ fn install_handlers(client: &Client, tx: InboundTx, invites_seen: Arc<std::sync:
         let (tx, own) = (tx_msg.clone(), own.clone());
         async move {
             if own.as_deref() == Some(ev.sender.as_ref()) {
+                return;
+            }
+            if is_edit(&ev.content) {
                 return;
             }
             let MessageType::Text(text) = ev.content.msgtype else { return };
@@ -337,12 +342,19 @@ fn install_handlers(client: &Client, tx: InboundTx, invites_seen: Arc<std::sync:
     });
 }
 
+/// An edit (`m.replace`) of an earlier message: never a new turn.
+fn is_edit(content: &RoomMessageEventContent) -> bool {
+    matches!(content.relates_to, Some(Relation::Replacement(_)))
+}
+
 #[async_trait]
 impl MatrixTransport for SdkTransport {
     async fn next_inbound(&self) -> Result<Inbound, TransportError> {
         match self.inbound.lock().await.recv().await {
             Some(item) => item,
-            None => Err(TransportError::Platform("sync task ended".into())),
+            // The sync task ended without reporting a logout (it reports
+            // `Unauthorized` before returning): nothing will ever arrive.
+            None => Err(TransportError::Closed),
         }
     }
 
@@ -470,6 +482,25 @@ mod tests {
         assert_eq!(err, crate::lock::BUSY);
         assert!(std::fs::read_dir(&d).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with("store")));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_edit_is_recognised_and_a_plain_message_or_reply_is_not() {
+        let content = |json: serde_json::Value| -> RoomMessageEventContent { serde_json::from_value(json).unwrap() };
+        let edit = content(serde_json::json!({
+            "msgtype": "m.text",
+            "body": "* fixed",
+            "m.new_content": { "msgtype": "m.text", "body": "fixed" },
+            "m.relates_to": { "rel_type": "m.replace", "event_id": "$orig:x" }
+        }));
+        assert!(is_edit(&edit));
+        assert!(!is_edit(&content(serde_json::json!({ "msgtype": "m.text", "body": "hi" }))));
+        let reply = content(serde_json::json!({
+            "msgtype": "m.text",
+            "body": "re",
+            "m.relates_to": { "m.in_reply_to": { "event_id": "$orig:x" } }
+        }));
+        assert!(!is_edit(&reply));
     }
 
     #[test]
