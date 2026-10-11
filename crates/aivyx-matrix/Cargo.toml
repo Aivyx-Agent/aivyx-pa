@@ -1,0 +1,33 @@
+[package]
+name = "aivyx-matrix"
+description = "Matrix ChannelContext adapter — end-to-end-encrypted rooms, verified devices only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[dependencies]
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+aivyx-crypto = { path = "../aivyx-crypto" }
+aivyx-llm = { path = "../aivyx-llm" }
+aivyx-storage = { path = "../aivyx-storage" }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+# Apache-2.0. No default features: we want E2EE + the encrypted SQLite
+# store + rustls on aws-lc-rs (the TLS stack the rest of pa uses).
+matrix-sdk = { version = "0.19", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-aws-lc-rs"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+aivyx-audit = { path = "../aivyx-audit" }
