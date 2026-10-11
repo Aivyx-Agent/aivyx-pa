@@ -212,9 +212,16 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
                         Err(e @ TransportError::Unauthorized(_)) => {
                             // Logged out mid-turn: finish this turn, then fail.
                             fatal = Some(e.to_string());
-                            continue;
+                            let _ = (&mut turn).await;
+                            break;
                         }
-                        Err(_) => continue,
+                        // Any other error (e.g. a dead sync task) would
+                        // return instantly on every poll: stop polling for
+                        // this turn; the outer loop applies its backoff.
+                        Err(_) => {
+                            let _ = (&mut turn).await;
+                            break;
+                        }
                     };
                     if let Ok(Routed::Turn(next)) =
                         route(transport.as_ref(), &policy, &mut asked, &mut told, inbound).await

@@ -61,6 +61,7 @@ pub struct ScriptedTransport {
     joined: Mutex<Vec<String>>,
     declined: Mutex<Vec<String>>,
     encrypted: Vec<String>,
+    fail_when_empty: Option<fn() -> TransportError>,
 }
 
 impl ScriptedTransport {
@@ -71,12 +72,20 @@ impl ScriptedTransport {
             joined: Mutex::new(Vec::new()),
             declined: Mutex::new(Vec::new()),
             encrypted: Vec::new(),
+            fail_when_empty: None,
         }
     }
 
     /// Rooms `room_is_encrypted` reports as encrypted (all others: not).
     pub fn encrypted_rooms(mut self, rooms: Vec<&str>) -> Self {
         self.encrypted = rooms.into_iter().map(str::to_string).collect();
+        self
+    }
+
+    /// Once the queue is empty, `next_inbound` returns `Err(err())`
+    /// immediately instead of waiting (models a dead sync task).
+    pub fn then_fail(mut self, err: fn() -> TransportError) -> Self {
+        self.fail_when_empty = Some(err);
         self
     }
 
@@ -103,6 +112,9 @@ impl MatrixTransport for ScriptedTransport {
         loop {
             if let Some(item) = self.queue.lock().await.pop_front() {
                 return Ok(item);
+            }
+            if let Some(err) = self.fail_when_empty {
+                return Err(err());
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }

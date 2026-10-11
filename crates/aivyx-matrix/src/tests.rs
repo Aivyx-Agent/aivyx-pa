@@ -114,7 +114,7 @@ async fn scratch_storage(suffix: &str) -> (Arc<dyn Storage>, PathBuf) {
 
 use crate::policy::{MatrixPolicy, ASK_TO_VERIFY, CANT_DECRYPT};
 use crate::session::{run_matrix_session_with_transport, MatrixSessionConfig};
-use crate::transport::{Inbound, IncomingMessage, ScriptedTransport};
+use crate::transport::{Inbound, IncomingMessage, ScriptedTransport, TransportError};
 
 fn config(storage: Arc<dyn Storage>) -> MatrixSessionConfig {
     MatrixSessionConfig {
@@ -275,4 +275,51 @@ async fn an_unencrypted_home_room_refuses_to_start() {
     let transport = Arc::new(ScriptedTransport::with_queue(vec![])); // nothing encrypted
     let err = run_until_sent(transport, vec![], 1).await.unwrap_err();
     assert!(err.contains("isn't encrypted"), "{err}");
+}
+
+#[tokio::test]
+async fn a_transport_error_mid_turn_still_completes_the_turn() {
+    let transport = Arc::new(
+        ScriptedTransport::with_queue(vec![msg("!home:x", "@me:x", "hi", true)])
+            .encrypted_rooms(vec!["!home:x"])
+            .then_fail(|| TransportError::Platform("sync task ended".into())),
+    );
+    let turns = run_until_sent(
+        Arc::clone(&transport),
+        vec![final_step(&["done"], "done")],
+        1,
+    )
+    .await
+    .unwrap();
+    assert_eq!(turns, 1);
+    assert_eq!(transport.sent().await[0].text, "done");
+}
+
+#[tokio::test]
+async fn a_logout_between_turns_ends_the_session_with_an_error() {
+    let transport = Arc::new(
+        ScriptedTransport::with_queue(vec![])
+            .encrypted_rooms(vec!["!home:x"])
+            .then_fail(|| TransportError::Unauthorized("M_UNKNOWN_TOKEN".into())),
+    );
+    let err = run_until_sent(transport, vec![], 1).await.unwrap_err();
+    assert!(err.contains("connect matrix"), "{err}");
+}
+
+#[tokio::test]
+async fn a_logout_mid_turn_finishes_the_turn_then_ends_with_an_error() {
+    let transport = Arc::new(
+        ScriptedTransport::with_queue(vec![msg("!home:x", "@me:x", "hi", true)])
+            .encrypted_rooms(vec!["!home:x"])
+            .then_fail(|| TransportError::Unauthorized("M_UNKNOWN_TOKEN".into())),
+    );
+    let err = run_until_sent(
+        Arc::clone(&transport),
+        vec![final_step(&["done"], "done")],
+        1,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.contains("connect matrix"), "{err}");
+    assert_eq!(transport.sent().await[0].text, "done");
 }
