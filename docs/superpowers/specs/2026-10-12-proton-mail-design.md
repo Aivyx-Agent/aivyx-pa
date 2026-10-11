@@ -60,19 +60,34 @@ Telegram, Discord, Slack and Matrix — only when **all** hold:
 
 1. it is addressed to `channel_address`;
 2. either
-   - its From is one of `own_addresses` **and** Proton marks it internal
-     (sent within Proton, end-to-end encrypted), or
-   - its From is in `allowed_external_senders` **and** Proton's own
-     `Authentication-Results` records `dmarc=pass` aligned with that From;
-3. the verdict rests only on headers Proton itself added — never on a copy
-   a sender could have written into the message.
+   - **from you:** its From is one of `own_addresses` (addresses of the
+     Bridge account) **and** the same Proton message is also in the
+     account's **Sent** folder — i.e. this account really sent it. Found by
+     `X-Pm-Internal-Id`, which Bridge always sets to Proton's own message
+     ID (overwriting any sender-supplied copy). Folder membership is
+     account metadata, not a header: a forged "From: you" from outside can
+     never be in your Sent folder. Mail from your *other* Proton accounts
+     is not "from you" here; list those addresses in
+     `allowed_external_senders` instead;
+   - **allowlisted:** its From is in `allowed_external_senders` **and** the
+     **topmost** `Authentication-Results` header whose authserv-id is
+     Proton's records `dmarc=pass` with `header.from` matching that From.
+     Proton's receiving server adds its result above anything the sender
+     wrote, and Bridge preserves header order, so a sender-written copy
+     further down is never read.
 
-How Bridge exposes Proton's origin/encryption markers and authentication
-results — and whether Proton strips or overrides sender-supplied copies —
-is confirmed against a live Bridge during planning (recorded header
-samples become test fixtures) before any code depends on it. If Proton's
-headers can't be told apart from sender-supplied ones, the plan stops and
-this section is revisited with the operator.
+Planning research (2026-10-12, Proton Bridge source at b9c5dac): Bridge
+serves Proton's stored headers (`ParsedHeaders`) in their original order
+(`pkg/message/build.go` `toMessageHeader`), always sets
+`X-Pm-Internal-Id` to the Proton message ID (`getMessageHeader`), and does
+not expose Proton's internal/end-to-end message flags over IMAP — so
+`X-Pm-Origin`-style headers are deliberately **not** relied on. Two facts
+come from Proton's servers, not Bridge, and are confirmed on the
+operator's real account (the manual checklist; recorded samples become
+test fixtures): Proton's authserv-id string and that it always adds an
+`Authentication-Results` header to received external mail; and that mail
+you send to your own `+assistant` address appears in both INBOX and Sent.
+If either doesn't hold, the plan stops and this section is revisited.
 
 Both kinds of sender run at the same tier: daemon mode fixes the tier per
 connection. Everything else is **ignored silently** — no auto-reply, which
@@ -150,15 +165,17 @@ credential and certificate pin are never config.
 ## Testing
 
 - Unit tests against the scripted transport: every Trust combination
-  (including forged `X-Pm-*` / `Authentication-Results` headers), loop
+  (including a forged "From: you" not in Sent, forged lower
+  `Authentication-Results`, and a missing Proton result), loop
   guards, threading, body extraction and caps, the folder move, a failed
   send leaving mail in place, `/team` gating, restart resume.
 - Recorded real-Bridge header samples as fixtures for the policy parser.
 - An `#[ignore]`d live test against GreenMail (IMAP/SMTP) in Docker: IDLE,
   fetch, send, threading, folder move end to end.
 - A short manual checklist against the operator's real Bridge (Bridge
-  needs a paid account and can't run in CI): one internal email answered,
-  one forged external email ignored, one `proton.search`, one
+  needs a paid account and can't run in CI): one email to yourself answered (and found in
+  Sent), one external allowlisted email answered, one forged external
+  email ignored, Proton's `Authentication-Results` sample recorded, one `proton.search`, one
   `proton.send` with approval.
 
 ## Docs
