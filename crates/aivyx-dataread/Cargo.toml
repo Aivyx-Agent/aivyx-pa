@@ -32,7 +32,7 @@ csv = "1"
 # XLSX spreadsheet parsing (Chapter Sheaf SH.2). MIT — permissive,
 # clears deny.toml. Reads the binary zip+XML format `fs.read` cannot
 # expose; parsed in-memory from the sandbox-read bytes (no temp files).
-calamine = "0.26"
+calamine = "0.36"
 
 # PDF text extraction (Chapter Sheaf SH.3). MIT; brings `lopdf` (also
 # used directly for the page count, and now for `data.pdf.write`'s
