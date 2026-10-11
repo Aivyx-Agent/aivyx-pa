@@ -35,9 +35,18 @@ pub async fn run(
     install(&client, allowed_senders, confirm, done_tx);
     let sync_client = client.clone();
     let sync = tokio::spawn(async move { sync_client.sync(SyncSettings::default()).await });
-    let ok = done_rx.recv().await.unwrap_or(false);
-    sync.abort();
-    Ok(ok)
+    let mut sync = sync;
+    tokio::select! {
+        ok = done_rx.recv() => {
+            sync.abort();
+            Ok(ok.unwrap_or(false))
+        }
+        ended = &mut sync => match ended {
+            Ok(Ok(())) => Ok(false),
+            Ok(Err(e)) => Err(format!("matrix sync: {e}")),
+            Err(e) => Err(format!("matrix sync task: {e}")),
+        },
+    }
 }
 
 fn install(client: &Client, allowed: Vec<String>, confirm: Confirm, done: mpsc::Sender<bool>) {
