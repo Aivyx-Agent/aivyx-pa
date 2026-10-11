@@ -89,6 +89,8 @@ pub enum ChannelKind {
     /// on destructive tools (`shell.exec`, `fs.delete`)
     /// symmetrically.
     Slack,
+    /// Matrix adapter — same SemiTrusted registration posture as Telegram/Discord/Slack
+    Matrix,
     /// Phase 135 — Voice I/O channel. Operator speaks
     /// through the microphone; agent speaks back through
     /// the speakers. Same `Trusted` tier posture as
@@ -209,6 +211,7 @@ pub fn render_role_envelope(
             ChannelKind::Telegram => "telegram",
             ChannelKind::Discord => "discord",
             ChannelKind::Slack => "slack",
+            ChannelKind::Matrix => "matrix",
             ChannelKind::Voice => "voice",
         }
     )

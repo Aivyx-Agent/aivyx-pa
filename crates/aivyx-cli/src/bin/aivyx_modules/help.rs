@@ -283,6 +283,12 @@ pub const COMMANDS: &[CommandHelp] = &[
         usage: &["aivyx-pa connect", "aivyx-pa connect <service>"],
     },
     CommandHelp {
+        name: "matrix",
+        group: Group::Tools,
+        summary: "Verify the assistant's Matrix device",
+        usage: &["aivyx-pa matrix verify"],
+    },
+    CommandHelp {
         name: "pack",
         group: Group::Tools,
         summary: "Build, inspect, and install signed vertical packs",

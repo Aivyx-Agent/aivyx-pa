@@ -415,6 +415,17 @@ aivyx-pa connect <service>    # walk through connecting one
 
 See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
 
+### `aivyx-pa matrix`
+
+Verifies the assistant's Matrix device after `aivyx-pa connect matrix`. It
+waits for you to start verification from your Matrix app, shows the emoji,
+and confirms only if you say they match. Stop the daemon first.
+
+```
+aivyx-pa connect matrix       # log the assistant in once (password not stored)
+aivyx-pa matrix verify
+```
+
 ### `aivyx-pa pack`
 
 Vertical packs: signed bundles that turn an assistant into a domain

@@ -267,6 +267,7 @@ dependencies = [
  "aivyx-kitchen-toolkit",
  "aivyx-kvcache",
  "aivyx-llm",
+ "aivyx-matrix",
  "aivyx-mcp",
  "aivyx-memory",
  "aivyx-pack",

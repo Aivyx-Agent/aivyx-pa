@@ -116,6 +116,7 @@ aivyx-route = { workspace = true, features = ["discovery"] }
 aivyx-telegram = { path = "../aivyx-telegram" }
 aivyx-discord = { path = "../aivyx-discord" }
 aivyx-slack = { path = "../aivyx-slack" }
+aivyx-matrix = { path = "../aivyx-matrix" }
 aivyx-voice = { path = "../aivyx-voice", optional = true }
 # Task 8 (Chapter Passport): `aivyx federation yubikey-init` drives
 # `aivyx-yubi`'s discovery/pin/provision flow directly (not re-exported by

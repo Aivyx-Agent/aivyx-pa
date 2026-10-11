@@ -106,6 +106,8 @@ mod autonomy;
 mod connect;
 #[path = "aivyx_modules/connect_kitchen.rs"]
 mod connect_kitchen;
+#[path = "aivyx_modules/matrix_cli.rs"]
+mod matrix_cli;
 #[path = "aivyx_modules/cost.rs"]
 mod cost;
 #[path = "aivyx_modules/daemon_service.rs"]
@@ -371,7 +373,10 @@ fn build_shell_exec_for_channel(
         // registration time. Symmetric behavior keeps the
         // SemiTrusted audit chain free of shell.exec mentions
         // across every remote adapter.
-        ChannelKind::Telegram | ChannelKind::Discord | ChannelKind::Slack => Ok(None),
+        ChannelKind::Telegram
+        | ChannelKind::Discord
+        | ChannelKind::Slack
+        | ChannelKind::Matrix => Ok(None),
     }
 }
 
@@ -421,7 +426,10 @@ fn build_fs_delete_for_channel(
         // destructive tool gating. A SemiTrusted dispatch
         // registry never contains `fs.delete` regardless of
         // which remote adapter is wired.
-        ChannelKind::Telegram | ChannelKind::Discord | ChannelKind::Slack => Ok(None),
+        ChannelKind::Telegram
+        | ChannelKind::Discord
+        | ChannelKind::Slack
+        | ChannelKind::Matrix => Ok(None),
     }
 }
 
@@ -1469,6 +1477,32 @@ fn run() -> Result<(), String> {
     let master_key = derive_master_key(passphrase_source, &salt_path, Argon2Params::d7_default())
         .map_err(|e| format!("failed to derive master key: {e}"))?;
 
+    if matches!(mode, CliMode::MatrixConnect | CliMode::MatrixVerify) {
+        let keys = aivyx_matrix::credentials::MatrixKeys::derive(&master_key)?;
+        let dir = aivyx_instance::InstancePaths::current()
+            .map_err(|e| e.to_string())?
+            .matrix_dir()
+            .ok_or("can't resolve the instance's data folder (is HOME set?)")?;
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async {
+            if mode == CliMode::MatrixVerify {
+                if let Ok(sp) = default_socket_path()
+                    && aivyx_channel::daemon_client::daemon_is_running(&sp).await
+                {
+                    return Err("stop the daemon first (`aivyx-pa daemon stop`) — \
+                                verification opens the Matrix store the daemon uses"
+                        .to_string());
+                }
+                matrix_cli::run_verify(&config, &keys, &dir).await
+            } else {
+                matrix_cli::run_connect(&config, &keys, &dir).await
+            }
+        });
+    }
+
     // Derive the audit chain key *before* `RedbStorage::open` consumes
     // `master_key`. `PersistentAuditLog` is documented as the single
     // legitimate caller of `SubKey::as_bytes`; the raw `[u8; 32]` then
@@ -1522,6 +1556,8 @@ fn run() -> Result<(), String> {
         out.copy_from_slice(subkey.as_bytes());
         out
     };
+
+    let matrix_keys = aivyx_matrix::credentials::MatrixKeys::derive(&master_key)?;
 
     // ---- Runtime ------------------------------------------------------
     // A multi-threaded runtime is overkill for a single-user REPL, but
@@ -1636,6 +1672,7 @@ fn run() -> Result<(), String> {
             persona_chain_key,
             persona_proposal_chain_key,
             loop_backlog_chain_key,
+            matrix_keys,
             channel_kind,
             mode,
             no_daemon,
@@ -2239,6 +2276,10 @@ enum CliMode {
     /// connectable services + status; `Some(service)` runs the
     /// guided OAuth flow.
     Connect(Option<String>),
+    /// `aivyx-pa connect matrix` / `matrix verify` — need the master key, not the store.
+    MatrixConnect,
+    /// See [`CliMode::MatrixConnect`].
+    MatrixVerify,
     /// `aivyx-pa instances list | create <name> | remove <name>`: named
     /// instances (several separate agents for one OS user).
     Instances(InstancesCmd),
@@ -3764,8 +3805,37 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         if args.len() > 2 {
             return Err("`aivyx-pa connect` takes at most one service name".into());
         }
+        if service.as_deref() == Some("matrix") {
+            return Ok(CliArgs {
+                mode: CliMode::MatrixConnect,
+                channel: ChannelKind::Local,
+                role: None,
+                no_daemon: false,
+                mcp_servers: vec![],
+                mcp_sse_servers: vec![],
+                provider: None,
+                web_ui_port: None,
+            });
+        }
         return Ok(CliArgs {
             mode: CliMode::Connect(service),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // `aivyx-pa matrix verify`: SAS-verify an operator device.
+    if !args.is_empty() && args[0] == "matrix" {
+        if args.get(1).map(String::as_str) != Some("verify") || args.len() > 2 {
+            return Err("usage: `aivyx-pa matrix verify`".into());
+        }
+        return Ok(CliArgs {
+            mode: CliMode::MatrixVerify,
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -5566,7 +5636,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "--channel" => {
                 let value = args.get(i + 1).ok_or_else(|| {
-                    "`--channel` requires a value: `local`, `telegram`, `discord`, `slack`, or `voice`"
+                    "`--channel` requires a value: `local`, `telegram`, `discord`, `slack`, `matrix`, or `voice`"
                         .to_string()
                 })?;
                 channel = match value.as_str() {
@@ -5576,12 +5646,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     "discord" => ChannelKind::Discord,
                     // Phase 108 — Slack adapter parse arm.
                     "slack" => ChannelKind::Slack,
+                    "matrix" => ChannelKind::Matrix,
                     // Phase 135 — Voice channel parse arm.
                     "voice" => ChannelKind::Voice,
                     other => {
                         return Err(format!(
                             "unrecognized channel `{other}`. \
-                             Supported: local, telegram, discord, slack, voice"
+                             Supported: local, telegram, discord, slack, matrix, voice"
                         ));
                     }
                 };
@@ -6592,6 +6663,7 @@ async fn run_async(
     persona_chain_key: [u8; 32],
     persona_proposal_chain_key: [u8; 32],
     loop_backlog_chain_key: [u8; 32],
+    matrix_keys: aivyx_matrix::credentials::MatrixKeys,
     channel_kind: ChannelKind,
     mode: CliMode,
     no_daemon: bool,
@@ -6721,9 +6793,8 @@ async fn run_async(
         // `ChannelKind::Discord` dispatch arm below; carries
         // the bot token through to `run_discord_session`.
         discord,
-        // `[matrix]` is parsed here; its channel dispatch arm lands
-        // in a later task of the Matrix channel plan.
-        matrix: _,
+        // `[matrix]` config consumed by the `ChannelKind::Matrix` arm below.
+        matrix,
         // Phase 108 — `slack` config consumed by the
         // `ChannelKind::Slack` dispatch arm below; carries
         // the bot + app tokens through to
@@ -11688,6 +11759,88 @@ async fn run_async(
             .map(|_report| ())
         }
 
+        ChannelKind::Matrix => {
+            let mc = matrix.ok_or("`--channel matrix` needs a [matrix] section in your config")?;
+            let dir = aivyx_instance::InstancePaths::current()
+                .map_err(|e| e.to_string())?
+                .matrix_dir()
+                .ok_or("can't resolve the instance's data folder")?;
+            let session = aivyx_matrix::credentials::load(&matrix_keys, &dir)?
+                .ok_or("not connected to Matrix yet — run `aivyx-pa connect matrix` first")?;
+            let passphrase = matrix_keys.store_passphrase();
+            let policy = aivyx_matrix::policy::MatrixPolicy {
+                room_filter: mc.room_filter.clone(),
+                allowed_senders: mc.allowed_senders.clone(),
+            };
+            let shutdown = CancellationToken::new();
+            let shutdown_for_signal = shutdown.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    std::process::exit(130);
+                }
+                eprintln!("\naivyx: shutting down the Matrix channel.");
+                shutdown_for_signal.cancel();
+            });
+            if !no_daemon && let Ok(sp) = default_socket_path() {
+                let transport = aivyx_matrix::sdk::SdkTransport::connect(&session, &dir, &passphrase).await?;
+                eprintln!(
+                    "aivyx-pa {} (daemon) — Matrix live in {} as {}",
+                    env!("CARGO_PKG_VERSION"),
+                    mc.room_filter,
+                    session.user_id
+                );
+                match aivyx_channel::matrix_daemon_frontend::run_matrix_daemon_session(
+                    transport,
+                    policy.clone(),
+                    sp.clone(),
+                    Some(active_role_name.clone()),
+                    shutdown.clone(),
+                    mc.team_run_channel,
+                    mc.team_trigger_rate_limit,
+                    mc.team_command_allowed_senders.clone(),
+                )
+                .await
+                {
+                    Ok(()) => return Ok(()),
+                    // A rejected login would fail the same way in-process.
+                    Err(e) if e.to_string().contains("connect matrix") => return Err(e.to_string()),
+                    Err(e) => eprintln!("aivyx-pa: daemon Matrix session failed ({e}), falling back to in-process."),
+                }
+            }
+            eprintln!(
+                "aivyx-pa {} — Matrix live in {} (in-process)",
+                env!("CARGO_PKG_VERSION"),
+                mc.room_filter
+            );
+            let matrix_config = aivyx_matrix::MatrixSessionConfig {
+                model,
+                system_prompt,
+                max_tokens: DEFAULT_MAX_TOKENS,
+                capabilities,
+                tools,
+                storage,
+                tool_allowlist,
+                memory_topic_prefix,
+                turn_timeout_secs,
+                cycle_detection,
+                injection_scan_enabled,
+                injection_scan_exempt,
+                confirm_integration_writes,
+                budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
+                    config_budget.clone(),
+                    Arc::clone(&persistent_audit_for_query),
+                    aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
+                    DEFAULT_MAX_TOKENS,
+                ),
+                rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
+            };
+            aivyx_matrix::session::run_matrix_session(
+                &session, &dir, &passphrase, policy, matrix_config, provider, audit, checkpointer.clone(), shutdown,
+            )
+            .await
+            .map(|_| ())
+        }
+
         // Phase 108 Task 5 — Slack adapter dispatch. Mirrors
         // the Discord arm above. Socket Mode requires two
         // tokens (bot for REST, app for the WebSocket); both
@@ -14516,6 +14669,15 @@ mod tests {
         assert!(local_config_notice(&named, true, true).is_none()); // AIVYX_PA_CONFIG_PATH wins
         assert!(local_config_notice(&named, false, false).is_none()); // no ./aivyx-pa.toml
         assert!(local_config_notice(&default, false, true).is_none());
+    }
+
+    #[test]
+    fn matrix_commands_parse() {
+        assert_eq!(parse_cli_args_from(&argv(&["connect", "matrix"])).unwrap().mode, CliMode::MatrixConnect);
+        assert_eq!(parse_cli_args_from(&argv(&["matrix", "verify"])).unwrap().mode, CliMode::MatrixVerify);
+        assert!(parse_cli_args_from(&argv(&["matrix"])).is_err());
+        assert!(parse_cli_args_from(&argv(&["matrix", "verify", "x"])).is_err());
+        assert_eq!(parse_cli_args_from(&argv(&["--channel", "matrix"])).unwrap().channel, ChannelKind::Matrix);
     }
 
     #[test]
