@@ -36,8 +36,10 @@ A new crate, `crates/aivyx-matrix`, shaped like `aivyx-discord`:
   transport for tests, as the other chat crates have.
 - `matrix_channel.rs` — `ChannelContext`: the trust tier (below), and the
   reply sent once complete (like Telegram), not edited in place.
-- `session.rs` — the receive loop: one conversation per room, `/cancel`,
-  `/team …` gated like the other channels, reconnection with backoff.
+- `session.rs` — the in-process receive loop: one conversation per room,
+  `/cancel` (also during a turn), reconnection with backoff. Like
+  Discord's in-process loop it doesn't handle `/team …` or gate commands;
+  those exist only in daemon mode (below), gated like the other channels.
 - Daemon mode — `FrontendType::Matrix` in `aivyx-ipc` and
   `aivyx-channel/src/matrix_daemon_frontend.rs`, matching Discord's.
 - Config — `[matrix]`: `homeserver`, `user_id` (the assistant's Matrix ID),
@@ -129,7 +131,9 @@ crash mid-login can't silently reset the device identity.
    password holder can't read them — nor, by the same rule, can the
    operator's own un-cross-signed device read the "please verify" reply.)
 3. Room invites are accepted only from `allowed_senders`; others are
-   declined.
+   declined. (Review refinement, 2026-10-12: and only to the
+   `room_filter` room — an operator's invite anywhere else is declined
+   too, since the assistant never talks there.)
 
 ## Errors
 

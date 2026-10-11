@@ -76,7 +76,8 @@ homeserver you choose (or run yourself).
    emoji and confirm on both sides. Once is enough: your other cross-signed
    devices are trusted too.
 5. `aivyx-pa --channel matrix`. The assistant accepts your invite and joins
-   the room once the channel is running, not before.
+   the room once the channel is running, not before. It declines invites to
+   any other room.
 
 It answers only you (`allowed_senders`), only in that room, and only from
 devices you've verified — a stolen password or the homeserver can't
@@ -114,6 +115,10 @@ Good to know:
   "the Matrix channel is running in another process": stop it, run them,
   then start `aivyx-pa --channel matrix` again so it uses the new device.
   The daemon can stay up.
+- **`/cancel` with the daemon.** When `--channel matrix` runs through the
+  daemon, `/cancel` is read between turns, so it can't stop a turn already
+  running (same as Discord). Run without the daemon, it cancels the
+  current turn. `/team` and gate commands work only through the daemon.
 - **If the device is logged out** (say, from your Matrix app), the channel
   stops and tells you to run `aivyx-pa connect matrix` again. It doesn't
   retry.
