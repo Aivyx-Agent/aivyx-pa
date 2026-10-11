@@ -297,12 +297,32 @@ async fn an_encrypted_message_reaches_the_transport() {
     assert_eq!(seen, None, "an unsigned device must not receive the room key");
 }
 
+/// How the operator starts verification.
+#[derive(Clone, Copy, PartialEq)]
+enum Start {
+    /// A to-device request to the assistant's device.
+    ToDevice,
+    /// Element's way: an in-room request in a DM (created, inviting the
+    /// assistant), via the assistant's user identity.
+    InRoom,
+}
+
 #[tokio::test]
 #[ignore = "needs a local Conduit homeserver in Docker — see the module doc"]
 async fn after_verification_the_operator_drives_a_turn() {
+    verified_flow("pv", "mv", [6u8; 32], Start::ToDevice).await;
+}
+
+#[tokio::test]
+#[ignore = "needs a local Conduit homeserver in Docker — see the module doc"]
+async fn verification_started_in_a_dm_like_element_does_works_too() {
+    verified_flow("pd", "md", [7u8; 32], Start::InRoom).await;
+}
+
+async fn verified_flow(bot_prefix: &str, me_prefix: &str, master: [u8; 32], start: Start) {
     let stamp = std::process::id();
-    let (bot, me) = (format!("pv{stamp}"), format!("mv{stamp}"));
-    let scratch = Scratch::new("verified");
+    let (bot, me) = (format!("{bot_prefix}{stamp}"), format!("{me_prefix}{stamp}"));
+    let scratch = Scratch::new(bot_prefix);
     let dir = &scratch.0;
 
     drop(register(&bot, &dir.join("bot-scratch")).await);
@@ -312,7 +332,7 @@ async fn after_verification_the_operator_drives_a_turn() {
     let sync_client = operator.clone();
     let _operator_sync = AbortOnDrop(tokio::spawn(async move { sync_client.sync(SyncSettings::default()).await }));
 
-    let keys = MatrixKeys::derive(&aivyx_crypto::MasterKey::from_raw([6u8; 32])).unwrap();
+    let keys = MatrixKeys::derive(&aivyx_crypto::MasterKey::from_raw(master)).unwrap();
     let session = connect_bot(&bot, dir, &keys).await;
     let bot_id: OwnedUserId = session.user_id.as_str().try_into().unwrap();
     let bot_device: OwnedDeviceId = session.device_id.as_str().into();
@@ -331,17 +351,28 @@ async fn after_verification_the_operator_drives_a_turn() {
         tokio::spawn(async move { aivyx_matrix::verify::run(&session, &dir, &pass, vec![sender], confirm).await })
     };
 
-    // The operator's side: find the assistant's device and verify it by emoji.
+    // The operator's side: find the assistant and verify it by emoji.
     let deadline = Instant::now() + Duration::from_secs(30);
-    let device = loop {
-        assert!(Instant::now() < deadline, "operator never saw the assistant's device");
-        operator.encryption().request_user_identity(&bot_id).await.unwrap();
-        if let Some(d) = operator.encryption().get_device(&bot_id, &bot_device).await.unwrap() {
-            break d;
+    let request = loop {
+        assert!(Instant::now() < deadline, "operator never saw the assistant's keys");
+        let identity = operator.encryption().request_user_identity(&bot_id).await.unwrap();
+        match start {
+            Start::ToDevice => {
+                if let Some(d) = operator.encryption().get_device(&bot_id, &bot_device).await.unwrap() {
+                    break d.request_verification().await.unwrap();
+                }
+            }
+            Start::InRoom => {
+                if let Some(identity) = identity {
+                    // Creates an encrypted DM, invites the assistant and
+                    // sends `m.key.verification.request` into it.
+                    break identity.request_verification().await.unwrap();
+                }
+            }
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
-    let request = device.request_verification().await.unwrap();
+    println!("operator started verification ({}): flow {}", if start == Start::InRoom { "in-room" } else { "to-device" }, request.flow_id());
     let operator_side = async {
         let mut changes = request.changes();
         while !request.is_ready() {

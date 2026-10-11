@@ -14,11 +14,14 @@ use matrix_sdk::{
     ruma::{
         events::{
             key::verification::request::ToDeviceKeyVerificationRequestEvent,
-            room::message::{MessageType, OriginalSyncRoomMessageEvent},
+            room::{
+                member::{MembershipState, StrippedRoomMemberEvent},
+                message::{MessageType, OriginalSyncRoomMessageEvent},
+            },
         },
         OwnedUserId, UserId,
     },
-    Client,
+    Client, Room, RoomState,
 };
 use tokio::sync::mpsc;
 
@@ -114,7 +117,37 @@ async fn wait_until_verified(client: &Client, operator: &UserId) -> Result<(), S
     }
 }
 
+/// Should `verify::run` join this invite? Only a direct-message invite to
+/// the assistant itself, from an allowed sender: Element sends an in-room
+/// verification request in a DM, creating it (and inviting the assistant)
+/// when there isn't one. Any other invite is left for the channel's policy.
+fn joins_for_verification(allowed: &[String], own: Option<&UserId>, ev: &StrippedRoomMemberEvent, invited: bool) -> bool {
+    invited
+        && own.is_some_and(|me| ev.state_key.as_str() == me.as_str())
+        && ev.content.membership == MembershipState::Invite
+        && ev.content.is_direct == Some(true)
+        && allowed.iter().any(|a| a == ev.sender.as_str())
+}
+
 fn install(client: &Client, allowed: Vec<String>, confirm: Confirm, done: mpsc::Sender<Option<OwnedUserId>>) {
+    // Verification started from Element arrives as an in-room request in a
+    // DM. Joining the DM makes the next sync deliver the room's timeline,
+    // request included; matrix-sdk-base hands it (decrypted) to the
+    // verification machine and the room-message handler below picks it up
+    // by event id. The assistant only ever answers in the home room; the DM
+    // is just where the emoji are exchanged.
+    let allowed_inv = allowed.clone();
+    client.add_event_handler(move |ev: StrippedRoomMemberEvent, room: Room, client: Client| {
+        let allowed = allowed_inv.clone();
+        async move {
+            let invited = room.state() == RoomState::Invited;
+            if joins_for_verification(&allowed, client.user_id(), &ev, invited) {
+                if let Err(e) = room.join().await {
+                    eprintln!("aivyx-matrix: couldn't join the verification DM {}: {e}", room.room_id());
+                }
+            }
+        }
+    });
     let (allowed_dev, confirm_dev, done_dev) = (allowed.clone(), confirm.clone(), done.clone());
     client.add_event_handler(move |ev: ToDeviceKeyVerificationRequestEvent, client: Client| {
         let (allowed, confirm, done) = (allowed_dev.clone(), confirm_dev.clone(), done_dev.clone());
@@ -196,5 +229,41 @@ async fn drive(request: VerificationRequest, confirm: Confirm, done: mpsc::Sende
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invite(sender: &str, is_direct: Option<bool>, membership: &str) -> StrippedRoomMemberEvent {
+        let mut content = serde_json::json!({ "membership": membership });
+        if let Some(d) = is_direct {
+            content["is_direct"] = serde_json::json!(d);
+        }
+        serde_json::from_value(serde_json::json!({
+            "type": "m.room.member",
+            "state_key": "@bot:x",
+            "sender": sender,
+            "content": content,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_an_allowed_senders_dm_invite_to_the_assistant_is_joined() {
+        let allowed = vec!["@me:x".to_string()];
+        let bot = <&UserId>::try_from("@bot:x").unwrap();
+        let other = <&UserId>::try_from("@other:x").unwrap();
+        assert!(joins_for_verification(&allowed, Some(bot), &invite("@me:x", Some(true), "invite"), true));
+        // Not a DM (e.g. the home room's invite): left for the channel.
+        assert!(!joins_for_verification(&allowed, Some(bot), &invite("@me:x", None, "invite"), true));
+        assert!(!joins_for_verification(&allowed, Some(bot), &invite("@me:x", Some(false), "invite"), true));
+        // A stranger's DM.
+        assert!(!joins_for_verification(&allowed, Some(bot), &invite("@stranger:x", Some(true), "invite"), true));
+        // Not our membership, not an invite, or no longer invited.
+        assert!(!joins_for_verification(&allowed, Some(other), &invite("@me:x", Some(true), "invite"), true));
+        assert!(!joins_for_verification(&allowed, Some(bot), &invite("@me:x", Some(true), "join"), true));
+        assert!(!joins_for_verification(&allowed, Some(bot), &invite("@me:x", Some(true), "invite"), false));
     }
 }

@@ -125,7 +125,10 @@ crash mid-login can't silently reset the device identity.
    a successful `matrix verify` signs the operator's master key with it and
    waits until the homeserver returns that signature. The effect: one
    verification trusts every device the operator has cross-signed, now or
-   later; devices they haven't cross-signed are never trusted. Replies are
+   later; devices they haven't cross-signed are never trusted. Element
+   sends its request in-room, in a DM it creates: while `matrix verify`
+   runs (only then), the assistant joins a DM invite from an
+   `allowed_senders` ID to see it; it never answers there. Replies are
    encrypted only to cross-signed devices (`CollectStrategy::
    IdentityBasedStrategy`), so a device added by the homeserver or a
    password holder can't read them — nor, by the same rule, can the

@@ -95,6 +95,12 @@ Good to know:
   refused: no turn runs, and the assistant replies once asking you to
   verify. If your account has no cross-signing, `matrix verify` says so and
   fails.
+- **Verifying from Element may open a DM** with the assistant (Element
+  sends the request there). While `matrix verify` runs, the assistant joins
+  a DM you invite it to, just to exchange the emoji; it only ever answers in
+  the home room.
+- **If you reset your Matrix cross-signing identity, run `aivyx-pa matrix
+  verify` again.**
 - **Replies go only to your cross-signed devices.** Someone who adds a
   device to your account (with your password, or a hostile homeserver)
   can't read them. It also means a device you haven't cross-signed sees

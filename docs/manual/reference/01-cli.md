@@ -433,7 +433,8 @@ aivyx-pa connect matrix
 ### `aivyx-pa matrix`
 
 Verifies the assistant's Matrix device after `aivyx-pa connect matrix`. It
-waits for you to start verification from your Matrix app, shows the emoji,
+waits for you to start verification from your Matrix app (joining the DM
+your app opens for it, if any), shows the emoji,
 and confirms only if you say they match. On success the assistant has signed
 your Matrix identity, so every device you've cross-signed is trusted. Your
 Matrix account needs cross-signing (Element and most clients set it up by
