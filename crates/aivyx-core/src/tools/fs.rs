@@ -74,6 +74,29 @@ use crate::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 /// Const, not config knob — same philosophy as `TURN_TIMEOUT`.
 pub const MAX_READ_BYTES: usize = 256 * 1024;
 
+/// Open `path` for reading, but only a regular file. Opened without
+/// blocking — a FIFO's open otherwise waits for a writer, forever, with the
+/// turn stuck on it — and checked on the opened file, so it can't be
+/// swapped between the check and the read. Devices, pipes and sockets are
+/// refused (`InvalidInput`).
+pub fn open_regular_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file (a device, pipe or socket) — only regular files can be read",
+        ));
+    }
+    Ok(file)
+}
+
 /// Construction inputs for [`FsReadTool`]. Split from the tool itself
 /// so that the fallible `canonicalize()` call on the sandbox root
 /// happens at `build()` time and the resulting `FsReadTool` is
@@ -387,7 +410,7 @@ impl Tool for FsReadTool {
         // Read up to MAX_READ_BYTES + 1 so we can tell "exactly at cap"
         // apart from "over cap" in one syscall.
         use std::io::Read;
-        let mut file = match std::fs::File::open(&canonical) {
+        let mut file = match open_regular_file(&canonical) {
             Ok(f) => f,
             Err(e) => {
                 return ToolOutcome::Failed(AivyxError::Tool {
@@ -2066,6 +2089,30 @@ mod tests {
                     detail.contains("canonicalize"),
                     "expected canonicalize failure, got {detail}"
                 );
+            }
+            other => panic!("expected Failed(Tool), got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execute_refuses_a_fifo_instead_of_blocking() {
+        // Opening a FIFO for reading waits for a writer — forever, with
+        // the turn stuck on it. It must be refused, promptly.
+        let sandbox = SandboxDir::new();
+        let fifo = sandbox.root.join("pipe");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let tool = build_tool(&sandbox);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(run_execute(&tool, json!({"path": "pipe"})));
+        });
+        let outcome = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("fs.read on a FIFO must not block");
+        match outcome {
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => {
+                assert!(detail.contains("not a regular file"), "{detail}");
             }
             other => panic!("expected Failed(Tool), got {other:?}"),
         }

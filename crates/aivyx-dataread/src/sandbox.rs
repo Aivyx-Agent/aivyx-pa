@@ -347,7 +347,8 @@ impl ReaderSandbox {
 /// remained (so callers can flag truncation honestly).
 fn read_capped(path: &Path) -> std::io::Result<(Vec<u8>, bool)> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path)?;
+    // A regular file only, opened without blocking (a FIFO would wait).
+    let mut file = aivyx_core::tools::fs::open_regular_file(path)?;
     let mut buf = Vec::with_capacity(64 * 1024);
     let mut probe = [0u8; 64 * 1024];
     loop {
@@ -419,6 +420,23 @@ mod tests {
         // And read_guarded refuses it too.
         let err = sb.read_guarded(&json!({"path": "../../../etc/passwd"}), ToolId::new());
         assert!(err.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_refused_instead_of_blocking() {
+        let root = scratch_root();
+        let fifo = root.join("pipe.csv");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let sb = ReaderSandbox::new(&root).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(sb.read_guarded(&json!({"path": "pipe.csv"}), ToolId::new()).is_err());
+        });
+        let refused = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("reading a FIFO must not block");
+        assert!(refused);
     }
 
     #[test]
