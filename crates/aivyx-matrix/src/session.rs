@@ -171,7 +171,13 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
                 }
                 Err(e) => {
                     eprintln!("aivyx-matrix: {e}; retrying in {}s", backoff.as_secs());
-                    tokio::time::sleep(backoff).await;
+                    tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => {
+                            return Ok(MatrixSessionReport { turns_run });
+                        }
+                        _ = tokio::time::sleep(backoff) => {}
+                    }
                     backoff = (backoff * 2).min(std::time::Duration::from_secs(60));
                     continue;
                 }
@@ -180,6 +186,7 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
                 Ok(Routed::Turn(m)) if m.text.trim() == "/cancel" => continue,
                 Ok(Routed::Turn(m)) => pending.push_back(m),
                 Ok(Routed::Handled) => continue,
+                Err(e @ TransportError::Unauthorized(_)) => return Err(e.to_string()),
                 Err(e) => {
                     eprintln!("aivyx-matrix: {e}");
                     continue;
@@ -201,7 +208,7 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
                 _ = &mut turn => break,
                 _ = shutdown.cancelled() => {
                     // Cancel the turn, let it wind down, then stop; the
-                    // outer loop returns at its shutdown check.
+                    // check after this loop returns.
                     channel.cancellation_token().cancel();
                     let _ = (&mut turn).await;
                     break;
@@ -223,14 +230,18 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
                             break;
                         }
                     };
-                    if let Ok(Routed::Turn(next)) =
-                        route(transport.as_ref(), &policy, &mut asked, &mut told, inbound).await
-                    {
-                        if next.text.trim() == "/cancel" {
+                    match route(transport.as_ref(), &policy, &mut asked, &mut told, inbound).await {
+                        Ok(Routed::Turn(next)) if next.text.trim() == "/cancel" => {
                             channel.cancellation_token().cancel();
-                        } else {
-                            pending.push_back(next);
                         }
+                        Ok(Routed::Turn(next)) => pending.push_back(next),
+                        Ok(Routed::Handled) => {}
+                        Err(e @ TransportError::Unauthorized(_)) => {
+                            fatal = Some(e.to_string());
+                            let _ = (&mut turn).await;
+                            break;
+                        }
+                        Err(e) => eprintln!("aivyx-matrix: {e}"),
                     }
                 }
             }
@@ -238,6 +249,9 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
         turns_run += 1;
         if let Some(e) = fatal {
             return Err(e);
+        }
+        if shutdown.is_cancelled() {
+            return Ok(MatrixSessionReport { turns_run });
         }
     }
 }
