@@ -58,7 +58,7 @@ so mail is decrypted only on the operator's machine.
 A message becomes a turn — at `SemiTrusted`, like an allowlisted chat on
 Telegram, Discord, Slack and Matrix — only when **all** hold:
 
-1. it is addressed to `channel_address`;
+1. it is addressed to `channel_address` (see 3);
 2. either
    - **from you:** its From is one of `own_addresses` (addresses of the
      Bridge account) **and** the same Proton message is also in the
@@ -69,25 +69,37 @@ Telegram, Discord, Slack and Matrix — only when **all** hold:
      never be in your Sent folder. Mail from your *other* Proton accounts
      is not "from you" here; list those addresses in
      `allowed_external_senders` instead;
-   - **allowlisted:** its From is in `allowed_external_senders` **and** the
-     **topmost** `Authentication-Results` header whose authserv-id is
-     Proton's records `dmarc=pass` with `header.from` matching that From.
-     Proton's receiving server adds its result above anything the sender
-     wrote, and Bridge preserves header order, so a sender-written copy
-     further down is never read.
+   - **allowlisted:** its From is in `allowed_external_senders` **and**
+     Proton's own DMARC result passes for that From's domain. Proton's
+     receiving server adds one `Authentication-Results` value per check
+     (`dmarc`, `spf`, `arc`, `dkim`), each stamped `mail.protonmail.ch`,
+     ahead of any value the sender wrote; Bridge preserves the order of a
+     header's values. So: take the `Authentication-Results` values in
+     order, keep the leading run stamped `mail.protonmail.ch`, and use the
+     **first** `dmarc=` result in it — it must be `dmarc=pass` with
+     `header.from` equal to the From address's domain (case-insensitive).
+     No Proton DMARC result in that run → not trusted. A sender-written
+     `mail.protonmail.ch; dmarc=pass` line can only come after Proton's own
+     result and is never the first.
+3. **addressed to the channel:** `channel_address` is matched against
+   `Delivered-To` / `X-Original-To`, which Proton's receiving server sets
+   for the actual delivery — not `To:`, which the sender writes.
 
 Planning research (2026-10-12, Proton Bridge source at b9c5dac): Bridge
 serves Proton's stored headers (`ParsedHeaders`) in their original order
 (`pkg/message/build.go` `toMessageHeader`), always sets
 `X-Pm-Internal-Id` to the Proton message ID (`getMessageHeader`), and does
 not expose Proton's internal/end-to-end message flags over IMAP — so
-`X-Pm-Origin`-style headers are deliberately **not** relied on. Two facts
-come from Proton's servers, not Bridge, and are confirmed on the
-operator's real account (the manual checklist; recorded samples become
-test fixtures): Proton's authserv-id string and that it always adds an
-`Authentication-Results` header to received external mail; and that mail
-you send to your own `+assistant` address appears in both INBOX and Sent.
-If either doesn't hold, the plan stops and this section is revisited.
+`X-Pm-Origin`-style headers are deliberately **not** relied on. Confirmed on the operator's account (2026-10-12, a received external
+message's headers, recorded with the address redacted as the fixture
+`docs/superpowers/specs/fixtures/proton-external-dmarc-pass.headers`, copied into the crate's test fixtures by the plan):
+Proton's authserv-id is `mail.protonmail.ch`; it adds separate
+`dmarc` / `spf` / `arc` / `dkim` results, with DMARC first and recording
+the policy (`dmarc=pass (p=reject dis=none) header.from=<domain>`); and it
+sets `Delivered-To` / `X-Original-To`. Still to confirm on the operator's
+account before the channel's trust code is written: mail you send to your
+own `+assistant` address appears in both INBOX and Sent. If not, the plan
+stops and this section is revisited.
 
 Both kinds of sender run at the same tier: daemon mode fixes the tier per
 connection. Everything else is **ignored silently** — no auto-reply, which

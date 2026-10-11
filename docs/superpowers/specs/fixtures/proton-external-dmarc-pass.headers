@@ -1,0 +1,17 @@
+Return-Path: <postmaster@bounce.newsletter.example>
+X-Original-To: you@proton.me
+Delivered-To: you@proton.me
+Received: from mta1.relay.example (mta1.relay.example
+ [192.0.2.63]) (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+ (No client certificate requested) by mailin045.protonmail.ch (Postfix) with ESMTPS id
+ 4h00000000000 for <you@proton.me>; Thu, 01 Oct 2026 12:30:23 +0000 (UTC)
+Received: by 0000000000000000000000000000000000000000000000000000000000000000 with HTTP
+ id 000000000000000000000000; Thu, 01 Oct 2026 12:30:13 GMT
+Authentication-Results: mail.protonmail.ch; dmarc=pass (p=reject dis=none)
+ header.from=newsletter.example
+Authentication-Results: mail.protonmail.ch; spf=pass
+ smtp.mailfrom=bounce.newsletter.example
+Authentication-Results: mail.protonmail.ch; arc=none smtp.remote-ip=192.0.2.63
+Authentication-Results: mail.protonmail.ch; dkim=pass (1024-bit key)
+ header.d=bounce.newsletter.example header.i=@bounce.newsletter.example
+ header.b="AAAAAAAA"
