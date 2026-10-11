@@ -151,8 +151,7 @@ impl McpTransport for StreamableHttpTransport {
         let status = resp.status();
         let session = header(&resp, "Mcp-Session-Id");
         let content_type = header(&resp, "Content-Type");
-        let body = resp
-            .text()
+        let body = crate::limits::collect_capped(resp.bytes_stream(), crate::limits::MAX_MESSAGE_BYTES)
             .await
             .map_err(|e| format!("streamable-http body: {e}"))?;
         if !status.is_success() {

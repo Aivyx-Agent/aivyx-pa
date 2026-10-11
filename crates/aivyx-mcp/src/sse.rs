@@ -130,6 +130,9 @@ impl SseTransport {
             match stream.next().await {
                 Some(Ok(chunk)) => {
                     buf.extend_from_slice(&chunk);
+                    if buf.len() > crate::limits::MAX_MESSAGE_BYTES {
+                        return Err("SSE event during connect is too large".into());
+                    }
                     while let Some(event) = try_parse_one(&mut buf)
                         .map_err(|e| format!("SSE parse during connect: {e}"))?
                     {
@@ -211,7 +214,20 @@ async fn sse_reader_task(
 
         // Pull more bytes from the HTTP stream.
         match stream.next().await {
-            Some(Ok(chunk)) => buf.extend_from_slice(&chunk),
+            // `buf` holds only the unfinished event: complete ones were
+            // parsed off above, so this bounds a single event.
+            Some(Ok(chunk)) => {
+                buf.extend_from_slice(&chunk);
+                if buf.len() > crate::limits::MAX_MESSAGE_BYTES {
+                    let _ = tx
+                        .send(Err(format!(
+                            "SSE event over {} bytes",
+                            crate::limits::MAX_MESSAGE_BYTES
+                        )))
+                        .await;
+                    return;
+                }
+            }
             Some(Err(e)) => {
                 let _ = tx.send(Err(format!("SSE stream error: {e}"))).await;
                 return;

@@ -21,6 +21,7 @@
 
 mod conn;
 mod jsonrpc;
+mod limits;
 pub mod notifications;
 mod prompt_proxy;
 mod protocol;

@@ -171,9 +171,8 @@ impl McpTransport for StdioTransport {
     }
 
     async fn receive(&self) -> Result<String, String> {
-        let mut line = String::new();
         let mut r = self.reader.lock().await;
-        r.read_line(&mut line)
+        let mut line = crate::limits::read_line_capped(&mut *r, crate::limits::MAX_MESSAGE_BYTES)
             .await
             .map_err(|e| format!("read from MCP server: {e}"))?;
 
