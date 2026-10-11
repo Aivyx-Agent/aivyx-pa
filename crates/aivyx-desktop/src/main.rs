@@ -484,7 +484,19 @@ fn webview_builder<'a>(
     on_ipc: impl Fn(&str) + 'static,
 ) -> WebViewBuilder<'a> {
     let builder = WebViewBuilder::new()
-        .with_ipc_handler(move |request: wry::http::Request<String>| on_ipc(request.body()));
+        .with_ipc_handler(move |request: wry::http::Request<String>| on_ipc(request.body()))
+        // The window shows the Studio; any other link opens in the browser.
+        .with_navigation_handler(|url: String| {
+            let stay = stays_in_window(&url, &studio_url());
+            if !stay {
+                open_in_browser(&url);
+            }
+            stay
+        })
+        .with_new_window_req_handler(|url: String, _features| {
+            open_in_browser(&url);
+            wry::NewWindowResponse::Deny
+        });
     match page {
         Page::Url(url) => builder.with_url(url),
         Page::Html(html) => builder.with_html(html),
@@ -515,4 +527,71 @@ fn build_webview(
         .default_vbox()
         .expect("tao window should expose a default GTK vbox on Linux");
     webview_builder(page, on_ipc).build_gtk(vbox)
+}
+
+/// Whether `url` may load in the app window: the Studio's own origin, or
+/// `about:` (the setup page `load_html` shows). Anything else is opened in
+/// the browser instead (`http`/`https`) or not at all.
+fn stays_in_window(url: &str, studio: &str) -> bool {
+    if url.starts_with("about:") {
+        return true;
+    }
+    // The Studio's origin: scheme://host:port, without its path.
+    let after_scheme = studio.find("://").map_or(0, |i| i + 3);
+    let origin_end = studio[after_scheme..]
+        .find(['/', '?', '#'])
+        .map_or(studio.len(), |i| after_scheme + i);
+    let origin = &studio[..origin_end];
+    // Same origin only when the origin ends right there — `:7843` must not
+    // match `:78430` or `:7843.evil.example`.
+    url.strip_prefix(origin)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '?', '#']))
+}
+
+/// Open an `http`/`https` link in the user's browser, not the app window.
+/// Any other scheme is dropped.
+fn open_in_browser(url: &str) {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    let opener = "xdg-open";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(target_os = "windows")]
+    let opener = "explorer";
+    let _ = Command::new(opener).arg(url).spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_studio_and_the_setup_page_load_in_the_window() {
+        let studio = "http://127.0.0.1:7843/";
+        for url in [
+            "http://127.0.0.1:7843/",
+            "http://127.0.0.1:7843",
+            "http://127.0.0.1:7843/?token=abc",
+            "http://127.0.0.1:7843/settings#x",
+            "about:blank",
+        ] {
+            assert!(stays_in_window(url, studio), "{url}");
+        }
+        for url in [
+            "https://example.com/",
+            "http://127.0.0.1:7843.evil.example/",
+            "http://127.0.0.1:78430/",
+            "http://127.0.0.1:7844/",
+            "https://127.0.0.1:7843/",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+        ] {
+            assert!(!stays_in_window(url, studio), "{url}");
+        }
+        // A remote Studio (AIVYX_PA_STUDIO_URL) is its own origin.
+        assert!(stays_in_window("http://10.0.0.5:7843/x", "http://10.0.0.5:7843/"));
+        assert!(!stays_in_window("http://127.0.0.1:7843/", "http://10.0.0.5:7843/"));
+    }
 }
