@@ -70,15 +70,17 @@ homeserver you choose (or run yourself).
 
 3. `aivyx-pa connect matrix` — logs the assistant in once (the password isn't
    kept).
-4. `aivyx-pa matrix verify` — then, in your Matrix app, open the assistant and
-   choose **Verify**; compare the emoji and confirm on both sides. Repeat for
-   each device you'll use.
-5. `aivyx-pa --channel matrix`.
+4. `aivyx-pa matrix verify` (stop the daemon first if it's running) — then,
+   in your Matrix app, open the assistant and choose **Verify**; compare the
+   emoji and confirm on both sides. Repeat for each device you'll use.
+5. `aivyx-pa --channel matrix`. The assistant accepts your invite and joins
+   the room once the channel is running, not before.
 
 It answers only you (`allowed_senders`), only in that room, and only from
 devices you've verified — a stolen password or the homeserver can't
-impersonate you. From an unverified device it tells you once to verify;
-everyone else is ignored.
+impersonate you. From an unverified device it tells you once to verify, and
+a message it can't decrypt gets one "I couldn't read that" reply; everyone
+else is ignored.
 
 Good to know:
 
