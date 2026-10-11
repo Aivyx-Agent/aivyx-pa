@@ -16,7 +16,7 @@ pub mod session;
 pub mod transport;
 pub mod verify;
 
-pub use session::{run_matrix_session, run_matrix_session_with_transport, MatrixSessionConfig, MatrixSessionReport};
+pub use session::{run_matrix_session_with_transport, MatrixSessionConfig, MatrixSessionReport};
 
 #[cfg(test)]
 mod tests;

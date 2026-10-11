@@ -147,8 +147,9 @@ async fn handle_matrix_team_command(
     None
 }
 
-/// Apply the failure rule to a Matrix call: Unauthorized ends the session;
-/// anything else is logged and the turn's outcome stands.
+/// Apply the failure rule to a Matrix call: Unauthorized ends the session
+/// (`DaemonError::ChannelFatal`, so the binary doesn't fall back
+/// in-process); anything else is logged and the turn's outcome stands.
 async fn settle(
     session: DaemonSession,
     what: &str,
@@ -158,7 +159,7 @@ async fn settle(
         Ok(()) => Ok(session),
         Err(e @ TransportError::Unauthorized(_)) => {
             let _ = session.disconnect().await;
-            Err(DaemonError::Internal(e.to_string()))
+            Err(DaemonError::ChannelFatal(e.to_string()))
         }
         Err(e) => {
             eprintln!("aivyx-matrix(daemon): {what} failed: {e}");
@@ -183,7 +184,7 @@ pub async fn run_matrix_daemon_session<T: MatrixTransport + 'static>(
         .await
         .map_err(|e| DaemonError::Internal(e.to_string()))?
     {
-        return Err(DaemonError::Internal(format!(
+        return Err(DaemonError::ChannelFatal(format!(
             "the Matrix room {} isn't encrypted — the assistant only talks in end-to-end-encrypted rooms",
             policy.room_filter
         )));
@@ -210,7 +211,7 @@ pub async fn run_matrix_daemon_session<T: MatrixTransport + 'static>(
                 }
                 Err(TransportError::Unauthorized(e)) => {
                     let _ = session.disconnect().await;
-                    return Err(DaemonError::Internal(TransportError::Unauthorized(e).to_string()));
+                    return Err(DaemonError::ChannelFatal(TransportError::Unauthorized(e).to_string()));
                 }
                 Err(e) => {
                     eprintln!("aivyx-matrix(daemon): {e}; retrying in {}s", backoff.as_secs());
@@ -437,8 +438,9 @@ mod tests {
         )
         .await
         .expect("returns");
-        let e = r.expect_err("must be Err").to_string();
-        assert!(e.contains("connect matrix"), "{e}");
+        let e = r.expect_err("must be Err");
+        assert!(matches!(e, DaemonError::ChannelFatal(_)), "{e:?}");
+        assert!(e.to_string().contains("connect matrix"), "{e}");
     }
 
     #[tokio::test]

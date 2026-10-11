@@ -89,6 +89,13 @@ pub enum DaemonError {
     /// Internal error (catch-all for unexpected conditions).
     #[error("{0}")]
     Internal(String),
+
+    /// A channel frontend's own platform connection failed in a way that
+    /// neither a retry nor the in-process fallback can fix (the Matrix
+    /// device was logged out, its sync stopped, the room isn't encrypted).
+    /// The binary stops with this message instead of falling back.
+    #[error("{0}")]
+    ChannelFatal(String),
 }
 
 impl DaemonError {

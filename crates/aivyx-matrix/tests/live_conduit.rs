@@ -317,6 +317,9 @@ async fn after_verification_the_operator_drives_a_turn() {
     let bot_id: OwnedUserId = session.user_id.as_str().try_into().unwrap();
     let bot_device: OwnedDeviceId = session.device_id.as_str().into();
 
+    // The guide's order: the operator invites the assistant first.
+    let room = create_encrypted_room(&operator, &session.user_id).await;
+
     // The assistant's side: `aivyx-pa matrix verify`, confirming the emoji.
     let verify = {
         let (session, dir, pass) = (session.clone(), dir.clone(), keys.store_passphrase());
@@ -372,8 +375,9 @@ async fn after_verification_the_operator_drives_a_turn() {
         .expect("verify::run failed");
     assert!(verified, "verify::run must report success");
 
-    // Now the channel: the room, the invite, the join.
-    let room = create_encrypted_room(&operator, &session.user_id).await;
+    // Now the channel. The invite was sent before `matrix verify` ran (as
+    // the guide orders it), so verify's sync consumed it; the transport
+    // must still report it.
     let transport = SdkTransport::connect(&session, dir, &keys.store_passphrase()).await.unwrap();
     let room_id = join_invited_room(&transport).await;
 

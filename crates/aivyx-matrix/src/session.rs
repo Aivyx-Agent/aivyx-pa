@@ -123,6 +123,9 @@ async fn route<T: MatrixTransport>(
     Ok(Routed::Handled)
 }
 
+/// Runs the in-process session over `transport`. Production passes the one
+/// `sdk::SdkTransport` built for the run (the same instance the daemon-mode
+/// frontend would have used, so a fallback loses nothing queued).
 pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
     transport: Arc<T>,
     policy: MatrixPolicy,
@@ -254,22 +257,4 @@ pub async fn run_matrix_session_with_transport<T: MatrixTransport + 'static>(
             return Ok(MatrixSessionReport { turns_run });
         }
     }
-}
-
-/// Production entry point: restore the sealed session (`connect` does the
-/// initial sync so room state is known), then run the loop.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_matrix_session(
-    session: &crate::credentials::Session,
-    store_dir: &std::path::Path,
-    passphrase: &str,
-    policy: MatrixPolicy,
-    config: MatrixSessionConfig,
-    provider: Arc<dyn LlmProvider>,
-    audit: Arc<dyn AuditHook>,
-    checkpointer: Option<Arc<aivyx_core::GitCheckpointer>>,
-    shutdown: CancellationToken,
-) -> Result<MatrixSessionReport, String> {
-    let transport = crate::sdk::SdkTransport::connect(session, store_dir, passphrase).await?;
-    run_matrix_session_with_transport(transport, policy, config, provider, audit, checkpointer, shutdown).await
 }

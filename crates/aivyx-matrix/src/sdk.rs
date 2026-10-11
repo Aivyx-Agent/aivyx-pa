@@ -2,6 +2,7 @@
 //! open the encrypted SQLite store, sync in the background and turn
 //! room events into `Inbound` items.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -219,7 +220,8 @@ impl SdkTransport {
         // nothing drains the channel until `connect` returns), so a bounded
         // channel could deadlock the initial sync. A sync response is bounded.
         let (tx, rx) = mpsc::unbounded_channel();
-        install_handlers(&client, tx.clone());
+        let invites_seen = Arc::new(std::sync::Mutex::new(HashSet::new()));
+        install_handlers(&client, tx.clone(), Arc::clone(&invites_seen));
         let first = client.sync_once(SyncSettings::default()).await.map_err(|e| {
             let err = classify_sdk(&e);
             match err {
@@ -227,6 +229,18 @@ impl SdkTransport {
                 TransportError::Platform(_) => format!("matrix sync: {e}"),
             }
         })?;
+        // An invite that arrived while another process held the store (say
+        // `matrix verify`) was consumed by that process's sync and won't be
+        // replayed: report every invite still pending, once.
+        for room in client.invited_rooms() {
+            let room_id = room.room_id().to_string();
+            if !invites_seen.lock().expect("invite set poisoned").insert(room_id.clone()) {
+                continue;
+            }
+            if let Ok(invite) = room.invite_details().await {
+                let _ = tx.send(Ok(Inbound::Invite { room_id, inviter: invite.inviter_id.to_string() }));
+            }
+        }
         let mut token = first.next_batch;
         let sync_client = client.clone();
         let task = tokio::spawn(async move {
@@ -267,7 +281,7 @@ impl SdkTransport {
     }
 }
 
-fn install_handlers(client: &Client, tx: InboundTx) {
+fn install_handlers(client: &Client, tx: InboundTx, invites_seen: Arc<std::sync::Mutex<HashSet<String>>>) {
     let own = client.user_id().map(|u| u.to_owned());
     let tx_msg = tx.clone();
     client.add_event_handler(move |ev: OriginalSyncRoomMessageEvent, room: Room, info: Option<EncryptionInfo>| {
@@ -294,11 +308,12 @@ fn install_handlers(client: &Client, tx: InboundTx) {
         }
     });
     client.add_event_handler(move |ev: StrippedRoomMemberEvent, room: Room, client: Client| {
-        let tx = tx.clone();
+        let (tx, invites_seen) = (tx.clone(), Arc::clone(&invites_seen));
         async move {
             if Some(ev.state_key.as_ref()) != client.user_id().map(|u| u.as_str()) || room.state() != RoomState::Invited {
                 return;
             }
+            invites_seen.lock().expect("invite set poisoned").insert(room.room_id().to_string());
             let _ = tx.send(Ok(Inbound::Invite { room_id: room.room_id().to_string(), inviter: ev.sender.to_string() }));
         }
     });

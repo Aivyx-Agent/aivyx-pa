@@ -11781,8 +11781,16 @@ async fn run_async(
                 eprintln!("\naivyx: shutting down the Matrix channel.");
                 shutdown_for_signal.cancel();
             });
-            if !no_daemon && let Ok(sp) = default_socket_path() {
-                let transport = aivyx_matrix::sdk::SdkTransport::connect(&session, &dir, &passphrase).await?;
+            // One transport per run, handed to whichever loop runs: its
+            // initial sync queues the pending invite and offline messages,
+            // and a second client would resume after them (and share the
+            // crypto store). Probe for the daemon first to pick the mode.
+            let transport = aivyx_matrix::sdk::SdkTransport::connect(&session, &dir, &passphrase).await?;
+            let daemon_socket = match default_socket_path() {
+                Ok(sp) if !no_daemon && aivyx_channel::daemon_client::daemon_is_running(&sp).await => Some(sp),
+                _ => None,
+            };
+            if let Some(sp) = daemon_socket {
                 eprintln!(
                     "aivyx-pa {} (daemon) — Matrix live in {} as {}",
                     env!("CARGO_PKG_VERSION"),
@@ -11790,7 +11798,7 @@ async fn run_async(
                     session.user_id
                 );
                 match aivyx_channel::matrix_daemon_frontend::run_matrix_daemon_session(
-                    transport,
+                    Arc::clone(&transport),
                     policy.clone(),
                     sp.clone(),
                     Some(active_role_name.clone()),
@@ -11802,8 +11810,9 @@ async fn run_async(
                 .await
                 {
                     Ok(()) => return Ok(()),
-                    // A rejected login would fail the same way in-process.
-                    Err(e) if e.to_string().contains("connect matrix") => return Err(e.to_string()),
+                    // A logged-out device or an unencrypted room would fail
+                    // the same way in-process.
+                    Err(e @ aivyx_channel::daemon_server::DaemonError::ChannelFatal(_)) => return Err(e.to_string()),
                     Err(e) => eprintln!("aivyx-pa: daemon Matrix session failed ({e}), falling back to in-process."),
                 }
             }
@@ -11834,8 +11843,8 @@ async fn run_async(
                 ),
                 rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
-            aivyx_matrix::session::run_matrix_session(
-                &session, &dir, &passphrase, policy, matrix_config, provider, audit, checkpointer.clone(), shutdown,
+            aivyx_matrix::run_matrix_session_with_transport(
+                transport, policy, matrix_config, provider, audit, checkpointer.clone(), shutdown,
             )
             .await
             .map(|_| ())
