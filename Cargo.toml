@@ -373,3 +373,9 @@ inherits = "dev"
 
 [profile.android-dev]
 inherits = "dev"
+
+# serde-saphyr 0.0.16 with its `regex < 1.13` cap relaxed, so matrix-sdk 0.19
+# (regex 1.13+) and mistralrs-core 0.8.1 (pins serde-saphyr 0.0.16) can share a
+# lockfile. See vendor/README.md for why and when to remove it.
+[patch.crates-io]
+serde-saphyr = { path = "vendor/serde-saphyr" }
