@@ -342,7 +342,7 @@ aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "d387a
 # Extracted from crates/aivyx-pack into its own repo 2026-10-07. Not on
 # crates.io — pinned by commit SHA, same as the shared crates above.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "6240c4fd142c3aec89b520fd8c5d47763c4131bf" }
+aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "6d3729498a74bf80607cee38703ec41f33c85ab0" }
 
 # Standalone generation backends for the aivyx-vision tool process's
 # vision.generate_svg / vision.generate_image / vision.generate_3d
