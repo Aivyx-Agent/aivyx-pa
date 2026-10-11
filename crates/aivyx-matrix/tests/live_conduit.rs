@@ -1,13 +1,27 @@
-//! Live test against a local Conduit homeserver. Run by hand:
+//! Live test against a local Conduit homeserver. Run by hand (copy-paste):
 //!
+//!   cat > /tmp/aivyx-conduit.toml <<'EOF'
+//!   [global]
+//!   server_name = "localhost"
+//!   database_backend = "rocksdb"
+//!   database_path = "/var/lib/matrix-conduit"
+//!   address = "0.0.0.0"
+//!   port = 6167
+//!   allow_registration = true
+//!   yes_i_am_very_very_sure_i_want_an_open_registration_server_prone_to_abuse = true
+//!   allow_federation = false
+//!   max_request_size = 20000000
+//!   EOF
+//!   chmod 644 /tmp/aivyx-conduit.toml
 //!   docker run -d --rm --name aivyx-conduit -p 127.0.0.1:6167:6167 \
-//!     -e CONDUIT_SERVER_NAME=localhost -e CONDUIT_ALLOW_REGISTRATION=true \
-//!     -e CONDUIT_DATABASE_BACKEND=rocksdb -e CONDUIT_PORT=6167 \
-//!     -e CONDUIT_ADDRESS=0.0.0.0 -e CONDUIT_DATABASE_PATH=/tmp \
-//!     -e CONDUIT_YES_I_AM_VERY_VERY_SURE_I_WANT_AN_OPEN_REGISTRATION_SERVER_PRONE_TO_ABUSE=true \
-//!     matrixconduit/matrix-conduit:latest
+//!     -v /tmp/aivyx-conduit.toml:/etc/conduit.toml:ro \
+//!     -e CONDUIT_CONFIG=/etc/conduit.toml matrixconduit/matrix-conduit:latest
+//!   until curl -sf http://127.0.0.1:6167/_matrix/client/versions >/dev/null; do sleep 1; done
 //!   cargo test -p aivyx-matrix --test live_conduit -- --ignored --nocapture
 //!   docker stop aivyx-conduit
+//!
+//! Conduit sends welcome/announcement messages from @conduit:localhost to
+//! new accounts; the test skips those on purpose.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
