@@ -90,20 +90,26 @@ A Signal event becomes a turn — at `SemiTrusted`, like Matrix — only when
 1. it is a 1:1 `dataMessage` with text. Group messages, sync messages,
    typing and receipt events, reactions and empty messages are ignored
    silently;
-2. its sender (`sourceUuid` / `sourceNumber`) is in `allowed_senders`;
+2. its sender (`sourceNumber`, or `sourceUuid` — the ACI — when Signal
+   hides the number) is in `allowed_senders` (numbers or ACIs);
 3. signal-cli's `listIdentities` for that sender reports the key as
-   **`TRUSTED_VERIFIED`**. Checked per message, with a 60 s cache that is
-   dropped when signal-cli reports an identity change.
+   **`TRUSTED_VERIFIED`**. Checked on every message, uncached: signal-cli
+   doesn't tell clients when a key changes, so a cache could serve a stale
+   "verified".
 
 An allowed sender whose key is unverified or changed gets **one** reply per
 run — "I only answer a verified safety number. Run `aivyx-pa signal verify`
 and compare it with your phone." — and nothing runs. Everyone else is
 ignored silently.
 
-`aivyx-pa signal verify` shows each allowed sender's safety number (from
-`listIdentities`); the operator compares it with their phone (Signal → the
-chat → View safety number) and, on "yes", pa calls `trust` with
-`--verified-safety-number`. A changed key needs verifying again.
+`aivyx-pa signal verify` shows the safety number (from `listIdentities`)
+for each allowed sender **and each `send_to` contact** — signal-cli
+(`--trust-new-identities never`) also refuses to *send* to an unverified
+key; the operator compares it with their phone (Signal → the chat → View
+safety number) and, on "yes", pa calls `trust` with
+`--verified-safety-number`. A changed key needs verifying again. signal-cli
+knows a contact's key once they've messaged the assistant or after a first
+send attempt.
 
 ## Message flow
 
@@ -114,8 +120,9 @@ chat → View safety number) and, on "yes", pa calls `trust` with
 - **While a turn runs:** a typing indicator; a read receipt for the incoming
   message.
 - **Reply:** sent once complete, split into several messages past ~2,000
-  characters. If the incoming message had a disappearing-messages timer
-  (`expiresInSeconds`), the reply uses the same timer.
+  characters. A disappearing-messages timer is the chat's setting, which
+  signal-cli applies to the assistant's replies itself (checked on the
+  manual checklist).
 - **Commands:** `/cancel` during a turn (in-process, as on Matrix); `/team …`
   gated exactly as on Matrix (daemon mode).
 
@@ -148,7 +155,10 @@ The socket path is not config: it is always the instance's
 1. Register the assistant's number with signal-cli (documented).
 2. Start the signal-cli daemon (the guide's systemd user unit).
 3. Add `[signal]`, and the `[[tool_process]]` entry for `signal.send`.
-4. `aivyx-pa connect signal` — checks the socket answers and serves `account`.
+4. `aivyx-pa connect signal` — checks the socket answers (`version`) and
+   writes `tool-processes/signal/signal-tool.toml` with `send_to` (the
+   sandboxed tool can't read `aivyx-pa.toml`); run it again after changing
+   `send_to`.
 5. `aivyx-pa signal verify` — verify each allowed sender's safety number.
 6. `aivyx-pa --channel signal`.
 
@@ -159,8 +169,6 @@ The socket path is not config: it is always the instance's
 - **Account not registered or unregistered** (the number was taken over
   elsewhere): the channel stops with "re-register the assistant's number with
   signal-cli, then run `aivyx-pa connect signal`".
-- **The socket serves another account:** `connect signal` and the channel
-  refuse.
 - **A reply fails to send:** logged, not retried (the turn itself is audited as usual).
 - **`signal.send` fails:** the tool returns the error.
 - `[budget]` and `[rate_limit]` apply as on every channel.
