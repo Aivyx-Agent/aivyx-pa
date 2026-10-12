@@ -835,7 +835,10 @@ not a header, so a forged "From: you" from outside never qualifies; Proton's
 results come before any the sender wrote, so a forged pass is never first.
 External mail must also be delivered to the channel address (`Delivered-To` /
 `X-Original-To`, set by Proton's receiving server). Everything else is
-ignored without a reply (no backscatter). DMARC proves the sender's *domain*
+ignored without a reply (no backscatter). The channel's replies carry
+`Auto-Submitted: auto-replied` (RFC 3834), and incoming mail with any
+`Auto-Submitted` other than `no` is ignored, so two auto-answering mailboxes
+(including another Aivyx PA) can't loop. DMARC proves the sender's *domain*
 authorised the message, not the person, and replies to external addresses
 leave Proton as ordinary email. Bridge is reached only on loopback, over
 STARTTLS pinned to the SHA-256 of its certificate (captured by `connect

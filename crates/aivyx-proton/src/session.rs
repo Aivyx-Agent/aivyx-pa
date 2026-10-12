@@ -118,12 +118,13 @@ pub async fn answer<T: MailTransport + ?Sized>(
     answer: &str,
 ) -> Result<(), TransportError> {
     let to = turn.message.from.clone().into_iter().collect();
-    let reply = OutgoingMail::reply(
+    let mut reply = OutgoingMail::reply(
         &policy.channel_address,
         to,
         &turn.message,
         reply_body(answer, &turn.notes),
     );
+    reply.auto_submitted = true;
     transport.send(&reply).await?;
     if let Err(e) = transport.file_handled(turn.message.uid, &reply).await {
         eprintln!("aivyx-proton: replied, but couldn't file the email: {e}");

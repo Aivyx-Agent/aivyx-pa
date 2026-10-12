@@ -275,6 +275,7 @@ async fn an_email_from_you_is_answered_in_its_thread_and_filed() {
     assert_eq!(sent[0].subject, "Re: Lunch?");
     assert_eq!(sent[0].in_reply_to.as_deref(), Some("m10@proton.me"));
     assert_eq!(sent[0].body, "The usual place.");
+    assert!(sent[0].auto_submitted, "channel replies are marked Auto-Submitted");
     let filed = t.filed().await;
     assert_eq!(filed.len(), 1);
     assert_eq!(filed[0].0, 10);

@@ -2,7 +2,7 @@
 //! and sends. Rendered to RFC 5322 bytes with `lettre`'s message builder
 //! (CRLF, encoded headers); sent by our own SMTP client (`smtp`).
 
-use lettre::message::header::ContentType;
+use lettre::message::header::{ContentType, HeaderName, HeaderValue};
 use lettre::message::Mailbox;
 
 use crate::message::MailMessage;
@@ -20,6 +20,10 @@ pub struct OutgoingMail {
     pub references: Vec<String>,
     /// Without angle brackets.
     pub message_id: String,
+    /// Adds `Auto-Submitted: auto-replied` (RFC 3834): set on the
+    /// channel's replies only, so another auto-answering mailbox (or
+    /// another Aivyx PA) ignores them instead of answering back.
+    pub auto_submitted: bool,
 }
 
 impl OutgoingMail {
@@ -33,6 +37,7 @@ impl OutgoingMail {
             in_reply_to: None,
             references: Vec::new(),
             message_id: new_message_id(from),
+            auto_submitted: false,
         }
     }
 
@@ -71,6 +76,12 @@ impl OutgoingMail {
         if !self.references.is_empty() {
             let refs: Vec<String> = self.references.iter().map(|r| format!("<{r}>")).collect();
             b = b.references(refs.join(" "));
+        }
+        if self.auto_submitted {
+            b = b.raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("Auto-Submitted"),
+                "auto-replied".to_string(),
+            ));
         }
         let message = b
             .header(ContentType::TEXT_PLAIN)
@@ -138,6 +149,19 @@ mod tests {
         let back = crate::message::parse(1, raw.as_bytes()).unwrap();
         assert_eq!(back.in_reply_to.as_deref(), Some("m2@proton.me"));
         assert_eq!(back.from.as_deref(), Some("bot@proton.me"));
+    }
+
+    #[test]
+    fn only_channel_replies_say_auto_submitted() {
+        let mut r = OutgoingMail::reply("bot@proton.me", vec!["me@proton.me".into()], &original(), "Sure.".into());
+        assert!(!r.auto_submitted);
+        let raw = String::from_utf8(r.to_rfc5322().unwrap()).unwrap();
+        assert!(!raw.contains("Auto-Submitted"), "{raw}");
+        r.auto_submitted = true;
+        let raw = String::from_utf8(r.to_rfc5322().unwrap()).unwrap();
+        assert!(raw.contains("Auto-Submitted: auto-replied\r\n"), "{raw}");
+        let back = crate::message::parse(1, raw.as_bytes()).unwrap();
+        assert_eq!(back.auto_submitted.as_deref(), Some("auto-replied"));
     }
 
     #[test]
