@@ -109,9 +109,16 @@ impl From<RpcError> for TransportError {
             RpcError::Closed => TransportError::Unreachable("connection closed".into()),
             RpcError::Remote { message, .. } => {
                 // Signal's server answers 401/403 for a number that was
-                // unregistered or taken over elsewhere.
+                // unregistered or taken over elsewhere. A "Failed to send…"
+                // report is per recipient (it can quote a 401/403 for one
+                // of them): that send failed, the account is fine.
                 let lower = message.to_ascii_lowercase();
-                if lower.contains("authorization failed") || lower.contains("[401]") || lower.contains("[403]") {
+                let per_recipient = message.trim_start().starts_with("Failed to send");
+                if !per_recipient
+                    && (lower.contains("authorization failed")
+                        || lower.contains("[401]")
+                        || lower.contains("[403]"))
+                {
                     TransportError::Unregistered(message)
                 } else {
                     TransportError::Refused(message)
@@ -464,6 +471,21 @@ mod tests {
         assert!(e.is_untrusted_recipient());
         assert!(!e.is_fatal());
         assert!(matches!(TransportError::from(RpcError::Closed), TransportError::Unreachable(_)));
+        let remote = |m: &str| TransportError::from(RpcError::Remote { code: -1, message: m.into() });
+        assert!(remote("authorization FAILED").is_fatal());
+        assert!(remote("Something went wrong: [401] Unauthorized").is_fatal());
+        assert!(remote("[403] Forbidden").is_fatal());
+        // A per-recipient send failure is that send's problem, not the account's.
+        for m in [
+            "Failed to send (some) messages:\n+15550002222: [401] Unauthorized",
+            "Failed to send message: [403] Forbidden",
+            "Failed to send (some) messages: Authorization failed",
+        ] {
+            let e = remote(m);
+            assert!(matches!(e, TransportError::Refused(_)), "{m}: {e:?}");
+            assert!(!e.is_fatal());
+        }
+        assert!(matches!(remote("Unregistered user"), TransportError::Refused(_)));
     }
 
     /// A fake signal-cli daemon on a real Unix socket: answers `version`,
