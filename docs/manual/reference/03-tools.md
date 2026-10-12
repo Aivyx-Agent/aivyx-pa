@@ -169,7 +169,7 @@ Needs `aivyx-pa connect gmail`.
 
 ## Proton Mail
 
-Needs Proton Mail Bridge and `aivyx-pa connect proton`, then the `aivyx-proton` `[[tool_process]]`. See [Chat apps and accounts]({GUIDE}/13-chat-apps-and-accounts.md).
+Needs Proton Mail Bridge and `aivyx-pa connect proton`, then the `aivyx-proton` `[[tool_process]]`. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
 
 | Tool | What it does |
 |---|---|
