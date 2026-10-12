@@ -7206,6 +7206,12 @@ impl AivyxConfig {
                             let n = n.trim().to_ascii_lowercase();
                             if is_e164(&n) || (aci_ok && is_aci(&n)) {
                                 Ok(n)
+                            } else if aci_ok {
+                                Err(invalid(
+                                    field,
+                                    "each entry must be a phone number like +15550001111 or a \
+                                     Signal ACI (UUID)",
+                                ))
                             } else {
                                 Err(invalid(field, "each entry must be a phone number like +15550001111"))
                             }

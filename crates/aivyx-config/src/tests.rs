@@ -723,6 +723,23 @@ fn signal_rejects_malformed_numbers() {
 }
 
 #[test]
+fn signal_number_errors_mention_acis_only_where_allowed() {
+    let env = EnvScope::new();
+    let reason = |rest: &str| {
+        let body = format!("[signal]\naccount = \"+15559990000\"\n{rest}");
+        match load_with_toml_result(&body, "signal-reason") {
+            Err(ConfigError::Invalid { reason, .. }) => reason,
+            other => panic!("expected Invalid for:\n{body}\ngot {other:?}"),
+        }
+    };
+    assert!(reason("allowed_senders = [\"me\"]\n").contains("Signal ACI"));
+    let send_to = reason("allowed_senders = [\"+15550001111\"]\nsend_to = [\"x\"]\n");
+    assert!(send_to.contains("phone number like +15550001111"), "{send_to}");
+    assert!(!send_to.contains("ACI"), "{send_to}");
+    drop(env);
+}
+
+#[test]
 fn matrix_accepts_loopback_http_homeservers() {
     let env = EnvScope::new();
     for hs in [
