@@ -10,5 +10,7 @@
 //! `docs/superpowers/specs/2026-10-12-signal-channel-design.md`.
 
 pub mod envelope;
+pub mod lock;
+pub mod policy;
 pub mod rpc;
 pub mod transport;
