@@ -10,9 +10,12 @@
 //! `docs/superpowers/specs/2026-10-12-proton-mail-design.md`.
 
 pub mod bridge;
+pub mod credentials;
+pub mod lock;
 pub mod message;
 pub mod outgoing;
 pub mod policy;
 pub mod smtp;
+pub mod state;
 pub mod tls;
 pub mod transport;
