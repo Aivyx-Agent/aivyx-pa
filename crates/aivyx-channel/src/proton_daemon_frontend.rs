@@ -3,7 +3,8 @@
 //! policy, reply, filing); only approved mail is submitted to the daemon,
 //! over one IPC session per email thread so each thread keeps its own
 //! conversation. `/team …` and gate commands are read from the email's
-//! first line, gated exactly as on Matrix.
+//! first line: `/team …` gated exactly as on Matrix, gate commands only
+//! from you or a `team_command_allowed_senders` address.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use aivyx_core::{
     CancellationToken, ChannelContext, ChannelError, ChannelPlatform, SessionId, StreamEvent,
     TurnOutcome,
 };
-use aivyx_proton::policy::ProtonPolicy;
+use aivyx_proton::policy::{ProtonPolicy, Sender};
 use aivyx_proton::session::Turn;
 use aivyx_proton::transport::MailTransport;
 use aivyx_proton::{LoopError, TurnRunner};
@@ -77,6 +78,19 @@ impl ChannelContext for ProtonDaemonChannel {
     fn cancel_inflight(&self) {
         self.token.lock().expect("token mutex poisoned").cancel();
     }
+}
+
+/// Whether this email may resolve a mission gate (`/gate …` on its first
+/// line): only mail from you, or from a `team_command_allowed_senders`
+/// address. For anyone else the line is ordinary text — the daemon's
+/// `ResolveGate` doesn't check who owns the mission.
+fn may_resolve_gates(turn: &Turn, team_allowed: &[String]) -> bool {
+    if turn.sender == Sender::Operator {
+        return true;
+    }
+    turn.message.from.as_deref().is_some_and(|from| {
+        !from.is_empty() && team_allowed.iter().any(|a| a.trim().eq_ignore_ascii_case(from))
+    })
 }
 
 /// Daemon sessions kept open at once (one per recent thread); the oldest
@@ -145,7 +159,10 @@ impl TurnRunner for DaemonRunner {
             return Ok(Some(reply));
         }
         let root = turn.thread();
-        if let Some(gate) = gate_command::parse(&turn.first_line) {
+        let gate = may_resolve_gates(turn, &self.team_command_allowed_senders)
+            .then(|| gate_command::parse(&turn.first_line))
+            .flatten();
+        if let Some(gate) = gate {
             let session = self.session_for(&root).await.map_err(|e| e.to_string())?;
             let reply = match session
                 .resolve_gate(gate.mission_id, gate.gate_id, gate.approved)
@@ -216,6 +233,32 @@ mod tests {
 
     fn policy() -> ProtonPolicy {
         ProtonPolicy::new("bot@proton.me", &["me@proton.me".into(), "bot@proton.me".into()], &[])
+    }
+
+    fn turn(sender: Sender, from: &str) -> Turn {
+        Turn {
+            message: aivyx_proton::message::MailMessage {
+                uid: 1,
+                from: Some(from.into()),
+                ..Default::default()
+            },
+            sender,
+            text: String::new(),
+            first_line: "/gate approve m1 g1".into(),
+            notes: vec![],
+        }
+    }
+
+    #[test]
+    fn only_you_or_team_allowed_senders_resolve_gates() {
+        let team = vec!["Boss@Example.com".to_string()];
+        assert!(may_resolve_gates(&turn(Sender::Operator, "me@proton.me"), &[]));
+        assert!(!may_resolve_gates(&turn(Sender::External, "friend@example.com"), &team));
+        assert!(!may_resolve_gates(&turn(Sender::External, "friend@example.com"), &[]));
+        assert!(may_resolve_gates(&turn(Sender::External, "boss@example.com"), &team));
+        let mut no_from = turn(Sender::External, "");
+        no_from.message.from = None;
+        assert!(!may_resolve_gates(&no_from, &[String::new()]));
     }
 
     #[test]
