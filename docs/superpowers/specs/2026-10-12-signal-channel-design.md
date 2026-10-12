@@ -59,7 +59,7 @@ signal-cli -a +ASSISTANT \
 - No `--trust-new-identities` flag: signal-cli's default trusts a new key on
   first sight (TOFU, `TRUSTED_UNVERIFIED`). pa answers, and `signal.send`
   sends to, only a key the operator verified; a changed key is
-  `UNTRUSTED` (never verified), so it's refused until verified again.
+  `UNTRUSTED` (isn't verified), so it's refused until verified again.
 - The guide gives a systemd user unit for it. signal-cli needs Java 25 and
   must be updated at least every three months (Signal's server drops older
   clients).

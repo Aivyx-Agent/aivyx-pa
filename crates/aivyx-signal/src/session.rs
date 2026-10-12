@@ -294,7 +294,10 @@ pub async fn run_signal_session_with_transport<T: SignalTransport + ?Sized>(
                 }
                 r = transport.next_event(), if polling => {
                     let event = match r {
-                        Ok(e) => e,
+                        Ok(e) => {
+                            backoff = Duration::from_secs(1);
+                            e
+                        }
                         Err(e) if e.is_fatal() => {
                             fatal = Some(e.to_string());
                             channel.cancellation_token().cancel();

@@ -858,7 +858,7 @@ message, when signal-cli reports the sender's identity key as
 (`aivyx-pa signal verify`). signal-cli itself runs with its default
 on-first-use trust (a new key is `TRUSTED_UNVERIFIED`), so the check is
 pa's: only `TRUSTED_VERIFIED` drives a turn, and a changed key (a
-re-registered or SIM-swapped number) is never verified, so it's refused
+re-registered or SIM-swapped number) isn't verified, so it's refused
 until verified again. An
 allowed sender with an unverified key gets one reply per run asking to
 verify; everyone else, and group messages, are ignored. signal-cli is a
