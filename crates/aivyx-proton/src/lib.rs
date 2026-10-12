@@ -12,4 +12,5 @@
 pub mod message;
 pub mod outgoing;
 pub mod policy;
+pub mod tls;
 pub mod transport;
