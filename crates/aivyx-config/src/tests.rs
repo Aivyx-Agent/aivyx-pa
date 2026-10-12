@@ -639,6 +639,11 @@ team_command_allowed_senders = ["me@proton.me"]
     assert!(!p.team_run_channel);
     assert!(load_with_toml("", "proton-absent").proton.is_none());
     // Tools only: no channel address needed.
+    let padded = load_with_toml(
+        "[proton]\nown_addresses = [\"me@proton.me\"]\nfolder = \" Handled \"\n",
+        "proton-folder-trim",
+    );
+    assert_eq!(padded.proton.unwrap().folder, "Handled");
     let tools_only = load_with_toml("[proton]\nown_addresses = [\"me@proton.me\"]\n", "proton-tools");
     assert_eq!(tools_only.proton.unwrap().channel_address, None);
     drop(env);
@@ -658,6 +663,11 @@ fn proton_rejects_unsafe_or_malformed_settings() {
         ("allowed_external_senders = [\"a@b\"]\n", "proton.allowed_external_senders"),
         ("team_command_allowed_senders = [\"me\"]\n", "proton.team_command_allowed_senders"),
         ("folder = \"a/b\"\n", "proton.folder"),
+        ("folder = \"Work*\"\n", "proton.folder"),
+        ("folder = \"Wo%rk\"\n", "proton.folder"),
+        ("folder = \"say \\\"hi\\\"\"\n", "proton.folder"),
+        ("folder = \"a\\\\b\"\n", "proton.folder"),
+        ("folder = \"  \"\n", "proton.folder"),
     ];
     for (line, field) in cases {
         let body = format!("[proton]\n{own}{line}");

@@ -7101,9 +7101,16 @@ impl AivyxConfig {
                     Some(a)
                 }
             };
-            let folder = raw.folder.clone().unwrap_or_else(|| "Aivyx".into());
-            if folder.trim().is_empty() || folder.contains('/') || folder.chars().any(char::is_control) {
-                return Err(invalid("proton.folder", "must be a folder name without `/`"));
+            let folder = raw.folder.as_deref().unwrap_or("Aivyx").trim().to_string();
+            // `*` and `%` are IMAP LIST wildcards; `"` and `\` need quoting.
+            if folder.is_empty()
+                || folder.contains(['/', '*', '%', '"', '\\'])
+                || folder.chars().any(char::is_control)
+            {
+                return Err(invalid(
+                    "proton.folder",
+                    "must be a folder name without `/`, `*`, `%`, `\"` or `\\`",
+                ));
             }
             Some(ProtonConfig {
                 imap_addr,

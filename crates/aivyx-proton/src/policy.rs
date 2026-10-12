@@ -247,6 +247,13 @@ mod tests {
     fn strangers_loops_and_automatic_mail_are_ignored() {
         let p = policy();
         assert!(matches!(decide(&p, &mail("stranger@x.com"), false), Decision::Ignore(_)));
+        // Not allowlisted, even with Proton's own DMARC pass for its domain.
+        let stranger = MailMessage {
+            auth_results: vec!["mail.protonmail.ch; dmarc=pass (p=reject) header.from=x.com".into()],
+            ..mail("stranger@x.com")
+        };
+        assert!(proton_dmarc_passes(&stranger.auth_results, "x.com"));
+        assert_eq!(decide(&p, &stranger, false), Decision::Ignore("sender not allowed"));
         // The assistant's own replies (from the channel address).
         let own = mail("me_aivyx@proton.me");
         assert!(!p.claims_operator(&own));

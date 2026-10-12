@@ -124,6 +124,13 @@ pub fn save(path: &Path, creds: &BridgeCredentials) -> Result<(), String> {
         .map_err(|e| format!("create {}: {e}", dir.display()))?;
     let text = toml::to_string(creds).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("toml.tmp");
+    // Never reuse a leftover (or planted) temporary file: its permissions
+    // would survive `create(true)` and the rename.
+    match std::fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("remove {}: {e}", tmp.display())),
+    }
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -185,6 +192,21 @@ mod tests {
         save(&path, &creds()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(load(&path).unwrap_err().contains("chmod 600"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_temporary_file_is_never_reused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CREDENTIALS_FILE);
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, "planted").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save(&path, &creds()).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(load(&path).unwrap(), Some(creds()));
+        assert!(!tmp.exists());
     }
 
     #[test]
