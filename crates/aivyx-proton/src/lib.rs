@@ -10,3 +10,4 @@
 //! `docs/superpowers/specs/2026-10-12-proton-mail-design.md`.
 
 pub mod message;
+pub mod policy;
