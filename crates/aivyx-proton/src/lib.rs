@@ -9,6 +9,7 @@
 //! Bridge transport (`bridge`, `smtp`, pinned `tls`). See
 //! `docs/superpowers/specs/2026-10-12-proton-mail-design.md`.
 
+pub mod bridge;
 pub mod message;
 pub mod outgoing;
 pub mod policy;
