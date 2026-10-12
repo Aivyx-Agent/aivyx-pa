@@ -59,6 +59,15 @@ async fn raw(user: &str) -> async_imap::Session<Stream> {
     PlainDial.imap().await.unwrap().login(user, "pw").await.map_err(|(e, _)| e).unwrap()
 }
 
+/// Unique per run (pid + nanos): a reused container must not collide.
+fn stamp() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{}{}", std::process::id(), nanos)
+}
+
 async fn wait_for_mail(t: &BridgeTransport, after: u32) -> Vec<aivyx_proton::message::MailMessage> {
     tokio::time::timeout(Duration::from_secs(70), async {
         loop {
@@ -75,7 +84,7 @@ async fn wait_for_mail(t: &BridgeTransport, after: u32) -> Vec<aivyx_proton::mes
 #[tokio::test]
 #[ignore = "needs a local GreenMail in Docker — see the module doc"]
 async fn the_transport_works_against_a_real_mailbox() {
-    let stamp = std::process::id();
+    let stamp = stamp();
     let me = format!("me{stamp}@proton.test");
     let t = transport(&me);
     let status = t.inbox_status().await.unwrap();
@@ -125,7 +134,7 @@ async fn the_transport_works_against_a_real_mailbox() {
     // IDLE wakes for new mail well before its 60 s timeout.
     let last = r.select("INBOX").await.unwrap().uid_next.unwrap_or(1) - 1;
     let me2 = me.clone();
-    tokio::spawn(async move {
+    let sender = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(3)).await;
         let m = OutgoingMail::new(&me2, vec![me2.clone()], vec![], "second", "x".into());
         transport(&me2).send(&m).await.unwrap();
@@ -134,6 +143,7 @@ async fn the_transport_works_against_a_real_mailbox() {
     let b = wait_for_mail(&transport(&me), last).await;
     assert_eq!(b[0].subject, "second");
     assert!(start.elapsed() < Duration::from_secs(30), "IDLE took {:?}", start.elapsed());
+    sender.await.expect("sender task did not panic");
     r.logout().await.unwrap();
 }
 
@@ -150,7 +160,7 @@ impl TurnRunner for Echo {
 #[tokio::test]
 #[ignore = "needs a local GreenMail in Docker — see the module doc"]
 async fn the_mail_loop_answers_mail_from_you_and_files_it() {
-    let stamp = std::process::id();
+    let stamp = stamp();
     let me = format!("me{stamp}l@proton.test");
     let bot = format!("bot{stamp}l@proton.test");
     let mut r = raw(&me).await;
@@ -175,13 +185,15 @@ async fn the_mail_loop_answers_mail_from_you_and_files_it() {
         "X-Pm-Internal-Id: pm{stamp}==\r\nFrom: {me}\r\nTo: {bot}\r\nMessage-ID: <q{stamp}@proton.test>\r\n\
          Subject: hello bot\r\n\r\nare you there?\r\n"
     );
-    r.append("Sent", None, None, raw_mail.as_bytes()).await.unwrap();
-    r.append("INBOX", None, None, raw_mail.as_bytes()).await.unwrap();
     // A forgery: same From, not in Sent.
     let forged = format!(
         "X-Pm-Internal-Id: forged{stamp}==\r\nFrom: {me}\r\nTo: {bot}\r\nSubject: forged\r\n\r\nx\r\n"
     );
     r.append("INBOX", None, None, forged.as_bytes()).await.unwrap();
+    // The real email goes in after it, so by the time its reply appears the
+    // forgery (lower UID) has already been screened.
+    r.append("Sent", None, None, raw_mail.as_bytes()).await.unwrap();
+    r.append("INBOX", None, None, raw_mail.as_bytes()).await.unwrap();
 
     // The reply (from the bot address) lands back in this same inbox.
     let deadline = std::time::Instant::now() + Duration::from_secs(90);
@@ -196,6 +208,10 @@ async fn the_mail_loop_answers_mail_from_you_and_files_it() {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
+    // The loop sends before it files; stop it between messages (after filing)
+    // and join before asserting on the folders.
+    shutdown.cancel();
+    let report = looper.await.unwrap().unwrap();
     assert_eq!(reply.subject, "Re: hello bot");
     assert_eq!(reply.in_reply_to.as_deref(), Some(format!("q{stamp}@proton.test").as_str()));
     assert!(reply.text.contains("HELLO BOT"));
@@ -204,9 +220,8 @@ async fn the_mail_loop_answers_mail_from_you_and_files_it() {
     assert_eq!(r.uid_search("ALL").await.unwrap().len(), 2, "original + reply copy");
     r.select("INBOX").await.unwrap();
     assert_eq!(r.uid_search("SUBJECT \"forged\" UNSEEN").await.unwrap().len(), 1);
+    assert_eq!(r.uid_search(format!("FROM \"{bot}\"")).await.unwrap().len(), 1, "only the real email was answered");
 
-    shutdown.cancel();
-    let report = looper.await.unwrap().unwrap();
     assert_eq!(report.answered, 1);
     r.logout().await.unwrap();
 }
