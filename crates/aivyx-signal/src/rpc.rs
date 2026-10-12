@@ -34,19 +34,58 @@ pub enum RpcError {
     Closed,
 }
 
-type Pending = Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, RpcError>>>>>;
+type Reply = oneshot::Sender<Result<Value, RpcError>>;
+
+/// The waiting calls and whether the connection is gone, under one lock so a
+/// call can never register after the drain that fails everyone.
+#[derive(Default)]
+struct Shared {
+    pending: HashMap<u64, Reply>,
+    closed: bool,
+}
+
+type SharedState = Arc<StdMutex<Shared>>;
+
+/// Marks the connection closed and fails every waiting call.
+fn close(shared: &SharedState) {
+    let mut s = shared.lock().expect("pending mutex poisoned");
+    s.closed = true;
+    for (_, tx) in s.pending.drain() {
+        let _ = tx.send(Err(RpcError::Closed));
+    }
+}
+
+/// Removes a call's pending entry when the call ends, however it ends.
+struct PendingGuard<'a> {
+    shared: &'a SharedState,
+    id: u64,
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        self.shared
+            .lock()
+            .expect("pending mutex poisoned")
+            .pending
+            .remove(&self.id);
+    }
+}
 
 pub struct RpcClient {
-    writer: Mutex<Box<dyn AsyncWrite + Send + Unpin>>,
-    pending: Pending,
+    /// Complete request lines for the writer task; sending is synchronous, so
+    /// a cancelled `call` can never leave half a line on the wire.
+    lines: mpsc::UnboundedSender<Vec<u8>>,
+    shared: SharedState,
     next_id: AtomicU64,
     notifications: Mutex<mpsc::UnboundedReceiver<Value>>,
     reader: tokio::task::JoinHandle<()>,
+    writer: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for RpcClient {
     fn drop(&mut self) {
         self.reader.abort();
+        self.writer.abort();
     }
 }
 
@@ -62,26 +101,24 @@ impl RpcClient {
     /// Wraps any byte stream (tests use an in-memory pipe).
     pub fn from_stream<S: AsyncRead + AsyncWrite + Send + 'static>(stream: S) -> Self {
         let (read, write) = tokio::io::split(stream);
-        let pending: Pending = Arc::default();
+        let shared: SharedState = Arc::default();
         let (tx, rx) = mpsc::unbounded_channel();
-        let reader = tokio::spawn(read_loop(read, Arc::clone(&pending), tx));
+        let (lines, line_rx) = mpsc::unbounded_channel();
+        let reader = tokio::spawn(read_loop(read, Arc::clone(&shared), tx));
+        let writer = tokio::spawn(write_loop(write, line_rx, Arc::clone(&shared)));
         RpcClient {
-            writer: Mutex::new(Box::new(write)),
-            pending,
+            lines,
+            shared,
             next_id: AtomicU64::new(1),
             notifications: Mutex::new(rx),
             reader,
+            writer,
         }
     }
 
-    /// Calls `method` and waits for its result.
+    /// Calls `method` and waits for its result. Cancel-safe.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        self.pending
-            .lock()
-            .expect("pending mutex poisoned")
-            .insert(id, tx);
         let mut line = serde_json::to_vec(&json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -90,25 +127,28 @@ impl RpcClient {
         }))
         .map_err(|e| RpcError::Io(e.to_string()))?;
         line.push(b'\n');
-        let written = {
-            let mut w = self.writer.lock().await;
-            match w.write_all(&line).await {
-                Ok(()) => w.flush().await,
-                Err(e) => Err(e),
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut s = self.shared.lock().expect("pending mutex poisoned");
+            if s.closed {
+                return Err(RpcError::Closed);
             }
-        };
-        if let Err(e) = written {
-            self.pending.lock().expect("pending mutex poisoned").remove(&id);
-            return Err(RpcError::Io(e.to_string()));
+            s.pending.insert(id, tx);
+        }
+        let _guard = PendingGuard { shared: &self.shared, id };
+        if self.lines.send(line).is_err() {
+            return Err(RpcError::Closed);
         }
         match tokio::time::timeout(CALL_TIMEOUT, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(RpcError::Closed),
-            Err(_) => {
-                self.pending.lock().expect("pending mutex poisoned").remove(&id);
-                Err(RpcError::Io(format!("signal-cli didn't answer `{method}` in time")))
-            }
+            Err(_) => Err(RpcError::Io(format!("signal-cli didn't answer `{method}` in time"))),
         }
+    }
+
+    #[cfg(test)]
+    fn pending_len(&self) -> usize {
+        self.shared.lock().expect("pending mutex poisoned").pending.len()
     }
 
     /// The next `receive` notification's `params`. `Closed` once the
@@ -125,7 +165,7 @@ impl RpcClient {
 
 async fn read_loop<R: AsyncRead + Unpin>(
     read: R,
-    pending: Pending,
+    shared: SharedState,
     notifications: mpsc::UnboundedSender<Value>,
 ) {
     let mut reader = BufReader::new(read);
@@ -142,16 +182,30 @@ async fn read_loop<R: AsyncRead + Unpin>(
         let Ok(msg) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
-        dispatch(msg, &pending, &notifications);
+        dispatch(msg, &shared, &notifications);
     }
-    for (_, tx) in pending.lock().expect("pending mutex poisoned").drain() {
-        let _ = tx.send(Err(RpcError::Closed));
+    close(&shared);
+}
+
+/// Owns the write half: writes each complete line, and on failure marks the
+/// connection closed.
+async fn write_loop<W: AsyncWrite + Unpin>(
+    mut write: W,
+    mut lines: mpsc::UnboundedReceiver<Vec<u8>>,
+    shared: SharedState,
+) {
+    while let Some(line) = lines.recv().await {
+        let ok = write.write_all(&line).await.is_ok() && write.flush().await.is_ok();
+        if !ok {
+            close(&shared);
+            return;
+        }
     }
 }
 
-fn dispatch(msg: Value, pending: &Pending, notifications: &mpsc::UnboundedSender<Value>) {
+fn dispatch(msg: Value, shared: &SharedState, notifications: &mpsc::UnboundedSender<Value>) {
     if let Some(id) = msg.get("id").and_then(Value::as_u64) {
-        let Some(tx) = pending.lock().expect("pending mutex poisoned").remove(&id) else {
+        let Some(tx) = shared.lock().expect("pending mutex poisoned").pending.remove(&id) else {
             return;
         };
         let result = match msg.get("error") {
@@ -252,13 +306,39 @@ mod tests {
     async fn a_closed_connection_fails_waiting_calls_and_the_stream() {
         let (client, srv) = tokio::io::duplex(1024);
         let c = RpcClient::from_stream(client);
-        drop(srv);
-        // Writing to a closed pipe fails (Io) or the reader saw EOF first
-        // (Closed); the transport treats both as "unreachable".
-        assert!(matches!(
-            c.call("version", json!({})).await,
-            Err(RpcError::Closed | RpcError::Io(_))
-        ));
+        // The server reads the request, then drops the connection.
+        let h = tokio::spawn(async move {
+            let mut lines = BufReader::new(srv).lines();
+            let _ = lines.next_line().await;
+        });
+        assert_eq!(c.call("version", json!({})).await.unwrap_err(), RpcError::Closed);
+        h.await.unwrap();
         assert_eq!(c.next_notification().await.unwrap_err(), RpcError::Closed);
+    }
+
+    #[tokio::test]
+    async fn a_call_after_the_reader_died_fails_at_once() {
+        let (client, srv) = tokio::io::duplex(1024);
+        let c = RpcClient::from_stream(client);
+        drop(srv);
+        assert_eq!(c.next_notification().await.unwrap_err(), RpcError::Closed);
+        let r = tokio::time::timeout(Duration::from_secs(1), c.call("version", json!({})))
+            .await
+            .expect("call must not wait");
+        assert_eq!(r.unwrap_err(), RpcError::Closed);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_call_leaves_nothing_pending_and_the_next_call_works() {
+        let (stream, _srv) = server(vec![], |req| {
+            (req["id"] == 2).then(|| json!({"jsonrpc":"2.0","id":2,"result":"ok"}))
+        });
+        let c = RpcClient::from_stream(stream);
+        let first =
+            tokio::time::timeout(Duration::from_millis(50), c.call("slow", json!({}))).await;
+        assert!(first.is_err(), "the first call is never answered");
+        assert_eq!(c.pending_len(), 0);
+        assert_eq!(c.call("fast", json!({})).await.unwrap(), "ok");
+        assert_eq!(c.pending_len(), 0);
     }
 }
