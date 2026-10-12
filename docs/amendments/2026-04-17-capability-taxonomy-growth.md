@@ -873,6 +873,27 @@ infrastructure bases). The
 `known_bases_count_matches_phase_143_a3_addendum` test pins the new
 total at **100**, so this addendum and the runtime stay in sync.
 
+## Signal addendum — `message.send` (2026-10-12)
+
+> *Added for the Signal channel's tool process (`aivyx-signal`).
+> `message.send` gates `signal.send`: a text message from the
+> assistant's own Signal number to a contact the operator listed in
+> `[signal] send_to`. A third-party integration send, the same category
+> as `email.send` — not substrate, so no P10 amendment. Bare base,
+> `CEILING_TRUSTED` only, and in the withheld-integration list, so the
+> turn loop pauses for approval on every call. Deliberately not
+> `channel.send`, which remote channels' ceilings carry.*
+
+| Chapter | Bases added | Provenance |
+|---|---|---|
+| Signal | `message.send` | `signal.send` (Trusted-tier only, withheld like `email.send`) |
+
+### Running count
+
+`KNOWN_BASES.len()` moves **100 → 101**. The
+`known_bases_count_matches_phase_143_a3_addendum` test pins the new
+total at **101**.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

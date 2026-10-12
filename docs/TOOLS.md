@@ -196,6 +196,14 @@ Through Proton Mail Bridge on this machine; set up with `aivyx-pa connect proton
 | `proton.draft` | `email.write` | Trusted | save a draft (never sent) |
 | `proton.send` | `email.send` | Trusted | send now; approval on every call |
 
+## Signal (tool process `aivyx-signal`)
+
+Through the operator's own signal-cli daemon; set up with `aivyx-pa connect signal`.
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `signal.send` | `message.send` | Trusted | send a text from the assistant's Signal number to a `[signal] send_to` contact; approval on every call |
+
 ## Calendar (tool process `aivyx-calendar`)
 
 | Tool | Scope | Min tier | Notes |

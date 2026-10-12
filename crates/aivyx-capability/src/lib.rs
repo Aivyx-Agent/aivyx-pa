@@ -103,6 +103,13 @@ const KNOWN_BASES: &[&str] = &[
     "email.read",
     "email.write",
     "email.send",
+    // Signal (aivyx-signal tool process). `message.send` gates
+    // `signal.send`: a text message from the assistant's own Signal
+    // number to a contact the operator listed in `[signal] send_to`.
+    // Trusted-tier only and withheld (approval on every call), like
+    // email.send. Not `channel.send`, which remote channels' ceilings
+    // carry.
+    "message.send",
     // Personal assistant tool bundle (Phase 125 — Chapter G #1,
     // aivyx-toolkit third-party tool process). Five bases for
     // the bundled tool surface:
@@ -656,6 +663,7 @@ pub fn is_read_only_base(base: &str) -> bool {
 const WITHHELD_INTEGRATION_BASES: &[&str] = &[
     "email.write",
     "email.send",
+    "message.send",
     "drive.write",
     "notion.write",
     "obsidian.write",
@@ -1265,6 +1273,8 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "email.read",
         "email.write",
         "email.send",
+        // Signal `signal.send` — Trusted-tier only, like email.send.
+        "message.send",
         // Phase 125 — Personal assistant tool bundle (Chapter
         // G #1). Five bases for the aivyx-toolkit tool process
         // surface; same Trusted-only default as email.* and
@@ -1515,6 +1525,7 @@ mod tests {
         for base in [
             "email.write",
             "email.send",
+            "message.send",
             "drive.write",
             "notion.write",
             "obsidian.write",
@@ -2539,14 +2550,25 @@ mod tests {
         // Model routing Part 3a adds routing.status + routing.read — the
         // router's candidate list and per-session decision read gates
         // (infrastructure, no P10 amendment).
+        // Signal adds message.send — the signal.send tool's base
+        // (Trusted-only, withheld like email.send).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            100,
+            101,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
+    }
+
+    #[test]
+    fn message_send_is_trusted_only_and_withheld() {
+        let s = |x: &str| Scope::parse(x).expect("message.send parses");
+        assert!(TrustTier::Trusted.default_ceiling().grants(&s("message.send")));
+        assert!(!TrustTier::SemiTrusted.default_ceiling().grants(&s("message.send")));
+        assert!(!TrustTier::Untrusted.default_ceiling().grants(&s("message.send")));
+        assert!(is_withheld_integration_base("message.send"));
     }
 
     #[test]
