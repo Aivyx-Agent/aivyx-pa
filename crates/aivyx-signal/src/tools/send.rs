@@ -1,7 +1,9 @@
 //! `signal.send` — a text message from the assistant's Signal number to a
 //! contact the operator listed in `[signal] send_to`. Scope
 //! `message.send`: Trusted-only, and the turn loop pauses for approval on
-//! every call (a withheld-integration base, like `email.send`).
+//! every call unless `[access] confirm_destructive = false` (a
+//! withheld-integration base, like `email.send`). Only a recipient whose
+//! key the operator verified (`TRUSTED_VERIFIED`) is sent to.
 
 use std::sync::Arc;
 
@@ -12,7 +14,7 @@ use aivyx_capability::Scope;
 use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 
 use crate::session::split_reply;
-use crate::transport::SignalTransport;
+use crate::transport::{SignalTransport, TrustLevel};
 
 /// The most text one call may send (several Signal messages).
 const MAX_TEXT: usize = 8 * 1024;
@@ -65,7 +67,8 @@ impl Tool for SignalSend {
          to one of the contacts the operator listed (`[signal] send_to`). \
          **It goes out immediately — there is no undo.** Input: `to` (a \
          listed number, e.g. +15550002222) and `text`. Long text is sent as \
-         several messages. Asks the operator to approve every send."
+         several messages. The contact's safety number must be verified \
+         (`aivyx-pa signal verify`). Asks the operator to approve every send."
     }
 
     fn input_schema(&self) -> &Value {
@@ -95,6 +98,24 @@ impl Tool for SignalSend {
         if text.len() > MAX_TEXT {
             return self.fail("`text` is longer than 8 KiB");
         }
+        // signal-cli trusts a new key on first sight; pa sends only to a
+        // key the operator verified.
+        match self.transport.identity(to).await {
+            Ok(Some(id)) if id.trust == TrustLevel::TrustedVerified => {}
+            Ok(Some(_)) => {
+                return self.fail(format!(
+                    "{to}'s safety number isn't verified — the operator must run \
+                     `aivyx-pa signal verify` first"
+                ));
+            }
+            Ok(None) => {
+                return self.fail(format!(
+                    "signal-cli hasn't seen {to}'s key yet — they need to message the \
+                     assistant first, then the operator runs `aivyx-pa signal verify`"
+                ));
+            }
+            Err(e) => return self.fail(e),
+        }
         let parts = split_reply(text);
         let mut timestamp = 0;
         for part in &parts {
@@ -119,7 +140,7 @@ impl Tool for SignalSend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::{ScriptedTransport, TransportError};
+    use crate::transport::{ScriptedTransport, TransportError, TrustLevel};
     use aivyx_core::{
         AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform, MessageOrigin,
         NullAuditHook, SessionId, StreamEvent, TurnId, TurnOutcome,
@@ -168,7 +189,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_listed_contact_gets_the_message() {
-        let t = Arc::new(ScriptedTransport::new(vec![]));
+        let t = Arc::new(verified_sam());
         let tool = SignalSend::new(t.clone(), vec![SAM.into()]);
         assert_eq!(tool.required_scope(&json!({})).to_string(), "message.send");
         assert!(!tool.output_is_untrusted());
@@ -180,7 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unlisted_number_is_refused_before_anything_is_sent() {
-        let t = Arc::new(ScriptedTransport::new(vec![]));
+        let t = Arc::new(verified_sam());
         let tool = SignalSend::new(t.clone(), vec![SAM.into()]);
         let out = tool.execute(json!({"to": "+15559999999", "text": "hi"}), &ctx()).await;
         assert!(matches!(out, ToolOutcome::Failed(_)));
@@ -191,13 +212,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_unverified_or_unknown_key_is_refused_and_nothing_is_sent() {
+        for (t, says) in [
+            (ScriptedTransport::new(vec![]).with_identity(SAM, TrustLevel::TrustedUnverified, "1"), "signal verify"),
+            (ScriptedTransport::new(vec![]).with_identity(SAM, TrustLevel::Untrusted, "1"), "signal verify"),
+            (ScriptedTransport::new(vec![]), "message the assistant"),
+        ] {
+            let t = Arc::new(t);
+            let tool = SignalSend::new(t.clone(), vec![SAM.into()]);
+            let out = tool.execute(json!({"to": SAM, "text": "hi"}), &ctx()).await;
+            let ToolOutcome::Failed(e) = out else { panic!("{out:?}") };
+            assert!(e.to_string().contains(says), "{e}");
+            assert!(t.sent().await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_key_lookup_error_fails_the_send() {
+        let t = Arc::new(
+            ScriptedTransport::new(vec![])
+                .failing_identity(SAM, TransportError::Unreachable("no socket".into())),
+        );
+        let tool = SignalSend::new(t.clone(), vec![SAM.into()]);
+        let out = tool.execute(json!({"to": SAM, "text": "hi"}), &ctx()).await;
+        let ToolOutcome::Failed(e) = out else { panic!("{out:?}") };
+        assert!(e.to_string().contains("isn't reachable"), "{e}");
+        assert!(t.sent().await.is_empty());
+    }
+
+    #[tokio::test]
     async fn an_untrusted_recipient_key_says_to_verify() {
-        let t = Arc::new(ScriptedTransport::new(vec![]).failing_send(TransportError::Refused(
+        // signal-cli's own refusal (the key changed between check and send).
+        let t = Arc::new(verified_sam().failing_send(TransportError::Refused(
             "Failed to send message due to untrusted identities".into(),
         )));
         let tool = SignalSend::new(t, vec![SAM.into()]);
         let out = tool.execute(json!({"to": SAM, "text": "hi"}), &ctx()).await;
         let ToolOutcome::Failed(e) = out else { panic!() };
         assert!(e.to_string().contains("signal verify"), "{e}");
+    }
+
+    fn verified_sam() -> ScriptedTransport {
+        ScriptedTransport::new(vec![]).with_identity(SAM, TrustLevel::TrustedVerified, "22222")
     }
 }
