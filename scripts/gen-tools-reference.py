@@ -25,6 +25,7 @@ GROUPS = {
     "aivyx-channel": ("Agent machinery", "Missions, routines, reminders, skills, reflection and the like — the agent managing its own work."),
     "aivyx-toolkit": ("Toolkit", "Everyday utilities — tasks, budget, dates, units, health checks. A tool process: install `aivyx-toolkit` and add it as a `[[tool_process]]` (see [INSTALL.md](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md))."),
     "aivyx-gmail": ("Gmail", "Needs `aivyx-pa connect gmail`."),
+    "aivyx-signal": ("Signal", f"Needs your signal-cli daemon and `aivyx-pa connect signal`, then the `aivyx-signal` `[[tool_process]]`. See [Chat apps and accounts]({GUIDE}/13-chat-apps-and-accounts.md)."),
     "aivyx-proton": ("Proton Mail", f"Needs Proton Mail Bridge and `aivyx-pa connect proton`, then the `aivyx-proton` `[[tool_process]]`. See [Chat apps and accounts]({GUIDE}/13-chat-apps-and-accounts.md)."),
     "aivyx-calendar": ("Google Calendar", "Needs `aivyx-pa connect calendar`."),
     "aivyx-drive": ("Google Drive", "Needs `aivyx-pa connect drive`."),

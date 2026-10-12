@@ -53,7 +53,7 @@ the trust tiers in `aivyx-capability/src/lib.rs:503` (D5):
 |---|---|---|---|
 | `Kernel` | Aivyx PA itself | the turn loop, audit writer | unconditional (internal use only) |
 | `Trusted` | the operator at their own keyboard | Local CLI, Web UI on `127.0.0.1` | near-total, with extra audit on destructive ops |
-| `SemiTrusted` | the operator over a remote, authenticated channel | their own Telegram bot, with chat-id allowlisted; the Matrix home room, from a verified operator device; an email to the Proton channel address, from you (proven by Sent) or an allowlisted sender with Proton's DMARC pass | narrowed — no unqualified shell, no `fs.delete`, qualifier required on `fs.*` and `net.post` |
+| `SemiTrusted` | the operator over a remote, authenticated channel | their own Telegram bot, with chat-id allowlisted; the Matrix home room, from a verified operator device; an email to the Proton channel address, from you (proven by Sent) or an allowlisted sender with Proton's DMARC pass; a Signal message from an allowed number with a verified safety number | narrowed — no unqualified shell, no `fs.delete`, qualifier required on `fs.*` and `net.post` |
 | `Untrusted` | anyone the operator has not authenticated | webhook requests, unallowlisted senders | near-empty — read public memory, that's it |
 
 A turn loop computes the **effective capability set** exactly
@@ -851,6 +851,21 @@ OAuth tokens: the sandboxed tool process can't reach a keyring. The
 are `Trusted`, the channel `SemiTrusted`. Gate commands by email are honoured
 only from you (or `team_command_allowed_senders`); the daemon's `ResolveGate`
 doesn't check who owns the mission, so the frontend does.
+
+**Signal.** A message is a turn only from `allowed_senders`, as a 1:1 text
+message, when signal-cli reports the sender's identity key as
+`TRUSTED_VERIFIED` — the operator compared the safety number with their phone
+(`aivyx-pa signal verify`). signal-cli runs with `--trust-new-identities
+never`, so no key is trusted until verified, and a changed key (a
+re-registered or SIM-swapped number) is refused until verified again. An
+allowed sender with an unverified key gets one reply per run asking to
+verify; everyone else, and group messages, are ignored. signal-cli is a
+separate process the operator runs (libsignal is AGPL and can't be linked
+into BUSL-1.1 code): pa talks JSON-RPC to it over a Unix socket in the
+instance's signal tool folder and holds no Signal credential. `signal.send`
+(scope `message.send`, `Trusted`-only, approval on every call) can only
+message numbers in `send_to`, and only once their safety number is verified,
+so a hijacked agent can't message strangers from the assistant's number.
 
 ### 5.9 Adversarial co-tenants
 

@@ -703,6 +703,19 @@ Proton Mail through Proton Mail Bridge: the email channel and the `proton.*` too
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour. Unset = unlimited. |
 | `team_command_allowed_senders` | list of string |  | The addresses allowed to issue `/team...` commands. Empty: nobody. |
 
+### `[signal]`
+
+Signal through your own signal-cli daemon: the channel and `signal.send`. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
+
+| Key | Type | Example | Meaning |
+|---|---|---|---|
+| `account` | string |  | The assistant's own Signal number (E.164, e.g. `+15559990000`) — the one signal-cli runs for. |
+| `allowed_senders` | list of string |  | Your Signal numbers (E.164) or ACIs. Only these, with a safety number you verified (`aivyx-pa signal verify`), can talk to the assistant. |
+| `send_to` | list of string |  | The numbers (E.164) `signal.send` may message. Run `aivyx-pa connect signal` again after changing it. |
+| `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` from Signal. |
+| `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour. Unset = unlimited. |
+| `team_command_allowed_senders` | list of string |  | The numbers allowed to issue `/team...` commands. Empty: nobody. |
+
 ### `[voice]`
 
 The voice channel (`--channel voice`): speech recognition and text-to-speech engines and devices.

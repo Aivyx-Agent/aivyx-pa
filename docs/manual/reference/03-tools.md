@@ -167,6 +167,14 @@ Needs `aivyx-pa connect gmail`.
 | `gmail.search` | Search Gmail messages using Gmail's query DSL. |
 | `gmail.send` | Send a Gmail message directly. **The message goes out immediately — Aivyx PA has no undo.** Input is a JSON object with required `to`, `subject`, `body_text` fields, an optional `from` (send-as alias the operator's Gmail account has authorized; defaults to the primary address), an optional `in_reply_to_message_id` for `In-Reply-To` + `References` header threading, and an optional `thread_id` for Gmail thread placement. |
 
+## Signal
+
+Needs your signal-cli daemon and `aivyx-pa connect signal`, then the `aivyx-signal` `[[tool_process]]`. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
+
+| Tool | What it does |
+|---|---|
+| `signal.send` | Send a Signal text message from the assistant's own Signal number to one of the contacts the operator listed (`[signal] send_to`). **It goes out immediately — there is no undo.** Input: `to` (a listed number, e.g. +15550002222) and `text`. |
+
 ## Proton Mail
 
 Needs Proton Mail Bridge and `aivyx-pa connect proton`, then the `aivyx-proton` `[[tool_process]]`. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).

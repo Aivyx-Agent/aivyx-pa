@@ -199,6 +199,93 @@ Good to know:
   `imap_addr` or `smtp_addr`.
 - **One channel process at a time** per instance.
 
+### Signal
+
+Message your assistant on Signal and get the answer back there — and let it
+send a Signal message to a contact you list, with your approval each time.
+The assistant has **its own Signal number**; it talks through
+[signal-cli](https://github.com/AsamK/signal-cli), which you run yourself, so
+pa never holds a Signal credential.
+
+1. Get a number for the assistant (a spare SIM, or a VoIP number that can
+   receive an SMS or call) and register it with signal-cli (it needs Java 25):
+
+   ```
+   signal-cli -a +15559990000 register        # add --captcha … if asked
+   signal-cli -a +15559990000 verify 123-456  # the code you received
+   ```
+
+2. Run signal-cli as a daemon. A systemd user unit,
+   `~/.config/systemd/user/signal-cli.service` (adjust the number and, for a
+   named instance, the socket path — `connect signal` prints the right one):
+
+   ```ini
+   [Unit]
+   Description=signal-cli for Aivyx PA
+
+   [Service]
+   ExecStart=signal-cli -a +15559990000 --trust-new-identities never daemon --socket %h/.aivyx-pa/tool-processes/signal/signal-cli.sock --receive-mode manual --ignore-attachments
+   Restart=on-failure
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   then `systemctl --user enable --now signal-cli`. Keep signal-cli up to date
+   — Signal stops accepting releases older than about three months.
+
+3. Add to your config:
+
+   ```toml
+   [signal]
+   account = "+15559990000"          # the assistant's number
+   allowed_senders = ["+15550001111"] # your number
+   # send_to = ["+15550002222"]       # contacts signal.send may message
+   ```
+
+4. `aivyx-pa connect signal` — checks signal-cli answers (and tells you how
+   to start it if not).
+5. Send the assistant a message from your phone, then `aivyx-pa signal
+   verify`: it shows the safety number; compare it with your phone (the chat
+   with the assistant → View safety number) and type `yes`.
+6. `aivyx-pa --channel signal`.
+7. For `signal.send`, add this and restart the daemon:
+
+   ```toml
+   [[tool_process]]
+   name = "signal"
+   command = "aivyx-signal"
+   ```
+
+It answers only you (`allowed_senders`), and only once you've verified your
+safety number — a SIM-swapped or re-registered number can't drive it. With an
+unverified (or changed) number it replies once asking you to verify; everyone
+else, and group messages, are ignored.
+
+Good to know:
+
+- **Messages aren't lost while the channel is off.** signal-cli fetches them
+  only for the channel; they wait on Signal's server until it runs.
+- **One conversation per sender.** A message is read up to 4 KiB;
+  attachments aren't downloaded (the reply says it ignored them). Long
+  replies arrive as several messages. You see "typing…" while it works.
+- **Disappearing messages:** signal-cli applies the chat's timer to the
+  assistant's replies.
+- **`/cancel`** stops the current turn when the channel runs without the
+  daemon; through the daemon it's read between turns. `/team` and gate
+  commands work only through the daemon.
+- **`signal.send`** only messages numbers in `send_to`, needs the trusted
+  terminal or Studio (it's not available inside a Signal turn), and asks you
+  to approve every send (unless you turned off confirmations with `[access]
+  confirm_destructive = false`). Each contact's safety number must be
+  verified too (`signal verify` covers `send_to`); signal-cli learns a
+  contact's key once they've messaged the assistant or after a first send
+  attempt. Run `aivyx-pa connect signal` again after changing `send_to`.
+- **If the number is unregistered** (re-registered elsewhere), the channel
+  stops and tells you to re-register it with signal-cli. If signal-cli
+  isn't running, the channel waits for it.
+- **One channel process at a time** per instance.
+
 ### Discord and Slack
 
 Both follow the same pattern with a few more steps on the chat app's side
