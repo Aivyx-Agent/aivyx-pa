@@ -191,17 +191,22 @@ pub async fn run_mail_loop<T: MailTransport + ?Sized, R: TurnRunner>(
         let mut transient: Option<TransportError> = None;
         match batch {
             Ok(batch) => {
-                backoff = Duration::from_secs(1);
                 let after = cursor.last_uid;
                 for m in batch.into_iter().filter(|m| m.uid > after) {
                     let uid = m.uid;
                     match screen(transport, policy, m).await {
                         Ok(Some(turn)) => {
-                            if let Some(text) = runner.run(&turn).await.map_err(LoopError::Runner)? {
+                            let outcome = runner.run(&turn).await.map_err(LoopError::Runner)?;
+                            if shutdown.is_cancelled() {
+                                // Stopped mid-turn (or as it finished): don't answer
+                                // and leave the cursor, so a restart handles it again.
+                                return Ok(report);
+                            }
+                            if let Some(text) = outcome {
                                 match answer(transport, policy, &turn, &text).await {
                                     Ok(()) => report.answered += 1,
                                     Err(e) if e.is_fatal() => {
-                                        cursor.last_uid = uid;
+                                        cursor.last_uid = cursor.last_uid.max(uid);
                                         let _ = state::save(state_dir, &cursor);
                                         return Err(LoopError::Fatal(e.to_string()));
                                     }
@@ -221,7 +226,7 @@ pub async fn run_mail_loop<T: MailTransport + ?Sized, R: TurnRunner>(
                             break;
                         }
                     }
-                    cursor.last_uid = uid;
+                    cursor.last_uid = cursor.last_uid.max(uid);
                     state::save(state_dir, &cursor).map_err(LoopError::Fatal)?;
                     if shutdown.is_cancelled() {
                         return Ok(report);
@@ -230,6 +235,9 @@ pub async fn run_mail_loop<T: MailTransport + ?Sized, R: TurnRunner>(
             }
             Err(e) if e.is_fatal() => return Err(LoopError::Fatal(e.to_string())),
             Err(e) => transient = Some(e),
+        }
+        if transient.is_none() {
+            backoff = Duration::from_secs(1);
         }
         if let Some(e) = transient {
             eprintln!("aivyx-proton: {e}; retrying in {}s", backoff.as_secs());

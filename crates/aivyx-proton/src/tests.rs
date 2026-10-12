@@ -135,7 +135,7 @@ async fn scratch_storage(suffix: &str) -> (Arc<dyn Storage>, PathBuf) {
 
 
 
-use crate::lock;
+use crate::{lock, state};
 use crate::message::MailMessage;
 use crate::policy::ProtonPolicy;
 use crate::session::{
@@ -285,10 +285,12 @@ async fn an_email_from_you_is_answered_in_its_thread_and_filed() {
 #[tokio::test]
 async fn a_forged_from_you_that_isnt_in_sent_is_ignored() {
     let t = Arc::new(ScriptedTransport::new(status(), vec![vec![from_me(10, "hi", "do it")]]));
-    let r = run(Arc::clone(&t), vec![], 0).await;
+    let dir = tempfile::tempdir().unwrap();
+    let r = run_in(dir.path(), Arc::clone(&t), vec![], 0).await;
     assert_eq!(r.result.unwrap().turns_run, 0);
     assert!(t.sent().await.is_empty());
     assert!(t.filed().await.is_empty());
+    assert_eq!(state::load(dir.path()).unwrap().unwrap().last_uid, 10);
 }
 
 #[tokio::test]
@@ -312,9 +314,11 @@ async fn the_assistants_own_mail_and_automatic_mail_are_ignored() {
     let mut auto = from_me(11, "Out of office", "away");
     auto.auto_submitted = Some("auto-replied".into());
     let t = Arc::new(ScriptedTransport::new(status(), vec![vec![own, auto]]).in_sent_folder(vec!["pm10", "pm11"]));
-    let r = run(Arc::clone(&t), vec![], 0).await;
+    let dir = tempfile::tempdir().unwrap();
+    let r = run_in(dir.path(), Arc::clone(&t), vec![], 0).await;
     assert_eq!(r.result.unwrap().turns_run, 0);
     assert!(t.sent().await.is_empty());
+    assert_eq!(state::load(dir.path()).unwrap().unwrap().last_uid, 11);
 }
 
 #[tokio::test]
@@ -410,4 +414,67 @@ async fn a_second_channel_on_the_same_instance_is_refused() {
     let t = Arc::new(ScriptedTransport::new(status(), vec![]));
     let r = run_in(dir.path(), t, vec![], 0).await;
     assert_eq!(r.result, Err(LoopError::Fatal(lock::BUSY.to_string())));
+}
+
+#[tokio::test]
+async fn stopping_mid_turn_sends_nothing_and_keeps_the_email() {
+    let dir = tempfile::tempdir().unwrap();
+    let (storage, _scratch) = scratch_storage("midturn").await;
+    let gate = Arc::new(Gate::default());
+    let provider: Arc<dyn LlmProvider> = Arc::new(ScriptedProvider {
+        queue: StdMutex::new(vec![final_step(&["late"], "late")].into()),
+        gate: Some(Arc::clone(&gate)),
+        seen: Arc::new(StdMutex::new(Vec::new())),
+    });
+    let audit: Arc<dyn AuditHook> = Arc::new(AuditBridge::new(HmacChainLog::new([42u8; 32].to_vec())));
+    let t = Arc::new(
+        ScriptedTransport::new(status(), vec![vec![from_me(10, "hi", "do it")]]).in_sent_folder(vec!["pm10"]),
+    );
+    let shutdown = CancellationToken::new();
+    let (g, s) = (Arc::clone(&gate), shutdown.clone());
+    tokio::spawn(async move {
+        g.started.notified().await;
+        s.cancel();
+        // Also let the turn finish in the same breath as the shutdown.
+        g.release.notify_one();
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_proton_session_with_transport(
+            t.as_ref(),
+            &policy(),
+            dir.path(),
+            config(storage),
+            provider,
+            audit,
+            None,
+            shutdown,
+        ),
+    )
+    .await
+    .expect("session did not finish");
+    let report = result.unwrap();
+    assert_eq!(report.answered, 0);
+    assert_eq!(report.turns_run, 0);
+    assert!(t.sent().await.is_empty());
+    assert!(t.filed().await.is_empty());
+    assert_eq!(state::load(dir.path()).unwrap().unwrap().last_uid, 9);
+}
+
+#[tokio::test]
+async fn a_transient_screening_error_retries_the_same_email() {
+    // The batch is consumed by the failed attempt, so script it twice.
+    let t = Arc::new(
+        ScriptedTransport::new(
+            status(),
+            vec![vec![from_me(10, "hi", "do it")], vec![from_me(10, "hi", "do it")]],
+        )
+        .in_sent_folder(vec!["pm10"])
+        .fail_in_sent_once(),
+    );
+    let r = run(Arc::clone(&t), vec![final_step(&["ok"], "ok")], 1).await;
+    // The loop sleeps its 1 s backoff before the retry.
+    assert_eq!(r.result.unwrap().answered, 1);
+    assert_eq!(t.sent().await.len(), 1);
+    assert_eq!(t.filed().await.len(), 1);
 }

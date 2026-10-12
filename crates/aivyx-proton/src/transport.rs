@@ -130,6 +130,7 @@ pub struct ScriptedTransport {
     sent_ids: Vec<String>,
     all_mail: Vec<MailMessage>,
     fail_send: bool,
+    fail_in_sent_once: std::sync::atomic::AtomicBool,
     fail_when_empty: Option<fn() -> TransportError>,
     sent: Mutex<Vec<OutgoingMail>>,
     filed: Mutex<Vec<(u32, OutgoingMail)>>,
@@ -145,6 +146,7 @@ impl ScriptedTransport {
             sent_ids: Vec::new(),
             all_mail: Vec::new(),
             fail_send: false,
+            fail_in_sent_once: std::sync::atomic::AtomicBool::new(false),
             fail_when_empty: None,
             sent: Mutex::new(Vec::new()),
             filed: Mutex::new(Vec::new()),
@@ -167,6 +169,14 @@ impl ScriptedTransport {
 
     pub fn failing_send(mut self) -> Self {
         self.fail_send = true;
+        self
+    }
+
+    /// The first `in_sent` call fails with a transient error; later calls
+    /// behave normally.
+    pub fn fail_in_sent_once(self) -> Self {
+        self.fail_in_sent_once
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self
     }
 
@@ -208,6 +218,12 @@ impl MailTransport for ScriptedTransport {
     }
 
     async fn in_sent(&self, internal_id: &str) -> Result<bool, TransportError> {
+        if self
+            .fail_in_sent_once
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(TransportError::Platform("bridge busy".into()));
+        }
         Ok(self.sent_ids.iter().any(|id| id == internal_id))
     }
 
