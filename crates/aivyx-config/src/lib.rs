@@ -1042,6 +1042,9 @@ pub struct AivyxConfig {
     /// `[matrix]` channel config. `None` unless `[matrix]` sets
     /// `homeserver`; see [`MatrixConfig`].
     pub matrix: Option<MatrixConfig>,
+    /// `[proton]` — Proton Mail through Bridge. `None` unless the section
+    /// sets a key; see [`ProtonConfig`].
+    pub proton: Option<ProtonConfig>,
     /// Phase 108 — Slack channel config. `None` when no
     /// Slack field is set. Filled in whenever any Slack
     /// field is set so the startup banner can warn about
@@ -1820,6 +1823,31 @@ pub struct MatrixConfig {
     /// Max `/team run` confirmations accepted per rolling hour. Unset = unlimited.
     pub team_trigger_rate_limit: Option<u32>,
     /// The Matrix IDs allowed to issue `/team ...` commands. Empty: nobody.
+    pub team_command_allowed_senders: Vec<String>,
+}
+
+/// Proton Mail through Proton Mail Bridge: the email channel
+/// (`--channel proton`) and the `proton.*` tools. The Bridge login is not
+/// config: `aivyx-pa connect proton` stores it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtonConfig {
+    /// Bridge's IMAP address. On this machine only (`127.0.0.1`, `localhost` or `[::1]`). Default `127.0.0.1:1143`.
+    pub imap_addr: String,
+    /// Bridge's SMTP address. On this machine only. Default `127.0.0.1:1025`.
+    pub smtp_addr: String,
+    /// The address of yours the assistant answers on, e.g. `you_aivyx@proton.me` or `you+assistant@proton.me`. Must also be in `own_addresses`. Needed for `--channel proton`, not for the tools.
+    pub channel_address: Option<String>,
+    /// Every address of your Proton account. Mail "from you" counts only if it is from one of these and in your Sent folder. The first is what `proton.draft` / `proton.send` send from.
+    pub own_addresses: Vec<String>,
+    /// Outside addresses that may email the assistant; only when Proton's own DMARC check passes for the sender's domain.
+    pub allowed_external_senders: Vec<String>,
+    /// The Proton folder handled mail (and the assistant's reply) is moved to. Created if missing. Default `Aivyx`.
+    pub folder: String,
+    /// Operator opt-in for `/team run <goal>` by email.
+    pub team_run_channel: bool,
+    /// Max `/team run` confirmations accepted per rolling hour. Unset = unlimited.
+    pub team_trigger_rate_limit: Option<u32>,
+    /// The addresses allowed to issue `/team ...` commands. Empty: nobody.
     pub team_command_allowed_senders: Vec<String>,
 }
 
@@ -4108,6 +4136,8 @@ struct RawToml {
     #[serde(default)]
     matrix: RawMatrix,
     #[serde(default)]
+    proton: RawProton,
+    #[serde(default)]
     slack: RawSlack,
     #[serde(default)]
     git: RawGit,
@@ -5141,6 +5171,56 @@ struct RawMatrix {
     team_trigger_rate_limit: Option<u32>,
     #[serde(default)]
     team_command_allowed_senders: Vec<String>,
+}
+
+/// `[proton]` TOML section. Present when any key is set.
+#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+struct RawProton {
+    #[serde(default)]
+    imap_addr: Option<String>,
+    #[serde(default)]
+    smtp_addr: Option<String>,
+    #[serde(default)]
+    channel_address: Option<String>,
+    #[serde(default)]
+    own_addresses: Vec<String>,
+    #[serde(default)]
+    allowed_external_senders: Vec<String>,
+    #[serde(default)]
+    folder: Option<String>,
+    #[serde(default)]
+    team_run_channel: bool,
+    #[serde(default)]
+    team_trigger_rate_limit: Option<u32>,
+    #[serde(default)]
+    team_command_allowed_senders: Vec<String>,
+}
+
+/// `host:port` with the host exactly `127.0.0.1`, `localhost` or `[::1]`.
+fn loopback_socket_addr(s: &str) -> bool {
+    let Some((host, port)) = s.rsplit_once(':') else {
+        return false;
+    };
+    !port.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && port.parse::<u16>().is_ok_and(|p| p != 0)
+        && matches!(host, "127.0.0.1" | "localhost" | "[::1]")
+}
+
+/// `local@domain.tld`: one `@`, a dotted domain, no spaces, brackets,
+/// commas, semicolons or quotes.
+fn plausible_email(s: &str) -> bool {
+    let Some((local, domain)) = s.split_once('@') else {
+        return false;
+    };
+    !local.is_empty()
+        && !domain.contains('@')
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !s
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | ',' | ';' | '"'))
 }
 
 /// Phase 108 — `[slack]` TOML section deserialize target.
@@ -6961,6 +7041,89 @@ impl AivyxConfig {
             }
         };
 
+        // --- proton ------------------------------------------------
+        // `[proton]` is `Some` when any key is set. The Bridge login and
+        // certificate pins are never here (`connect proton` stores them).
+        let proton = if toml.proton == RawProton::default() {
+            None
+        } else {
+            let raw = &toml.proton;
+            let invalid = |field: &'static str, reason: &str| ConfigError::Invalid {
+                field,
+                reason: reason.into(),
+            };
+            let emails = |list: &[String], field: &'static str| -> Result<Vec<String>, ConfigError> {
+                list.iter()
+                    .map(|a| {
+                        let a = a.trim().to_ascii_lowercase();
+                        if plausible_email(&a) {
+                            Ok(a)
+                        } else {
+                            Err(invalid(field, "each entry must be an email address like you@proton.me"))
+                        }
+                    })
+                    .collect()
+            };
+            let imap_addr = raw.imap_addr.clone().unwrap_or_else(|| "127.0.0.1:1143".into());
+            if !loopback_socket_addr(&imap_addr) {
+                return Err(invalid(
+                    "proton.imap_addr",
+                    "must be Bridge on this machine: 127.0.0.1, localhost or [::1], with a port",
+                ));
+            }
+            let smtp_addr = raw.smtp_addr.clone().unwrap_or_else(|| "127.0.0.1:1025".into());
+            if !loopback_socket_addr(&smtp_addr) {
+                return Err(invalid(
+                    "proton.smtp_addr",
+                    "must be Bridge on this machine: 127.0.0.1, localhost or [::1], with a port",
+                ));
+            }
+            let own_addresses = emails(&raw.own_addresses, "proton.own_addresses")?;
+            if own_addresses.is_empty() {
+                return Err(invalid(
+                    "proton.own_addresses",
+                    "list your Proton account's addresses, e.g. [\"you@proton.me\"]",
+                ));
+            }
+            let channel_address = match &raw.channel_address {
+                None => None,
+                Some(a) => {
+                    let a = a.trim().to_ascii_lowercase();
+                    if !plausible_email(&a) {
+                        return Err(invalid("proton.channel_address", "must be an email address"));
+                    }
+                    if !own_addresses.contains(&a) {
+                        return Err(invalid(
+                            "proton.channel_address",
+                            "must be one of your own_addresses (an address of your Proton account)",
+                        ));
+                    }
+                    Some(a)
+                }
+            };
+            let folder = raw.folder.clone().unwrap_or_else(|| "Aivyx".into());
+            if folder.trim().is_empty() || folder.contains('/') || folder.chars().any(char::is_control) {
+                return Err(invalid("proton.folder", "must be a folder name without `/`"));
+            }
+            Some(ProtonConfig {
+                imap_addr,
+                smtp_addr,
+                channel_address,
+                own_addresses,
+                allowed_external_senders: emails(
+                    &raw.allowed_external_senders,
+                    "proton.allowed_external_senders",
+                )?,
+                folder,
+                team_run_channel: raw.team_run_channel,
+                team_trigger_rate_limit: raw.team_trigger_rate_limit,
+                team_command_allowed_senders: emails(
+                    &raw.team_command_allowed_senders,
+                    "proton.team_command_allowed_senders",
+                )?,
+            })
+        };
+
         // --- slack (Phase 108) -------------------------------------
         // Same shape as Telegram + Discord: SlackConfig is
         // constructed whenever any Slack source fires. Both
@@ -8433,6 +8596,7 @@ impl AivyxConfig {
             telegram,
             discord,
             matrix,
+            proton,
             slack,
             git,
             email,

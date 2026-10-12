@@ -6791,6 +6791,8 @@ async fn run_async(
         discord,
         // `[matrix]` config consumed by the `ChannelKind::Matrix` arm below.
         matrix,
+        // `[proton]` — bound by the `ChannelKind::Proton` arm (next tasks).
+        proton: _,
         // Phase 108 — `slack` config consumed by the
         // `ChannelKind::Slack` dispatch arm below; carries
         // the bot + app tokens through to

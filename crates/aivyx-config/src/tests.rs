@@ -619,6 +619,60 @@ fn matrix_rejects_malformed_team_command_senders() {
 }
 
 #[test]
+fn proton_section_parses_with_defaults_and_absent_means_none() {
+    let env = EnvScope::new();
+    let toml = r#"
+[proton]
+channel_address = "Me_Aivyx@proton.me"
+own_addresses = ["me@proton.me", "me_aivyx@proton.me"]
+allowed_external_senders = ["Friend@Example.com"]
+team_command_allowed_senders = ["me@proton.me"]
+"#;
+    let p = load_with_toml(toml, "proton-parse").proton.expect("[proton] is Some");
+    assert_eq!(p.imap_addr, "127.0.0.1:1143");
+    assert_eq!(p.smtp_addr, "127.0.0.1:1025");
+    assert_eq!(p.channel_address.as_deref(), Some("me_aivyx@proton.me"));
+    assert_eq!(p.own_addresses, vec!["me@proton.me", "me_aivyx@proton.me"]);
+    assert_eq!(p.allowed_external_senders, vec!["friend@example.com"]);
+    assert_eq!(p.folder, "Aivyx");
+    assert_eq!(p.team_command_allowed_senders, vec!["me@proton.me"]);
+    assert!(!p.team_run_channel);
+    assert!(load_with_toml("", "proton-absent").proton.is_none());
+    // Tools only: no channel address needed.
+    let tools_only = load_with_toml("[proton]\nown_addresses = [\"me@proton.me\"]\n", "proton-tools");
+    assert_eq!(tools_only.proton.unwrap().channel_address, None);
+    drop(env);
+}
+
+#[test]
+fn proton_rejects_unsafe_or_malformed_settings() {
+    let env = EnvScope::new();
+    let own = "own_addresses = [\"me@proton.me\", \"bot@proton.me\"]\n";
+    let cases: &[(&str, &str)] = &[
+        ("imap_addr = \"192.168.1.5:1143\"\n", "proton.imap_addr"),
+        ("imap_addr = \"localhost.evil.com:1143\"\n", "proton.imap_addr"),
+        ("imap_addr = \"127.0.0.1\"\n", "proton.imap_addr"),
+        ("smtp_addr = \"mail.proton.me:25\"\n", "proton.smtp_addr"),
+        ("channel_address = \"stranger@x.com\"\n", "proton.channel_address"),
+        ("channel_address = \"not an address\"\n", "proton.channel_address"),
+        ("allowed_external_senders = [\"a@b\"]\n", "proton.allowed_external_senders"),
+        ("team_command_allowed_senders = [\"me\"]\n", "proton.team_command_allowed_senders"),
+        ("folder = \"a/b\"\n", "proton.folder"),
+    ];
+    for (line, field) in cases {
+        let body = format!("[proton]\n{own}{line}");
+        assert_eq!(matrix_invalid_field(&body, "proton-bad"), *field, "for:\n{body}");
+    }
+    let no_own = "[proton]\nchannel_address = \"bot@proton.me\"\n";
+    assert_eq!(matrix_invalid_field(no_own, "proton-no-own"), "proton.own_addresses");
+    for ok in ["localhost:1143", "[::1]:1143", "127.0.0.1:2143"] {
+        let body = format!("[proton]\n{own}imap_addr = \"{ok}\"\n");
+        assert!(load_with_toml_result(&body, "proton-ok").is_ok(), "should accept {ok}");
+    }
+    drop(env);
+}
+
+#[test]
 fn matrix_accepts_loopback_http_homeservers() {
     let env = EnvScope::new();
     for hs in [
