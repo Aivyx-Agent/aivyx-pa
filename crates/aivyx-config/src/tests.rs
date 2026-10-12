@@ -683,6 +683,46 @@ fn proton_rejects_unsafe_or_malformed_settings() {
 }
 
 #[test]
+fn signal_section_parses_and_absent_means_none() {
+    let env = EnvScope::new();
+    let toml = r#"
+[signal]
+account = "+15559990000"
+allowed_senders = ["+15550001111", "8F3C7A1E-0B5D-4C2A-9E61-3D7F2B9A4C10"]
+send_to = ["+15550002222"]
+team_command_allowed_senders = ["+15550001111"]
+"#;
+    let s = load_with_toml(toml, "signal-parse").signal.expect("[signal] is Some");
+    assert_eq!(s.account, "+15559990000");
+    assert_eq!(s.allowed_senders, vec!["+15550001111", "8f3c7a1e-0b5d-4c2a-9e61-3d7f2b9a4c10"]);
+    assert_eq!(s.send_to, vec!["+15550002222"]);
+    assert_eq!(s.team_command_allowed_senders, vec!["+15550001111"]);
+    assert!(!s.team_run_channel);
+    assert!(load_with_toml("", "signal-absent").signal.is_none());
+    drop(env);
+}
+
+#[test]
+fn signal_rejects_malformed_numbers() {
+    let env = EnvScope::new();
+    let ok = "allowed_senders = [\"+15550001111\"]\n";
+    let cases: &[(&str, &str, &str)] = &[
+        ("15559990000", ok, "signal.account"),
+        ("+1555", ok, "signal.account"),
+        ("+15559990000", "allowed_senders = []\n", "signal.allowed_senders"),
+        ("+15559990000", "allowed_senders = [\"me\"]\n", "signal.allowed_senders"),
+        ("+15559990000", "allowed_senders = [\"+15559990000\"]\n", "signal.allowed_senders"),
+        ("+15559990000", "allowed_senders = [\"+15550001111\"]\nsend_to = [\"8f3c7a1e-0b5d-4c2a-9e61-3d7f2b9a4c10\"]\n", "signal.send_to"),
+        ("+15559990000", "allowed_senders = [\"+15550001111\"]\nteam_command_allowed_senders = [\"x\"]\n", "signal.team_command_allowed_senders"),
+    ];
+    for (account, rest, field) in cases {
+        let body = format!("[signal]\naccount = \"{account}\"\n{rest}");
+        assert_eq!(matrix_invalid_field(&body, "signal-bad"), *field, "for:\n{body}");
+    }
+    drop(env);
+}
+
+#[test]
 fn matrix_accepts_loopback_http_homeservers() {
     let env = EnvScope::new();
     for hs in [

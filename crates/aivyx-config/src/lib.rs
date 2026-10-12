@@ -1045,6 +1045,9 @@ pub struct AivyxConfig {
     /// `[proton]` — Proton Mail through Bridge. `None` unless the section
     /// sets a key; see [`ProtonConfig`].
     pub proton: Option<ProtonConfig>,
+    /// `[signal]` — Signal through the operator's signal-cli daemon. `None`
+    /// unless the section sets `account`; see [`SignalConfig`].
+    pub signal: Option<SignalConfig>,
     /// Phase 108 — Slack channel config. `None` when no
     /// Slack field is set. Filled in whenever any Slack
     /// field is set so the startup banner can warn about
@@ -1848,6 +1851,25 @@ pub struct ProtonConfig {
     /// Max `/team run` confirmations accepted per rolling hour. Unset = unlimited.
     pub team_trigger_rate_limit: Option<u32>,
     /// The addresses allowed to issue `/team ...` commands. Empty: nobody.
+    pub team_command_allowed_senders: Vec<String>,
+}
+
+/// Signal through the operator's own signal-cli daemon: the channel
+/// (`--channel signal`) and `signal.send`. signal-cli holds the account;
+/// nothing secret is config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignalConfig {
+    /// The assistant's own Signal number (E.164, e.g. `+15559990000`) — the one signal-cli runs for.
+    pub account: String,
+    /// Your Signal numbers (E.164) or ACIs. Only these, with a safety number you verified (`aivyx-pa signal verify`), can talk to the assistant.
+    pub allowed_senders: Vec<String>,
+    /// The numbers (E.164) `signal.send` may message. Run `aivyx-pa connect signal` again after changing it.
+    pub send_to: Vec<String>,
+    /// Operator opt-in for `/team run <goal>` from Signal.
+    pub team_run_channel: bool,
+    /// Max `/team run` confirmations accepted per rolling hour. Unset = unlimited.
+    pub team_trigger_rate_limit: Option<u32>,
+    /// The numbers allowed to issue `/team ...` commands. Empty: nobody.
     pub team_command_allowed_senders: Vec<String>,
 }
 
@@ -4138,6 +4160,8 @@ struct RawToml {
     #[serde(default)]
     proton: RawProton,
     #[serde(default)]
+    signal: RawSignal,
+    #[serde(default)]
     slack: RawSlack,
     #[serde(default)]
     git: RawGit,
@@ -5221,6 +5245,36 @@ fn plausible_email(s: &str) -> bool {
         && !s
             .chars()
             .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | ',' | ';' | '"'))
+}
+
+/// `[signal]` TOML section. Present when `account` is set.
+#[derive(Debug, Default, Deserialize)]
+struct RawSignal {
+    #[serde(default)]
+    account: Option<String>,
+    #[serde(default)]
+    allowed_senders: Vec<String>,
+    #[serde(default)]
+    send_to: Vec<String>,
+    #[serde(default)]
+    team_run_channel: bool,
+    #[serde(default)]
+    team_trigger_rate_limit: Option<u32>,
+    #[serde(default)]
+    team_command_allowed_senders: Vec<String>,
+}
+
+/// `+` and 7–15 digits (E.164).
+fn is_e164(s: &str) -> bool {
+    s.strip_prefix('+')
+        .is_some_and(|d| (7..=15).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_digit()) && !d.starts_with('0'))
+}
+
+/// A Signal ACI: a UUID (8-4-4-4-12 hex).
+fn is_aci(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.len() == 5
+        && parts.iter().zip([8, 4, 4, 4, 12]).all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// Phase 108 — `[slack]` TOML section deserialize target.
@@ -7131,6 +7185,61 @@ impl AivyxConfig {
             })
         };
 
+        // --- signal ------------------------------------------------
+        // `[signal]` is `Some` when `account` is set. signal-cli holds the
+        // account; nothing here is secret.
+        let signal = match toml.signal.account.clone() {
+            None => None,
+            Some(account) => {
+                let raw = &toml.signal;
+                let invalid = |field: &'static str, reason: &str| ConfigError::Invalid {
+                    field,
+                    reason: reason.into(),
+                };
+                let account = account.trim().to_string();
+                if !is_e164(&account) {
+                    return Err(invalid("signal.account", "must be a phone number like +15559990000"));
+                }
+                let numbers = |list: &[String], field: &'static str, aci_ok: bool| {
+                    list.iter()
+                        .map(|n| {
+                            let n = n.trim().to_ascii_lowercase();
+                            if is_e164(&n) || (aci_ok && is_aci(&n)) {
+                                Ok(n)
+                            } else {
+                                Err(invalid(field, "each entry must be a phone number like +15550001111"))
+                            }
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                };
+                let allowed_senders = numbers(&raw.allowed_senders, "signal.allowed_senders", true)?;
+                if allowed_senders.is_empty() {
+                    return Err(invalid(
+                        "signal.allowed_senders",
+                        "list your Signal number, e.g. [\"+15550001111\"]",
+                    ));
+                }
+                if allowed_senders.contains(&account) {
+                    return Err(invalid(
+                        "signal.allowed_senders",
+                        "must not include the assistant's own number (`account`)",
+                    ));
+                }
+                Some(SignalConfig {
+                    account,
+                    allowed_senders,
+                    send_to: numbers(&raw.send_to, "signal.send_to", false)?,
+                    team_run_channel: raw.team_run_channel,
+                    team_trigger_rate_limit: raw.team_trigger_rate_limit,
+                    team_command_allowed_senders: numbers(
+                        &raw.team_command_allowed_senders,
+                        "signal.team_command_allowed_senders",
+                        true,
+                    )?,
+                })
+            }
+        };
+
         // --- slack (Phase 108) -------------------------------------
         // Same shape as Telegram + Discord: SlackConfig is
         // constructed whenever any Slack source fires. Both
@@ -8604,6 +8713,7 @@ impl AivyxConfig {
             discord,
             matrix,
             proton,
+            signal,
             slack,
             git,
             email,

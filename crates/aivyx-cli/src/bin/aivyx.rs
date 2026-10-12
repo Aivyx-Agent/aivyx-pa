@@ -6831,6 +6831,8 @@ async fn run_async(
         matrix,
         // `[proton]` config consumed by the `ChannelKind::Proton` arm below.
         proton,
+        // [signal] — bound by the ChannelKind::Signal arm (next tasks).
+        signal: _,
         // Phase 108 — `slack` config consumed by the
         // `ChannelKind::Slack` dispatch arm below; carries
         // the bot + app tokens through to
