@@ -23,6 +23,16 @@ pub enum TrustLevel {
 }
 
 impl TrustLevel {
+    /// Trust ordering used to pick the least-trusted key; higher is more
+    /// trusted. Deliberately explicit rather than declaration order.
+    fn rank(self) -> u8 {
+        match self {
+            TrustLevel::Untrusted => 0,
+            TrustLevel::TrustedUnverified => 1,
+            TrustLevel::TrustedVerified => 2,
+        }
+    }
+
     fn parse(s: &str) -> Option<Self> {
         match s {
             "UNTRUSTED" => Some(TrustLevel::Untrusted),
@@ -31,6 +41,26 @@ impl TrustLevel {
             _ => None,
         }
     }
+}
+
+/// The least-trusted entry of a `listIdentities` array. Fails closed: an
+/// entry with a missing or unknown `trustLevel` counts as untrusted.
+fn least_trusted(ids: &Value) -> Option<Identity> {
+    ids.as_array()?
+        .iter()
+        .map(|id| Identity {
+            trust: id
+                .get("trustLevel")
+                .and_then(Value::as_str)
+                .and_then(TrustLevel::parse)
+                .unwrap_or(TrustLevel::Untrusted),
+            safety_number: id
+                .get("safetyNumber")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
+        .min_by_key(|i| i.trust.rank())
 }
 
 /// A contact's identity key as signal-cli knows it.
@@ -144,6 +174,18 @@ impl CliTransport {
         Ok(client)
     }
 
+    /// A connection error on `client` drops the stored connection, but only
+    /// if it is still `client` (a newer healthy one is left alone).
+    async fn note_failure(&self, client: &Arc<RpcClient>, e: &RpcError) {
+        if matches!(e, RpcError::Remote { .. }) {
+            return;
+        }
+        let mut guard = self.conn.lock().await;
+        if guard.as_ref().is_some_and(|c| Arc::ptr_eq(&c.client, client)) {
+            *guard = None;
+        }
+    }
+
     /// Calls `method`; a connection error drops the connection so the next
     /// call reconnects.
     async fn call(&self, method: &str, params: Value) -> Result<Value, TransportError> {
@@ -151,9 +193,7 @@ impl CliTransport {
         match client.call(method, params).await {
             Ok(v) => Ok(v),
             Err(e) => {
-                if !matches!(e, RpcError::Remote { .. }) {
-                    *self.conn.lock().await = None;
-                }
+                self.note_failure(&client, &e).await;
                 Err(e.into())
             }
         }
@@ -163,21 +203,36 @@ impl CliTransport {
 #[async_trait]
 impl SignalTransport for CliTransport {
     async fn next_event(&self) -> Result<Inbound, TransportError> {
-        let client = self.client().await?;
-        let needs_subscribe = {
-            let guard = self.conn.lock().await;
-            guard.as_ref().is_some_and(|c| !c.subscribed)
+        // One snapshot: subscribe on and read from the same client. The flag
+        // is set before the request is awaited, so a cancelled `next_event`
+        // can't cause a second subscribe; it is cleared again on error.
+        let (client, needs_subscribe) = {
+            let mut guard = self.conn.lock().await;
+            if guard.is_none() {
+                let client = Arc::new(RpcClient::connect(&self.socket).await?);
+                *guard = Some(Conn { client, subscribed: false });
+            }
+            let c = guard.as_mut().expect("connection just ensured");
+            let first = !c.subscribed;
+            c.subscribed = true;
+            (Arc::clone(&c.client), first)
         };
         if needs_subscribe {
-            self.call("subscribeReceive", json!({})).await?;
-            if let Some(c) = self.conn.lock().await.as_mut() {
-                c.subscribed = true;
+            if let Err(e) = client.call("subscribeReceive", json!({})).await {
+                {
+                    let mut guard = self.conn.lock().await;
+                    if let Some(c) = guard.as_mut().filter(|c| Arc::ptr_eq(&c.client, &client)) {
+                        c.subscribed = false;
+                    }
+                }
+                self.note_failure(&client, &e).await;
+                return Err(e.into());
             }
         }
         match client.next_notification().await {
             Ok(params) => Ok(envelope::parse(&params)),
             Err(e) => {
-                *self.conn.lock().await = None;
+                self.note_failure(&client, &e).await;
                 Err(e.into())
             }
         }
@@ -207,14 +262,7 @@ impl SignalTransport for CliTransport {
 
     async fn identity(&self, who: &str) -> Result<Option<Identity>, TransportError> {
         let r = self.call("listIdentities", json!({"number": who})).await?;
-        Ok(r.as_array().and_then(|ids| {
-            ids.iter().find_map(|id| {
-                Some(Identity {
-                    trust: TrustLevel::parse(id.get("trustLevel")?.as_str()?)?,
-                    safety_number: id.get("safetyNumber")?.as_str()?.to_string(),
-                })
-            })
-        }))
+        Ok(least_trusted(&r))
     }
 
     async fn trust_verified(&self, who: &str, safety_number: &str) -> Result<(), TransportError> {
@@ -352,6 +400,39 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    type Subs = Arc<std::sync::Mutex<Vec<Arc<AtomicUsize>>>>;
+
+    fn subs_of(s: &Subs) -> Vec<usize> {
+        s.lock().unwrap().iter().map(|c| c.load(Ordering::SeqCst)).collect()
+    }
+
+    fn id(level: Option<&str>, sn: &str) -> Value {
+        match level {
+            Some(l) => json!({"trustLevel": l, "safetyNumber": sn}),
+            None => json!({"safetyNumber": sn}),
+        }
+    }
+
+    #[test]
+    fn identity_is_the_least_trusted_entry() {
+        let mixed = json!([id(Some("TRUSTED_VERIFIED"), "old"), id(Some("UNTRUSTED"), "new")]);
+        assert_eq!(least_trusted(&mixed).unwrap().trust, TrustLevel::Untrusted);
+        let unknown = json!([id(Some("SOMETHING_NEW"), "a"), id(Some("TRUSTED_VERIFIED"), "b")]);
+        let got = least_trusted(&unknown).unwrap();
+        assert_eq!(got.trust, TrustLevel::Untrusted);
+        assert_eq!(got.safety_number, "a");
+        let missing = json!([id(None, "a"), id(Some("TRUSTED_VERIFIED"), "b")]);
+        assert_eq!(least_trusted(&missing).unwrap().trust, TrustLevel::Untrusted);
+        let one = json!([id(Some("TRUSTED_VERIFIED"), "x")]);
+        assert_eq!(
+            least_trusted(&one),
+            Some(Identity { trust: TrustLevel::TrustedVerified, safety_number: "x".into() })
+        );
+        assert_eq!(least_trusted(&json!([])), None);
+        assert_eq!(least_trusted(&json!(null)), None);
+    }
 
     #[test]
     fn errors_classify() {
@@ -373,15 +454,24 @@ mod tests {
 
     /// A fake signal-cli daemon on a real Unix socket: answers `version`,
     /// `subscribeReceive`, `listIdentities`, `send`; after a subscription
-    /// it pushes one `receive` notification. `connections` counts accepts.
-    async fn fake_daemon(path: PathBuf, drop_first_after_notify: bool) -> tokio::task::JoinHandle<()> {
+    /// and after each `send` it pushes one `receive` notification. The
+    /// returned list holds one `subscribeReceive` counter per accepted
+    /// connection, in accept order.
+    async fn fake_daemon(
+        path: PathBuf,
+        drop_first_after_notify: bool,
+    ) -> (tokio::task::JoinHandle<()>, Subs) {
         let listener = UnixListener::bind(&path).unwrap();
-        tokio::spawn(async move {
+        let subs: Subs = Arc::default();
+        let subs_out = Arc::clone(&subs);
+        let h = tokio::spawn(async move {
             let mut n = 0;
             loop {
                 let Ok((stream, _)) = listener.accept().await else { return };
                 n += 1;
                 let drop_after = drop_first_after_notify && n == 1;
+                let count = Arc::new(AtomicUsize::new(0));
+                subs.lock().unwrap().push(Arc::clone(&count));
                 tokio::spawn(async move {
                     let (r, mut w) = stream.into_split();
                     let mut lines = BufReader::new(r).lines();
@@ -403,6 +493,9 @@ mod tests {
                         let resp = json!({"jsonrpc": "2.0", "id": id, "result": result});
                         w.write_all(format!("{resp}\n").as_bytes()).await.unwrap();
                         if req["method"] == "subscribeReceive" {
+                            count.fetch_add(1, Ordering::SeqCst);
+                        }
+                        if req["method"] == "subscribeReceive" || req["method"] == "send" {
                             let note = json!({"jsonrpc": "2.0", "method": "receive", "params": {
                                 "subscription": 0,
                                 "result": {"envelope": {
@@ -411,21 +504,22 @@ mod tests {
                                 }}
                             }});
                             w.write_all(format!("{note}\n").as_bytes()).await.unwrap();
-                            if drop_after {
+                            if drop_after && req["method"] == "subscribeReceive" {
                                 return;
                             }
                         }
                     }
                 });
             }
-        })
+        });
+        (h, subs_out)
     }
 
     #[tokio::test]
     async fn the_cli_transport_talks_json_rpc_over_the_socket() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("signal-cli.sock");
-        let _srv = fake_daemon(path.clone(), false).await;
+        let (_srv, _subs) = fake_daemon(path.clone(), false).await;
         let t = CliTransport::new(path);
         assert_eq!(t.version().await.unwrap(), "0.14.6");
         let Inbound::Text(m) = t.next_event().await.unwrap() else { panic!() };
@@ -440,13 +534,26 @@ mod tests {
     async fn a_dropped_connection_reconnects_and_resubscribes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("signal-cli.sock");
-        let _srv = fake_daemon(path.clone(), true).await;
+        let (_srv, subs) = fake_daemon(path.clone(), true).await;
         let t = CliTransport::new(path);
         assert!(matches!(t.next_event().await.unwrap(), Inbound::Text(_)));
         // The first connection closed after its notification.
         assert!(matches!(t.next_event().await, Err(TransportError::Unreachable(_))));
         // The next call reconnects and subscribes again.
         assert!(matches!(t.next_event().await.unwrap(), Inbound::Text(_)));
+        assert_eq!(subs_of(&subs), vec![1, 1]);
+    }
+
+    #[tokio::test]
+    async fn subscribes_exactly_once_per_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("signal-cli.sock");
+        let (_srv, subs) = fake_daemon(path.clone(), false).await;
+        let t = CliTransport::new(path);
+        assert!(matches!(t.next_event().await.unwrap(), Inbound::Text(_)));
+        assert_eq!(t.send_text("+15550001111", "yo").await.unwrap(), 42);
+        assert!(matches!(t.next_event().await.unwrap(), Inbound::Text(_)));
+        assert_eq!(subs_of(&subs), vec![1]);
     }
 
     #[tokio::test]
