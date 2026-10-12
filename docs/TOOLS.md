@@ -186,6 +186,16 @@ base, Trusted-tier only. See the Lattice addendum in
 | `gmail.draft` | `email.write` | Trusted | create a draft |
 | `gmail.send` | `email.send` | Trusted | send mail |
 
+## Email — Proton Mail (tool process `aivyx-proton`)
+
+Through Proton Mail Bridge on this machine; set up with `aivyx-pa connect proton`.
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `proton.search` / `proton.read` | `email.read` | Trusted | search All Mail / read one message; output untrusted |
+| `proton.draft` | `email.write` | Trusted | save a draft (never sent) |
+| `proton.send` | `email.send` | Trusted | send now; approval on every call |
+
 ## Calendar (tool process `aivyx-calendar`)
 
 | Tool | Scope | Min tier | Notes |
@@ -288,6 +298,7 @@ user-facing; the scope base groups capabilities):
 | `web.fetch`, `web.extract` | `net.fetch` | "web" is the user-facing verb; both are outbound HTTP GETs (extract adds a readability pass) |
 | `web.post` | `net.post` | same |
 | `gmail.*` | `email.*` | the base is provider-neutral (`email.read/write/send`); Gmail is one implementation |
+| `proton.*` | `email.*` | the same scopes as Gmail |
 | `git.status`, `git.diff` | `git.read` | one read base shared by both read tools (A12) |
 | `git.commit` | `git.write` | the destructive write base (A13b, Chapter Forge); separate from `git.read` by invariant |
 | `web.search` | `web.search` | (matches — listed for completeness) |

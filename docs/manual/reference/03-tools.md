@@ -167,6 +167,17 @@ Needs `aivyx-pa connect gmail`.
 | `gmail.search` | Search Gmail messages using Gmail's query DSL. |
 | `gmail.send` | Send a Gmail message directly. **The message goes out immediately — Aivyx PA has no undo.** Input is a JSON object with required `to`, `subject`, `body_text` fields, an optional `from` (send-as alias the operator's Gmail account has authorized; defaults to the primary address), an optional `in_reply_to_message_id` for `In-Reply-To` + `References` header threading, and an optional `thread_id` for Gmail thread placement. |
 
+## Proton Mail
+
+Needs Proton Mail Bridge and `aivyx-pa connect proton`, then the `aivyx-proton` `[[tool_process]]`. See [Chat apps and accounts]({GUIDE}/13-chat-apps-and-accounts.md).
+
+| Tool | What it does |
+|---|---|
+| `proton.draft` | Save a plain-text draft in the operator's Proton Mail Drafts folder — it is NOT sent; the operator sends it from Proton Mail. |
+| `proton.read` | Read one Proton Mail message by the `id` from proton.search: from, to, cc, subject, date, message_id, the text (at most 32 KiB; `truncated` says if it was cut) and attachment names (their content is not available). |
+| `proton.search` | Search the operator's Proton Mail (All Mail) by `from`, `to`, `subject`, `text` (anywhere in the message) and a `since` / `before` date range (YYYY-MM-DD); every given field must match. |
+| `proton.send` | Send a plain-text email from the operator's Proton Mail account. **It goes out immediately — there is no undo.** A new message needs `to`, `subject` and `body`; a reply needs `reply_to_id` (from proton.search) and `body`, and is threaded, addressed to the original sender and titled Re: <subject> unless you give `to` / `subject`. |
+
 ## Google Calendar
 
 Needs `aivyx-pa connect calendar`.

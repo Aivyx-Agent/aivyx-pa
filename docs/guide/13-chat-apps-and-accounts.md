@@ -129,6 +129,72 @@ Good to know:
   stops and tells you to run `aivyx-pa connect matrix` again. It doesn't
   retry.
 
+### Proton Mail
+
+Email your assistant from Proton Mail and get the answer back in the same
+thread — and let it search, read, draft and send in your mailbox. It all goes
+through [Proton Mail Bridge](https://proton.me/mail/bridge) on this machine
+(a paid Proton plan), so your mail is decrypted only here.
+
+1. Install Proton Mail Bridge and sign in. Add an address to your account for
+   the assistant (Proton → Settings → Identity and addresses), e.g.
+   `you_aivyx@proton.me`; a `+` alias (`you+assistant@proton.me`) also works.
+2. Add to your config:
+
+   ```toml
+   [proton]
+   channel_address = "you_aivyx@proton.me"
+   own_addresses = ["you@proton.me", "you_aivyx@proton.me"]
+   # allowed_external_senders = ["you@work.example"]
+   ```
+
+3. `aivyx-pa connect proton` — shows Bridge's certificate fingerprints and
+   pins them, asks for the username and password **Bridge** shows you
+   (Bridge → your account → mailbox details; not your Proton password),
+   checks them, and saves them where only you can read them.
+4. `aivyx-pa --channel proton`, then email `you_aivyx@proton.me`.
+5. For the tools (`proton.search`, `proton.read`, `proton.draft`,
+   `proton.send`), add this and restart the daemon:
+
+   ```toml
+   [[tool_process]]
+   name = "proton"
+   command = "aivyx-proton"
+   ```
+
+It answers mail sent to `channel_address` from **you** — one of
+`own_addresses`, and only if the message really is in your Sent folder, so a
+forged "From: you" from outside is ignored — or from an address in
+`allowed_external_senders` that passes Proton's own DMARC check. Everything
+else is ignored without a reply.
+
+Good to know:
+
+- **Handled mail is filed**: marked read and moved, with a copy of the reply,
+  to the `Aivyx` folder (`folder` changes it). If a reply can't be sent, the
+  email stays unread in your inbox.
+- **It starts from now.** Mail already in your inbox when the channel first
+  runs is never answered; after a restart it carries on where it stopped. If
+  you stop the channel during a turn, that email is answered after the next
+  start.
+- **One email, one turn.** The new part of the message is read (quoted
+  history is dropped), up to 32 KiB; attachments aren't opened. The reply
+  says when it cut or ignored something. An email the assistant can't read
+  is skipped.
+- **`/team` and gate commands** go on the first line of the email, and work
+  only through the daemon. There's no `/cancel`.
+- **The mail tools aren't available inside an email turn** — like Gmail's,
+  they need the trusted terminal or Studio. `proton.send` asks you to approve
+  every send.
+- **External senders**: DMARC proves the sender's domain sent the message,
+  not who typed it, and replies to them leave Proton as ordinary email. Mail
+  from another Proton account may carry no DMARC result and then isn't
+  answered.
+- **If you reinstall or reset Bridge**, its certificate changes and the
+  channel stops: run `aivyx-pa connect proton` again. Same if you change
+  `imap_addr` or `smtp_addr`.
+- **One channel process at a time** per instance.
+
 ### Discord and Slack
 
 Both follow the same pattern with a few more steps on the chat app's side

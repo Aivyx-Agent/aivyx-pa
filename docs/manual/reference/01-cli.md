@@ -15,7 +15,7 @@ These work with any command.
 |---|---|
 | `--instance <name>` | Use a named instance — a separate agent with its own config, store and Studio. Same as setting `AIVYX_PA_INSTANCE`; the flag wins. Without it you get the `default` instance. See [Named instances](../../guide/16-named-instances.md). |
 | `--verify-only` | Verify the audit chain and exit (forensic check; no session). |
-| `--channel <kind>` | Run the session on a channel instead of the terminal: `local`, `telegram`, `discord`, `slack`, `matrix` or `voice`. |
+| `--channel <kind>` | Run the session on a channel instead of the terminal: `local`, `telegram`, `discord`, `slack`, `matrix`, `proton` or `voice`. |
 | `--role <name>` | Use a named role (from `[[role]]` in your config) for this session. |
 | `--print-role <name>` | Print a role's full capability envelope and exit. |
 | `--no-daemon` | Chat in-process: don't connect to a running daemon or start one. |
@@ -446,6 +446,21 @@ aivyx-pa matrix verify
 ```
 
 Then run the channel with `aivyx-pa --channel matrix`.
+
+### `aivyx-pa connect proton`
+
+Connects to Proton Mail Bridge using the `[proton]` section of your config:
+shows and pins Bridge's IMAP and SMTP certificates, asks for the username and
+password Bridge shows you (not your Proton password), checks they work, and
+saves them to the instance's `tool-processes/proton/credentials.toml`
+(readable only by you). Needs no passphrase and no daemon. Run it again after
+reinstalling Bridge or changing `imap_addr` / `smtp_addr`.
+
+```
+aivyx-pa connect proton
+```
+
+Then run the channel with `aivyx-pa --channel proton`.
 
 ### `aivyx-pa pack`
 

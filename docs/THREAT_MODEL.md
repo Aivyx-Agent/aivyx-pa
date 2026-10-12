@@ -53,7 +53,7 @@ the trust tiers in `aivyx-capability/src/lib.rs:503` (D5):
 |---|---|---|---|
 | `Kernel` | Aivyx PA itself | the turn loop, audit writer | unconditional (internal use only) |
 | `Trusted` | the operator at their own keyboard | Local CLI, Web UI on `127.0.0.1` | near-total, with extra audit on destructive ops |
-| `SemiTrusted` | the operator over a remote, authenticated channel | their own Telegram bot, with chat-id allowlisted; the Matrix home room, from a verified operator device | narrowed — no unqualified shell, no `fs.delete`, qualifier required on `fs.*` and `net.post` |
+| `SemiTrusted` | the operator over a remote, authenticated channel | their own Telegram bot, with chat-id allowlisted; the Matrix home room, from a verified operator device; an email to the Proton channel address, from you (proven by Sent) or an allowlisted sender with Proton's DMARC pass | narrowed — no unqualified shell, no `fs.delete`, qualifier required on `fs.*` and `net.post` |
 | `Untrusted` | anyone the operator has not authenticated | webhook requests, unallowlisted senders | near-empty — read public memory, that's it |
 
 A turn loop computes the **effective capability set** exactly
@@ -824,6 +824,25 @@ assistant shares room keys only with devices their owner has cross-signed
 (`matrix-sdk`'s identity-based strategy), not with every device in the
 room. The flip side: a device the operator hasn't cross-signed can't read
 anything the assistant sends, including the one "please verify" reply.
+
+**Proton Mail.** An email is a turn only when it is addressed to
+`channel_address` and is either from one of `own_addresses` **and** the same
+Proton message (`X-Pm-Internal-Id`, which Bridge always sets) is in the
+account's Sent folder, or from `allowed_external_senders` **and** the first
+`Authentication-Results` value is Proton's own (`mail.protonmail.ch`)
+`dmarc=pass` for the From domain. Sent-folder membership is account metadata,
+not a header, so a forged "From: you" from outside never qualifies; Proton's
+results come before any the sender wrote, so a forged pass is never first.
+External mail must also be delivered to the channel address (`Delivered-To` /
+`X-Original-To`, set by Proton's receiving server). Everything else is
+ignored without a reply (no backscatter). DMARC proves the sender's *domain*
+authorised the message, not the person, and replies to external addresses
+leave Proton as ordinary email. Bridge is reached only on loopback, over
+STARTTLS pinned to the SHA-256 of its certificate (captured by `connect
+proton`); a changed certificate stops the channel. The Bridge login is in a
+`0600` file in the instance's Proton tool folder, the same posture as Gmail's
+OAuth tokens: the sandboxed tool process can't reach a keyring. The
+`proton.*` tools need `Trusted` and are not available inside an email turn.
 
 ### 5.9 Adversarial co-tenants
 

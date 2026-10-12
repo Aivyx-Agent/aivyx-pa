@@ -687,6 +687,22 @@ The Matrix channel: an end-to-end-encrypted room with your assistant. See [Chat 
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour. Unset = unlimited. |
 | `team_command_allowed_senders` | list of string |  | The Matrix IDs allowed to issue `/team...` commands. Empty: nobody. |
 
+### `[proton]`
+
+Proton Mail through Proton Mail Bridge: the email channel and the `proton.*` tools. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
+
+| Key | Type | Example | Meaning |
+|---|---|---|---|
+| `imap_addr` | string |  | Bridge's IMAP address. On this machine only (`127.0.0.1`, `localhost` or `[::1]`). |
+| `smtp_addr` | string |  | Bridge's SMTP address. On this machine only. |
+| `channel_address` | string |  | The address of yours the assistant answers on, e.g. `you_aivyx@proton.me` or `you+assistant@proton.me`. |
+| `own_addresses` | list of string |  | Every address of your Proton account. Mail "from you" counts only if it is from one of these and in your Sent folder. |
+| `allowed_external_senders` | list of string |  | Outside addresses that may email the assistant; only when Proton's own DMARC check passes for the sender's domain. |
+| `folder` | string |  | The Proton folder handled mail (and the assistant's reply) is moved to. Created if missing. |
+| `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` by email. |
+| `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour. Unset = unlimited. |
+| `team_command_allowed_senders` | list of string |  | The addresses allowed to issue `/team...` commands. Empty: nobody. |
+
 ### `[voice]`
 
 The voice channel (`--channel voice`): speech recognition and text-to-speech engines and devices.
