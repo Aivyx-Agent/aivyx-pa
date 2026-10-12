@@ -304,6 +304,14 @@ impl InstancePaths {
         self.data_dir().map(|d| d.join("proton"))
     }
 
+    /// Signal channel state: `data_dir/signal` — the per-process lock.
+    /// signal-cli's own socket is not here: it lives in
+    /// `tool_process_dir("signal")`, which the sandboxed `signal.send`
+    /// tool can reach.
+    pub fn signal_dir(&self) -> Option<PathBuf> {
+        self.data_dir().map(|d| d.join("signal"))
+    }
+
     /// Sandbox directory: `~/aivyx-pa-sandbox[-<n>]`
     pub fn sandbox_dir(&self) -> Option<PathBuf> {
         self.dirs.home.as_ref().map(|h| {
@@ -480,6 +488,26 @@ mod tests {
         assert_eq!(
             work.proton_dir(),
             Some(PathBuf::from("/h/.local/share/aivyx-pa/instances/work/proton"))
+        );
+    }
+
+    #[test]
+    fn signal_dir_is_under_the_instance_data_dir() {
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/h")),
+            xdg_config_home: None,
+            xdg_data_home: None,
+            xdg_runtime_dir: None,
+        };
+        let default = InstancePaths::new(InstanceName::default_instance(), dirs.clone());
+        assert_eq!(
+            default.signal_dir(),
+            Some(PathBuf::from("/h/.local/share/aivyx-pa/signal"))
+        );
+        let work = InstancePaths::new(InstanceName::parse("work").unwrap(), dirs);
+        assert_eq!(
+            work.signal_dir(),
+            Some(PathBuf::from("/h/.local/share/aivyx-pa/instances/work/signal"))
         );
     }
 

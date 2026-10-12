@@ -296,6 +296,7 @@ pub enum ChannelPlatform {
     Slack,
     Matrix,
     Email,
+    Signal,
     /// HTTP API, not bound locally
     Rest,
     /// Phase 135 — Voice I/O channel. Operator speaks
@@ -1367,6 +1368,7 @@ impl ChannelPlatform {
             ChannelPlatform::Slack => "slack",
             ChannelPlatform::Matrix => "matrix",
             ChannelPlatform::Email => "email",
+            ChannelPlatform::Signal => "signal",
             ChannelPlatform::Rest => "rest",
             ChannelPlatform::Voice => "voice",
         }
@@ -1925,6 +1927,7 @@ mod tests {
             ChannelPlatform::Slack,
             ChannelPlatform::Matrix,
             ChannelPlatform::Email,
+            ChannelPlatform::Signal,
             ChannelPlatform::Rest,
             ChannelPlatform::Voice,
         ] {

@@ -4475,6 +4475,7 @@ pub fn to_wire_channel_platform(platform: aivyx_core::ChannelPlatform) -> WireCh
         aivyx_core::ChannelPlatform::Slack => WireChannelPlatform::Slack,
         aivyx_core::ChannelPlatform::Matrix => WireChannelPlatform::Matrix,
         aivyx_core::ChannelPlatform::Email => WireChannelPlatform::Email,
+        aivyx_core::ChannelPlatform::Signal => WireChannelPlatform::Signal,
         aivyx_core::ChannelPlatform::Rest => WireChannelPlatform::Rest,
         aivyx_core::ChannelPlatform::Voice => WireChannelPlatform::Voice,
     }

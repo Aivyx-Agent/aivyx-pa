@@ -2017,6 +2017,7 @@ pub enum WireChannelPlatform {
     Slack,
     Matrix,
     Email,
+    Signal,
     Rest,
     Voice,
 }
