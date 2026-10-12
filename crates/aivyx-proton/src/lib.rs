@@ -15,7 +15,17 @@ pub mod lock;
 pub mod message;
 pub mod outgoing;
 pub mod policy;
+pub mod proton_channel;
+pub mod session;
 pub mod smtp;
 pub mod state;
 pub mod tls;
 pub mod transport;
+
+pub use session::{
+    run_mail_loop, run_proton_session_with_transport, LoopError, ProtonSessionConfig,
+    ProtonSessionReport, TurnRunner,
+};
+
+#[cfg(test)]
+mod tests;
