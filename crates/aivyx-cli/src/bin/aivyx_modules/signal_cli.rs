@@ -24,7 +24,7 @@ fn transport() -> Result<(CliTransport, std::path::PathBuf), String> {
 /// The signal-cli command line `connect signal` tells the operator to run.
 fn daemon_command(account: &str, socket: &std::path::Path) -> String {
     format!(
-        "signal-cli -a {account} --trust-new-identities never daemon \\\n  --socket {} \\\n  \
+        "signal-cli -a {account} daemon \\\n  --socket {} \\\n  \
          --receive-mode manual --ignore-attachments",
         socket.display()
     )

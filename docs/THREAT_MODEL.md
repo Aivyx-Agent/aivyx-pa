@@ -855,17 +855,25 @@ doesn't check who owns the mission, so the frontend does.
 **Signal.** A message is a turn only from `allowed_senders`, as a 1:1 text
 message, when signal-cli reports the sender's identity key as
 `TRUSTED_VERIFIED` — the operator compared the safety number with their phone
-(`aivyx-pa signal verify`). signal-cli runs with `--trust-new-identities
-never`, so no key is trusted until verified, and a changed key (a
-re-registered or SIM-swapped number) is refused until verified again. An
+(`aivyx-pa signal verify`). signal-cli itself runs with its default
+on-first-use trust (a new key is `TRUSTED_UNVERIFIED`), so the check is
+pa's: only `TRUSTED_VERIFIED` drives a turn, and a changed key (a
+re-registered or SIM-swapped number) is never verified, so it's refused
+until verified again. An
 allowed sender with an unverified key gets one reply per run asking to
 verify; everyone else, and group messages, are ignored. signal-cli is a
 separate process the operator runs (libsignal is AGPL and can't be linked
 into BUSL-1.1 code): pa talks JSON-RPC to it over a Unix socket in the
-instance's signal tool folder and holds no Signal credential. `signal.send`
-(scope `message.send`, `Trusted`-only, approval on every call) can only
-message numbers in `send_to`, and only once their safety number is verified,
-so a hijacked agent can't message strangers from the assistant's number.
+instance's signal tool folder and holds no Signal credential. That socket
+gives whoever can open it full control of the assistant's Signal account
+(any process running as the operator's UID, and the sandboxed tool), which
+is why it lives in the instance's private tool folder. Gate commands by
+Signal (through the daemon) are honoured from any verified `allowed_senders`
+entry, as on Matrix — list only yourself there. `signal.send` (scope
+`message.send`, `Trusted`-only, approval on every call unless `[access]
+confirm_destructive = false`) can only message numbers in `send_to`, and only
+once pa sees their key as `TRUSTED_VERIFIED`, so a hijacked agent can't
+message strangers from the assistant's number.
 
 ### 5.9 Adversarial co-tenants
 

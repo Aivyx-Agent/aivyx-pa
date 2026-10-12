@@ -23,9 +23,17 @@ listed, with approval each time. The assistant has **its own Signal number**.
 - **Trust:** a turn only from an allowed number whose identity key the
   operator has **verified** (safety number compared) — the same posture as
   Matrix's verified devices. A SIM-swapped or re-registered number can't
-  drive turns.
-- **`signal.send`:** only to numbers in `send_to`, `Trusted` only, approval on
-  every call.
+  drive turns. **pa** enforces this (`TRUSTED_VERIFIED`, checked on every
+  message); signal-cli runs with its default on-first-use key trust.
+  *Changed 2026-10-12 (final review):* this spec first ran signal-cli with
+  `--trust-new-identities never`, but a key signal-cli doesn't trust can't
+  even decrypt the first message, so the "please verify" reply could never
+  be delivered and setup couldn't work. With on-first-use trust the first
+  message arrives as `TRUSTED_UNVERIFIED`, gets the verify reply, and the
+  security check stays in pa.
+- **`signal.send`:** only to numbers in `send_to` whose key the operator
+  verified (`TRUSTED_VERIFIED`, checked by the tool), `Trusted` only,
+  approval on every call (unless `[access] confirm_destructive = false`).
 - **Architecture:** a new crate `crates/aivyx-signal` holding the channel and
   the tool, shaped like `aivyx-proton`.
 
@@ -35,7 +43,7 @@ The operator registers the assistant's number with signal-cli (`register`,
 `verify`, a captcha if Signal asks) — pa doesn't — and runs:
 
 ```
-signal-cli -a +ASSISTANT --trust-new-identities never \
+signal-cli -a +ASSISTANT \
   daemon --socket <instance>/tool-processes/signal/signal-cli.sock \
   --receive-mode manual --ignore-attachments
 ```
@@ -48,7 +56,10 @@ signal-cli -a +ASSISTANT --trust-new-identities never \
   calls `subscribeReceive`. The channel subscribes; the tool never does. So
   nothing is received (and lost) while the channel isn't running — messages
   wait on Signal's server.
-- `--trust-new-identities never`: no identity key is trusted until verified.
+- No `--trust-new-identities` flag: signal-cli's default trusts a new key on
+  first sight (TOFU, `TRUSTED_UNVERIFIED`). pa answers, and `signal.send`
+  sends to, only a key the operator verified; a changed key is
+  `UNTRUSTED` (never verified), so it's refused until verified again.
 - The guide gives a systemd user unit for it. signal-cli needs Java 25 and
   must be updated at least every three months (Signal's server drops older
   clients).
@@ -103,13 +114,11 @@ and compare it with your phone." — and nothing runs. Everyone else is
 ignored silently.
 
 `aivyx-pa signal verify` shows the safety number (from `listIdentities`)
-for each allowed sender **and each `send_to` contact** — signal-cli
-(`--trust-new-identities never`) also refuses to *send* to an unverified
-key; the operator compares it with their phone (Signal → the chat → View
+for each allowed sender **and each `send_to` contact** — `signal.send`
+also refuses to send to an unverified key; the operator compares it with their phone (Signal → the chat → View
 safety number) and, on "yes", pa calls `trust` with
 `--verified-safety-number`. A changed key needs verifying again. signal-cli
-knows a contact's key once they've messaged the assistant or after a first
-send attempt.
+knows a contact's key once they've messaged the assistant.
 
 ## Message flow
 
@@ -138,8 +147,11 @@ send attempt.
   Not `channel.send`, which remote channels' ceilings already include.
 - `Trusted` only, so a Signal turn itself can't use it.
 - A recipient not in `send_to` is refused before anything is sent.
-- If signal-cli refuses because the recipient's key isn't trusted, the tool
-  says "verify <number>'s safety number first".
+- Before sending, the tool looks up the recipient's key: unless it is
+  `TRUSTED_VERIFIED` the call fails with "run `aivyx-pa signal verify`
+  first" (no key yet: the contact must message the assistant first), and
+  nothing is sent. signal-cli refusing an untrusted key at send time gets
+  the same message.
 
 ## Config — `[signal]`
 
@@ -159,7 +171,9 @@ The socket path is not config: it is always the instance's
    writes `tool-processes/signal/signal-tool.toml` with `send_to` (the
    sandboxed tool can't read `aivyx-pa.toml`); run it again after changing
    `send_to`.
-5. `aivyx-pa signal verify` — verify each allowed sender's safety number.
+5. Message the assistant (one reply asks you to verify), then `aivyx-pa
+   signal verify` — verify each allowed sender's safety number — and message
+   it again.
 6. `aivyx-pa --channel signal`.
 
 ## Errors

@@ -479,7 +479,9 @@ aivyx-pa connect signal
 Verifies safety numbers. For each `allowed_senders` and `send_to` number it
 shows the safety number signal-cli has; compare it with that phone (the chat
 with the assistant → View safety number) and type `yes` to mark it verified.
-A number signal-cli has no key for yet is skipped with a hint.
+A number signal-cli has no key for yet is skipped with a hint, and one it
+can't look up is reported and skipped; only signal-cli being unreachable stops
+it.
 
 ```
 aivyx-pa signal verify

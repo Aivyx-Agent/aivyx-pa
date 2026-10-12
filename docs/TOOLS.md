@@ -202,7 +202,7 @@ Through the operator's own signal-cli daemon; set up with `aivyx-pa connect sign
 
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
-| `signal.send` | `message.send` | Trusted | send a text from the assistant's Signal number to a `[signal] send_to` contact; approval on every call |
+| `signal.send` | `message.send` | Trusted | send a text from the assistant's Signal number to a `[signal] send_to` contact whose safety number is verified; approval on every call (unless `[access] confirm_destructive = false`) |
 
 ## Calendar (tool process `aivyx-calendar`)
 

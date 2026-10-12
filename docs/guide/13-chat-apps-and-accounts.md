@@ -224,7 +224,7 @@ pa never holds a Signal credential.
    Description=signal-cli for Aivyx PA
 
    [Service]
-   ExecStart=signal-cli -a +15559990000 --trust-new-identities never daemon --socket %h/.aivyx-pa/tool-processes/signal/signal-cli.sock --receive-mode manual --ignore-attachments
+   ExecStart=signal-cli -a +15559990000 daemon --socket %h/.aivyx-pa/tool-processes/signal/signal-cli.sock --receive-mode manual --ignore-attachments
    Restart=on-failure
 
    [Install]
@@ -245,9 +245,10 @@ pa never holds a Signal credential.
 
 4. `aivyx-pa connect signal` — checks signal-cli answers (and tells you how
    to start it if not).
-5. Send the assistant a message from your phone, then `aivyx-pa signal
-   verify`: it shows the safety number; compare it with your phone (the chat
-   with the assistant → View safety number) and type `yes`.
+5. Send the assistant a message from your phone — it replies once, asking
+   you to verify. Then `aivyx-pa signal verify`: it shows the safety number;
+   compare it with your phone (the chat with the assistant → View safety
+   number) and type `yes`. Message it again.
 6. `aivyx-pa --channel signal`.
 7. For `signal.send`, add this and restart the daemon:
 
@@ -258,14 +259,19 @@ pa never holds a Signal credential.
    ```
 
 It answers only you (`allowed_senders`), and only once you've verified your
-safety number — a SIM-swapped or re-registered number can't drive it. With an
-unverified (or changed) number it replies once asking you to verify; everyone
-else, and group messages, are ignored.
+safety number. signal-cli itself accepts a new key on first sight, but pa
+answers only a key you verified — and a changed key (a SIM-swapped or
+re-registered number) isn't verified, so it can't drive the assistant until
+you verify again. With an unverified (or changed) number it replies once
+asking you to verify; everyone else, and group messages, are ignored.
 
 Good to know:
 
 - **Messages aren't lost while the channel is off.** signal-cli fetches them
-  only for the channel; they wait on Signal's server until it runs.
+  only for the channel; they wait on Signal's server until it runs. But
+  messages that arrive during a turn (they wait in a queue), or while you
+  stop the channel, can be lost on Ctrl-C: signal-cli has already taken
+  them from Signal's server.
 - **One conversation per sender.** A message is read up to 4 KiB;
   attachments aren't downloaded (the reply says it ignored them). Long
   replies arrive as several messages. You see "typing…" while it works.
@@ -277,10 +283,10 @@ Good to know:
 - **`signal.send`** only messages numbers in `send_to`, needs the trusted
   terminal or Studio (it's not available inside a Signal turn), and asks you
   to approve every send (unless you turned off confirmations with `[access]
-  confirm_destructive = false`). Each contact's safety number must be
-  verified too (`signal verify` covers `send_to`); signal-cli learns a
-  contact's key once they've messaged the assistant or after a first send
-  attempt. Run `aivyx-pa connect signal` again after changing `send_to`.
+  confirm_destructive = false`). It sends only to a contact whose safety
+  number you verified (`signal verify` covers `send_to`), and a changed key
+  is refused until you verify again; signal-cli learns a contact's key once
+  they've messaged the assistant. Run `aivyx-pa connect signal` again after changing `send_to`.
 - **If the number is unregistered** (re-registered elsewhere), the channel
   stops and tells you to re-register it with signal-cli. If signal-cli
   isn't running, the channel waits for it.
