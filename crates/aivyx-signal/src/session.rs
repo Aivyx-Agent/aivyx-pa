@@ -265,6 +265,9 @@ pub async fn run_signal_session_with_transport<T: SignalTransport + ?Sized>(
             continue;
         }
 
+        if shutdown.is_cancelled() {
+            return Ok(report);
+        }
         let m = pending.pop_front().expect("pending is non-empty here");
         let sender = m.sender().to_string();
         let session = *sessions.entry(sender.clone()).or_default();
@@ -275,6 +278,10 @@ pub async fn run_signal_session_with_transport<T: SignalTransport + ?Sized>(
         tokio::pin!(turn);
         let mut fatal: Option<String> = None;
         let mut stopped = false;
+        // Off after a transient error: it could return at once on every
+        // poll. The outer loop backs off after the turn.
+        let mut polling = true;
+        let mut backoff_after_turn = false;
         loop {
             tokio::select! {
                 biased;
@@ -285,20 +292,20 @@ pub async fn run_signal_session_with_transport<T: SignalTransport + ?Sized>(
                     stopped = true;
                     break;
                 }
-                r = transport.next_event() => {
+                r = transport.next_event(), if polling => {
                     let event = match r {
                         Ok(e) => e,
                         Err(e) if e.is_fatal() => {
                             fatal = Some(e.to_string());
+                            channel.cancellation_token().cancel();
                             let _ = (&mut turn).await;
                             break;
                         }
-                        // A transient error could return at once on every
-                        // poll: stop polling for this turn; the outer loop
-                        // backs off.
-                        Err(_) => {
-                            let _ = (&mut turn).await;
-                            break;
+                        Err(e) => {
+                            eprintln!("aivyx-signal: {e}");
+                            polling = false;
+                            backoff_after_turn = true;
+                            continue;
                         }
                     };
                     match route(transport, policy, &mut asked, event).await {
@@ -309,6 +316,7 @@ pub async fn run_signal_session_with_transport<T: SignalTransport + ?Sized>(
                         Ok(Routed::Handled) => {}
                         Err(e) if e.is_fatal() => {
                             fatal = Some(e.to_string());
+                            channel.cancellation_token().cancel();
                             let _ = (&mut turn).await;
                             break;
                         }
@@ -331,6 +339,15 @@ pub async fn run_signal_session_with_transport<T: SignalTransport + ?Sized>(
                 Err(e) if e.is_fatal() => return Err(e.to_string()),
                 Err(e) => eprintln!("aivyx-signal: couldn't send the reply: {e}"),
             }
+        }
+        if backoff_after_turn {
+            eprintln!("aivyx-signal: retrying in {}s", backoff.as_secs());
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => return Ok(report),
+                _ = tokio::time::sleep(backoff) => {}
+            }
+            backoff = (backoff * 2).min(Duration::from_secs(60));
         }
     }
 }

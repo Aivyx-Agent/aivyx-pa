@@ -364,9 +364,63 @@ async fn an_unregistered_account_ends_the_session() {
 
 #[tokio::test]
 async fn signal_cli_being_down_is_retried_not_fatal() {
-    let t = Arc::new(ScriptedTransport::new(vec![]).then_fail(|| TransportError::Unreachable("no socket".into())));
-    let r = run(Arc::clone(&t), vec![], 0).await;
-    assert_eq!(r.result.unwrap().turns_run, 0);
+    let t = Arc::new(verified(vec![]));
+    t.push_error(TransportError::Unreachable("no socket".into())).await;
+    t.push(text(ME, "still there?", 1)).await;
+    // n == 1: answered after the (1 s) backoff.
+    let r = run(Arc::clone(&t), vec![final_step(&["Yes."], "Yes.")], 1).await;
+    assert_eq!(r.result.unwrap().turns_run, 1);
+    assert_eq!(t.sent().await, vec![(ME.to_string(), "Yes.".to_string())]);
+}
+
+#[tokio::test]
+async fn a_transient_error_mid_turn_still_lets_shutdown_through() {
+    let gate = Arc::new(Gate::default());
+    let t = Arc::new(verified(vec![text(ME, "slow", 1)]));
+    let dir = tempfile::tempdir().unwrap();
+    let shutdown = CancellationToken::new();
+    let cancelled_at = Arc::new(StdMutex::new(None));
+    let (t2, g2, s2, at2) = (Arc::clone(&t), Arc::clone(&gate), shutdown.clone(), Arc::clone(&cancelled_at));
+    tokio::spawn(async move {
+        g2.started.notified().await;
+        // The session polls next_event during the turn: hand it one error.
+        t2.push_error(TransportError::Unreachable("connection closed".into())).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        *at2.lock().unwrap() = Some(std::time::Instant::now());
+        s2.cancel();
+    });
+    let r = run_with(dir.path(), Arc::clone(&t), vec![], Some(gate), 99, shutdown).await;
+    let at = cancelled_at.lock().unwrap().expect("shutdown was cancelled");
+    assert!(at.elapsed() < Duration::from_secs(1), "took {:?}", at.elapsed());
+    assert_eq!(r.result.unwrap().turns_run, 1);
+    assert!(t.sent().await.is_empty());
+}
+
+#[tokio::test]
+async fn shutdown_mid_turn_drops_the_queued_message() {
+    let gate = Arc::new(Gate::default());
+    let t = Arc::new(verified(vec![text(ME, "first", 1), text(ME, "second", 2)]));
+    let dir = tempfile::tempdir().unwrap();
+    let shutdown = CancellationToken::new();
+    let (g2, s2) = (Arc::clone(&gate), shutdown.clone());
+    tokio::spawn(async move {
+        g2.started.notified().await;
+        // Let the session queue "second" while "first" is held.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        s2.cancel();
+    });
+    let r = run_with(
+        dir.path(),
+        Arc::clone(&t),
+        vec![final_step(&["x"], "x"), final_step(&["y"], "y")],
+        Some(gate),
+        99,
+        shutdown,
+    )
+    .await;
+    assert_eq!(r.result.unwrap().turns_run, 1);
+    assert_eq!(r.seen.len(), 1, "{:?}", r.seen);
+    assert!(t.sent().await.is_empty());
 }
 
 #[tokio::test]

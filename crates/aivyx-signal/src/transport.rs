@@ -286,8 +286,9 @@ impl SignalTransport for CliTransport {
 /// Test double: pops queued events, records everything sent.
 #[derive(Default)]
 pub struct ScriptedTransport {
-    events: Mutex<VecDeque<Inbound>>,
+    events: Mutex<VecDeque<Result<Inbound, TransportError>>>,
     identities: HashMap<String, Identity>,
+    fail_identity: HashMap<String, TransportError>,
     fail_send: Option<TransportError>,
     fail_when_empty: Option<fn() -> TransportError>,
     sent: Mutex<Vec<(String, String)>>,
@@ -299,7 +300,7 @@ pub struct ScriptedTransport {
 impl ScriptedTransport {
     pub fn new(events: Vec<Inbound>) -> Self {
         ScriptedTransport {
-            events: Mutex::new(events.into()),
+            events: Mutex::new(events.into_iter().map(Ok).collect()),
             ..Default::default()
         }
     }
@@ -316,6 +317,12 @@ impl ScriptedTransport {
         self
     }
 
+    /// `identity(who)` fails with `err`.
+    pub fn failing_identity(mut self, who: &str, err: TransportError) -> Self {
+        self.fail_identity.insert(who.to_string(), err);
+        self
+    }
+
     /// Every `send_text` fails with `err`.
     pub fn failing_send(mut self, err: TransportError) -> Self {
         self.fail_send = Some(err);
@@ -329,7 +336,11 @@ impl ScriptedTransport {
     }
 
     pub async fn push(&self, event: Inbound) {
-        self.events.lock().await.push_back(event);
+        self.events.lock().await.push_back(Ok(event));
+    }
+    /// Queues one `Err(err)` from `next_event`, among the events.
+    pub async fn push_error(&self, err: TransportError) {
+        self.events.lock().await.push_back(Err(err));
     }
     pub async fn sent(&self) -> Vec<(String, String)> {
         self.sent.lock().await.clone()
@@ -350,7 +361,7 @@ impl SignalTransport for ScriptedTransport {
     async fn next_event(&self) -> Result<Inbound, TransportError> {
         loop {
             if let Some(e) = self.events.lock().await.pop_front() {
-                return Ok(e);
+                return e;
             }
             if let Some(err) = self.fail_when_empty {
                 return Err(err());
@@ -379,6 +390,9 @@ impl SignalTransport for ScriptedTransport {
     }
 
     async fn identity(&self, who: &str) -> Result<Option<Identity>, TransportError> {
+        if let Some(e) = self.fail_identity.get(who) {
+            return Err(e.clone());
+        }
         Ok(self.identities.get(who).cloned())
     }
 
