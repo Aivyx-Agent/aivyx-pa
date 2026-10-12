@@ -51,8 +51,13 @@ pub struct Turn {
 }
 
 impl Turn {
+    /// The conversation key: the lowercased From and the thread's root
+    /// `Message-ID`, so a sender who knows another thread's root (one of
+    /// yours, say) still lands in a conversation — and memory partition —
+    /// of their own.
     pub fn thread(&self) -> String {
-        self.message.thread_root()
+        let from = self.message.from.as_deref().unwrap_or("").to_ascii_lowercase();
+        format!("{from}\n{}", self.message.thread_root())
     }
 }
 
@@ -364,11 +369,11 @@ fn build_agent(
     .apply(agent)
 }
 
-/// A thread's memory namespace: a short hash of its root `Message-ID`
-/// (raw IDs carry `@`, `<`, `>` and other characters scope strings
-/// shouldn't).
-pub fn partition(thread_root: &str) -> String {
-    let digest = Sha256::digest(thread_root.as_bytes());
+/// A thread's memory namespace: a short hash of its [`Turn::thread`] key
+/// (sender and root `Message-ID`, which carry `@`, `<`, `>` and other
+/// characters scope strings shouldn't).
+pub fn partition(thread: &str) -> String {
+    let digest = Sha256::digest(thread.as_bytes());
     format!("proton-{}", &hex::encode(digest.as_slice())[..16])
 }
 
@@ -450,6 +455,27 @@ mod unit_tests {
         assert_ne!(p, partition("<other@proton.me>"));
         assert_eq!(p.len(), "proton-".len() + 16);
         assert!(p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+    }
+
+    #[test]
+    fn a_thread_belongs_to_its_sender() {
+        let turn = |from: &str| Turn {
+            message: MailMessage {
+                uid: 1,
+                from: Some(from.into()),
+                references: vec!["root@proton.me".into()],
+                ..Default::default()
+            },
+            sender: Sender::Operator,
+            text: String::new(),
+            first_line: String::new(),
+            notes: vec![],
+        };
+        let (mine, theirs) = (turn("me@proton.me"), turn("friend@example.com"));
+        assert_eq!(mine.thread(), turn("Me@Proton.me").thread());
+        assert!(mine.thread().contains("root@proton.me"));
+        assert_ne!(mine.thread(), theirs.thread());
+        assert_ne!(partition(&mine.thread()), partition(&theirs.thread()));
     }
 
     #[test]
