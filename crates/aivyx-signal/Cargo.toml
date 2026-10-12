@@ -1,0 +1,43 @@
+[package]
+name = "aivyx-signal"
+description = "Signal channel and signal.send over the operator's signal-cli daemon (JSON-RPC on a Unix socket)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# The `signal.send` tool process, spawned by the daemon via `[[tool_process]]`.
+[[bin]]
+name = "aivyx-signal"
+path = "src/main.rs"
+
+[dependencies]
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+aivyx-instance = { path = "../aivyx-instance" }
+aivyx-llm = { path = "../aivyx-llm" }
+aivyx-storage = { path = "../aivyx-storage" }
+aivyx-tool = { path = "../aivyx-tool" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util", "fs"] }
+toml = "0.8"
+
+# flock(2) for the channel lock (`lock.rs`).
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+aivyx-audit = { path = "../aivyx-audit" }
+aivyx-crypto = { path = "../aivyx-crypto" }
+tempfile = "3"

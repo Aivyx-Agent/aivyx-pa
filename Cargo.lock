@@ -793,6 +793,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "aivyx-signal"
+version = "0.18.2"
+dependencies = [
+ "aivyx-audit",
+ "aivyx-capability",
+ "aivyx-core",
+ "aivyx-crypto",
+ "aivyx-instance",
+ "aivyx-llm",
+ "aivyx-storage",
+ "aivyx-tool",
+ "async-trait",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "aivyx-skills"
 version = "0.1.0"
 source = "git+https://github.com/Aivyx-Agent/aivyx-skills?rev=4ee706e7b378f8da1792d320908f557fea270747#4ee706e7b378f8da1792d320908f557fea270747"
