@@ -20,6 +20,7 @@ pub mod session;
 pub mod smtp;
 pub mod state;
 pub mod tls;
+pub mod tools;
 pub mod transport;
 
 pub use session::{
