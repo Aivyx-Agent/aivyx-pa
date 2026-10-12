@@ -846,6 +846,11 @@ proton`); a changed certificate stops the channel. The Bridge login is in a
 `0600` file in the instance's Proton tool folder, the same posture as Gmail's
 OAuth tokens: the sandboxed tool process can't reach a keyring. The
 `proton.*` tools need `Trusted` and are not available inside an email turn.
+`proton.send` sends from your own address, so a send to `channel_address`
+(after your approval) becomes a channel turn — no tier escalation: the tools
+are `Trusted`, the channel `SemiTrusted`. Gate commands by email are honoured
+only from you (or `team_command_allowed_senders`); the daemon's `ResolveGate`
+doesn't check who owns the mission, so the frontend does.
 
 ### 5.9 Adversarial co-tenants
 

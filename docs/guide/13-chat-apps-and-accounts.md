@@ -171,21 +171,25 @@ else is ignored without a reply.
 Good to know:
 
 - **Handled mail is filed**: marked read and moved, with a copy of the reply,
-  to the `Aivyx` folder (`folder` changes it). If a reply can't be sent, the
-  email stays unread in your inbox.
+  to the `Aivyx` folder (`folder` changes it). If a reply can't be sent, it
+  isn't retried: the email stays unread in your inbox.
 - **It starts from now.** Mail already in your inbox when the channel first
   runs is never answered; after a restart it carries on where it stopped. If
-  you stop the channel during a turn, that email is answered after the next
-  start.
+  you stop the channel during a turn: without the daemon, that email is handled
+  again (the turn runs again) after the next start; through the daemon, the
+  running turn finishes and is answered first.
 - **One email, one turn.** The new part of the message is read (quoted
   history is dropped), up to 32 KiB; attachments aren't opened. The reply
   says when it cut or ignored something. An email the assistant can't read
-  is skipped.
+  is skipped, and so is one that keeps failing to be checked (5 tries; the
+  channel logs it).
 - **`/team` and gate commands** go on the first line of the email, and work
-  only through the daemon. There's no `/cancel`.
+  only through the daemon. Gate commands are honoured only from you (or an
+  address in `team_command_allowed_senders`). There's no `/cancel`.
 - **The mail tools aren't available inside an email turn** — like Gmail's,
   they need the trusted terminal or Studio. `proton.send` asks you to approve
-  every send.
+  every send, unless you turned off confirmations (`[access]
+  confirm_destructive = false`).
 - **External senders**: DMARC proves the sender's domain sent the message,
   not who typed it, and replies to them leave Proton as ordinary email. Mail
   from another Proton account may carry no DMARC result and then isn't
