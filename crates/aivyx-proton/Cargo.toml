@@ -1,0 +1,60 @@
+[package]
+name = "aivyx-proton"
+description = "Proton Mail channel and proton.* tools over Proton Mail Bridge (local IMAP/SMTP, pinned TLS)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# The `proton.*` tool process, spawned by the daemon via `[[tool_process]]`.
+[[bin]]
+name = "aivyx-proton"
+path = "src/main.rs"
+
+[dependencies]
+aivyx-core = { path = "../aivyx-core" }
+aivyx-capability = { path = "../aivyx-capability" }
+aivyx-instance = { path = "../aivyx-instance" }
+aivyx-llm = { path = "../aivyx-llm" }
+aivyx-storage = { path = "../aivyx-storage" }
+aivyx-tool = { path = "../aivyx-tool" }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+futures-util = { workspace = true }
+hex = { workspace = true }
+# Message *building* only (RFC 5322, encoded headers); SMTP is our own
+# `smtp.rs` because the TLS must be pinned, which lettre's transport
+# can't express.
+lettre = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util", "fs"] }
+toml = "0.8"
+uuid = { workspace = true }
+# MIT OR Apache-2.0. Async IMAP on tokio, with IDLE.
+async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+# Apache-2.0 OR MIT (Stalwart). MIME parsing, HTML→text fallback.
+mail-parser = "0.11"
+# Already in the tree (reqwest, matrix-sdk); named directly for the pinned
+# certificate verifier. aws-lc-rs, like the rest of pa.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
+
+# flock(2) for the channel lock (`lock.rs`).
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+aivyx-audit = { path = "../aivyx-audit" }
+aivyx-crypto = { path = "../aivyx-crypto" }
+tempfile = "3"
