@@ -4,7 +4,7 @@ use std::io::{BufRead, Write};
 
 use aivyx_config::{AivyxConfig, SignalConfig};
 use aivyx_signal::toolconf::{self, ToolConfig};
-use aivyx_signal::transport::{CliTransport, SignalTransport, TrustLevel};
+use aivyx_signal::transport::{CliTransport, SignalTransport, TransportError, TrustLevel};
 
 fn signal_config(config: &AivyxConfig) -> Result<&SignalConfig, String> {
     config.signal.as_ref().ok_or_else(|| {
@@ -65,39 +65,120 @@ pub async fn run_verify(config: &AivyxConfig) -> Result<(), String> {
             people.push(n.clone());
         }
     }
+    let stdin = std::io::stdin();
+    let verified = verify_each(&t, &people, &mut stdin.lock(), &mut std::io::stderr()).await?;
+    eprintln!("\n{verified} of {} verified.", people.len());
+    Ok(())
+}
+
+/// Shows each of `people`'s safety number and marks it verified when the
+/// operator types `yes` on `input`; returns how many are verified. A
+/// lookup or trust error for one contact is reported and skipped; only
+/// signal-cli being unreachable stops it.
+async fn verify_each<T: SignalTransport + ?Sized>(
+    t: &T,
+    people: &[String],
+    input: &mut impl BufRead,
+    out: &mut impl Write,
+) -> Result<usize, String> {
     let mut verified = 0;
-    for who in &people {
-        match t.identity(who).await.map_err(|e| e.to_string())? {
-            None => eprintln!(
-                "{who}: no key yet. Send the assistant a message from that number (or try \
-                 a signal.send to it), then run this again."
-            ),
+    for who in people {
+        let id = match t.identity(who).await {
+            Ok(id) => id,
+            Err(e @ TransportError::Unreachable(_)) => return Err(e.to_string()),
+            Err(e) => {
+                let _ = writeln!(out, "{who}: couldn't look up the key ({e})");
+                continue;
+            }
+        };
+        match id {
+            None => {
+                let _ = writeln!(
+                    out,
+                    "{who}: no key yet. Send the assistant a message from that number, \
+                     then run this again."
+                );
+            }
             Some(id) if id.trust == TrustLevel::TrustedVerified => {
-                eprintln!("{who}: already verified.");
+                let _ = writeln!(out, "{who}: already verified.");
                 verified += 1;
             }
             Some(id) => {
-                eprintln!(
+                let _ = writeln!(
+                    out,
                     "\n{who}: safety number\n\n  {}\n\nOn that phone, open the chat with the \
                      assistant → View safety number.",
                     id.safety_number
                 );
-                eprint!("Is it the same? Type yes if so: ");
-                let _ = std::io::stderr().flush();
+                let _ = write!(out, "Is it the same? Type yes if so: ");
+                let _ = out.flush();
                 let mut line = String::new();
-                let _ = std::io::stdin().lock().read_line(&mut line);
-                if line.trim().eq_ignore_ascii_case("yes") {
-                    t.trust_verified(who, &id.safety_number)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    eprintln!("{who}: verified.");
-                    verified += 1;
-                } else {
-                    eprintln!("{who}: not verified.");
+                let _ = input.read_line(&mut line);
+                if !line.trim().eq_ignore_ascii_case("yes") {
+                    let _ = writeln!(out, "{who}: not verified.");
+                    continue;
+                }
+                match t.trust_verified(who, &id.safety_number).await {
+                    Ok(()) => {
+                        let _ = writeln!(out, "{who}: verified.");
+                        verified += 1;
+                    }
+                    Err(e @ TransportError::Unreachable(_)) => return Err(e.to_string()),
+                    Err(e) => {
+                        let _ = writeln!(out, "{who}: couldn't mark it verified ({e})");
+                    }
                 }
             }
         }
     }
-    eprintln!("\n{verified} of {} verified.", people.len());
-    Ok(())
+    Ok(verified)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aivyx_signal::transport::ScriptedTransport;
+
+    const ME: &str = "+15550001111";
+    const SAM: &str = "+15550002222";
+    const ALEX: &str = "+15550003333";
+
+    async fn verify(t: &ScriptedTransport, people: &[&str], typed: &str) -> (Result<usize, String>, String) {
+        let people: Vec<String> = people.iter().map(|p| p.to_string()).collect();
+        let mut out = Vec::new();
+        let r = verify_each(t, &people, &mut typed.as_bytes(), &mut out).await;
+        (r, String::from_utf8(out).unwrap())
+    }
+
+    #[tokio::test]
+    async fn one_contacts_lookup_error_does_not_stop_the_rest() {
+        let t = ScriptedTransport::new(vec![])
+            .failing_identity(SAM, TransportError::Refused("Unregistered user".into()))
+            .with_identity(ME, TrustLevel::TrustedUnverified, "11111")
+            .with_identity(ALEX, TrustLevel::TrustedVerified, "33333");
+        let (r, out) = verify(&t, &[SAM, ME, ALEX], "yes\n").await;
+        assert_eq!(r.unwrap(), 2, "{out}");
+        assert!(out.contains(&format!("{SAM}: couldn't look up the key")), "{out}");
+        assert!(out.contains("Unregistered user"), "{out}");
+        assert_eq!(t.trusted().await, vec![(ME.to_string(), "11111".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn signal_cli_unreachable_stops_it() {
+        let t = ScriptedTransport::new(vec![])
+            .failing_identity(ME, TransportError::Unreachable("no socket".into()));
+        let (r, _) = verify(&t, &[ME, SAM], "").await;
+        assert!(r.unwrap_err().contains("isn't reachable"));
+    }
+
+    #[tokio::test]
+    async fn only_yes_verifies() {
+        let t = ScriptedTransport::new(vec![])
+            .with_identity(ME, TrustLevel::Untrusted, "99999");
+        let (r, out) = verify(&t, &[ME, SAM], "no\n").await;
+        assert_eq!(r.unwrap(), 0);
+        assert!(out.contains(&format!("{ME}: not verified.")), "{out}");
+        assert!(out.contains(&format!("{SAM}: no key yet")), "{out}");
+        assert!(t.trusted().await.is_empty());
+    }
 }
