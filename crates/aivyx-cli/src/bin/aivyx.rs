@@ -108,6 +108,8 @@ mod connect;
 mod connect_kitchen;
 #[path = "aivyx_modules/matrix_cli.rs"]
 mod matrix_cli;
+#[path = "aivyx_modules/proton_cli.rs"]
+mod proton_cli;
 #[path = "aivyx_modules/cost.rs"]
 mod cost;
 #[path = "aivyx_modules/daemon_service.rs"]
@@ -376,7 +378,8 @@ fn build_shell_exec_for_channel(
         ChannelKind::Telegram
         | ChannelKind::Discord
         | ChannelKind::Slack
-        | ChannelKind::Matrix => Ok(None),
+        | ChannelKind::Matrix
+        | ChannelKind::Proton => Ok(None),
     }
 }
 
@@ -429,7 +432,8 @@ fn build_fs_delete_for_channel(
         ChannelKind::Telegram
         | ChannelKind::Discord
         | ChannelKind::Slack
-        | ChannelKind::Matrix => Ok(None),
+        | ChannelKind::Matrix
+        | ChannelKind::Proton => Ok(None),
     }
 }
 
@@ -1268,6 +1272,17 @@ fn run() -> Result<(), String> {
         let rendered = render_role_envelope(&name, &config, channel_kind)?;
         print!("{rendered}");
         return Ok(());
+    }
+
+    // `aivyx-pa connect proton`: needs the config ([proton]) but no
+    // passphrase, store or daemon — it talks only to Proton Mail Bridge and
+    // writes the instance's `tool-processes/proton/credentials.toml`.
+    if mode == CliMode::ProtonConnect {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(proton_cli::run_connect(&config));
     }
 
     // Model routing Part 3a — `aivyx-pa routing status`. Like
@@ -2276,6 +2291,8 @@ enum CliMode {
     MatrixConnect,
     /// See [`CliMode::MatrixConnect`].
     MatrixVerify,
+    /// `aivyx-pa connect proton` — pins Bridge's certificate and stores its login.
+    ProtonConnect,
     /// `aivyx-pa instances list | create <name> | remove <name>`: named
     /// instances (several separate agents for one OS user).
     Instances(InstancesCmd),
@@ -3800,6 +3817,18 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         if args.len() > 2 {
             return Err("`aivyx-pa connect` takes at most one service name".into());
+        }
+        if service.as_deref() == Some("proton") {
+            return Ok(CliArgs {
+                mode: CliMode::ProtonConnect,
+                channel: ChannelKind::Local,
+                role: None,
+                no_daemon: false,
+                mcp_servers: vec![],
+                mcp_sse_servers: vec![],
+                provider: None,
+                web_ui_port: None,
+            });
         }
         if service.as_deref() == Some("matrix") {
             return Ok(CliArgs {
@@ -5632,7 +5661,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "--channel" => {
                 let value = args.get(i + 1).ok_or_else(|| {
-                    "`--channel` requires a value: `local`, `telegram`, `discord`, `slack`, `matrix`, or `voice`"
+                    "`--channel` requires a value: `local`, `telegram`, `discord`, `slack`, `matrix`, `proton`, or `voice`"
                         .to_string()
                 })?;
                 channel = match value.as_str() {
@@ -5643,12 +5672,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     // Phase 108 — Slack adapter parse arm.
                     "slack" => ChannelKind::Slack,
                     "matrix" => ChannelKind::Matrix,
+                    "proton" => ChannelKind::Proton,
                     // Phase 135 — Voice channel parse arm.
                     "voice" => ChannelKind::Voice,
                     other => {
                         return Err(format!(
                             "unrecognized channel `{other}`. \
-                             Supported: local, telegram, discord, slack, matrix, voice"
+                             Supported: local, telegram, discord, slack, matrix, proton, voice"
                         ));
                     }
                 };
@@ -6791,8 +6821,8 @@ async fn run_async(
         discord,
         // `[matrix]` config consumed by the `ChannelKind::Matrix` arm below.
         matrix,
-        // `[proton]` — bound by the `ChannelKind::Proton` arm (next tasks).
-        proton: _,
+        // `[proton]` config consumed by the `ChannelKind::Proton` arm below.
+        proton,
         // Phase 108 — `slack` config consumed by the
         // `ChannelKind::Slack` dispatch arm below; carries
         // the bot + app tokens through to
@@ -11851,6 +11881,101 @@ async fn run_async(
             .map(|_| ())
         }
 
+        ChannelKind::Proton => {
+            let pc = proton.ok_or("`--channel proton` needs a [proton] section in your config")?;
+            let channel_address = pc.channel_address.clone().ok_or(
+                "`--channel proton` needs `channel_address` in [proton] — the address the assistant answers on",
+            )?;
+            let instance = aivyx_instance::InstancePaths::current().map_err(|e| e.to_string())?;
+            let state_dir = instance
+                .proton_dir()
+                .ok_or("can't resolve the instance's data folder")?;
+            let creds_path = aivyx_proton::credentials::path_for(&instance)
+                .ok_or("can't resolve the instance's folders (is HOME set?)")?;
+            let creds = aivyx_proton::credentials::load(&creds_path)?.ok_or(
+                "not connected to Proton Mail Bridge yet — run `aivyx-pa connect proton` first",
+            )?;
+            if creds.imap_addr != pc.imap_addr || creds.smtp_addr != pc.smtp_addr {
+                return Err("[proton] imap_addr / smtp_addr changed since `aivyx-pa connect proton` — run it again".into());
+            }
+            let transport = creds.transport(&pc.folder)?;
+            let policy = aivyx_proton::policy::ProtonPolicy::new(
+                &channel_address,
+                &pc.own_addresses,
+                &pc.allowed_external_senders,
+            );
+            let shutdown = CancellationToken::new();
+            let shutdown_for_signal = shutdown.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    std::process::exit(130);
+                }
+                eprintln!("\naivyx: shutting down the Proton Mail channel.");
+                shutdown_for_signal.cancel();
+            });
+            let daemon_socket = match default_socket_path() {
+                Ok(sp) if !no_daemon && aivyx_channel::daemon_client::daemon_is_running(&sp).await => Some(sp),
+                _ => None,
+            };
+            if let Some(sp) = daemon_socket {
+                eprintln!(
+                    "aivyx-pa {} (daemon) — answering email to {channel_address}",
+                    env!("CARGO_PKG_VERSION")
+                );
+                match aivyx_channel::proton_daemon_frontend::run_proton_daemon_session(
+                    &transport,
+                    &policy,
+                    &state_dir,
+                    sp.clone(),
+                    Some(active_role_name.clone()),
+                    shutdown.clone(),
+                    pc.team_run_channel,
+                    pc.team_trigger_rate_limit,
+                    pc.team_command_allowed_senders.clone(),
+                )
+                .await
+                {
+                    Ok(()) => return Ok(()),
+                    // A rejected login, a changed certificate or a second
+                    // channel would fail the same way in-process.
+                    Err(e @ aivyx_channel::daemon_server::DaemonError::ChannelFatal(_)) => return Err(e.to_string()),
+                    Err(e) => eprintln!("aivyx-pa: daemon Proton session failed ({e}), falling back to in-process."),
+                }
+            }
+            eprintln!(
+                "aivyx-pa {} — answering email to {channel_address} (in-process)",
+                env!("CARGO_PKG_VERSION")
+            );
+            let proton_config = aivyx_proton::ProtonSessionConfig {
+                model,
+                system_prompt,
+                max_tokens: DEFAULT_MAX_TOKENS,
+                capabilities,
+                tools,
+                storage,
+                tool_allowlist,
+                memory_topic_prefix,
+                turn_timeout_secs,
+                cycle_detection,
+                injection_scan_enabled,
+                injection_scan_exempt,
+                confirm_integration_writes,
+                budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
+                    config_budget.clone(),
+                    Arc::clone(&persistent_audit_for_query),
+                    aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
+                    DEFAULT_MAX_TOKENS,
+                ),
+                rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
+            };
+            aivyx_proton::run_proton_session_with_transport(
+                &transport, &policy, &state_dir, proton_config, provider, audit, checkpointer.clone(), shutdown,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        }
+
         // Phase 108 Task 5 — Slack adapter dispatch. Mirrors
         // the Discord arm above. Socket Mode requires two
         // tokens (bot for REST, app for the WebSocket); both
@@ -14679,6 +14804,12 @@ mod tests {
         assert!(local_config_notice(&named, true, true).is_none()); // AIVYX_PA_CONFIG_PATH wins
         assert!(local_config_notice(&named, false, false).is_none()); // no ./aivyx-pa.toml
         assert!(local_config_notice(&default, false, true).is_none());
+    }
+
+    #[test]
+    fn proton_commands_parse() {
+        assert_eq!(parse_cli_args_from(&argv(&["connect", "proton"])).unwrap().mode, CliMode::ProtonConnect);
+        assert_eq!(parse_cli_args_from(&argv(&["--channel", "proton"])).unwrap().channel, ChannelKind::Proton);
     }
 
     #[test]

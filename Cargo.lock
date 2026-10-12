@@ -272,6 +272,7 @@ dependencies = [
  "aivyx-mcp",
  "aivyx-memory",
  "aivyx-pack",
+ "aivyx-proton",
  "aivyx-route",
  "aivyx-skills",
  "aivyx-slack",
