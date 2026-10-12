@@ -1227,7 +1227,8 @@ fn run() -> Result<(), String> {
             && !print_role_mode
             && !audit_export_mode
             && !cost_mode
-            && !routing_status_mode,
+            && !routing_status_mode
+            && mode_needs_api_key(&mode),
         require_telegram_token: matches!(channel_kind, ChannelKind::Telegram) && !print_role_mode,
         // Phase 107 — mirrors the Telegram check for the
         // Discord adapter. `--print-role` does not open a
@@ -2255,6 +2256,13 @@ fn run_mcp_status() -> Result<(), String> {
 // type from CLI parsing (`--channel local|telegram`), but the enum
 // itself is library-side so `aivyx_channel::render_role_envelope`
 // and any future IPC frontends share one discriminator.
+
+/// Whether `mode` can need the LLM provider's API key. `connect proton`,
+/// `connect matrix` and `matrix verify` talk only to Bridge / the
+/// homeserver, so they load without one.
+fn mode_needs_api_key(mode: &CliMode) -> bool {
+    !matches!(mode, CliMode::ProtonConnect | CliMode::MatrixConnect | CliMode::MatrixVerify)
+}
 
 /// Phase 17 Task 3 — the binary's primary mode of operation.
 #[derive(Debug, PartialEq)]
@@ -14804,6 +14812,14 @@ mod tests {
         assert!(local_config_notice(&named, true, true).is_none()); // AIVYX_PA_CONFIG_PATH wins
         assert!(local_config_notice(&named, false, false).is_none()); // no ./aivyx-pa.toml
         assert!(local_config_notice(&default, false, true).is_none());
+    }
+
+    #[test]
+    fn connect_commands_need_no_api_key() {
+        for mode in [CliMode::ProtonConnect, CliMode::MatrixConnect, CliMode::MatrixVerify] {
+            assert!(!mode_needs_api_key(&mode), "{mode:?}");
+        }
+        assert!(mode_needs_api_key(&parse_cli_args_from(&argv(&[])).unwrap().mode));
     }
 
     #[test]
