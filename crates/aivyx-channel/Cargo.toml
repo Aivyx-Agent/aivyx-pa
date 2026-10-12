@@ -154,6 +154,7 @@ aivyx-telegram = { path = "../aivyx-telegram" }
 aivyx-discord = { path = "../aivyx-discord" }
 aivyx-matrix = { path = "../aivyx-matrix" }
 aivyx-proton = { path = "../aivyx-proton" }
+aivyx-signal = { path = "../aivyx-signal" }
 # Phase 108 — Slack channel adapter. Same binary-only-import
 # pattern as `aivyx-telegram` and `aivyx-discord`. The
 # production transport is currently stubbed (Phase-108-internal

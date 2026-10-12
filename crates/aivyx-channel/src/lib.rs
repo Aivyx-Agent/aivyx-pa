@@ -189,6 +189,7 @@ pub mod telegram_daemon_frontend;
 pub mod discord_daemon_frontend;
 pub mod matrix_daemon_frontend;
 pub mod proton_daemon_frontend;
+pub mod signal_daemon_frontend;
 pub mod channel_team_chain;
 pub mod gate_command;
 pub mod team_command;

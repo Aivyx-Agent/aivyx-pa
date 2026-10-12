@@ -95,6 +95,10 @@ pub enum FrontendType {
     /// connection and applies the email trust policy; only approved mail
     /// reaches the daemon, one connection per email thread.
     Proton,
+    /// Signal daemon-frontend. The frontend process talks to signal-cli and
+    /// applies the verified-safety-number policy; only approved messages
+    /// reach the daemon, one connection per sender.
+    Signal,
 }
 
 // ---------------------------------------------------------------------------
