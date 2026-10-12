@@ -1184,7 +1184,8 @@ async fn telegram_frontend_type_gets_telegram_channel() {
         | FrontendType::Web
         | FrontendType::Discord
         | FrontendType::Slack
-        | FrontendType::Matrix => {
+        | FrontendType::Matrix
+        | FrontendType::Proton => {
             Arc::new(LocalChannel::new("test-local", Vec::<u8>::new()))
         }
     });
@@ -1332,7 +1333,8 @@ async fn mixed_local_and_telegram_frontends_on_same_daemon() {
         | FrontendType::Web
         | FrontendType::Discord
         | FrontendType::Slack
-        | FrontendType::Matrix => {
+        | FrontendType::Matrix
+        | FrontendType::Proton => {
             Arc::new(LocalChannel::new("test-local", Vec::<u8>::new()))
         }
     });

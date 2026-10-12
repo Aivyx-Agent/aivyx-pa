@@ -10737,6 +10737,9 @@ async fn run_async(
                 aivyx_channel::daemon_ipc::FrontendType::Matrix => Arc::new(
                     aivyx_channel::matrix_daemon_frontend::MatrixDaemonChannel::new(),
                 ),
+                aivyx_channel::daemon_ipc::FrontendType::Proton => Arc::new(
+                    aivyx_channel::proton_daemon_frontend::ProtonDaemonChannel::new(),
+                ),
                 // Phase 111 — Slack daemon-mode channel stub.
                 // Mirrors TelegramDaemonChannel and
                 // DiscordDaemonChannel; the slack_daemon_frontend.rs

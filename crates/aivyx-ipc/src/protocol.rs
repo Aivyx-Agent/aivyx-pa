@@ -91,6 +91,10 @@ pub enum FrontendType {
     /// Matrix client and applies the policy; only policy-approved turns
     /// reach the daemon over this connection.
     Matrix,
+    /// Proton Mail daemon-frontend. The frontend process holds the Bridge
+    /// connection and applies the email trust policy; only approved mail
+    /// reaches the daemon, one connection per email thread.
+    Proton,
 }
 
 // ---------------------------------------------------------------------------

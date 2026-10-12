@@ -2,9 +2,8 @@
 //! applies `aivyx_matrix::policy`; only policy-approved turns are
 //! submitted to the daemon over IPC. Mirrors `discord_daemon_frontend`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use aivyx_core::{
     CancellationToken, ChannelContext, ChannelError, ChannelPlatform, SessionId, StreamEvent,
@@ -15,15 +14,11 @@ use aivyx_matrix::policy::{
 };
 use aivyx_matrix::transport::{MatrixTransport, OutgoingMessage, TransportError};
 
-use crate::daemon_client::{self, DaemonSession};
+use crate::daemon_client::DaemonSession;
 use crate::daemon_ipc::FrontendType;
 use crate::daemon_server::DaemonError;
 use crate::gate_command;
-use crate::team_command::{self, TeamCommand, sender_allowed};
-use crate::team_dispatch;
-use crate::team_trigger_state::{
-    ConfirmReply, PendingTrigger, check_and_record_trigger, parse_confirm_reply,
-};
+use crate::team_trigger_state::PendingTrigger;
 
 pub struct MatrixDaemonChannel {
     session: SessionId,
@@ -76,75 +71,6 @@ impl ChannelContext for MatrixDaemonChannel {
     fn cancel_inflight(&self) {
         self.token.lock().expect("token mutex poisoned").cancel();
     }
-}
-
-/// The `/team` precedence chain for one message. `Some(reply)` when it
-/// was a team command or a pending confirmation; `None` to carry on.
-#[allow(clippy::too_many_arguments)]
-async fn handle_matrix_team_command(
-    text: &str,
-    socket_path: &Path,
-    pending: &mut Option<PendingTrigger<String>>,
-    history: &mut Vec<Instant>,
-    team_run_channel: bool,
-    team_trigger_rate_limit: Option<u32>,
-    sender: String,
-    allowed_senders: &[String],
-) -> Option<String> {
-    if team_command::parse(text).is_some() && !sender_allowed(allowed_senders, &sender) {
-        return Some("✗ you are not authorized to issue /team commands.".to_string());
-    }
-    if let Some(p) = pending.take() {
-        let now = Instant::now();
-        match parse_confirm_reply(text) {
-            Some(ConfirmReply::Yes) | Some(ConfirmReply::No) if p.sender_id != sender => {
-                if !p.is_expired(now) {
-                    *pending = Some(p);
-                }
-            }
-            Some(ConfirmReply::Yes) if p.is_expired(now) => {
-                return Some("✗ that request expired, ask again.".to_string());
-            }
-            Some(ConfirmReply::Yes) => {
-                return Some(
-                    match daemon_client::run_team_mission_channel(
-                        socket_path,
-                        FrontendType::Matrix,
-                        p.goal.clone(),
-                    )
-                    .await
-                    {
-                        Ok(id) => format!("✓ Started mission {id}."),
-                        Err(e) => format!("✗ Could not start the mission: {e}"),
-                    },
-                );
-            }
-            Some(ConfirmReply::No) => return Some("Cancelled.".to_string()),
-            None => {
-                if !p.is_expired(now) {
-                    *pending = Some(p);
-                }
-            }
-        }
-    }
-    if let Some(TeamCommand::Run { goal }) = team_command::parse(text) {
-        if !team_run_channel {
-            return Some("✗ this channel is not authorized to start team missions.".to_string());
-        }
-        if let Some(limit) = team_trigger_rate_limit
-            && !check_and_record_trigger(history, limit, Instant::now())
-        {
-            return Some(format!(
-                "✗ too many mission-start requests (max {limit} per hour), try again later."
-            ));
-        }
-        *pending = Some(PendingTrigger::new(goal.clone(), sender));
-        return Some(format!("Start '{goal}' on the default team? Reply yes/no."));
-    }
-    if let Some(cmd) = team_command::parse(text) {
-        return Some(team_dispatch::dispatch(socket_path, cmd).await);
-    }
-    None
 }
 
 /// Apply the failure rule to a Matrix call: Unauthorized ends the session
@@ -258,7 +184,8 @@ pub async fn run_matrix_daemon_session<T: MatrixTransport + 'static>(
             let _ = session.cancel_turn().await;
             continue;
         }
-        if let Some(reply) = handle_matrix_team_command(
+        if let Some(reply) = crate::channel_team_chain::handle_team_command(
+            FrontendType::Matrix,
             &text,
             &socket_path,
             &mut pending,
@@ -316,45 +243,6 @@ mod tests {
         assert_eq!(c.platform(), ChannelPlatform::Matrix);
         assert_eq!(c.trust_tier(), aivyx_capability::TrustTier::SemiTrusted);
         assert_eq!(c.channel_name(), "aivyx-matrix-daemon");
-    }
-
-    #[tokio::test]
-    async fn a_team_command_from_a_sender_not_allowed_is_refused() {
-        let mut pending = None;
-        let mut history = Vec::new();
-        let out = handle_matrix_team_command(
-            "/team status",
-            std::path::Path::new("/nonexistent.sock"),
-            &mut pending,
-            &mut history,
-            false,
-            None,
-            "@stranger:x".to_string(),
-            &["@me:x".to_string()],
-        )
-        .await;
-        assert_eq!(
-            out,
-            Some("✗ you are not authorized to issue /team commands.".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn ordinary_text_is_not_a_team_command() {
-        let mut pending = None;
-        let mut history = Vec::new();
-        let out = handle_matrix_team_command(
-            "hello",
-            std::path::Path::new("/nonexistent.sock"),
-            &mut pending,
-            &mut history,
-            false,
-            None,
-            "@me:x".to_string(),
-            &["@me:x".to_string()],
-        )
-        .await;
-        assert_eq!(out, None);
     }
 
     use aivyx_matrix::transport::{Inbound, ScriptedTransport};

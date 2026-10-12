@@ -204,6 +204,7 @@ dependencies = [
  "aivyx-matrix",
  "aivyx-mcp",
  "aivyx-memory",
+ "aivyx-proton",
  "aivyx-route",
  "aivyx-slack",
  "aivyx-storage",
