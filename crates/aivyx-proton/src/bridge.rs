@@ -31,6 +31,8 @@ pub const ALL_MAIL: &str = "All Mail";
 const BATCH: usize = 20;
 /// How long one IDLE (or poll sleep) lasts before searching again.
 const IDLE_FOR: Duration = Duration::from_secs(60);
+/// Longest any one Bridge operation may take (`wait_for_new` gets `IDLE_FOR` on top).
+const OP_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub trait Io: AsyncRead + AsyncWrite + Unpin + Send + fmt::Debug {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + fmt::Debug> Io for T {}
@@ -169,7 +171,27 @@ impl BridgeTransport {
     /// Logs in to IMAP and SMTP without changing anything — what
     /// `connect proton` runs before saving the credential.
     pub async fn check_login(&self) -> Result<(), TransportError> {
-        self.inbox_status().await?;
+        self.bounded(OP_TIMEOUT, self.check_login_inner()).await
+    }
+
+    /// Runs `fut` for at most `limit`. On a timeout the cached IMAP session
+    /// (possibly mid-command) is dropped and a transient error returned.
+    async fn bounded<T>(
+        &self,
+        limit: Duration,
+        fut: impl std::future::Future<Output = Result<T, TransportError>>,
+    ) -> Result<T, TransportError> {
+        match tokio::time::timeout(limit, fut).await {
+            Ok(r) => r,
+            Err(_) => {
+                *self.imap.lock().await = None;
+                Err(TransportError::Platform("Proton Mail Bridge didn't answer in time".into()))
+            }
+        }
+    }
+
+    async fn check_login_inner(&self) -> Result<(), TransportError> {
+        self.inbox_status_inner().await?;
         let mut conn = self.dial.smtp().await?;
         let r = conn
             .auth_plain(&self.login.username, &self.login.password)
@@ -257,9 +279,55 @@ fn plausible_internal_id(id: &str) -> bool {
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'='))
 }
 
+/// Fills in a blank message for every UID that was found but didn't parse,
+/// so the receive loop advances past it instead of finding it again.
+fn with_stand_ins(found: &[u32], parsed: Vec<MailMessage>) -> Vec<MailMessage> {
+    let mut out = parsed;
+    for &uid in found {
+        if !out.iter().any(|m| m.uid == uid) {
+            eprintln!("aivyx-proton: skipping message UID {uid}: couldn't read it");
+            out.push(MailMessage { uid, ..Default::default() });
+        }
+    }
+    out.sort_by_key(|m| m.uid);
+    out
+}
+
+async fn fetch_new(s: &mut ImapSession, uids: &[u32]) -> Result<Vec<MailMessage>, TransportError> {
+    let parsed = fetch_uids(s, uids).await?;
+    Ok(with_stand_ins(uids, parsed))
+}
+
 #[async_trait]
 impl MailTransport for BridgeTransport {
     async fn inbox_status(&self) -> Result<InboxStatus, TransportError> {
+        self.bounded(OP_TIMEOUT, self.inbox_status_inner()).await
+    }
+    async fn wait_for_new(&self, after_uid: u32) -> Result<Vec<MailMessage>, TransportError> {
+        self.bounded(IDLE_FOR + OP_TIMEOUT, self.wait_for_new_inner(after_uid)).await
+    }
+    async fn in_sent(&self, internal_id: &str) -> Result<bool, TransportError> {
+        self.bounded(OP_TIMEOUT, self.in_sent_inner(internal_id)).await
+    }
+    async fn send(&self, mail: &OutgoingMail) -> Result<(), TransportError> {
+        self.bounded(OP_TIMEOUT, self.send_inner(mail)).await
+    }
+    async fn file_handled(&self, uid: u32, reply: &OutgoingMail) -> Result<(), TransportError> {
+        self.bounded(OP_TIMEOUT, self.file_handled_inner(uid, reply)).await
+    }
+    async fn search(&self, q: &SearchQuery) -> Result<Vec<MailMessage>, TransportError> {
+        self.bounded(OP_TIMEOUT, self.search_inner(q)).await
+    }
+    async fn fetch(&self, uid: u32) -> Result<Option<MailMessage>, TransportError> {
+        self.bounded(OP_TIMEOUT, self.fetch_inner(uid)).await
+    }
+    async fn append_draft(&self, mail: &OutgoingMail) -> Result<(), TransportError> {
+        self.bounded(OP_TIMEOUT, self.append_draft_inner(mail)).await
+    }
+}
+
+impl BridgeTransport {
+    async fn inbox_status_inner(&self) -> Result<InboxStatus, TransportError> {
         self.with_session(|s| {
             Box::pin(async move {
                 let mb = s.select(INBOX).await.map_err(platform)?;
@@ -272,13 +340,13 @@ impl MailTransport for BridgeTransport {
         .await
     }
 
-    async fn wait_for_new(&self, after_uid: u32) -> Result<Vec<MailMessage>, TransportError> {
+    async fn wait_for_new_inner(&self, after_uid: u32) -> Result<Vec<MailMessage>, TransportError> {
         let found = self
             .with_session(|s| Box::pin(async move { new_uids(s, after_uid).await }))
             .await?;
         if !found.is_empty() {
             return self
-                .with_session(|s| Box::pin(async move { fetch_uids(s, &found).await }))
+                .with_session(|s| Box::pin(async move { fetch_new(s, &found).await }))
                 .await;
         }
         // Nothing new: wait for the server to say something (or 60 s).
@@ -302,7 +370,7 @@ impl MailTransport for BridgeTransport {
         };
         let found = new_uids(&mut session, after_uid).await;
         let result = match found {
-            Ok(uids) => fetch_uids(&mut session, &uids).await,
+            Ok(uids) => fetch_new(&mut session, &uids).await,
             Err(e) => Err(e),
         };
         if result.is_ok() {
@@ -311,7 +379,7 @@ impl MailTransport for BridgeTransport {
         result
     }
 
-    async fn in_sent(&self, internal_id: &str) -> Result<bool, TransportError> {
+    async fn in_sent_inner(&self, internal_id: &str) -> Result<bool, TransportError> {
         if !plausible_internal_id(internal_id) {
             return Ok(false);
         }
@@ -325,7 +393,7 @@ impl MailTransport for BridgeTransport {
         .await
     }
 
-    async fn send(&self, mail: &OutgoingMail) -> Result<(), TransportError> {
+    async fn send_inner(&self, mail: &OutgoingMail) -> Result<(), TransportError> {
         let data = mail.to_rfc5322().map_err(platform)?;
         let mut conn = self.dial.smtp().await?;
         conn.auth_plain(&self.login.username, &self.login.password)
@@ -341,7 +409,7 @@ impl MailTransport for BridgeTransport {
         Ok(())
     }
 
-    async fn file_handled(&self, uid: u32, reply: &OutgoingMail) -> Result<(), TransportError> {
+    async fn file_handled_inner(&self, uid: u32, reply: &OutgoingMail) -> Result<(), TransportError> {
         let copy = reply.to_rfc5322().map_err(platform)?;
         let mailbox = self.handled_mailbox.clone();
         self.with_session(|s| {
@@ -377,7 +445,7 @@ impl MailTransport for BridgeTransport {
         .await
     }
 
-    async fn search(&self, q: &SearchQuery) -> Result<Vec<MailMessage>, TransportError> {
+    async fn search_inner(&self, q: &SearchQuery) -> Result<Vec<MailMessage>, TransportError> {
         let criteria = q.to_imap().map_err(platform)?;
         let max = q.max_results;
         self.with_session(|s| {
@@ -399,7 +467,7 @@ impl MailTransport for BridgeTransport {
         .await
     }
 
-    async fn fetch(&self, uid: u32) -> Result<Option<MailMessage>, TransportError> {
+    async fn fetch_inner(&self, uid: u32) -> Result<Option<MailMessage>, TransportError> {
         self.with_session(|s| {
             Box::pin(async move {
                 s.examine(ALL_MAIL).await.map_err(platform)?;
@@ -409,7 +477,7 @@ impl MailTransport for BridgeTransport {
         .await
     }
 
-    async fn append_draft(&self, mail: &OutgoingMail) -> Result<(), TransportError> {
+    async fn append_draft_inner(&self, mail: &OutgoingMail) -> Result<(), TransportError> {
         let data = mail.to_rfc5322().map_err(platform)?;
         self.with_session(|s| {
             Box::pin(async move {
@@ -454,5 +522,37 @@ mod tests {
         }
         let t = BridgeTransport::new(Arc::new(Never), Login { username: "u".into(), password: "p".into() }, "Aivyx");
         assert_eq!(t.handled_mailbox, "Folders/Aivyx");
+    }
+
+    #[test]
+    fn unreadable_uids_come_back_as_blank_stand_ins() {
+        let parsed = vec![MailMessage { uid: 5, subject: "hi".into(), ..Default::default() }];
+        let out = with_stand_ins(&[3, 5, 7], parsed);
+        assert_eq!(out.iter().map(|m| m.uid).collect::<Vec<_>>(), vec![3, 5, 7]);
+        assert!(out[0].from.is_none() && out[2].from.is_none());
+        assert_eq!(out[1].subject, "hi");
+    }
+
+    #[tokio::test]
+    async fn a_hung_bridge_times_out_and_drops_the_session() {
+        struct Hung;
+        #[async_trait]
+        impl Dial for Hung {
+            async fn imap(&self) -> Result<ImapClient, TransportError> {
+                std::future::pending().await
+            }
+            async fn smtp(&self) -> Result<smtp::Conn<Stream>, TransportError> {
+                std::future::pending().await
+            }
+        }
+        let t = BridgeTransport::new(Arc::new(Hung), Login { username: "u".into(), password: "p".into() }, "Aivyx");
+        let started = std::time::Instant::now();
+        let r = t.bounded(Duration::from_millis(50), t.inbox_status_inner()).await;
+        match r {
+            Err(TransportError::Platform(m)) => assert!(m.contains("didn't answer in time"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(t.imap.lock().await.is_none());
     }
 }
