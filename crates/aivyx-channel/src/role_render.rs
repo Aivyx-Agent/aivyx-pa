@@ -93,6 +93,8 @@ pub enum ChannelKind {
     Matrix,
     /// Proton Mail (email) channel — same SemiTrusted registration posture
     Proton,
+    /// Signal channel — same SemiTrusted registration posture
+    Signal,
     /// Phase 135 — Voice I/O channel. Operator speaks
     /// through the microphone; agent speaks back through
     /// the speakers. Same `Trusted` tier posture as
@@ -215,6 +217,7 @@ pub fn render_role_envelope(
             ChannelKind::Slack => "slack",
             ChannelKind::Matrix => "matrix",
             ChannelKind::Proton => "proton",
+            ChannelKind::Signal => "signal",
             ChannelKind::Voice => "voice",
         }
     )

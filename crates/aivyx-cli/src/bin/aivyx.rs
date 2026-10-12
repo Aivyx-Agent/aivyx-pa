@@ -110,6 +110,8 @@ mod connect_kitchen;
 mod matrix_cli;
 #[path = "aivyx_modules/proton_cli.rs"]
 mod proton_cli;
+#[path = "aivyx_modules/signal_cli.rs"]
+mod signal_cli;
 #[path = "aivyx_modules/cost.rs"]
 mod cost;
 #[path = "aivyx_modules/daemon_service.rs"]
@@ -379,7 +381,8 @@ fn build_shell_exec_for_channel(
         | ChannelKind::Discord
         | ChannelKind::Slack
         | ChannelKind::Matrix
-        | ChannelKind::Proton => Ok(None),
+        | ChannelKind::Proton
+        | ChannelKind::Signal => Ok(None),
     }
 }
 
@@ -433,7 +436,8 @@ fn build_fs_delete_for_channel(
         | ChannelKind::Discord
         | ChannelKind::Slack
         | ChannelKind::Matrix
-        | ChannelKind::Proton => Ok(None),
+        | ChannelKind::Proton
+        | ChannelKind::Signal => Ok(None),
     }
 }
 
@@ -1284,6 +1288,21 @@ fn run() -> Result<(), String> {
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt.block_on(proton_cli::run_connect(&config));
+    }
+
+    // `aivyx-pa connect signal` / `signal verify`: need the config
+    // ([signal]) but no passphrase, store or daemon — they talk only to the
+    // operator's signal-cli daemon.
+    if matches!(mode, CliMode::SignalConnect | CliMode::SignalVerify) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return if mode == CliMode::SignalConnect {
+            rt.block_on(signal_cli::run_connect(&config))
+        } else {
+            rt.block_on(signal_cli::run_verify(&config))
+        };
     }
 
     // Model routing Part 3a — `aivyx-pa routing status`. Like
@@ -2258,10 +2277,18 @@ fn run_mcp_status() -> Result<(), String> {
 // and any future IPC frontends share one discriminator.
 
 /// Whether `mode` can need the LLM provider's API key. `connect proton`,
-/// `connect matrix` and `matrix verify` talk only to Bridge / the
-/// homeserver, so they load without one.
+/// `connect matrix`, `matrix verify`, `connect signal` and `signal verify`
+/// talk only to Bridge / the homeserver / signal-cli, so they load without
+/// one.
 fn mode_needs_api_key(mode: &CliMode) -> bool {
-    !matches!(mode, CliMode::ProtonConnect | CliMode::MatrixConnect | CliMode::MatrixVerify)
+    !matches!(
+        mode,
+        CliMode::ProtonConnect
+            | CliMode::MatrixConnect
+            | CliMode::MatrixVerify
+            | CliMode::SignalConnect
+            | CliMode::SignalVerify
+    )
 }
 
 /// Phase 17 Task 3 — the binary's primary mode of operation.
@@ -2301,6 +2328,10 @@ enum CliMode {
     MatrixVerify,
     /// `aivyx-pa connect proton` — pins Bridge's certificate and stores its login.
     ProtonConnect,
+    /// `aivyx-pa connect signal` — checks signal-cli answers; writes the tool's `send_to`.
+    SignalConnect,
+    /// `aivyx-pa signal verify` — compare and mark safety numbers verified.
+    SignalVerify,
     /// `aivyx-pa instances list | create <name> | remove <name>`: named
     /// instances (several separate agents for one OS user).
     Instances(InstancesCmd),
@@ -3826,6 +3857,18 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         if args.len() > 2 {
             return Err("`aivyx-pa connect` takes at most one service name".into());
         }
+        if service.as_deref() == Some("signal") {
+            return Ok(CliArgs {
+                mode: CliMode::SignalConnect,
+                channel: ChannelKind::Local,
+                role: None,
+                no_daemon: false,
+                mcp_servers: vec![],
+                mcp_sse_servers: vec![],
+                provider: None,
+                web_ui_port: None,
+            });
+        }
         if service.as_deref() == Some("proton") {
             return Ok(CliArgs {
                 mode: CliMode::ProtonConnect,
@@ -3852,6 +3895,23 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         }
         return Ok(CliArgs {
             mode: CliMode::Connect(service),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // `aivyx-pa signal verify`: compare and mark safety numbers verified.
+    if !args.is_empty() && args[0] == "signal" {
+        if args.get(1).map(String::as_str) != Some("verify") || args.len() > 2 {
+            return Err("usage: `aivyx-pa signal verify`".into());
+        }
+        return Ok(CliArgs {
+            mode: CliMode::SignalVerify,
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -5669,7 +5729,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
             }
             "--channel" => {
                 let value = args.get(i + 1).ok_or_else(|| {
-                    "`--channel` requires a value: `local`, `telegram`, `discord`, `slack`, `matrix`, `proton`, or `voice`"
+                    "`--channel` requires a value: `local`, `telegram`, `discord`, `slack`, `matrix`, `proton`, `signal`, or `voice`"
                         .to_string()
                 })?;
                 channel = match value.as_str() {
@@ -5681,12 +5741,13 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                     "slack" => ChannelKind::Slack,
                     "matrix" => ChannelKind::Matrix,
                     "proton" => ChannelKind::Proton,
+                    "signal" => ChannelKind::Signal,
                     // Phase 135 — Voice channel parse arm.
                     "voice" => ChannelKind::Voice,
                     other => {
                         return Err(format!(
                             "unrecognized channel `{other}`. \
-                             Supported: local, telegram, discord, slack, matrix, proton, voice"
+                             Supported: local, telegram, discord, slack, matrix, proton, signal, voice"
                         ));
                     }
                 };
@@ -6831,8 +6892,8 @@ async fn run_async(
         matrix,
         // `[proton]` config consumed by the `ChannelKind::Proton` arm below.
         proton,
-        // [signal] — bound by the ChannelKind::Signal arm (next tasks).
-        signal: _,
+        // `[signal]` config consumed by the `ChannelKind::Signal` arm below.
+        signal,
         // Phase 108 — `slack` config consumed by the
         // `ChannelKind::Slack` dispatch arm below; carries
         // the bot + app tokens through to
@@ -11894,6 +11955,89 @@ async fn run_async(
             .map(|_| ())
         }
 
+        ChannelKind::Signal => {
+            let sc = signal.ok_or("`--channel signal` needs a [signal] section in your config")?;
+            let instance = aivyx_instance::InstancePaths::current().map_err(|e| e.to_string())?;
+            let state_dir = instance
+                .signal_dir()
+                .ok_or("can't resolve the instance's data folder")?;
+            let socket = aivyx_signal::toolconf::socket_path(&instance)
+                .ok_or("can't resolve the instance's folders (is HOME set?)")?;
+            let transport = aivyx_signal::transport::CliTransport::new(socket);
+            let policy = aivyx_signal::policy::SignalPolicy::new(&sc.allowed_senders);
+            let shutdown = CancellationToken::new();
+            let shutdown_for_signal = shutdown.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    std::process::exit(130);
+                }
+                eprintln!("\naivyx: shutting down the Signal channel.");
+                shutdown_for_signal.cancel();
+            });
+            let daemon_socket = match default_socket_path() {
+                Ok(sp) if !no_daemon && aivyx_channel::daemon_client::daemon_is_running(&sp).await => Some(sp),
+                _ => None,
+            };
+            if let Some(sp) = daemon_socket {
+                eprintln!(
+                    "aivyx-pa {} (daemon) — answering Signal messages to {}",
+                    env!("CARGO_PKG_VERSION"),
+                    sc.account
+                );
+                match aivyx_channel::signal_daemon_frontend::run_signal_daemon_session(
+                    &transport,
+                    &policy,
+                    &state_dir,
+                    sp.clone(),
+                    Some(active_role_name.clone()),
+                    shutdown.clone(),
+                    sc.team_run_channel,
+                    sc.team_trigger_rate_limit,
+                    sc.team_command_allowed_senders.clone(),
+                )
+                .await
+                {
+                    Ok(()) => return Ok(()),
+                    // An unregistered account or a second channel would
+                    // fail the same way in-process.
+                    Err(e @ aivyx_channel::daemon_server::DaemonError::ChannelFatal(_)) => return Err(e.to_string()),
+                    Err(e) => eprintln!("aivyx-pa: daemon Signal session failed ({e}), falling back to in-process."),
+                }
+            }
+            eprintln!(
+                "aivyx-pa {} — answering Signal messages to {} (in-process)",
+                env!("CARGO_PKG_VERSION"),
+                sc.account
+            );
+            let signal_config = aivyx_signal::SignalSessionConfig {
+                model,
+                system_prompt,
+                max_tokens: DEFAULT_MAX_TOKENS,
+                capabilities,
+                tools,
+                storage,
+                tool_allowlist,
+                memory_topic_prefix,
+                turn_timeout_secs,
+                cycle_detection,
+                injection_scan_enabled,
+                injection_scan_exempt,
+                confirm_integration_writes,
+                budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
+                    config_budget.clone(),
+                    Arc::clone(&persistent_audit_for_query),
+                    aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
+                    DEFAULT_MAX_TOKENS,
+                ),
+                rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
+            };
+            aivyx_signal::run_signal_session_with_transport(
+                &transport, &policy, &state_dir, signal_config, provider, audit, checkpointer.clone(), shutdown,
+            )
+            .await
+            .map(|_| ())
+        }
+
         ChannelKind::Proton => {
             let pc = proton.ok_or("`--channel proton` needs a [proton] section in your config")?;
             let channel_address = pc.channel_address.clone().ok_or(
@@ -14821,10 +14965,25 @@ mod tests {
 
     #[test]
     fn connect_commands_need_no_api_key() {
-        for mode in [CliMode::ProtonConnect, CliMode::MatrixConnect, CliMode::MatrixVerify] {
+        for mode in [
+            CliMode::ProtonConnect,
+            CliMode::MatrixConnect,
+            CliMode::MatrixVerify,
+            CliMode::SignalConnect,
+            CliMode::SignalVerify,
+        ] {
             assert!(!mode_needs_api_key(&mode), "{mode:?}");
         }
         assert!(mode_needs_api_key(&parse_cli_args_from(&argv(&[])).unwrap().mode));
+    }
+
+    #[test]
+    fn signal_commands_parse() {
+        assert_eq!(parse_cli_args_from(&argv(&["connect", "signal"])).unwrap().mode, CliMode::SignalConnect);
+        assert_eq!(parse_cli_args_from(&argv(&["signal", "verify"])).unwrap().mode, CliMode::SignalVerify);
+        assert!(parse_cli_args_from(&argv(&["signal"])).is_err());
+        assert!(parse_cli_args_from(&argv(&["signal", "verify", "x"])).is_err());
+        assert_eq!(parse_cli_args_from(&argv(&["--channel", "signal"])).unwrap().channel, ChannelKind::Signal);
     }
 
     #[test]

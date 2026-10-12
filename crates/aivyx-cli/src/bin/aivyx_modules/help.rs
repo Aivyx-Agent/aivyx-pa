@@ -283,6 +283,12 @@ pub const COMMANDS: &[CommandHelp] = &[
         usage: &["aivyx-pa connect", "aivyx-pa connect <service>"],
     },
     CommandHelp {
+        name: "signal",
+        group: Group::Tools,
+        summary: "Verify Signal safety numbers",
+        usage: &["aivyx-pa signal verify"],
+    },
+    CommandHelp {
         name: "matrix",
         group: Group::Tools,
         summary: "Verify the assistant's Matrix device",
@@ -467,7 +473,7 @@ pub fn render_top_level_help() -> String {
     out.push_str("  --instance <name>      Use a named instance (multi-instance support).\n");
     out.push_str("  --verify-only          Forensic: verify the audit chain and exit.\n");
     out.push_str("  --channel <kind>       local | telegram | discord | slack | matrix |\n");
-    out.push_str("                         proton | voice.\n");
+    out.push_str("                         proton | signal | voice.\n");
     out.push_str("  --role <name>          Use a named role for this session.\n");
     out.push_str("  --print-role <name>    Print a role's rendered envelope and exit.\n");
     out.push_str("  --no-daemon            Chat in-process: don't connect to a running\n");
