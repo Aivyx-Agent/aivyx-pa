@@ -131,6 +131,9 @@ pub struct ScriptedTransport {
     all_mail: Vec<MailMessage>,
     fail_send: bool,
     fail_in_sent_once: std::sync::atomic::AtomicBool,
+    fail_in_sent_for: Option<String>,
+    in_sent_calls: std::sync::Mutex<Vec<String>>,
+    fail_inbox_status_once: std::sync::Mutex<Option<fn() -> TransportError>>,
     fail_when_empty: Option<fn() -> TransportError>,
     sent: Mutex<Vec<OutgoingMail>>,
     filed: Mutex<Vec<(u32, OutgoingMail)>>,
@@ -147,6 +150,9 @@ impl ScriptedTransport {
             all_mail: Vec::new(),
             fail_send: false,
             fail_in_sent_once: std::sync::atomic::AtomicBool::new(false),
+            fail_in_sent_for: None,
+            in_sent_calls: std::sync::Mutex::new(Vec::new()),
+            fail_inbox_status_once: std::sync::Mutex::new(None),
             fail_when_empty: None,
             sent: Mutex::new(Vec::new()),
             filed: Mutex::new(Vec::new()),
@@ -180,6 +186,25 @@ impl ScriptedTransport {
         self
     }
 
+    /// `in_sent` always fails (transiently) for this `X-Pm-Internal-Id`.
+    pub fn fail_in_sent_for(mut self, internal_id: &str) -> Self {
+        self.fail_in_sent_for = Some(internal_id.to_string());
+        self
+    }
+
+    /// How many times `in_sent` was asked about `internal_id`.
+    pub fn in_sent_calls_for(&self, internal_id: &str) -> usize {
+        let calls = self.in_sent_calls.lock().expect("in_sent_calls poisoned");
+        calls.iter().filter(|c| *c == internal_id).count()
+    }
+
+    /// The first `inbox_status` call returns `Err(err())`; later calls
+    /// succeed.
+    pub fn fail_inbox_status_once(self, err: fn() -> TransportError) -> Self {
+        *self.fail_inbox_status_once.lock().expect("poisoned") = Some(err);
+        self
+    }
+
     /// Once the batches run out, `wait_for_new` returns `Err(err())`.
     pub fn then_fail(mut self, err: fn() -> TransportError) -> Self {
         self.fail_when_empty = Some(err);
@@ -203,6 +228,9 @@ impl ScriptedTransport {
 #[async_trait]
 impl MailTransport for ScriptedTransport {
     async fn inbox_status(&self) -> Result<InboxStatus, TransportError> {
+        if let Some(err) = self.fail_inbox_status_once.lock().expect("poisoned").take() {
+            return Err(err());
+        }
         Ok(self.status)
     }
 
@@ -218,6 +246,13 @@ impl MailTransport for ScriptedTransport {
     }
 
     async fn in_sent(&self, internal_id: &str) -> Result<bool, TransportError> {
+        self.in_sent_calls
+            .lock()
+            .expect("in_sent_calls poisoned")
+            .push(internal_id.to_string());
+        if self.fail_in_sent_for.as_deref() == Some(internal_id) {
+            return Err(TransportError::Platform("bridge busy".into()));
+        }
         if self
             .fail_in_sent_once
             .swap(false, std::sync::atomic::Ordering::SeqCst)

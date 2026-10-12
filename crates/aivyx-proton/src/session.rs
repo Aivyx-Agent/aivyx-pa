@@ -164,6 +164,18 @@ impl std::fmt::Display for LoopError {
     }
 }
 
+/// Times one email may fail to be checked (`screen`, in practice the Sent
+/// lookup) in a row before it is skipped.
+const MAX_ATTEMPTS: u32 = 5;
+
+fn show(d: Duration) -> String {
+    if d >= Duration::from_secs(1) {
+        format!("{}s", d.as_secs())
+    } else {
+        format!("{}ms", d.as_millis())
+    }
+}
+
 /// The receive loop. `state_dir` is the instance's `proton_dir()`: it
 /// holds the lock and the cursor.
 pub async fn run_mail_loop<T: MailTransport + ?Sized, R: TurnRunner>(
@@ -173,15 +185,43 @@ pub async fn run_mail_loop<T: MailTransport + ?Sized, R: TurnRunner>(
     runner: &mut R,
     shutdown: CancellationToken,
 ) -> Result<ProtonSessionReport, LoopError> {
+    run_mail_loop_with(transport, policy, state_dir, runner, shutdown, Duration::from_secs(1)).await
+}
+
+/// [`run_mail_loop`] with the first retry delay given (tests pass 1 ms;
+/// it doubles per retry, up to 60 s).
+pub(crate) async fn run_mail_loop_with<T: MailTransport + ?Sized, R: TurnRunner>(
+    transport: &T,
+    policy: &ProtonPolicy,
+    state_dir: &Path,
+    runner: &mut R,
+    shutdown: CancellationToken,
+    first_backoff: Duration,
+) -> Result<ProtonSessionReport, LoopError> {
     let _lock = lock::acquire(state_dir).map_err(LoopError::Fatal)?;
-    let status = transport
-        .inbox_status()
-        .await
-        .map_err(|e| LoopError::Fatal(e.to_string()))?;
+    let mut report = ProtonSessionReport::default();
+    let mut backoff = first_backoff;
+    // Bridge may not be up yet: retry anything but a fatal error.
+    let status = loop {
+        match transport.inbox_status().await {
+            Ok(status) => break status,
+            Err(e) if e.is_fatal() => return Err(LoopError::Fatal(e.to_string())),
+            Err(e) => {
+                eprintln!("aivyx-proton: {e}; retrying in {}", show(backoff));
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => return Ok(report),
+                    _ = tokio::time::sleep(backoff) => {}
+                }
+                backoff = (backoff * 2).min(Duration::from_secs(60));
+            }
+        }
+    };
+    backoff = first_backoff;
     let mut cursor = state::resume(state::load(state_dir).map_err(LoopError::Fatal)?, status);
     state::save(state_dir, &cursor).map_err(LoopError::Fatal)?;
-    let mut report = ProtonSessionReport::default();
-    let mut backoff = Duration::from_secs(1);
+    // Consecutive failed checks of one email: (UID, attempts).
+    let mut failing: (u32, u32) = (0, 0);
 
     loop {
         let batch = tokio::select! {
@@ -197,10 +237,13 @@ pub async fn run_mail_loop<T: MailTransport + ?Sized, R: TurnRunner>(
                     let uid = m.uid;
                     match screen(transport, policy, m).await {
                         Ok(Some(turn)) => {
+                            failing = (0, 0);
                             let outcome = runner.run(&turn).await.map_err(LoopError::Runner)?;
-                            if shutdown.is_cancelled() {
-                                // Stopped mid-turn (or as it finished): don't answer
-                                // and leave the cursor, so a restart handles it again.
+                            if outcome.is_none() && shutdown.is_cancelled() {
+                                // Stopped mid-turn: don't answer and leave the
+                                // cursor, so a restart handles it again. (A turn
+                                // that finished — the daemon's always do — is
+                                // answered below, then the loop stops.)
                                 return Ok(report);
                             }
                             if let Some(text) = outcome {
@@ -219,12 +262,21 @@ pub async fn run_mail_loop<T: MailTransport + ?Sized, R: TurnRunner>(
                             }
                             report.turns_run += 1;
                         }
-                        Ok(None) => {}
+                        Ok(None) => failing = (0, 0),
                         Err(e) if e.is_fatal() => return Err(LoopError::Fatal(e.to_string())),
                         Err(e) => {
-                            // Retried after the backoff, not skipped.
-                            transient = Some(e);
-                            break;
+                            let tries = if failing.0 == uid { failing.1 + 1 } else { 1 };
+                            if tries < MAX_ATTEMPTS {
+                                // Retried after the backoff, not skipped.
+                                failing = (uid, tries);
+                                transient = Some(e);
+                                break;
+                            }
+                            // Don't let one email stall the channel: skip it.
+                            eprintln!(
+                                "aivyx-proton: giving up on message UID {uid} after {tries} tries: {e}"
+                            );
+                            failing = (0, 0);
                         }
                     }
                     cursor.last_uid = cursor.last_uid.max(uid);
@@ -238,10 +290,10 @@ pub async fn run_mail_loop<T: MailTransport + ?Sized, R: TurnRunner>(
             Err(e) => transient = Some(e),
         }
         if transient.is_none() {
-            backoff = Duration::from_secs(1);
+            backoff = first_backoff;
         }
         if let Some(e) = transient {
-            eprintln!("aivyx-proton: {e}; retrying in {}s", backoff.as_secs());
+            eprintln!("aivyx-proton: {e}; retrying in {}", show(backoff));
             tokio::select! {
                 biased;
                 _ = shutdown.cancelled() => return Ok(report),

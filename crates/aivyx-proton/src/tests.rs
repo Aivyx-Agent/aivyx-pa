@@ -434,10 +434,11 @@ async fn stopping_mid_turn_sends_nothing_and_keeps_the_email() {
     let shutdown = CancellationToken::new();
     let (g, s) = (Arc::clone(&gate), shutdown.clone());
     tokio::spawn(async move {
+        // Stop while the turn is held in flight: it is cancelled (no
+        // reply). A turn that finishes as the channel stops is answered —
+        // see `a_turn_that_finishes_as_the_channel_stops_is_still_answered`.
         g.started.notified().await;
         s.cancel();
-        // Also let the turn finish in the same breath as the shutdown.
-        g.release.notify_one();
     });
     let result = tokio::time::timeout(
         Duration::from_secs(5),
@@ -478,4 +479,127 @@ async fn a_transient_screening_error_retries_the_same_email() {
     assert_eq!(r.result.unwrap().answered, 1);
     assert_eq!(t.sent().await.len(), 1);
     assert_eq!(t.filed().await.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// The mail loop with stub runners (no agent), and a 1 ms first backoff.
+// ---------------------------------------------------------------------------
+
+use crate::session::{run_mail_loop_with, Turn, TurnRunner};
+
+/// Answers every turn with `"done"`; with `cancel` set, cancels that
+/// token first (a turn that finishes as the channel is stopped).
+struct StubRunner {
+    cancel: Option<CancellationToken>,
+    turns: Vec<u32>,
+}
+
+#[async_trait]
+impl TurnRunner for StubRunner {
+    async fn run(&mut self, turn: &Turn) -> Result<Option<String>, String> {
+        self.turns.push(turn.message.uid);
+        if let Some(c) = &self.cancel {
+            c.cancel();
+        }
+        Ok(Some("done".into()))
+    }
+}
+
+/// Runs the loop with a stub runner until `n` replies were sent (then
+/// 50 ms more), or for 300 ms when `n == 0`.
+async fn run_stub(
+    dir: &std::path::Path,
+    t: Arc<ScriptedTransport>,
+    runner: &mut StubRunner,
+    shutdown: CancellationToken,
+    n: usize,
+) -> Result<ProtonSessionReport, LoopError> {
+    let (watch_t, watch_s) = (Arc::clone(&t), shutdown.clone());
+    tokio::spawn(async move {
+        if n == 0 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        } else {
+            while watch_t.sent().await.len() < n {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        watch_s.cancel();
+    });
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        run_mail_loop_with(t.as_ref(), &policy(), dir, runner, shutdown, Duration::from_millis(1)),
+    )
+    .await
+    .expect("loop did not finish")
+}
+
+#[tokio::test]
+async fn an_email_that_keeps_failing_to_be_checked_is_skipped_after_five_tries() {
+    // Each failed attempt consumes a batch, so script the stuck email
+    // (UID 10) five times, with a later one (UID 11) behind it.
+    let batch = || vec![from_me(10, "stuck", "a"), from_me(11, "later", "b")];
+    let t = Arc::new(
+        ScriptedTransport::new(status(), (0..5).map(|_| batch()).collect())
+            .in_sent_folder(vec!["pm10", "pm11"])
+            .fail_in_sent_for("pm10"),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let mut runner = StubRunner { cancel: None, turns: vec![] };
+    let report = run_stub(dir.path(), Arc::clone(&t), &mut runner, CancellationToken::new(), 1)
+        .await
+        .unwrap();
+    assert_eq!(runner.turns, vec![11]);
+    assert_eq!(report.answered, 1);
+    assert_eq!(t.sent().await[0].subject, "Re: later");
+    assert_eq!(t.in_sent_calls_for("pm10"), 5);
+    assert_eq!(state::load(dir.path()).unwrap().unwrap().last_uid, 11);
+}
+
+#[tokio::test]
+async fn a_turn_that_finishes_as_the_channel_stops_is_still_answered() {
+    let t = Arc::new(
+        ScriptedTransport::new(status(), vec![vec![from_me(10, "hi", "do it"), from_me(11, "next", "x")]])
+            .in_sent_folder(vec!["pm10", "pm11"]),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let shutdown = CancellationToken::new();
+    let mut runner = StubRunner { cancel: Some(shutdown.clone()), turns: vec![] };
+    let report = run_stub(dir.path(), Arc::clone(&t), &mut runner, shutdown, 0)
+        .await
+        .unwrap();
+    assert_eq!(report.answered, 1);
+    assert_eq!(runner.turns, vec![10], "stops after the finished turn");
+    assert_eq!(t.sent().await.len(), 1);
+    assert_eq!(t.filed().await.len(), 1);
+    assert_eq!(state::load(dir.path()).unwrap().unwrap().last_uid, 10);
+}
+
+#[tokio::test]
+async fn bridge_not_running_at_startup_is_retried() {
+    let t = Arc::new(
+        ScriptedTransport::new(status(), vec![vec![from_me(10, "hi", "x")]])
+            .in_sent_folder(vec!["pm10"])
+            .fail_inbox_status_once(|| TransportError::Platform("connection refused".into())),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let mut runner = StubRunner { cancel: None, turns: vec![] };
+    let report = run_stub(dir.path(), Arc::clone(&t), &mut runner, CancellationToken::new(), 1)
+        .await
+        .unwrap();
+    assert_eq!(report.answered, 1);
+}
+
+#[tokio::test]
+async fn a_rejected_login_at_startup_is_still_fatal() {
+    let t = Arc::new(
+        ScriptedTransport::new(status(), vec![])
+            .fail_inbox_status_once(|| TransportError::Unauthorized("NO".into())),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let mut runner = StubRunner { cancel: None, turns: vec![] };
+    match run_stub(dir.path(), t, &mut runner, CancellationToken::new(), 0).await {
+        Err(LoopError::Fatal(e)) => assert!(e.contains("connect proton"), "{e}"),
+        other => panic!("expected Fatal, got {other:?}"),
+    }
 }
