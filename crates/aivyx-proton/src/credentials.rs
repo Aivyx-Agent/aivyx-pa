@@ -125,14 +125,14 @@ pub fn save(path: &Path, creds: &BridgeCredentials) -> Result<(), String> {
     let text = toml::to_string(creds).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("toml.tmp");
     // Never reuse a leftover (or planted) temporary file: its permissions
-    // would survive `create(true)` and the rename.
+    // would survive and the rename.
     match std::fs::remove_file(&tmp) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("remove {}: {e}", tmp.display())),
     }
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

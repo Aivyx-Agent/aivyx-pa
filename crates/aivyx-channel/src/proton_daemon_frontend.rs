@@ -80,7 +80,7 @@ impl ChannelContext for ProtonDaemonChannel {
     }
 }
 
-/// Whether this email may resolve a mission gate (`/gate …` on its first
+/// Whether this email may resolve a mission gate (`/approve`/`/reject …` on its first
 /// line): only mail from you, or from a `team_command_allowed_senders`
 /// address. For anyone else the line is ordinary text — the daemon's
 /// `ResolveGate` doesn't check who owns the mission.
@@ -244,7 +244,7 @@ mod tests {
             },
             sender,
             text: String::new(),
-            first_line: "/gate approve m1 g1".into(),
+            first_line: "/approve m1 g1".into(),
             notes: vec![],
         }
     }
@@ -259,6 +259,15 @@ mod tests {
         let mut no_from = turn(Sender::External, "");
         no_from.message.from = None;
         assert!(!may_resolve_gates(&no_from, &[String::new()]));
+        // The fixture line is a real gate command, but only the operator's
+        // mail is ever allowed to act on it.
+        let op = turn(Sender::Operator, "me@proton.me");
+        assert!(gate_command::parse(&op.first_line).is_some());
+        let ext = turn(Sender::External, "friend@example.com");
+        assert!(may_resolve_gates(&ext, &[])
+            .then(|| gate_command::parse(&ext.first_line))
+            .flatten()
+            .is_none());
     }
 
     #[test]
