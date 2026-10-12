@@ -15,6 +15,8 @@ pub mod policy;
 pub mod rpc;
 pub mod session;
 pub mod signal_channel;
+pub mod toolconf;
+pub mod tools;
 pub mod transport;
 
 pub use session::{run_signal_session_with_transport, SignalSessionConfig, SignalSessionReport};
