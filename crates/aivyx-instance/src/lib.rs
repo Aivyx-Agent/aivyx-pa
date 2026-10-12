@@ -296,6 +296,14 @@ impl InstancePaths {
         self.data_dir().map(|d| d.join("matrix"))
     }
 
+    /// Proton Mail channel state: `data_dir/proton` — the resume cursor
+    /// (`state.json`) and the per-process lock. The Bridge credential is
+    /// not here: it lives in `tool_process_dir("proton")`, which the
+    /// sandboxed `proton.*` tools can reach.
+    pub fn proton_dir(&self) -> Option<PathBuf> {
+        self.data_dir().map(|d| d.join("proton"))
+    }
+
     /// Sandbox directory: `~/aivyx-pa-sandbox[-<n>]`
     pub fn sandbox_dir(&self) -> Option<PathBuf> {
         self.dirs.home.as_ref().map(|h| {
@@ -452,6 +460,26 @@ mod tests {
         assert_eq!(
             work.matrix_dir(),
             Some(PathBuf::from("/h/.local/share/aivyx-pa/instances/work/matrix"))
+        );
+    }
+
+    #[test]
+    fn proton_dir_is_under_the_instance_data_dir() {
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/h")),
+            xdg_config_home: None,
+            xdg_data_home: None,
+            xdg_runtime_dir: None,
+        };
+        let default = InstancePaths::new(InstanceName::default_instance(), dirs.clone());
+        assert_eq!(
+            default.proton_dir(),
+            Some(PathBuf::from("/h/.local/share/aivyx-pa/proton"))
+        );
+        let work = InstancePaths::new(InstanceName::parse("work").unwrap(), dirs);
+        assert_eq!(
+            work.proton_dir(),
+            Some(PathBuf::from("/h/.local/share/aivyx-pa/instances/work/proton"))
         );
     }
 
