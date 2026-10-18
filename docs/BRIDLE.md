@@ -75,7 +75,7 @@ budget exhaustion). Decisions:
 ### B — Constrained-mode `respond` preamble (the provider)
 When `constrain_tool_calls` is on, the MistralRs provider augments the **system
 message** it builds with a short, fixed note: *"You may call a tool, or reply to the
-user by emitting `{"name":"respond","arguments":{"text":"…"}}`. When you have
+user by emitting `{"name":"respond","parameters":{"text":"…"}}`. When you have
 finished or need no tool, use `respond` to answer and end your turn."* This is the
 one thing the model needs to know to use the sentinel that Stencil's grammar already
 admits. Decisions:

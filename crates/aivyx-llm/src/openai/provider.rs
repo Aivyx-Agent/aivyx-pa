@@ -433,7 +433,7 @@ struct OpenAiStream {
     /// the request advertised no tools (turn body was a plain chat).
     known_tool_names: std::collections::HashSet<String>,
     /// Chapter Emboss (EB.3) — grammar-constrained turn. When `true`,
-    /// the reply is the constrained `{"name","arguments"}` JSON streamed
+    /// the reply is the constrained `{"name","parameters"}` JSON streamed
     /// as `content`; content deltas are buffered silently (not emitted
     /// as `TextChunk`, so the raw JSON never reaches the channel) and
     /// the accumulated text is parsed at terminal into a real tool call

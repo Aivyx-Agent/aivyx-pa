@@ -75,12 +75,12 @@ mod tests {
         let v = validator_for(&sample_tools());
         assert!(v.is_valid(&json!({
             "name": "fs.read",
-            "arguments": { "path": "/etc/hosts" },
+            "parameters": { "path": "/etc/hosts" },
         })));
         // The second tool too — both branches are reachable.
         assert!(v.is_valid(&json!({
             "name": "web.fetch",
-            "arguments": { "url": "https://example.com" },
+            "parameters": { "url": "https://example.com" },
         })));
     }
 
@@ -91,11 +91,11 @@ mod tests {
         // isn't in the registry. No branch's `const` matches.
         assert!(!v.is_valid(&json!({
             "name": "fs.write_file", // gemma4's classic hallucination
-            "arguments": { "path": "x", "content": "y" },
+            "parameters": { "path": "x", "content": "y" },
         })));
         assert!(!v.is_valid(&json!({
             "name": "browser_navigate",
-            "arguments": {},
+            "parameters": {},
         })));
     }
 
@@ -105,17 +105,17 @@ mod tests {
         // Real name, missing the required `path`.
         assert!(!v.is_valid(&json!({
             "name": "fs.read",
-            "arguments": {},
+            "parameters": {},
         })));
         // Real name, wrong type for `path`.
         assert!(!v.is_valid(&json!({
             "name": "fs.read",
-            "arguments": { "path": 123 },
+            "parameters": { "path": 123 },
         })));
         // Real name, an argument the schema doesn't allow.
         assert!(!v.is_valid(&json!({
             "name": "fs.read",
-            "arguments": { "path": "/x", "bogus": true },
+            "parameters": { "path": "/x", "bogus": true },
         })));
     }
 
@@ -124,35 +124,35 @@ mod tests {
         let v = validator_for(&sample_tools());
         assert!(v.is_valid(&json!({
             "name": RESPOND_SENTINEL,
-            "arguments": { "text": "I've finished the task." },
+            "parameters": { "text": "I've finished the task." },
         })));
         // …even with no tools registered — the escape is always
         // available so a constrained turn can produce plain text.
         let v_empty = validator_for(&[]);
         assert!(v_empty.is_valid(&json!({
             "name": "respond",
-            "arguments": { "text": "hello" },
+            "parameters": { "text": "hello" },
         })));
         // But the sentinel still has to be well-formed.
         assert!(!v_empty.is_valid(&json!({
             "name": "respond",
-            "arguments": {},
+            "parameters": {},
         })));
     }
 
     #[test]
     fn rejects_missing_top_level_fields_and_cross_tool_args() {
         let v = validator_for(&sample_tools());
-        // No `arguments` at all.
+        // No `parameters` at all.
         assert!(!v.is_valid(&json!({ "name": "fs.read" })));
         // No `name` at all.
-        assert!(!v.is_valid(&json!({ "arguments": { "path": "/x" } })));
+        assert!(!v.is_valid(&json!({ "parameters": { "path": "/x" } })));
         // fs.read's name with web.fetch's arguments — the name
         // const selects the fs.read branch, whose schema rejects
         // `url`/forbids the missing `path`.
         assert!(!v.is_valid(&json!({
             "name": "fs.read",
-            "arguments": { "url": "https://example.com" },
+            "parameters": { "url": "https://example.com" },
         })));
     }
 
@@ -164,6 +164,21 @@ mod tests {
             r#"{"name": "fs.read", "arguments": {"path": "/etc/hosts"}}"#,
         )
         .expect("well-formed constrained call parses");
+        assert_eq!(
+            out,
+            ConstrainedOutput::ToolCall {
+                tool_name: "fs.read".to_string(),
+                input: json!({"path": "/etc/hosts"}),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_constrained_name_first_parameters_shape() {
+        let out = parse_constrained_output(
+            r#"{"name": "fs.read", "parameters": {"path": "/etc/hosts"}}"#,
+        )
+        .expect("name-first constrained call parses");
         assert_eq!(
             out,
             ConstrainedOutput::ToolCall {
@@ -223,12 +238,13 @@ mod tests {
         );
     }
 
-    /// The exact grammar for the sample tools, frozen before the move to
-    /// aivyx-stencil: the move must not change a byte of it.
+    /// Frozen output of the shared grammar; changes only deliberately - last
+    /// changed when aivyx-stencil switched to a `parameters` key so the tool
+    /// name comes first.
     #[test]
-    fn grammar_is_byte_identical_to_the_pre_extraction_output() {
+    fn grammar_output_is_frozen() {
         let got = serde_json::to_string(&tool_call_grammar(&sample_tools())).unwrap();
-        let want = r#"{"oneOf":[{"additionalProperties":false,"properties":{"arguments":{"additionalProperties":false,"properties":{"path":{"type":"string"}},"required":["path"],"type":"object"},"name":{"const":"fs.read"}},"required":["name","arguments"],"type":"object"},{"additionalProperties":false,"properties":{"arguments":{"additionalProperties":false,"properties":{"url":{"type":"string"}},"required":["url"],"type":"object"},"name":{"const":"web.fetch"}},"required":["name","arguments"],"type":"object"},{"additionalProperties":false,"properties":{"arguments":{"additionalProperties":false,"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"},"name":{"const":"respond"}},"required":["name","arguments"],"type":"object"}]}"#;
+        let want = r#"{"oneOf":[{"additionalProperties":false,"properties":{"name":{"const":"fs.read"},"parameters":{"additionalProperties":false,"properties":{"path":{"type":"string"}},"required":["path"],"type":"object"}},"required":["name","parameters"],"type":"object"},{"additionalProperties":false,"properties":{"name":{"const":"web.fetch"},"parameters":{"additionalProperties":false,"properties":{"url":{"type":"string"}},"required":["url"],"type":"object"}},"required":["name","parameters"],"type":"object"},{"additionalProperties":false,"properties":{"name":{"const":"respond"},"parameters":{"additionalProperties":false,"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"}},"required":["name","parameters"],"type":"object"}]}"#;
         assert_eq!(got, want);
     }
 }

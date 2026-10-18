@@ -74,12 +74,12 @@ that admits **only** a valid tool call:
 ```jsonc
 {
   "type": "object",
-  "required": ["name", "arguments"],
+  "required": ["name", "parameters"],
   "oneOf": [
     { "properties": { "name": { "const": "fs.read" },
-                      "arguments": { /* fs.read's input_schema verbatim */ } } },
+                      "parameters": { /* fs.read's input_schema verbatim */ } } },
     { "properties": { "name": { "const": "fs.write" },
-                      "arguments": { /* fs.write's input_schema verbatim */ } } }
+                      "parameters": { /* fs.write's input_schema verbatim */ } } }
     // …one branch per registered tool…
   ]
 }
@@ -98,7 +98,7 @@ A constrained decoder is *forced* into the grammar: if we admit only tool calls,
 the model can never reply in plain text ("I've finished," "I need clarification").
 That breaks the normal turn. Resolution (locked): the grammar includes a **sentinel
 branch** for plain text — a reserved pseudo-tool, e.g.
-`{ "name": "respond", "arguments": { "text": "…" } }` — that the provider unwraps
+`{ "name": "respond", "parameters": { "text": "…" } }` — that the provider unwraps
 back into an ordinary assistant text message rather than dispatching a tool. So the
 union is "every real tool **plus** `respond`," and the model is constrained to
 *either* a valid tool call *or* a valid text reply, nothing malformed in between.
@@ -233,7 +233,7 @@ aivyx-pa say "read probe.txt and tell me what it contains"
   not by rescue).
 - The follow-up turn ("just say hi, don't use any tools") returns clean assistant
   text via the **`respond` sentinel** — i.e. `parse_constrained_output` unwrapped
-  `{"name":"respond","arguments":{"text":"…"}}` to a `FinalMessage`, **not** a
+  `{"name":"respond","parameters":{"text":"…"}}` to a `FinalMessage`, **not** a
   spurious tool call.
 
 **Contrast (flag OFF):** expect the documented fragility — empty/declined turns,

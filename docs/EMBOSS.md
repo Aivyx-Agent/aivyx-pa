@@ -58,7 +58,7 @@ native `/completion` code path:
 
 ### The constrained JSON lands in `content` — parse it, suppress native `tools`
 As with Stencil, a grammar-constrained reply is the *raw text* `{"name":…,
-"arguments":…}` in the message `content`, **not** the OpenAI `tool_calls` array. So
+"parameters":…}` in the message `content`, **not** the OpenAI `tool_calls` array. So
 when constraining, Emboss **does not send the native `tools` field** (which would
 make llama.cpp build its own competing tool grammar and route to `tool_calls`);
 the grammar *is* the tool definition. The streamed `content` is accumulated and
