@@ -390,4 +390,13 @@ mod tests {
             Some(RESPOND_PREAMBLE)
         );
     }
+
+    /// The exact grammar for the sample tools, frozen before the move to
+    /// aivyx-stencil: the move must not change a byte of it.
+    #[test]
+    fn grammar_is_byte_identical_to_the_pre_extraction_output() {
+        let got = serde_json::to_string(&tool_call_grammar(&sample_tools())).unwrap();
+        let want = r#"{"oneOf":[{"additionalProperties":false,"properties":{"arguments":{"additionalProperties":false,"properties":{"path":{"type":"string"}},"required":["path"],"type":"object"},"name":{"const":"fs.read"}},"required":["name","arguments"],"type":"object"},{"additionalProperties":false,"properties":{"arguments":{"additionalProperties":false,"properties":{"url":{"type":"string"}},"required":["url"],"type":"object"},"name":{"const":"web.fetch"}},"required":["name","arguments"],"type":"object"},{"additionalProperties":false,"properties":{"arguments":{"additionalProperties":false,"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"},"name":{"const":"respond"}},"required":["name","arguments"],"type":"object"}]}"#;
+        assert_eq!(got, want);
+    }
 }
