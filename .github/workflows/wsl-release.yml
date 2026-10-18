@@ -112,7 +112,9 @@ jobs:
           # cargo-dist (release.yml) is the sole release CREATOR and runs on the
           # same tag; wait for it to exist, then UPLOAD (never create) so we
           # don't race its "Create GitHub Release" step. Mirrors desktop-release.
-          for i in $(seq 1 90); do
+          # Up to 2 hours: cargo-dist's slowest build (x86_64 macOS) took 50 min
+          # for v0.19.0, and the release only appears after every build is done.
+          for i in $(seq 1 360); do
             gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 && break
             echo "waiting for cargo-dist to create release $TAG… ($i)"
             sleep 20

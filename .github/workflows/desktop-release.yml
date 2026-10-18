@@ -69,7 +69,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for i in $(seq 1 90); do
+          # Up to 2 hours: cargo-dist's slowest build (x86_64 macOS) took 50 min
+          # for v0.19.0, and the release only appears after every build is done.
+          for i in $(seq 1 360); do
             gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
             echo "waiting for cargo-dist to create release $GITHUB_REF_NAME… ($i)"
             sleep 20
@@ -137,7 +139,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for i in $(seq 1 90); do
+          # Up to 2 hours: cargo-dist's slowest build (x86_64 macOS) took 50 min
+          # for v0.19.0, and the release only appears after every build is done.
+          for i in $(seq 1 360); do
             gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
             echo "waiting for cargo-dist to create release $GITHUB_REF_NAME… ($i)"
             sleep 20
