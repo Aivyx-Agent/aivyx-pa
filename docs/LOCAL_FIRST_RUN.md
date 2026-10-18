@@ -107,19 +107,19 @@ empty replies would have defeated the point. See
 The mechanisms above make a local model *reply*; making a **small** local model
 reliably *call a tool* is the harder, later problem — four prompt-substrate phases
 proved it can't be fixed from the prompt. **Chapter Stencil** ([`docs/STENCIL.md`](STENCIL.md))
-adds the lever the prompt can't reach: **grammar-constrained decoding** on the
+adds a lever the prompt can't reach: **grammar-constrained decoding** on the
 in-process mistral.rs engine (`[mistralrs] constrain_tool_calls = true`, default
 off). The decoder is constrained to a JSON-Schema grammar built from the registered
-tools, so a small GGUF emits a valid, real-named tool call (or a `respond` text
-escape) *by construction*, not by hoping. Live-proven on Qwen3-4B.
+tools, so a small GGUF emits a real-named tool call (or a `respond` text
+escape) in the right shape. It was live-proven on Qwen3-4B.
 
 **Chapter Emboss** ([`docs/EMBOSS.md`](EMBOSS.md)) extends the *same* grammar to the
 **`llama-server`** path (`provider = "llamacpp"` / Jan, the OpenAI-compatible local
-backends): set `[openai] constrain_tool_calls = true` and Aivyx PA injects
+backends): with `[openai] constrain_tool_calls = true` Aivyx PA injects
 `tool_call_grammar(tools)` as a `json_schema` constraint on the chat-completions
-body, so a GGUF served over HTTP is constrained the same way the in-process engine
-is. Default off. The grammar primitive now covers **both** local engines Aivyx PA
-ships. Live-proven against a real `llama-server` on Qwen3-4B.
+body. This is **off by default, and we do not recommend turning it on.**
+A 2026-10-18 measurement (aivyx-toolbench, `results/2026-10-18`) found that the grammar lowered tool choice on Qwen3.5-9B and Qwen3-4B compared with llama-server's native tool calling (for example 52.7 % against 87.7 % correct choice on the 9B). Native tool calling on
+llama-server is the recommended setup.
 
 ## 6. Making semantic memory work out of the box (Chapter Engram)
 

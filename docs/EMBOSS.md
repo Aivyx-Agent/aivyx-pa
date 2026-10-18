@@ -12,6 +12,8 @@
 > there is **no new endpoint and no new dependency**. Reuses Stencil's
 > constrained-output parser and Bridle's `respond` preamble (lifted to shared).
 > Opt-in, default off, byte-identical when off.
+>
+> **Not recommended.** A 2026-10-18 measurement (aivyx-toolbench, `results/2026-10-18`) found that the grammar lowered tool choice on Qwen3.5-9B and Qwen3-4B compared with llama-server's native tool calling (for example 52.7 % against 87.7 % correct choice on the 9B). It stays off by default, and native tool calling is the recommended setup. This chapter describes how the opt-in works; it does not recommend using it. See `docs/LOCAL_HOSTING.md` section 4.
 
 ## 1. Why this chapter
 

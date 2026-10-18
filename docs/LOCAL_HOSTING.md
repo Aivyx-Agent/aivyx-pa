@@ -76,14 +76,17 @@ you the model loads and replies; throughput you measure yourself.
 
 Local/quantized models are far less reliable than Claude at emitting clean tool
 calls — they drift, hallucinate tool names, or wrap JSON in prose. Aivyx PA has two
-defenses; **turn them on for a local host:**
+defenses; the second is worth turning on for a local host:
 
 - **Grammar-constrained decoding** (Chapters Stencil/Emboss) — forces the model
-  to emit *valid, real-named* tool-call JSON *by construction*. On the
-  llama.cpp/Jan OpenAI-compat path, set `[openai] constrain_tool_calls = true`;
-  the embedded mistralrs path constrains natively. (Ollama doesn't expose a
-  grammar hook, so prefer llama.cpp/mistralrs if tool-call reliability on a small
-  model is the priority.)
+  to emit *valid, real-named* tool-call JSON. It is **off by default, and we do not
+  recommend turning it on**: a 2026-10-18 measurement (aivyx-toolbench,
+  `results/2026-10-18`) found that the grammar lowered tool choice on Qwen3.5-9B and Qwen3-4B compared with llama-server's
+  native tool calling (for example 52.7 % against 87.7 % correct choice on the 9B). The recommended setup is
+  llama-server's native tool calling, which is what you get by leaving
+  `[openai] constrain_tool_calls` unset. (If you want to experiment anyway: on the
+  llama.cpp/Jan OpenAI-compat path set `[openai] constrain_tool_calls = true`;
+  the embedded mistralrs path has `[mistralrs] constrain_tool_calls`.)
 - **The runaway breakers** (Chapters Bridle/Halter) — the consecutive-identical
   and small-cycle breakers stop a model that loops `A,B,A,B…`, and
   `[agent] cycle_detection = true` arms the small-cycle breaker for the
