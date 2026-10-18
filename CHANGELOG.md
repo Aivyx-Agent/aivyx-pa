@@ -5,6 +5,27 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-10-18
+
+### Added
+
+Three private chat channels, each a **preview**: tested end to end against
+local stand-ins, not yet with real accounts. See
+[Chat apps and accounts](docs/guide/13-chat-apps-and-accounts.md).
+
+- **Matrix:** talk to your assistant in an end-to-end-encrypted room on a
+  homeserver you choose. It answers only people you list whose device
+  you've verified (`aivyx-pa connect matrix`, `aivyx-pa matrix verify`).
+- **Proton Mail:** email your assistant through Proton Mail Bridge and get
+  the answer in the same thread, and let it search, read, draft and send
+  in your mailbox (`proton.*` tools; sending asks you every time). It
+  answers only mail from your own Proton addresses, or from outside senders
+  you list whose mail passed DMARC.
+- **Signal:** message your assistant on its own Signal number through a
+  signal-cli you run, and let it send a Signal message to a contact you
+  list (`signal.send`, asking you every time). It answers only contacts
+  whose safety number you've verified (`aivyx-pa signal verify`).
+
 ### Security
 
 - **`shell.exec` at access `home` or `full` can't plant code or read your

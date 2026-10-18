@@ -51,6 +51,9 @@ public memory, but on your model and your budget.
 
 ### Matrix
 
+> **Preview (v0.19.0).** Tested end to end against a local Conduit homeserver, but not yet
+> with real accounts. Please report anything that doesn't work as described.
+
 Matrix gives you an end-to-end-encrypted room with your assistant, on a
 homeserver you choose (or run yourself).
 
@@ -131,6 +134,9 @@ Good to know:
 
 ### Proton Mail
 
+> **Preview (v0.19.0).** Tested end to end against a local test mail server (GreenMail), not Proton Mail Bridge, but not yet
+> with real accounts. Please report anything that doesn't work as described.
+
 Email your assistant from Proton Mail and get the answer back in the same
 thread — and let it search, read, draft and send in your mailbox. It all goes
 through [Proton Mail Bridge](https://proton.me/mail/bridge) on this machine
@@ -200,6 +206,9 @@ Good to know:
 - **One channel process at a time** per instance.
 
 ### Signal
+
+> **Preview (v0.19.0).** Tested end to end against a simulated signal-cli, but not yet
+> with real accounts. Please report anything that doesn't work as described.
 
 Message your assistant on Signal and get the answer back there — and let it
 send a Signal message to a contact you list, with your approval each time.
