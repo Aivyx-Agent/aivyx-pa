@@ -312,6 +312,29 @@ impl InstancePaths {
         self.data_dir().map(|d| d.join("signal"))
     }
 
+    /// The directories that hold the state of *every* instance on this
+    /// machine (the default instance's dirs, which contain each named
+    /// instance's `instances/<n>`): config, data, `~/.aivyx-pa`, the
+    /// runtime dir and the home-based data dir. For a sandbox that must
+    /// keep any instance's secrets out of reach, not just this one's.
+    pub fn all_instances_state_dirs(&self) -> Vec<PathBuf> {
+        let home_data = self
+            .dirs
+            .home
+            .as_ref()
+            .map(|h| h.join(".local").join("share").join("aivyx-pa"));
+        [
+            self.config_dir_base(),
+            self.data_dir_base(),
+            self.home_dir_base(),
+            self.runtime_dir_base(),
+            home_data,
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
     /// Sandbox directory: `~/aivyx-pa-sandbox[-<n>]`
     pub fn sandbox_dir(&self) -> Option<PathBuf> {
         self.dirs.home.as_ref().map(|h| {
@@ -441,6 +464,16 @@ mod tests {
         assert_eq!(d.home_data_dir().unwrap(), PathBuf::from("/h/.local/share/aivyx-pa"));
         let r = p("research", dirs(Some("/h"), None, Some("/d"), None));
         assert_eq!(r.home_data_dir().unwrap(), PathBuf::from("/h/.local/share/aivyx-pa/instances/research"));
+    }
+
+    #[test]
+    fn all_instances_state_dirs_are_the_same_for_every_instance() {
+        let d = dirs(Some("/h"), Some("/c"), Some("/d"), Some("/r"));
+        let named = p("work", d.clone()).all_instances_state_dirs();
+        assert_eq!(named, p("default", d).all_instances_state_dirs());
+        for expected in ["/c/aivyx-pa", "/d/aivyx-pa", "/h/.aivyx-pa", "/r/aivyx-pa", "/h/.local/share/aivyx-pa"] {
+            assert!(named.contains(&PathBuf::from(expected)), "{expected} missing: {named:?}");
+        }
     }
 
     #[test]

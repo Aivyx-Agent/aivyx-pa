@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- **`shell.exec` at access `home` or `full` can't plant code or read your
+  secrets in your home folder** (aivyx-confine `6e46575`, audit SH1). A
+  confined command could read `~/.ssh` keys, GitHub tokens and keyrings,
+  and add code that runs unconfined at your next login (`~/.bashrc`,
+  `~/.config/autostart`, a missing `~/.bash_profile`). Now nothing can be
+  created, deleted or renamed directly in `~`; dot folders and files,
+  `~/bin` and linked dotfiles are read-only; secret stores and Aivyx PA's
+  own state (every instance's) are unreadable. Other folders work as
+  before. The assistant's `~/.aivyx-pa/workspace` can't be used from
+  `shell.exec` at these levels.
+
 ## [0.18.2] — 2026-10-11
 
 ### Security

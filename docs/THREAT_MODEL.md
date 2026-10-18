@@ -158,16 +158,28 @@ upstream MCP-server tool description steers the LLM into emitting
    - **Process groups** as in item 3: `setsid`/`setpgid` are blocked,
      so git's background auto-maintenance prints `fatal: setsid failed`
      and skips that run (the git command itself still succeeds).
-   - **Credential stores.** `~/.cargo/credentials(.toml)`,
-     `~/.config/git/credentials` and `~/.git-credentials` are always
-     unreadable. When
-     `cwd_root` contains one of them (access level `home` or `full`),
-     every directory on the path to it — `$HOME` itself included — is
-     *carved*: `ls`, `touch` and `mkdir` still work there, but `rm`
-     and `mv` of entries directly in it fail with `EACCES`, and a file
-     created there has no write rights until the next call. Deeper,
-     fully granted subdirectories are unaffected. `aivyx-pa doctor`
-     and `aivyx-pa access show` print a notice when this applies.
+   - **A shell root that covers `$HOME`** (access level `home` or
+     `full`, aivyx-confine `6e46575`). `$HOME` gets narrower rules than
+     a project folder, because what a login, shell or desktop session
+     runs by itself is configured there: nothing can be created,
+     deleted or renamed directly in `~` (a missing `~/.bash_profile` is
+     as good a target as an existing one); every dot entry, `~/bin`, and
+     dotfiles linked from elsewhere (stow) are read-only; SSH/GPG keys,
+     cloud, GitHub and registry tokens, the OS keyrings, password stores
+     and browser profiles are unreadable, and so is Aivyx PA's own state
+     (every instance's config, data, `~/.aivyx-pa` and runtime folders).
+     Visible folders (`~/Documents`, `~/Projects`) are writable as
+     before, except that folders above a linked dotfile folder
+     (`~/.config/nvim -> ~/Projects/dot/nvim`) accept no new entries.
+     Consequences: the assistant's own workspace
+     (`~/.aivyx-pa/workspace`) is unreadable from `shell.exec` at these
+     levels (its `fs.*` tools still work), and `git.*` against a repo at
+     `$HOME` itself (a dotfiles repo with `~/.git`) can't write. Code
+     that runs later from a *visible* folder (another repo's git hooks,
+     direnv's `.envrc`) is not covered. `aivyx-pa doctor` and
+     `aivyx-pa access show` print a notice when these rules apply.
+     `~/.cargo/credentials(.toml)`, `~/.config/git/credentials` and
+     `~/.git-credentials` are unreadable at every level.
 
    Each of the first three has an operator opt-out in `[confine]`
    (`allow_unix_sockets`, `share_system_tmp`,

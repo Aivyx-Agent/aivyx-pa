@@ -342,6 +342,7 @@ fn build_shell_exec_for_channel(
     fs_root: &std::path::Path,
     sensitive: std::sync::Arc<aivyx_core::sensitive_paths::SensitivePolicy>,
     confine_options: aivyx_core::ConfineOptions,
+    confine_deny_paths: Vec<std::path::PathBuf>,
 ) -> Result<GatedToolRegistration, String> {
     match channel_kind {
         // Phase 135 — Voice runs in-process on the
@@ -355,6 +356,9 @@ fn build_shell_exec_for_channel(
                 // `confine_options` is the operator's `[confine]` posture
                 // (fail-closed, every opt-out off unless explicitly set).
                 .with_confine_options(confine_options)
+                // Aivyx PA's own state, unreachable even when the root
+                // covers $HOME (see `shell_confine_deny_paths`).
+                .with_deny_paths(confine_deny_paths)
                 .build()
                 .map_err(|e| format!("failed to build shell.exec tool: {e}"))?
                 // Chapters Ward/Portcullis on shell.exec — refuse commands
@@ -6736,6 +6740,38 @@ fn effective_studio_token_path(storage_path: &std::path::Path) -> std::path::Pat
     }
 }
 
+/// What `shell.exec`'s confiner carves out on top of aivyx-confine's own
+/// home secret list: every instance's config (`daemon.env` holds the master
+/// passphrase), data (the encrypted store, Matrix session, `studio-token`),
+/// `~/.aivyx-pa` (tool-process credentials such as Proton's, and
+/// signal-cli's socket) and runtime directories, plus this run's store,
+/// kvcache store and Studio token wherever config put them. A folder that
+/// contains the shell root (the default workspace is `~/.aivyx-pa/workspace`)
+/// is dropped by `ShellExecToolConfig::with_deny_paths`, leaving the files. With access `home` or
+/// `full` the shell root covers `$HOME`, and aivyx-confine leaves its dot
+/// directories readable.
+fn shell_confine_deny_paths(
+    storage_path: &std::path::Path,
+    kvcache_store_path: &std::path::Path,
+    studio_token_path: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let mut deny = vec![
+        storage_path.to_path_buf(),
+        kvcache_store_path.to_path_buf(),
+        studio_token_path.to_path_buf(),
+    ];
+    // Every instance's, not just this one's: a named instance must not
+    // reach the default instance's `daemon.env` either.
+    match aivyx_instance::InstancePaths::current() {
+        Ok(instance) => deny.extend(instance.all_instances_state_dirs()),
+        Err(e) => eprintln!(
+            "aivyx-pa: warning: can't resolve the instance folders ({e}); shell.exec's \
+             confiner denies only the store, kvcache store and Studio token"
+        ),
+    }
+    deny
+}
+
 /// Ward's extra-deny list: paths the agent's read (and shell) tools must
 /// never reach on top of the built-in secret set — the kvcache store and
 /// the Studio's automatic token (first-run coherence A2), so an agent can't
@@ -8637,6 +8673,7 @@ async fn run_async(
         &fs_root,
         std::sync::Arc::clone(&sensitive_policy),
         confine_options.clone(),
+        shell_confine_deny_paths(&storage_path.value, &kvcache_store_path, &studio_token_path),
     )? {
         Some((shell, scope)) => {
             tool_list.push(shell);
@@ -12847,6 +12884,7 @@ mod tests {
             // confinement behavior — the default options match
             // production's default posture.
             aivyx_core::ConfineOptions::new(),
+            Vec::new(),
         )
         .expect("local branch must build shell.exec cleanly");
         let (tool, scope) = result.expect("local must receive shell.exec");
@@ -12999,6 +13037,7 @@ mod tests {
             // irrelevant to what this test proves; the default options
             // match production's default posture.
             aivyx_core::ConfineOptions::new(),
+            Vec::new(),
         )
         .expect("telegram branch must not error — it's a no-op");
         assert!(
