@@ -1,202 +1,34 @@
-//! Tool-call grammar generation — Chapter Stencil (ST.1).
+//! Tool-call grammar — Chapters Stencil (ST.1) and Emboss (EB.1).
 //!
-//! Grammar-constrained decoding forces a local model to emit a
-//! **valid, real-named tool call by construction** instead of
-//! hoping the prompt lands. [`tool_call_grammar`] turns the
-//! turn's registered tools into a JSON Schema that admits *only*
-//! a well-formed call — the constraint a provider then hands to
-//! its decoder (for `mistralrs`, `Constraint::JsonSchema`).
-//!
-//! The function is **pure and provider-agnostic**: `&[LlmToolDescriptor]`
-//! in, [`serde_json::Value`] out, no engine, no I/O. It lives at
-//! the crate root (not under `mistral_rs/`) precisely so a future
-//! `llama-server` `/completion` GBNF path can reuse it unchanged.
-//!
-//! ## Shape
-//!
-//! A `oneOf` discriminated union — one branch per tool, plus a
-//! reserved [`RESPOND_SENTINEL`] branch:
-//!
-//! ```jsonc
-//! { "oneOf": [
-//!   { "type": "object",
-//!     "properties": { "name": { "const": "fs.read" },
-//!                     "arguments": { /* fs.read's input_schema verbatim */ } },
-//!     "required": ["name", "arguments"], "additionalProperties": false },
-//!   // …one branch per registered tool…
-//!   { "type": "object",                                   // the sentinel
-//!     "properties": { "name": { "const": "respond" },
-//!                     "arguments": { "type": "object",
-//!                                    "properties": { "text": { "type": "string" } },
-//!                                    "required": ["text"] } },
-//!     "required": ["name", "arguments"], "additionalProperties": false }
-//! ] }
-//! ```
-//!
-//! Each `name` is pinned to a `const` drawn from the registry, so
-//! a **hallucinated name can never match**; that branch's
-//! `arguments` is the matching tool's `input_schema` *verbatim*,
-//! so **malformed arguments can never match**. Because every
-//! branch's `name` const is distinct, an instance satisfies at
-//! most one branch — `oneOf` (exactly-one) is the correct
-//! combinator, and an unknown name or bad args satisfies *zero*
-//! branches → invalid.
-//!
-//! ## The `respond` sentinel
-//!
-//! A constrained decoder is *forced* into the grammar, so without
-//! an escape the model could never reply in plain text. The
-//! reserved [`RESPOND_SENTINEL`] branch is that escape: the
-//! provider (ST.3) unwraps a `{"name":"respond","arguments":{"text":…}}`
-//! "call" back into an ordinary assistant text message rather than
-//! dispatching it. The sentinel name has **no dot**, while every
-//! real Aivyx tool is `namespace.action` — so it can never collide
-//! with a registered tool.
+//! The implementation lives in the shared `aivyx-stencil` crate
+//! (`Aivyx-Agent/aivyx-toolbench`), extracted from this file on
+//! 2026-10-18 so aivyx-toolbench (and later aivyx-coder) use the same
+//! grammar. This module keeps pa's API: it converts pa's
+//! [`LlmToolDescriptor`] and re-exports the rest unchanged.
 
-use serde_json::{json, Value};
+use serde_json::Value;
+// The unchanged tests module reaches `json!` through `use super::*`.
+#[cfg(test)]
+use serde_json::json;
 
 use crate::LlmToolDescriptor;
 
-/// Reserved pseudo-tool name the grammar admits so a constrained
-/// model can decline to call a real tool and reply in plain text.
-/// Has no `.` separator, so it cannot collide with a real
-/// `namespace.action` tool name. ST.3's provider wiring unwraps a
-/// call to this name back into an assistant text message.
-pub const RESPOND_SENTINEL: &str = "respond";
+pub use aivyx_stencil::{
+    parse_constrained_output, system_message_for, ConstrainedOutput, RESPOND_PREAMBLE,
+    RESPOND_SENTINEL,
+};
 
-/// Build a JSON Schema that admits **only** a valid tool call for
-/// one of `tools` (or the [`RESPOND_SENTINEL`] text escape).
-///
-/// Pure and engine-free — the result is handed to a decoder as a
-/// generation constraint. With an empty `tools` slice the grammar
-/// still admits the sentinel, so a constrained turn can always
-/// produce *something* well-formed.
+/// See [`aivyx_stencil::tool_call_grammar`].
 pub fn tool_call_grammar(tools: &[LlmToolDescriptor]) -> Value {
-    let mut branches: Vec<Value> = tools
+    let specs: Vec<aivyx_stencil::ToolSpec> = tools
         .iter()
-        .map(|t| tool_branch(&t.name, &t.input_schema))
-        .collect();
-    branches.push(respond_branch());
-    json!({ "oneOf": branches })
-}
-
-/// One union branch: `name` pinned to `name`, `arguments` set to
-/// the tool's input schema verbatim.
-fn tool_branch(name: &str, input_schema: &Value) -> Value {
-    // Tools' input schemas are objects at the top level (the
-    // registry validates this at registration). If a schema ever
-    // isn't an object it can't be a meaningful `arguments`
-    // constraint, so fall back to a permissive object — still
-    // pinning the *name*, which is the load-bearing guarantee.
-    let arguments = if input_schema.is_object() {
-        input_schema.clone()
-    } else {
-        json!({ "type": "object" })
-    };
-    json!({
-        "type": "object",
-        "properties": {
-            "name": { "const": name },
-            "arguments": arguments,
-        },
-        "required": ["name", "arguments"],
-        "additionalProperties": false,
-    })
-}
-
-/// The reserved text-reply escape branch.
-fn respond_branch() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "name": { "const": RESPOND_SENTINEL },
-            "arguments": {
-                "type": "object",
-                "properties": { "text": { "type": "string" } },
-                "required": ["text"],
-                "additionalProperties": false,
-            },
-        },
-        "required": ["name", "arguments"],
-        "additionalProperties": false,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Constrained-decoding I/O helpers — Chapter Emboss (EB.1).
-//
-// Shared by every provider that grammar-constrains tool calls (the
-// in-process mistral.rs engine and llama.cpp's server). Both constrain
-// output to the [`tool_call_grammar`] shape, so the model emits the
-// same `{"name", "arguments"}` JSON in the message `content` — and both
-// parse it the same way. These lived in the mistral.rs provider through
-// Stencil/Bridle; Emboss promotes them here so there is one
-// implementation, no drift.
-// ---------------------------------------------------------------------------
-
-/// The instruction appended to the system message under
-/// grammar-constrained decoding (Chapter Bridle, BR.3). Stencil's
-/// grammar *admits* the `respond` sentinel as the plain-text escape,
-/// but a small model never *chooses* it unless told — ST.4 watched a 4B
-/// loop on one tool call because it had no way to "finish." This is that
-/// missing instruction.
-pub const RESPOND_PREAMBLE: &str = "\
-Tool-calling mode: every reply must be a single JSON object. To use a tool, emit \
-{\"name\":\"<tool>\",\"arguments\":{…}}. To answer the user in plain text — or when \
-you are done and need no tool — emit {\"name\":\"respond\",\"arguments\":{\"text\":\"…\"}}; \
-this ends your turn. Do not repeat the same tool call: if a call did not help, either \
-try a different one or `respond`.";
-
-/// Build the system message for a turn, appending [`RESPOND_PREAMBLE`]
-/// when decoding is constrained. Returns `None` when there is nothing
-/// to send (no base prompt and not constrained) so the unconstrained
-/// path stays byte-identical. Pure — unit-testable without an engine.
-pub fn system_message_for(base: Option<&str>, constrain: bool) -> Option<String> {
-    match (base, constrain) {
-        (Some(s), false) => Some(s.to_string()),
-        (None, false) => None,
-        (Some(s), true) => Some(format!("{s}\n\n{RESPOND_PREAMBLE}")),
-        (None, true) => Some(RESPOND_PREAMBLE.to_string()),
-    }
-}
-
-/// Outcome of parsing a grammar-constrained turn's output (Chapter
-/// Stencil ST.3). [`tool_call_grammar`] admits a single `{"name",
-/// "arguments"}` object; the `respond` sentinel maps to plain text, any
-/// other name to a real tool call.
-#[derive(Debug, PartialEq)]
-pub enum ConstrainedOutput {
-    ToolCall {
-        tool_name: String,
-        input: Value,
-    },
-    Text(String),
-}
-
-/// Parse the JSON a grammar-constrained turn produced. Returns `None`
-/// when `content` isn't the expected shape — the grammar guarantees it
-/// is, so `None` is purely defensive (the caller falls back to the
-/// provider's native extraction).
-pub fn parse_constrained_output(content: &str) -> Option<ConstrainedOutput> {
-    let value: Value = serde_json::from_str(content.trim()).ok()?;
-    let name = value.get("name")?.as_str()?;
-    let arguments = value
-        .get("arguments")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    if name == RESPOND_SENTINEL {
-        let text = arguments
-            .get("text")
-            .and_then(|t| t.as_str())
-            .unwrap_or_default()
-            .to_string();
-        Some(ConstrainedOutput::Text(text))
-    } else {
-        Some(ConstrainedOutput::ToolCall {
-            tool_name: name.to_string(),
-            input: arguments,
+        .map(|t| aivyx_stencil::ToolSpec {
+            name: t.name.clone(),
+            description: t.description.clone(),
+            input_schema: t.input_schema.clone(),
         })
-    }
+        .collect();
+    aivyx_stencil::tool_call_grammar(&specs)
 }
 
 #[cfg(test)]

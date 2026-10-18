@@ -611,6 +611,7 @@ name = "aivyx-llm"
 version = "0.19.0"
 dependencies = [
  "aivyx-route",
+ "aivyx-stencil",
  "async-trait",
  "base64 0.22.1",
  "bytes",
@@ -844,6 +845,15 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "uuid 1.28.0",
+]
+
+[[package]]
+name = "aivyx-stencil"
+version = "0.1.0"
+source = "git+https://github.com/Aivyx-Agent/aivyx-toolbench?rev=580b1be014ea4fb2ca23f651fd95a7bdb5ec773e#580b1be014ea4fb2ca23f651fd95a7bdb5ec773e"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

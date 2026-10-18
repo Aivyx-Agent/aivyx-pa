@@ -350,6 +350,10 @@ aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "d387a
 # MUST stay a public repo — see the aivyx-confine entry above for why.
 aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "5295ad2314c500d664d0a1117ba172eae3c1cb50" }
 
+# Shared tool-call grammar (Chapters Stencil/Emboss), extracted 2026-10-18.
+# MUST stay a public repo — see the aivyx-confine entry above for why.
+aivyx-stencil = { git = "https://github.com/Aivyx-Agent/aivyx-toolbench", rev = "580b1be014ea4fb2ca23f651fd95a7bdb5ec773e" }
+
 # Standalone generation backends for the aivyx-vision tool process's
 # vision.generate_svg / vision.generate_image / vision.generate_3d
 # (Chapter design docs:

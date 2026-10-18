@@ -69,6 +69,7 @@ provider-mistral-rs-accelerate = [
 ]
 
 [dependencies]
+aivyx-stencil = { workspace = true }
 # Protocol-only core — no dependency on aivyx-core. The LlmProvider
 # trait and its associated types use `serde_json::Value` for tool
 # inputs/outputs and `tokio_util::sync::CancellationToken` for mid-
