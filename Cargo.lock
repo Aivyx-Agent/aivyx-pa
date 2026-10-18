@@ -850,7 +850,7 @@ dependencies = [
 [[package]]
 name = "aivyx-stencil"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-toolbench?rev=580b1be014ea4fb2ca23f651fd95a7bdb5ec773e#580b1be014ea4fb2ca23f651fd95a7bdb5ec773e"
+source = "git+https://github.com/Aivyx-Agent/aivyx-toolbench?rev=b848525b1e9e90f9ca0f0effc25401b92a238cf9#b848525b1e9e90f9ca0f0effc25401b92a238cf9"
 dependencies = [
  "serde",
  "serde_json",

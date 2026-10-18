@@ -352,7 +352,7 @@ aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "5295ad2
 
 # Shared tool-call grammar (Chapters Stencil/Emboss), extracted 2026-10-18.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-stencil = { git = "https://github.com/Aivyx-Agent/aivyx-toolbench", rev = "580b1be014ea4fb2ca23f651fd95a7bdb5ec773e" }
+aivyx-stencil = { git = "https://github.com/Aivyx-Agent/aivyx-toolbench", rev = "b848525b1e9e90f9ca0f0effc25401b92a238cf9" }
 
 # Standalone generation backends for the aivyx-vision tool process's
 # vision.generate_svg / vision.generate_image / vision.generate_3d
