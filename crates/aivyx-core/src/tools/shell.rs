@@ -525,7 +525,7 @@ impl Tool for ShellExecTool {
         }
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         // ---- Re-parse the input ------------------------------------
         let cmd = match input.get("cmd").and_then(Value::as_str) {
             Some(s) if !s.is_empty() => s.to_string(),
@@ -647,11 +647,32 @@ impl Tool for ShellExecTool {
 
         // `run_in_own_group` keeps the process-group contract: the call
         // ends when `sh` exits, the whole group is killed then (or when
-        // this future is dropped by a cancelled turn), and on timeout the
-        // group gets SIGTERM, then SIGKILL.
-        let output = match run_in_own_group(command, Some(Duration::from_millis(timeout_ms))).await
-        {
+        // this future is dropped), on timeout the group gets SIGTERM, then
+        // SIGKILL, and a cancelled turn (Ctrl-C, its deadline) kills it at
+        // once — the turn loop waits for the call to return rather than
+        // dropping it, so the call stops itself.
+        let run = run_in_own_group(
+            command,
+            Some(Duration::from_millis(timeout_ms)),
+            Some(ctx.cancellation),
+        );
+        let output = match run.await {
             Ok(GroupRun::Finished(output)) => output,
+            Ok(GroupRun::Cancelled(output)) => {
+                return ToolOutcome::Completed {
+                    output: json!({
+                        "cmd": cmd,
+                        "cwd": canonical_cwd.display().to_string(),
+                        "stdout": String::from_utf8_lossy(&output.stdout),
+                        "stderr": String::from_utf8_lossy(&output.stderr),
+                        "exit_code": -1_i64,
+                        "timed_out": false,
+                        "cancelled": true,
+                        "timeout_ms": timeout_ms,
+                    }),
+                    verified: Verification::NotApplicable,
+                };
+            }
             Ok(GroupRun::TimedOut) => {
                 return ToolOutcome::Completed {
                     output: json!({
@@ -1556,6 +1577,55 @@ mod tests {
         let gone = wait_until_gone(pid);
         cleanup(pid);
         assert!(gone, "background job {pid} survived a cancelled shell.exec");
+    }
+
+    /// The turn loop doesn't drop a running tool when the turn is
+    /// cancelled; it waits for it. So a cancelled token must end the call
+    /// itself: the group is killed at once (not after the command's
+    /// timeout) and the call returns what was written, marked cancelled.
+    /// Live check 2026-10-21: one Ctrl-C left `sleep` running for the full
+    /// 30 s default timeout.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_cancelled_turn_stops_the_running_command() {
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let token = channel.token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            token.cancel();
+        });
+        let started = std::time::Instant::now();
+        let out = tool
+            .execute(
+                json!({
+                    "cmd": "echo started; sleep 300 >/dev/null 2>&1 & echo $! > bg.pid; sleep 300",
+                    "args": { "timeout_ms": 600_000 }
+                }),
+                &ctx,
+            )
+            .await;
+        let elapsed = started.elapsed();
+
+        let pid: u32 = std::fs::read_to_string(scratch.dir.join("bg.pid"))
+            .expect("the command wrote its background pid")
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = wait_until_gone(pid);
+        cleanup(pid);
+        let ToolOutcome::Completed { output, .. } = out else {
+            panic!("expected Completed, got {out:?}");
+        };
+        assert_eq!(output["cancelled"], true, "{output}");
+        assert_eq!(output["timed_out"], false, "{output}");
+        assert_eq!(output["stdout"], "started\n", "{output}");
+        assert!(elapsed < Duration::from_secs(10), "call took {elapsed:?}");
+        assert!(gone, "background job {pid} survived a cancelled turn");
     }
 
     /// Confined commands get a private, writable `TMPDIR`, and the shared

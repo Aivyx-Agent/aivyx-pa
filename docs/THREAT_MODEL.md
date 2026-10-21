@@ -125,7 +125,15 @@ upstream MCP-server tool description steers the LLM into emitting
    the tool call; on timeout it gets SIGTERM, then SIGKILL two seconds
    later (Phase 42). `git.*` spawns follow the same contract, and a
    call ends when the command itself exits even if a background job
-   still holds its output pipe. On non-Linux builds there is no sandbox
+   still holds its output pipe. A cancelled turn (Ctrl-C, its deadline)
+   kills a running command at once rather than waiting out its timeout.
+   Every live group is also tracked process-wide, so when aivyx-pa
+   itself ends on `SIGTERM`, on `SIGHUP` (its terminal went away) or on
+   a second Ctrl-C, the running commands are killed first; the daemon
+   kills them before its graceful shutdown, which otherwise waited for
+   them. `SIGKILL` can't be caught: it still leaves them running (a
+   systemd-managed daemon is still covered, since stopping the service
+   kills its whole cgroup). On non-Linux builds there is no sandbox
    backend, so a process that calls `setsid` itself leaves the group
    and survives.
 4. **Environment isolation.** `shell.exec` strips API keys and

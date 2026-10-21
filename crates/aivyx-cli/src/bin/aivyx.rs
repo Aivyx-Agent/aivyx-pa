@@ -127,6 +127,8 @@ mod doctor;
 #[cfg(feature = "yubikey")]
 #[path = "aivyx_modules/federation.rs"]
 mod federation;
+#[path = "aivyx_modules/exit_signals.rs"]
+mod exit_signals;
 #[path = "aivyx_modules/headless.rs"]
 mod headless;
 // Spec A3 (First-Run Coherence) — the central `--help` table + renderer for
@@ -622,6 +624,16 @@ fn run() -> Result<(), String> {
         };
         print!("{rendered}");
         return Ok(());
+    }
+
+    // A killed aivyx-pa must not leave its commands running (see
+    // `exit_signals`). `daemon run` installs its own, graceful handler;
+    // `team run` runs tools in-process with no Ctrl-C handler of its own.
+    if mode != CliMode::DaemonRun {
+        exit_signals::spawn_exit_on_signal(matches!(
+            mode,
+            CliMode::Team(TeamSubcommand::Run { .. })
+        ));
     }
 
     // ---- Chapter Belay: service install / uninstall --------------------
@@ -10901,41 +10913,22 @@ async fn run_async(
             // daemon's StateGuard, so every `systemctl stop/restart` left
             // the crash-recovery state file behind and the next boot
             // reported a bogus "detected unclean shutdown" (live rig
-            // 2026-07-05). Treat SIGTERM exactly like Ctrl-C: cancel the
+            // 2026-07-05). Treat SIGTERM — and SIGHUP, a `daemon run`
+            // whose terminal went away — exactly like Ctrl-C: cancel the
             // shutdown token and let the daemon unwind cleanly.
-            #[cfg(unix)]
-            {
-                let mut sigterm =
-                    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    {
-                        Ok(s) => s,
-                        Err(_) => {
-                            // No SIGTERM stream — fall back to Ctrl-C only.
-                            if tokio::signal::ctrl_c().await.is_err() {
-                                std::process::exit(130);
-                            }
-                            eprintln!("\naivyx daemon: shutting down.");
-                            shutdown_for_signal.cancel();
-                            return;
-                        }
-                    };
-                tokio::select! {
-                    r = tokio::signal::ctrl_c() => {
-                        if r.is_err() {
-                            std::process::exit(130);
-                        }
-                    }
-                    _ = sigterm.recv() => {}
-                }
-            }
-            #[cfg(not(unix))]
-            {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    std::process::exit(130);
-                }
-            }
+            //
+            // Running commands are killed first: the shutdown waits for
+            // in-flight turns and a turn waits for its command, so one with
+            // a ten-minute timeout held the daemon up that long, and SIGHUP
+            // used to leave it running for good (live check 2026-10-21). A
+            // second signal exits at once.
+            exit_signals::stop_signal().await;
             eprintln!("\naivyx daemon: shutting down.");
+            aivyx_core::kill_all_process_groups();
             shutdown_for_signal.cancel();
+            exit_signals::stop_signal().await;
+            eprintln!("\naivyx daemon: exiting now.");
+            exit_signals::exit(130);
         });
 
         // The "listening on <socket>" line is printed by `run_daemon`
@@ -11510,12 +11503,12 @@ async fn run_async(
             tokio::spawn(async move {
                 loop {
                     if tokio::signal::ctrl_c().await.is_err() {
-                        std::process::exit(130);
+                        exit_signals::exit(130);
                     }
                     let current = token_slot.lock().expect("token slot poisoned").clone();
                     if current.is_cancelled() {
                         eprintln!("\naivyx: interrupted, exiting.");
-                        std::process::exit(130);
+                        exit_signals::exit(130);
                     }
                     eprintln!("\naivyx: cancelling in-flight turn (ctrl-C again to exit).");
                     current.cancel();
@@ -11654,7 +11647,7 @@ async fn run_async(
             let shutdown_for_signal = shutdown.clone();
             tokio::spawn(async move {
                 if tokio::signal::ctrl_c().await.is_err() {
-                    std::process::exit(130);
+                    exit_signals::exit(130);
                 }
                 eprintln!("\naivyx: shutting down telegram bot after current poll completes.");
                 shutdown_for_signal.cancel();
@@ -11789,7 +11782,7 @@ async fn run_async(
             let shutdown_for_signal = shutdown.clone();
             tokio::spawn(async move {
                 if tokio::signal::ctrl_c().await.is_err() {
-                    std::process::exit(130);
+                    exit_signals::exit(130);
                 }
                 eprintln!("\naivyx: shutting down discord bot after current event drains.");
                 shutdown_for_signal.cancel();
@@ -11918,7 +11911,7 @@ async fn run_async(
             let shutdown_for_signal = shutdown.clone();
             tokio::spawn(async move {
                 if tokio::signal::ctrl_c().await.is_err() {
-                    std::process::exit(130);
+                    exit_signals::exit(130);
                 }
                 eprintln!("\naivyx: shutting down the Matrix channel.");
                 shutdown_for_signal.cancel();
@@ -12006,7 +11999,7 @@ async fn run_async(
             let shutdown_for_signal = shutdown.clone();
             tokio::spawn(async move {
                 if tokio::signal::ctrl_c().await.is_err() {
-                    std::process::exit(130);
+                    exit_signals::exit(130);
                 }
                 eprintln!("\naivyx: shutting down the Signal channel.");
                 shutdown_for_signal.cancel();
@@ -12102,7 +12095,7 @@ async fn run_async(
             let shutdown_for_signal = shutdown.clone();
             tokio::spawn(async move {
                 if tokio::signal::ctrl_c().await.is_err() {
-                    std::process::exit(130);
+                    exit_signals::exit(130);
                 }
                 eprintln!("\naivyx: shutting down the Proton Mail channel.");
                 shutdown_for_signal.cancel();
@@ -12208,7 +12201,7 @@ async fn run_async(
             let shutdown_for_signal = shutdown.clone();
             tokio::spawn(async move {
                 if tokio::signal::ctrl_c().await.is_err() {
-                    std::process::exit(130);
+                    exit_signals::exit(130);
                 }
                 eprintln!("\naivyx: shutting down slack bot after current event drains.");
                 shutdown_for_signal.cancel();

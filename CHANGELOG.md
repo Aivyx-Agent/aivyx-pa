@@ -5,6 +5,24 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **A killed aivyx-pa no longer leaves its commands running.** A
+  `shell.exec` command runs in a process group of its own, which never
+  sees the terminal's signals and was only killed when the tool call
+  finished. So when aivyx-pa ended on `SIGTERM`, on `SIGHUP` (its terminal
+  closed) or on a second Ctrl-C, a running command was left behind and ran
+  on indefinitely; `daemon run` did the same on `SIGHUP`. Running commands
+  are now killed first in every case, and the daemon kills them before its
+  graceful shutdown instead of waiting for them (up to a command's
+  ten-minute timeout). `SIGKILL` still leaves them running; a systemd
+  service is covered either way.
+- **Ctrl-C stops a running command.** Cancelling a turn used to wait for a
+  running `shell.exec` command to finish or time out (30 seconds by
+  default). It is now killed at once, and the tool call returns what it had
+  printed, marked `"cancelled": true`. The same applies when a turn hits
+  its deadline.
+
 ## [0.19.0] — 2026-10-18
 
 ### Added

@@ -98,6 +98,7 @@ pub use aivyx_confine::{
     ConfineOptions, ExecutionConfiner, NoopConfiner, default_confiner,
     default_confiner_with_options, kill_process_group,
 };
+pub use tools::kill_all_process_groups;
 
 // ---------------------------------------------------------------------------
 // ID newtypes

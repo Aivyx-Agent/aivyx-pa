@@ -165,11 +165,11 @@ pub async fn run_connected(
     tokio::spawn(async move {
         loop {
             if tokio::signal::ctrl_c().await.is_err() {
-                std::process::exit(130);
+                crate::exit_signals::exit(130);
             }
             if flag_for_signal.load(Ordering::Relaxed) {
                 eprintln!("\naivyx: interrupted, exiting.");
-                std::process::exit(130);
+                crate::exit_signals::exit(130);
             }
             eprintln!("\naivyx: cancelling in-flight turn (ctrl-C again to exit).");
             cancel_handle.cancel().await;
