@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-10-21
+
 ### Fixed
 
 - **A killed aivyx-pa no longer leaves its commands running.** A
