@@ -5,6 +5,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.19.2] — 2026-10-25
+
+### Fixed
+
+- **A checkpoint is no longer skipped after a failed one.** When git
+  couldn't save a checkpoint, the next checkpoint of the same files was
+  taken for a duplicate of it and reported success without saving
+  anything, so there was nothing to go back to. Now a checkpoint only
+  counts as a duplicate of one that was actually saved (aivyx-checkpoint
+  `b8072e7`).
+
+### Security
+
+- `slack-morphism` bumped to 2.28.0 (Dependabot alert, GHSA-26w4-8w32-4x3v:
+  when verifying a Slack request failed, the error written to the logs
+  could include a valid request signature).
+
 ## [0.19.1] — 2026-10-21
 
 ### Fixed
