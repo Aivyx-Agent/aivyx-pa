@@ -303,7 +303,7 @@ aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "7
 # `.git/config`, the checkpointer's own git invocation won't run it.
 # Defense in depth alongside the tool-level `.git`-write block in
 # `aivyx-core::tools::fs::touches_git_metadata`.
-aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "6cea5fc590c1d4a1255cd1e878829d78edcfcd9d" }
+aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "5ecd5e26b442b5568bab8730fd4608d7e379e369" }
 
 # KV-cache persistence against a llama-server backend (LlmPlanner/
 # SpecialistFactory `with_kv_cache`), adopted from the sibling aivyx-coder
@@ -335,7 +335,7 @@ aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "6dce9d4
 # aivyx-confine/aivyx-kvcache above. No platform-specific backend, so no
 # default-features/target-gating split is needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "81e1f36dbbf35987a38c3b936867eacb5ab8d8c8" }
+aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "a506c9c961b82715806bdec67e53704f1a11ed8d" }
 aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "ffaff98acf1bd32955e6abdb659444215218416e" }
 
 # Task-aware model routing (capability matching, tiering, discovery),
