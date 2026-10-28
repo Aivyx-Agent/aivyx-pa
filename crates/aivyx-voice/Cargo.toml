@@ -125,7 +125,7 @@ whisper-rs = { version = "0.16", optional = true }
 ort = { version = "2.0.0-rc.10", optional = true }
 ndarray = { version = "0.17", optional = true }
 # Kokoro `voices-*.bin` is an npz (zip of .npy); deflate only.
-zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
+zip = { version = "9", optional = true, default-features = false, features = ["deflate"] }
 # MIT, pure-Rust, dictionary-based English G2P (no espeak-ng linked
 # — espeak is only an optional runtime exec fallback, never a build
 # dep, so nothing GPL enters the link graph). Outputs Kokoro IPA.

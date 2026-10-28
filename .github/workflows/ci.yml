@@ -14,6 +14,9 @@ on:
     branches:
       - main
   pull_request:
+  schedule:
+    - cron: "17 3 * * 1"   # Mondays 03:17 UTC: catch new advisories and lints without a push
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -22,3 +25,11 @@ concurrency:
 jobs:
   quality-gate:
     uses: ./.github/workflows/quality-gate.yml
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

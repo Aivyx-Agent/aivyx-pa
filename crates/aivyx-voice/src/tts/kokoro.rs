@@ -374,7 +374,10 @@ impl VoiceStore {
             let mut entry = zip
                 .by_index(i)
                 .map_err(|e| TtsError::ModelLoad(format!("voices entry {i}: {e}")))?;
-            let raw = entry.name().to_string();
+            let raw = entry
+                .name()
+                .map_err(|e| TtsError::ModelLoad(format!("voices entry {i} name: {e}")))?
+                .to_string();
             if raw.ends_with('/') {
                 continue;
             }

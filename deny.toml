@@ -117,17 +117,10 @@ ignore = [
     # daemon / core / CLI never link them — and none is a vulnerability.
     # Revisit when the webview ecosystem moves to GTK4. The glib entry is
     # the GitHub Dependabot alert #6 (GHSA-wrw7-89jp-8q8g); same disposition.
+    # (The gtk-rs "no longer maintained" advisories RUSTSEC-2024-0411..0420
+    # were withdrawn upstream on 2026-08-14 after the repository was
+    # unarchived, so their ignore entries were removed 2026-10-28.)
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained; transitive via glib-macros/gtk3-macros (aivyx-desktop GTK3); not vulnerable" },
-    { id = "RUSTSEC-2024-0411", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
-    { id = "RUSTSEC-2024-0412", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
-    { id = "RUSTSEC-2024-0413", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
-    { id = "RUSTSEC-2024-0414", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
-    { id = "RUSTSEC-2024-0415", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
-    { id = "RUSTSEC-2024-0416", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
-    { id = "RUSTSEC-2024-0417", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
-    { id = "RUSTSEC-2024-0418", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
-    { id = "RUSTSEC-2024-0419", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
-    { id = "RUSTSEC-2024-0420", reason = "gtk-rs GTK3 bindings unmaintained; aivyx-desktop webview; frozen upstream, no GTK4 path yet" },
 
     # ttf-parser — RUSTSEC-2026-0192 (unmaintained). Pulled via
     #   ttf-parser → pdf-extract → aivyx-dataread (data.pdf reader).
@@ -140,9 +133,37 @@ ignore = [
     # alert #6) — a `glib::VariantStrIter` Iterator/DoubleEndedIterator
     # *unsoundness*, same aivyx-desktop GTK3 root cause (glib 0.18, patched
     # only in 0.20 which is unreachable via GTK3; not exercised by the thin
-    # webview shell). Not listed as an `ignore` entry because this config
-    # checks `unmaintained`, not `unsound`, so cargo-deny does not flag it
-    # (an entry would be a perpetual "unused ignore"). Recorded here as the
+    # webview shell). Not listed as an `ignore` entry: cargo-deny 0.20 does
+    # check `unsound` advisories, but its default scope is the workspace's
+    # own direct dependencies, and glib is only transitive (via
+    # wry/tao/tray-icon), so it is not flagged (an entry would be a
+    # perpetual "unused ignore"; verified 2026-10-28). Recorded here as the
     # accepted disposition; mirror it by dismissing Dependabot #6 as
-    # "tolerable risk".
+    # "tolerable risk". If a future cargo-deny flags it, add an entry with
+    # this disposition.
+
+    # ── 2026-10-28 additions (Chapter H) ─────────────────────────────
+    # zip — RUSTSEC-2026-0367/0368/0369 (ZipArchive::extract / ZipStreamReader
+    # ::extract). The workspace's own zip uses (aivyx-voice Kokoro npz,
+    # aivyx-dataread via calamine/rust_xlsxwriter) were moved to zip 9 on this
+    # date, which is fixed. One copy remains: zip 7.2.0 under candle-core
+    # (mistralrs-core local-LLM stack), which only calls ZipArchive::new /
+    # by_name to read .npz/.pth weights in memory and never calls extract.
+    { id = "RUSTSEC-2026-0367", reason = "zip 7.2.0 via candle-core (mistralrs, aivyx-llm local provider); the advisory is about ZipArchive::extract, which candle never calls (it reads npz/pth archives in memory); fixed only in zip 9, revisit when candle-core/mistralrs move" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 7.2.0 via candle-core (mistralrs, aivyx-llm local provider); the advisory is about ZipArchive::extract, which candle never calls (it reads npz/pth archives in memory); fixed only in zip 9, revisit when candle-core/mistralrs move" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 7.2.0 via candle-core (mistralrs, aivyx-llm local provider); the advisory is about ZipArchive::extract, which candle never calls (it reads npz/pth archives in memory); fixed only in zip 9, revisit when candle-core/mistralrs move" },
+
+    # anymap2 — RUSTSEC-2026-0319 (unmaintained). Pulled via
+    #   anymap2 → matrix-sdk 0.19.1 → aivyx-matrix. Not a direct dep;
+    # matrix-sdk 0.19.1 is the latest release. Not vulnerable.
+    { id = "RUSTSEC-2026-0319", reason = "anymap2 unmaintained, not vulnerable; transitive under matrix-sdk 0.19.1 (aivyx-matrix), the latest release; revisit when matrix-sdk drops it" },
+
+    # zbus 4.4.0 stack — RUSTSEC-2026-0370 (zvariant), 0371 (zbus_names),
+    # 0372 (zvariant_derive), all unmaintained. Pulled via
+    #   zbus 4.4.0 → keyring 3.6.3 / secret-service 4.0.0 → aivyx-channel
+    # (Linux secret-service keyring). keyring 4 exists but changes the store
+    # API (separate store crates); migration is deferred. Not vulnerable.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained, not vulnerable; transitive under zbus 4.4.0 via keyring 3 (aivyx-channel); revisit at the keyring 4 migration" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained, not vulnerable; transitive under zbus 4.4.0 via keyring 3 (aivyx-channel); revisit at the keyring 4 migration" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained, not vulnerable; transitive under zbus 4.4.0 via keyring 3 (aivyx-channel); revisit at the keyring 4 migration" },
 ]

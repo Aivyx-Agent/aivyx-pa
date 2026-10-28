@@ -243,7 +243,7 @@ dependencies = [
 [[package]]
 name = "aivyx-checkpoint"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-checkpoint?rev=b8072e7dce1a84f526cd4ecf99ab02f4ea50d0b1#b8072e7dce1a84f526cd4ecf99ab02f4ea50d0b1"
+source = "git+https://github.com/Aivyx-Agent/aivyx-checkpoint?rev=6cea5fc590c1d4a1255cd1e878829d78edcfcd9d#6cea5fc590c1d4a1255cd1e878829d78edcfcd9d"
 dependencies = [
  "tokio",
  "tokio-util",
@@ -327,7 +327,7 @@ dependencies = [
 [[package]]
 name = "aivyx-confine"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-confine?rev=6e465755c827189e195499b981c13ba235953b30#6e465755c827189e195499b981c13ba235953b30"
+source = "git+https://github.com/Aivyx-Agent/aivyx-confine?rev=7de5380de0b861e47d51d56342b521b75f194c34#7de5380de0b861e47d51d56342b521b75f194c34"
 dependencies = [
  "globset",
  "landlock",
@@ -545,7 +545,7 @@ dependencies = [
 [[package]]
 name = "aivyx-injection-guard"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=a9ece398f65ad56a756786cecc713bc5be836680#a9ece398f65ad56a756786cecc713bc5be836680"
+source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=81e1f36dbbf35987a38c3b936867eacb5ab8d8c8#81e1f36dbbf35987a38c3b936867eacb5ab8d8c8"
 
 [[package]]
 name = "aivyx-instance"
@@ -594,7 +594,7 @@ dependencies = [
 [[package]]
 name = "aivyx-kvcache"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-kvcache?rev=a6e7ed96094f13f4fb63c8026cd5d2b9f75df3a9#a6e7ed96094f13f4fb63c8026cd5d2b9f75df3a9"
+source = "git+https://github.com/Aivyx-Agent/aivyx-kvcache?rev=4ec85e4d887a6f0de2318baf1fa4d7e9023a1ffc#4ec85e4d887a6f0de2318baf1fa4d7e9023a1ffc"
 dependencies = [
  "async-trait",
  "clap",
@@ -738,7 +738,7 @@ dependencies = [
 [[package]]
 name = "aivyx-pack"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-pack?rev=5295ad2314c500d664d0a1117ba172eae3c1cb50#5295ad2314c500d664d0a1117ba172eae3c1cb50"
+source = "git+https://github.com/Aivyx-Agent/aivyx-pack?rev=eedbf350820c0483c6a1649de4c83bb1a45844ad#eedbf350820c0483c6a1649de4c83bb1a45844ad"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -785,7 +785,7 @@ dependencies = [
 [[package]]
 name = "aivyx-route"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=d387a52bbcc3925064cab17c4e6b1964d044a66f#d387a52bbcc3925064cab17c4e6b1964d044a66f"
+source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=1ab893732e07daca13d37ea2a1695b229c058a20#1ab893732e07daca13d37ea2a1695b229c058a20"
 dependencies = [
  "futures-util",
  "reqwest 0.13.5",
@@ -820,7 +820,7 @@ dependencies = [
 [[package]]
 name = "aivyx-skills"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-skills?rev=4ee706e7b378f8da1792d320908f557fea270747#4ee706e7b378f8da1792d320908f557fea270747"
+source = "git+https://github.com/Aivyx-Agent/aivyx-skills?rev=ffaff98acf1bd32955e6abdb659444215218416e#ffaff98acf1bd32955e6abdb659444215218416e"
 dependencies = [
  "libc",
  "rust-embed",
@@ -850,7 +850,7 @@ dependencies = [
 [[package]]
 name = "aivyx-stencil"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-toolbench?rev=e939e61979278ef4a66b31aa4bcb5ac1b5d2d762#e939e61979278ef4a66b31aa4bcb5ac1b5d2d762"
+source = "git+https://github.com/Aivyx-Agent/aivyx-toolbench?rev=80d251f7b811a4570bd8912f0e82c0fc9feabb0f#80d251f7b811a4570bd8912f0e82c0fc9feabb0f"
 dependencies = [
  "serde",
  "serde_json",
@@ -1005,7 +1005,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-core"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=531aa7d6e61f095aa8132ea9c7696bff15c3e131#531aa7d6e61f095aa8132ea9c7696bff15c3e131"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=226663984b64fe2832afb58158b6ad9be1414c9e#226663984b64fe2832afb58158b6ad9be1414c9e"
 dependencies = [
  "async-trait",
  "thiserror 2.0.21",
@@ -1014,7 +1014,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-mold"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=531aa7d6e61f095aa8132ea9c7696bff15c3e131#531aa7d6e61f095aa8132ea9c7696bff15c3e131"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=226663984b64fe2832afb58158b6ad9be1414c9e#226663984b64fe2832afb58158b6ad9be1414c9e"
 dependencies = [
  "aivyx-vision-core",
  "async-trait",
@@ -1031,7 +1031,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-svg"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=531aa7d6e61f095aa8132ea9c7696bff15c3e131#531aa7d6e61f095aa8132ea9c7696bff15c3e131"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=226663984b64fe2832afb58158b6ad9be1414c9e#226663984b64fe2832afb58158b6ad9be1414c9e"
 dependencies = [
  "async-trait",
  "svg-hush",
@@ -1060,7 +1060,7 @@ dependencies = [
  "uuid 1.28.0",
  "voice-g2p",
  "whisper-rs",
- "zip 2.4.2",
+ "zip 9.1.3",
 ]
 
 [[package]]
@@ -1083,7 +1083,7 @@ dependencies = [
 [[package]]
 name = "aivyx-yubi"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-yubi?rev=0801cedc2a15b89491dda3a3f85a968d2b03b0b3#0801cedc2a15b89491dda3a3f85a968d2b03b0b3"
+source = "git+https://github.com/Aivyx-Agent/aivyx-yubi?rev=6dce9d40aa2698a36bbc62d18359a21a8ba79c9e#6dce9d40aa2698a36bbc62d18359a21a8ba79c9e"
 dependencies = [
  "card-backend",
  "card-backend-pcsc",
@@ -1245,9 +1245,6 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
-dependencies = [
- "derive_arbitrary",
-]
 
 [[package]]
 name = "archery"
@@ -2116,9 +2113,9 @@ dependencies = [
 
 [[package]]
 name = "calamine"
-version = "0.36.1"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3"
+checksum = "c9ca341b94bc4b29e08970b1a03914fad2dfe177e2ecb67fcd6de9046004aafb"
 dependencies = [
  "atoi_simd",
  "byteorder",
@@ -2128,7 +2125,7 @@ dependencies = [
  "log",
  "quick-xml",
  "serde",
- "zip 8.6.0",
+ "zip 9.1.3",
 ]
 
 [[package]]
@@ -3080,15 +3077,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0b1fab2ae45819af2d0731d60f2afe17227ebb1a1538a236da84c93e9a60162"
 dependencies = [
  "dispatch2",
- "nix 0.31.2",
+ "nix 0.31.3",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "ctutils"
-version = "0.4.2"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+checksum = "fe3e9d21d39e6f39ff46e03d5b621424f88ee23d8a1672c6bfc9ccc7f2da4f6a"
 dependencies = [
  "cmov",
 ]
@@ -3534,17 +3531,6 @@ name = "derive-new"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2cdc8d50f426189eef89dac62fabfa0abb27d5cc008f25bf4156a0203325becc"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "derive_arbitrary"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6058,7 +6044,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.6",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -6857,7 +6843,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "url",
- "webpki-roots 1.0.6",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -8237,9 +8223,9 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.31.2"
+version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d6d0705320c1e6ba1d912b5e37cf18071b6c2e9b7fa8215a1e8a7651966f5d3"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags 2.13.2",
  "cfg-if",
@@ -9019,7 +9005,7 @@ checksum = "9cf20a545b305cf1da722b236b5155c9bb35f1d5ceb28c048bd96ca842f41b5b"
 dependencies = [
  "android_system_properties",
  "log",
- "nix 0.31.2",
+ "nix 0.31.3",
  "objc2",
  "objc2-foundation",
  "objc2-ui-kit",
@@ -9779,9 +9765,9 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quick-xml"
-version = "0.41.0"
+version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
 dependencies = [
  "encoding_rs",
  "memchr",
@@ -10366,7 +10352,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams 0.4.2",
  "web-sys",
- "webpki-roots 1.0.6",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -10724,11 +10710,11 @@ dependencies = [
 
 [[package]]
 name = "rust_xlsxwriter"
-version = "0.79.4"
+version = "0.101.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c743cb9f2a4524676020e26ee5f298445a82d882b09956811b1e78ca7e42b440"
+checksum = "49aa1d1558e9465f5053bf9fb5361fe75db827c6a4423d5e5fe72096622f8908"
 dependencies = [
- "zip 2.4.2",
+ "zip 9.1.3",
 ]
 
 [[package]]
@@ -10781,9 +10767,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -10855,7 +10841,7 @@ dependencies = [
  "rustls-webpki",
  "security-framework 3.7.0",
  "security-framework-sys",
- "webpki-root-certs 1.0.6",
+ "webpki-root-certs 1.0.11",
  "windows-sys 0.61.2",
 ]
 
@@ -10867,9 +10853,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -12714,9 +12700,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -13391,6 +13377,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
+name = "typed-path"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13632,7 +13624,7 @@ dependencies = [
  "socks",
  "ureq-proto",
  "utf8-zero",
- "webpki-root-certs 1.0.6",
+ "webpki-root-certs 1.0.11",
 ]
 
 [[package]]
@@ -14108,14 +14100,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75c7f0ef91146ebfb530314f5f1d24528d7f0767efbfd31dce919275413e393e"
 dependencies = [
- "webpki-root-certs 1.0.6",
+ "webpki-root-certs 1.0.11",
 ]
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.6"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "804f18a4ac2676ffb4e8b5b5fa9ae38af06df08162314f96a68d2a363e21a8ca"
+checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -14126,14 +14118,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.6",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.6"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22cfaf3c063993ff62e73cb4311efde4db1efb31ab78a3e5c457939ad5cc0bed"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -15304,23 +15296,6 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "2.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
-dependencies = [
- "arbitrary",
- "crc32fast",
- "crossbeam-utils",
- "displaydoc",
- "flate2",
- "indexmap 2.14.2",
- "memchr",
- "thiserror 2.0.21",
- "zopfli",
-]
-
-[[package]]
-name = "zip"
 version = "7.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
@@ -15328,20 +15303,23 @@ dependencies = [
  "crc32fast",
  "indexmap 2.14.2",
  "memchr",
- "typed-path",
+ "typed-path 0.12.3",
 ]
 
 [[package]]
 name = "zip"
-version = "8.6.0"
+version = "9.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+checksum = "1156b39d142a34b999c2310a50455e0cb3760bf7efad0122f796d813bee26ccb"
 dependencies = [
  "crc32fast",
  "flate2",
+ "getrandom 0.4.3",
  "indexmap 2.14.2",
  "memchr",
- "typed-path",
+ "nix 0.31.3",
+ "typed-path 0.13.0",
+ "windows-sys 0.61.2",
  "zopfli",
 ]
 
