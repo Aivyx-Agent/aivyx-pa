@@ -5,6 +5,34 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.19.3] — 2026-10-29
+
+### Security
+
+- **A repository's own git settings can no longer steer the checkpoint
+  git.** The checkpoint git runs outside the sandbox on a repository that
+  the sandboxed agent can write. Settings planted in that repository could
+  make it run a program, snapshot files from outside the working folder, or
+  pick a planted checkpoint when restoring. The checkpoint git now works only
+  on its own folder with fixed settings, accepts a repository's config only
+  from an allow-list, refuses symlinks in its own git folders, and restores
+  only checkpoints it took itself (aivyx-checkpoint `a41da40`).
+- **The prompt-injection check now ignores invisible Unicode tag characters
+  and variation selectors** that could hide a known injection phrase from it
+  (aivyx-injection-guard `a506c9c`).
+- Dependency updates for RustSec advisories: rustls 0.23.46, rustls-webpki
+  0.103.16, the root-certificate bundles, quinn-proto 0.11.19, tokio 1.54,
+  ctutils; zip 9 for the spreadsheet readers and the Kokoro voice loader.
+
+### Changed
+
+- **When a repository's checkpoints are refused, pa says so.** A git
+  repository whose settings fall outside the allow-list has no checkpoints,
+  so changes there can't be undone or rolled back. pa now prints one warning
+  per folder naming the setting, and `aivyx-pa doctor` lists such folders
+  under "Checkpoints".
+- CI checks dependency advisories with cargo-deny and runs weekly.
+
 ## [0.19.2] — 2026-10-25
 
 ### Fixed
