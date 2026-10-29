@@ -635,6 +635,9 @@ impl ConcreteAgent {
     async fn turn_inner(&self, message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
         let turn_id = TurnId::new();
         let session_id = channel.session_id();
+        // The ledger of refused calls counts turns per session: this one is
+        // the "operator's reply" to whatever the previous turn refused.
+        self.confirms.begin_turn(session_id, turn_id);
         // Captured up front: `message` is consumed before the arming step.
         let origin = message.origin;
         let tier = channel.trust_tier();
@@ -1607,6 +1610,11 @@ impl ConcreteAgent {
             crate::Approval::Parked { .. } => "parked",
             crate::Approval::Unavailable => return None,
         };
+        // The operator was asked in-line and answered: whatever the refusal
+        // recorded for this call must not approve a later one (a "no" never
+        // pre-approves, a used "yes" is spent).
+        self.confirms
+            .forget_turn(env.channel.session_id(), env.turn_id, &tool_name);
         self.audit.on_event(AuditTag::ApprovalRequested {
             turn_id: env.turn_id,
             tool: tool_name.clone(),
@@ -1940,12 +1948,48 @@ impl ConcreteAgent {
         // The operator, not the model, confirms. For a confirm-first tool
         // (its schema declares `confirmed`) the flag is ours to set: true
         // only for an operator-approved re-run, or — where the channel
-        // can't ask — when the operator replied after an earlier refusal.
+        // can't ask — when the operator replied after an earlier refusal of
+        // this exact call (same tool, same arguments, same resolved target;
+        // see `confirm::OperatorConfirmations`).
         let confirm_first = crate::confirm::declares_confirmed(tool.input_schema());
+        let call_digest = crate::confirm::call_digest(tool.name(), &input, &needed.to_string());
+
+        // Why this call must ask first, if it must: a withheld integration
+        // write (confirm-first), or — at the `manual` autonomy level — any
+        // change in an operator's turn.
+        let ask_reason = if self.confirm_destructive
+            && aivyx_capability::is_withheld_integration_base(needed.base())
+        {
+            Some(format!(
+                "{tool_name_str} needs approval before it runs (`{}` is a third-party \
+                 action Aivyx PA never takes unasked).",
+                needed.base()
+            ))
+        } else if self.confirm_all.for_base(needed.base())
+            && message_origin == MessageOrigin::Operator
+            && !aivyx_capability::is_read_only_base(needed.base())
+        {
+            let area = needed.base().split('.').next().unwrap_or(needed.base());
+            Some(format!(
+                "{tool_name_str} would change something, and the autonomy level for `{area}` \
+                 is manual: every change there needs approval first."
+            ))
+        } else {
+            None
+        };
+
+        // One ledger lookup per call, consumed on use. A model-supplied
+        // `confirmed: true` is only a claim to check against it; it never
+        // skips a prompt by itself.
+        let wants_ledger = !operator_approved
+            && (ask_reason.is_some() || (confirm_first && crate::confirm::is_confirmed(&input)));
+        let ledger_hit = wants_ledger
+            && self
+                .confirms
+                .take_refusal(ctx.session_id, turn_id, tool.name(), call_digest);
+
         if confirm_first {
-            let operator_confirmed = operator_approved
-                || (crate::confirm::is_confirmed(&input)
-                    && self.confirms.take_refusal(ctx.session_id, turn_id, tool.name()));
+            let operator_confirmed = operator_approved || ledger_hit;
             if let Some(obj) = input.as_object_mut() {
                 obj.insert("confirmed".into(), serde_json::Value::Bool(operator_confirmed));
             }
@@ -2004,36 +2048,13 @@ impl ConcreteAgent {
         // resolution path — the operator approves (or doesn't) out of
         // band — the same mechanism any other escalating tool already
         // uses; this task does not invent a second one.
-        // The operator's reply is the approval: the first call escalates
-        // (the turn ends with the reason below), and in the operator's next
-        // turn this tool may run once. Plain chat has no approve-and-resume
-        // step, so without this the integration could never run at all.
-        // Why this call must ask first, if it must: a withheld integration
-        // write (confirm-first), or — at the `manual` autonomy level — any
-        // change in an operator's turn.
-        let ask_reason = if self.confirm_destructive
-            && aivyx_capability::is_withheld_integration_base(needed.base())
-        {
-            Some(format!(
-                "{tool_name} needs approval before it runs (`{}` is a third-party \
-                 action Aivyx PA never takes unasked).",
-                needed.base()
-            ))
-        } else if self.confirm_all.for_base(needed.base())
-            && message_origin == MessageOrigin::Operator
-            && !aivyx_capability::is_read_only_base(needed.base())
-        {
-            let area = needed.base().split('.').next().unwrap_or(needed.base());
-            Some(format!(
-                "{tool_name} would change something, and the autonomy level for `{area}` \
-                 is manual: every change there needs approval first."
-            ))
-        } else {
-            None
-        };
-        let ask_reason = ask_reason.filter(|_| {
-            !operator_approved && !self.confirms.take_refusal(ctx.session_id, turn_id, tool_name)
-        });
+        // (Task 4, HIGH, 2026-09-16 audit) The pre-dispatch gate for
+        // third-party-integration write/send/delete/archive scopes and for
+        // `manual` areas is `ask_reason` above: a third-party tool's schema
+        // has no `confirmed` property, so the gate always escalates unless
+        // the operator approved this exact call (in-line, or by replying
+        // after the refusal on a channel that can't ask).
+        let ask_reason = ask_reason.filter(|_| !operator_approved && !ledger_hit);
 
         let step_start = Instant::now();
         let mut outcome = if let Some(reason) = ask_reason {
@@ -2050,7 +2071,7 @@ impl ConcreteAgent {
         // Remember a refusal so that, on a channel that can't ask, the
         // operator's next message can approve it (see `seek_approval`).
         if matches!(outcome, ToolOutcome::RequiresEscalation { .. }) && !operator_approved {
-            self.confirms.record_refusal(ctx.session_id, turn_id, tool_name);
+            self.confirms.record_refusal(ctx.session_id, turn_id, tool_name, call_digest);
         }
 
         // Chapter Reins (RN.3) — stamp an escalation with the authoritative
@@ -8415,5 +8436,158 @@ mod tests {
                 .any(|e| matches!(e, AuditTag::EscalationArmed { .. }))
         );
         assert_eq!(kinds(plain_events), kinds(armed_audit.snapshot()));
+    }
+
+    // ---- Audit 2026-10-28 (scratch branch): the "operator replied" ledger ----
+
+    /// An agent whose n-th turn plays `plans[n]` (the last plan repeats).
+    fn per_turn_plans_agent(
+        caps: CapabilitySet,
+        tools: Vec<Arc<dyn Tool>>,
+        plans: Vec<Vec<NextStep>>,
+    ) -> ConcreteAgent {
+        let registry = Arc::new(ToolRegistry::new(tools));
+        let plans = Arc::new(plans);
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        ConcreteAgent::new(AgentId::new(), caps, registry, RecordingAudit::new(), move || {
+            let i = n.fetch_add(1, Ordering::SeqCst).min(plans.len() - 1);
+            Box::new(crate::planner::VecPlanner::new(plans[i].clone()))
+        })
+    }
+
+    /// P-A: a refusal for ONE call (`todo.md`) is remembered per tool NAME, so
+    /// in any later turn of the session a call with a different target and a
+    /// model-supplied `confirmed: true` runs without the operator ever having
+    /// been asked about that target.
+    #[tokio::test]
+    async fn audit_a_refusal_for_one_target_does_not_approve_another_target() {
+        let tool = ConfirmFirstTool::new();
+        let agent = per_turn_plans_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            vec![
+                delete_plan(tool.id, json!({"path": "todo.md"})),
+                delete_plan(tool.id, json!({"path": "/precious/thesis.tex", "confirmed": true})),
+            ],
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let first = agent.turn(Message::text(channel.session, "delete todo.md"), &channel).await;
+        assert!(matches!(first, TurnOutcome::Escalated { .. }), "{first:?}");
+        // The operator's next message is about something else entirely; the
+        // model (say, steered by a fetched page) deletes another file.
+        let second = agent
+            .turn(Message::text(channel.session, "no wait, summarise this page"), &channel)
+            .await;
+        assert!(
+            matches!(second, TurnOutcome::Escalated { .. }),
+            "a never-asked-about target must ask again, got {second:?}; ran with {:?}",
+            tool.ran_with.lock().unwrap()
+        );
+    }
+
+    /// P15: on a channel that asks in-line, a "no" must never pre-approve the
+    /// next call to the same tool, with other arguments or the same ones.
+    #[tokio::test]
+    async fn a_declined_prompt_does_not_pre_approve_a_later_call() {
+        let tool = ConfirmFirstTool::new();
+        let agent = per_turn_plans_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            vec![
+                delete_plan(tool.id, json!({"path": "a.txt"})),
+                delete_plan(tool.id, json!({"path": "b.txt", "confirmed": true})),
+                delete_plan(tool.id, json!({"path": "a.txt", "confirmed": true})),
+            ],
+        );
+        let channel = ApprovingChannel::new(&[
+            crate::Approval::Denied,
+            crate::Approval::Denied,
+            crate::Approval::Denied,
+        ]);
+        for text in ["delete a", "now delete b", "ok delete a again"] {
+            let out = agent.turn(Message::text(channel.session_id(), text), &channel).await;
+            assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        }
+        assert_eq!(channel.asked.lock().unwrap().len(), 3, "every call asked again");
+        assert!(
+            tool.ran_with.lock().unwrap().iter().all(|v| v["confirmed"] == json!(false)),
+            "nothing ran confirmed: {:?}",
+            tool.ran_with.lock().unwrap()
+        );
+    }
+
+    /// The reply-to-approve flow keeps working, bound to the exact call: the
+    /// refused call runs once in the operator's next turn, a repeat asks again.
+    #[tokio::test]
+    async fn the_replied_to_call_runs_once_and_a_repeat_asks_again() {
+        let tool = ConfirmFirstTool::new();
+        let agent = per_turn_plans_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            vec![
+                delete_plan(tool.id, json!({"path": "todo.md"})),
+                delete_plan(tool.id, json!({"path": "todo.md", "confirmed": true})),
+            ],
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let first = agent.turn(Message::text(channel.session, "delete todo.md"), &channel).await;
+        assert!(matches!(first, TurnOutcome::Escalated { .. }), "{first:?}");
+        let yes = agent.turn(Message::text(channel.session, "yes"), &channel).await;
+        assert!(matches!(yes, TurnOutcome::Completed { .. }), "{yes:?}");
+        let repeat = agent.turn(Message::text(channel.session, "again"), &channel).await;
+        assert!(matches!(repeat, TurnOutcome::Escalated { .. }), "{repeat:?}");
+    }
+
+    /// An unanswered ask is good for the operator's very next turn only.
+    #[tokio::test]
+    async fn an_unanswered_ask_is_not_approvable_two_turns_later() {
+        let tool = ConfirmFirstTool::new();
+        let noop = vec![NextStep::FinalMessage("hi".to_string())];
+        let agent = per_turn_plans_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            vec![
+                delete_plan(tool.id, json!({"path": "todo.md"})),
+                noop,
+                delete_plan(tool.id, json!({"path": "todo.md", "confirmed": true})),
+            ],
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let first = agent.turn(Message::text(channel.session, "delete todo.md"), &channel).await;
+        assert!(matches!(first, TurnOutcome::Escalated { .. }), "{first:?}");
+        let chat = agent.turn(Message::text(channel.session, "weather?"), &channel).await;
+        assert!(matches!(chat, TurnOutcome::Completed { .. }), "{chat:?}");
+        let late = agent.turn(Message::text(channel.session, "yes"), &channel).await;
+        assert!(matches!(late, TurnOutcome::Escalated { .. }), "{late:?}");
+    }
+
+    /// P-A (ask path): same for a withheld integration write. One unanswered
+    /// refusal of `email.send` to alice lets the next turn send to anyone.
+    #[tokio::test]
+    async fn audit_a_refused_send_to_one_recipient_does_not_approve_another() {
+        let tool = Arc::new(FakeTool::new_bare("gmail.send", "email.send"));
+        let tool_id = tool.id();
+        let call = |to: &str| {
+            vec![
+                NextStep::ToolCall {
+                    tool_id,
+                    input: json!({"to": to}),
+                    auto_corrected_from: None,
+                    extracted_from_text: None,
+                },
+                NextStep::FinalMessage("done".to_string()),
+            ]
+        };
+        let caps = CapabilitySet::from_scopes([Scope::parse("email.send").unwrap()]);
+        let agent = per_turn_plans_agent(caps, vec![tool], vec![call("alice@example.com"), call("attacker@evil.example")])
+            .with_confirm_integration_writes(true);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let first = agent.turn(Message::text(channel.session, "mail alice"), &channel).await;
+        assert!(matches!(first, TurnOutcome::Escalated { .. }), "{first:?}");
+        let second = agent.turn(Message::text(channel.session, "never mind, what's the weather"), &channel).await;
+        assert!(
+            matches!(second, TurnOutcome::Escalated { .. }),
+            "a send to a different recipient must ask again, got {second:?}"
+        );
     }
 }

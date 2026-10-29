@@ -4,15 +4,18 @@
 //! order) runs only with `confirmed: true`, which the model is told to set
 //! after the operator approves. Nothing stopped a model from setting it on
 //! its first call. [`OperatorConfirmations`] closes that: `confirmed: true`
-//! only counts for a target the tool refused in an EARLIER turn of the same
-//! session. The tool can't read the operator's answer, but the model can't
-//! skip asking — it has to end its turn, and only the operator's next
-//! message starts a turn in which the confirmed call goes through.
+//! only counts for the exact call (tool + arguments + resolved target) that
+//! was refused in the turn just before, in the same session. The tool can't
+//! read the operator's answer, but the model can't skip asking — it has to
+//! end its turn, and only the operator's next message starts a turn in which
+//! that same call goes through, once.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::{SessionId, TurnId};
 
@@ -21,36 +24,160 @@ pub const ASK_THEN_END_TURN: &str = "Ask the operator and END YOUR TURN; only if
      in their next message, call again with `confirmed: true`. A confirmation in the same \
      turn as the refusal is not accepted.";
 
-/// Per-tool memory of refused confirm-first calls, keyed by session and a
-/// tool-chosen target (a resolved path, a repo, a skill name, …).
+/// How long a remembered refusal stays approvable, whatever happens.
+pub const APPROVAL_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+/// What a refused call is remembered by: the session, the tool, and a digest
+/// of the exact call (its canonical arguments without `confirmed`, plus the
+/// resolved scope the tool derived from them).
+type CallKey = (SessionId, String, [u8; 32]);
+
+#[derive(Debug)]
+struct Pending {
+    /// The session's turn index when the refusal was recorded.
+    epoch: u64,
+    turn: TurnId,
+    at: Instant,
+}
+
 #[derive(Debug, Default)]
-pub struct OperatorConfirmations(Mutex<HashMap<(SessionId, String), TurnId>>);
+struct Inner {
+    /// Per session: the latest turn seen and how many turns have begun.
+    epochs: HashMap<SessionId, (TurnId, u64)>,
+    refused: HashMap<CallKey, Pending>,
+}
+
+/// Memory of refused calls that cannot be asked about in-line, so the
+/// operator's next message may approve exactly that call.
+///
+/// An entry is bound to (session, tool, digest of the call) and:
+/// - counts only in the turn right after the one that recorded it (the
+///   operator's reply), never in the same turn and never later;
+/// - expires after [`APPROVAL_WINDOW`];
+/// - is consumed by use: one approval, one run;
+/// - is forgotten when the operator was asked in-line (an explicit "no" must
+///   never pre-approve anything, and neither may an answered "yes").
+///
+/// A different call to the same tool has a different digest and asks again.
+#[derive(Debug, Default)]
+pub struct OperatorConfirmations(Mutex<Inner>);
+
+/// The digest that identifies a call: tool name, the arguments with
+/// `confirmed` removed (keys sorted, so it is canonical), and the resolved
+/// scope string.
+pub fn call_digest(tool: &str, input: &Value, resolved_scope: &str) -> [u8; 32] {
+    fn canon(v: &Value, out: &mut String) {
+        match v {
+            Value::Object(m) => {
+                let mut keys: Vec<&String> = m.keys().collect();
+                keys.sort();
+                out.push('{');
+                for k in keys {
+                    out.push_str(&Value::String(k.clone()).to_string());
+                    out.push(':');
+                    canon(&m[k], out);
+                    out.push(',');
+                }
+                out.push('}');
+            }
+            Value::Array(a) => {
+                out.push('[');
+                for x in a {
+                    canon(x, out);
+                    out.push(',');
+                }
+                out.push(']');
+            }
+            other => out.push_str(&other.to_string()),
+        }
+    }
+    let mut args = input.clone();
+    if let Some(obj) = args.as_object_mut() {
+        obj.remove("confirmed");
+    }
+    let mut text = String::new();
+    canon(&args, &mut text);
+    let mut h = Sha256::new();
+    h.update(tool.as_bytes());
+    h.update([0]);
+    h.update(resolved_scope.as_bytes());
+    h.update([0]);
+    h.update(text.as_bytes());
+    h.finalize().into()
+}
 
 impl OperatorConfirmations {
-    /// Remember that `target` was refused in `turn` (the first refusal wins,
-    /// so a later refusal in the same turn doesn't move it forward).
-    pub fn record_refusal(&self, session: SessionId, turn: TurnId, target: &str) {
-        let Ok(mut refused) = self.0.lock() else { return };
-        // Bounded: stale refusals are cheap to forget — the cost is one more
-        // "please confirm" round, never a silent run.
-        if refused.len() > 1024 {
-            refused.clear();
+    /// A turn begins in `session`. Entries recorded in the previous turn
+    /// become approvable (this one is "the operator's reply"); older ones
+    /// are dead.
+    pub fn begin_turn(&self, session: SessionId, turn: TurnId) {
+        let Ok(mut inner) = self.0.lock() else { return };
+        if inner.epochs.len() > 1024 {
+            // Forget everything: the cost is one more "please confirm".
+            inner.epochs.clear();
+            inner.refused.clear();
         }
-        refused.entry((session, target.to_string())).or_insert(turn);
+        let e = inner.epochs.entry(session).or_insert((turn, 0));
+        if e.0 != turn {
+            *e = (turn, e.1 + 1);
+        }
+        let epochs = inner.epochs.clone();
+        inner.refused.retain(|(s, _, _), p| {
+            epochs.get(s).is_some_and(|(_, now)| *now <= p.epoch + 1)
+        });
     }
 
-    /// Whether `target` was refused in an EARLIER turn of `session` — i.e. the
-    /// operator has replied since. Consumes the record: one approval, one run.
-    pub fn take_refusal(&self, session: SessionId, turn: TurnId, target: &str) -> bool {
-        let Ok(mut refused) = self.0.lock() else { return false };
-        let key = (session, target.to_string());
-        match refused.get(&key) {
-            Some(t) if *t != turn => {
-                refused.remove(&key);
+    fn epoch(inner: &Inner, session: SessionId, turn: TurnId) -> u64 {
+        match inner.epochs.get(&session) {
+            Some((t, n)) if *t == turn => *n,
+            // A turn that never called `begin_turn` (a resumed approved
+            // call): it is not a reply to anything.
+            Some((_, n)) => n + 1,
+            None => 0,
+        }
+    }
+
+    /// Remember that this exact call was refused in `turn` (the first refusal
+    /// of a call wins, so a repeat in the same turn doesn't move it forward).
+    pub fn record_refusal(&self, session: SessionId, turn: TurnId, tool: &str, digest: [u8; 32]) {
+        let Ok(mut inner) = self.0.lock() else { return };
+        if inner.refused.len() > 1024 {
+            inner.refused.clear();
+        }
+        let epoch = Self::epoch(&inner, session, turn);
+        inner
+            .refused
+            .entry((session, tool.to_string(), digest))
+            .or_insert(Pending { epoch, turn, at: Instant::now() });
+    }
+
+    /// Whether this exact call was refused in the PREVIOUS turn of `session`,
+    /// within the window: the operator has replied since. Consumes the entry.
+    pub fn take_refusal(&self, session: SessionId, turn: TurnId, tool: &str, digest: [u8; 32]) -> bool {
+        let Ok(mut inner) = self.0.lock() else { return false };
+        let key = (session, tool.to_string(), digest);
+        let now = Self::epoch(&inner, session, turn);
+        match inner.refused.get(&key) {
+            Some(p) if p.epoch + 1 == now && p.turn != turn && p.at.elapsed() <= APPROVAL_WINDOW => {
+                inner.refused.remove(&key);
                 true
+            }
+            Some(p) if p.epoch + 1 < now || p.at.elapsed() > APPROVAL_WINDOW => {
+                inner.refused.remove(&key);
+                false
             }
             _ => false,
         }
+    }
+
+    /// The operator was asked in-line about a call of `tool` in `turn` and
+    /// answered (yes, no, timeout, parked): drop what this turn recorded for
+    /// that tool, so neither a "no" nor a used "yes" approves a later call.
+    pub fn forget_turn(&self, session: SessionId, turn: TurnId, tool: &str) {
+        let Ok(mut inner) = self.0.lock() else { return };
+        inner
+            .refused
+            .retain(|(s, t, _), p| !(*s == session && t == tool && p.turn == turn));
     }
 }
 
@@ -81,16 +208,64 @@ pub fn target_of(input: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn d(input: Value) -> [u8; 32] {
+        call_digest("fs.delete", &input, "fs.write")
+    }
+
+    /// Begin turns the way the agent does and return the new turn id.
+    fn turn(l: &OperatorConfirmations, s: SessionId) -> TurnId {
+        let t = TurnId::new();
+        l.begin_turn(s, t);
+        t
+    }
 
     #[test]
-    fn a_refusal_counts_only_in_a_later_turn_of_the_same_session() {
-        let ledger = OperatorConfirmations::default();
-        let (s, t1, t2) = (SessionId::new(), TurnId::new(), TurnId::new());
-        assert!(!ledger.take_refusal(s, t1, "fs.delete"), "nothing recorded yet");
-        ledger.record_refusal(s, t1, "fs.delete");
-        assert!(!ledger.take_refusal(s, t1, "fs.delete"), "same turn doesn't count");
-        assert!(!ledger.take_refusal(SessionId::new(), t2, "fs.delete"), "other session");
-        assert!(ledger.take_refusal(s, t2, "fs.delete"), "the operator's next turn");
-        assert!(!ledger.take_refusal(s, TurnId::new(), "fs.delete"), "consumed: one run");
+    fn a_refusal_approves_only_the_same_call_in_the_next_turn_once() {
+        let l = OperatorConfirmations::default();
+        let s = SessionId::new();
+        let (a, b) = (d(json!({"path": "a"})), d(json!({"path": "b"})));
+        let t1 = turn(&l, s);
+        assert!(!l.take_refusal(s, t1, "fs.delete", a), "nothing recorded yet");
+        l.record_refusal(s, t1, "fs.delete", a);
+        assert!(!l.take_refusal(s, t1, "fs.delete", a), "same turn doesn't count");
+        let t2 = turn(&l, s);
+        assert!(!l.take_refusal(s, t2, "fs.delete", b), "other arguments ask again");
+        assert!(!l.take_refusal(SessionId::new(), t2, "fs.delete", a), "other session");
+        assert!(l.take_refusal(s, t2, "fs.delete", a), "the operator's next turn");
+        assert!(!l.take_refusal(s, t2, "fs.delete", a), "consumed: one run");
+    }
+
+    #[test]
+    fn confirmed_flag_and_key_order_do_not_change_the_digest() {
+        let a = d(json!({"path": "x", "mode": 1}));
+        assert_eq!(a, d(json!({"mode": 1, "path": "x", "confirmed": true})));
+        assert_ne!(a, d(json!({"path": "y", "mode": 1})));
+        assert_ne!(a, call_digest("fs.delete", &json!({"path": "x", "mode": 1}), "fs.read"));
+    }
+
+    #[test]
+    fn a_refusal_expires_after_one_turn() {
+        let l = OperatorConfirmations::default();
+        let s = SessionId::new();
+        let a = d(json!({"path": "a"}));
+        let t1 = turn(&l, s);
+        l.record_refusal(s, t1, "fs.delete", a);
+        let _unrelated = turn(&l, s);
+        let t3 = turn(&l, s);
+        assert!(!l.take_refusal(s, t3, "fs.delete", a), "two turns later is too late");
+    }
+
+    #[test]
+    fn an_answered_prompt_forgets_the_refusal() {
+        let l = OperatorConfirmations::default();
+        let s = SessionId::new();
+        let a = d(json!({"path": "a"}));
+        let t1 = turn(&l, s);
+        l.record_refusal(s, t1, "fs.delete", a);
+        l.forget_turn(s, t1, "fs.delete");
+        let t2 = turn(&l, s);
+        assert!(!l.take_refusal(s, t2, "fs.delete", a));
     }
 }
