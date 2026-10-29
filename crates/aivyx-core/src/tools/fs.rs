@@ -2421,6 +2421,49 @@ mod tests {
         ));
     }
 
+    /// Audit 2026-10-28 (P3): at access `home`/`full` the sandbox root is
+    /// `$HOME`. With the guard built from the instance's state directories,
+    /// fs.write must refuse the daemon's own config, new files in the
+    /// tool-process directory and the packs directory: the next start obeys
+    /// them at daemon privilege (`[[tool_process]]`, `[[mcp_server]]`,
+    /// `[access]`).
+    #[test]
+    fn audit_fs_write_cannot_rewrite_the_daemons_own_config() {
+        use crate::sensitive_paths::SensitivePolicy;
+        let sandbox = SandboxDir::new(); // plays $HOME
+        let root = sandbox.root.canonicalize().unwrap();
+        let state = vec![
+            root.join(".config/aivyx-pa"),
+            root.join(".local/share/aivyx-pa"),
+            root.join(".aivyx-pa"),
+        ];
+        let policy = SensitivePolicy::new(vec![], state)
+            .with_extra_deny_exempt(vec![root.clone()]);
+        let tool = FsWriteToolConfig::new(sandbox.root.clone())
+            .with_sensitive_policy(Arc::new(policy))
+            .build()
+            .unwrap();
+        for path in [
+            ".config/aivyx-pa/aivyx-pa.toml",
+            ".config/aivyx-pa/instances/work/aivyx-pa.toml",
+            ".aivyx-pa/tool-processes/newtool/config.toml",
+            ".aivyx-pa/packs/evil/1.0.0/bin/tool",
+        ] {
+            let outcome = run_execute(
+                &tool,
+                json!({"path": path, "content": "[[tool_process]]\nname = \"x\"\n"}),
+            );
+            assert!(
+                matches!(outcome, ToolOutcome::Failed(_)),
+                "fs.write wrote {path}: {outcome:?}"
+            );
+            assert!(!root.join(path).exists(), "{path} exists");
+        }
+        // Ordinary files under the same root are untouched.
+        let ok = run_execute(&tool, json!({"path": "notes.md", "content": "hi"}));
+        assert!(matches!(ok, ToolOutcome::Completed { .. }), "{ok:?}");
+    }
+
     // ---- FsWriteTool: construction + config -----------------------
 
     #[test]

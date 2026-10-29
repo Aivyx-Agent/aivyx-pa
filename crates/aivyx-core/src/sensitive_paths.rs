@@ -120,6 +120,11 @@ pub struct SensitivePolicy {
     allow: Vec<PathBuf>,
     /// Extra path prefixes the operator marks secret beyond the built-ins.
     extra_deny: Vec<PathBuf>,
+    /// Folders the agent legitimately works in that sit INSIDE an
+    /// `extra_deny` prefix (the default workspace lives under `~/.aivyx-pa`).
+    /// A path under one is not matched by the extra-deny prefix that holds
+    /// the folder; the built-in rules still apply to it.
+    extra_deny_exempt: Vec<PathBuf>,
 }
 
 impl SensitivePolicy {
@@ -131,7 +136,16 @@ impl SensitivePolicy {
             enabled: true,
             allow,
             extra_deny,
+            extra_deny_exempt: Vec::new(),
         }
+    }
+
+    /// Carve working folders out of the extra-deny prefixes that contain
+    /// them. An exempt folder only lifts a prefix that holds it: exempting
+    /// `$HOME` never unprotects a state directory inside `$HOME`.
+    pub fn with_extra_deny_exempt(mut self, exempt: Vec<PathBuf>) -> Self {
+        self.extra_deny_exempt = exempt;
+        self
     }
 
     /// A disabled guard — every path is allowed. Used when the operator sets
@@ -141,6 +155,7 @@ impl SensitivePolicy {
             enabled: false,
             allow: Vec::new(),
             extra_deny: Vec::new(),
+            extra_deny_exempt: Vec::new(),
         }
     }
 
@@ -173,7 +188,13 @@ impl SensitivePolicy {
         if self.allow.iter().any(|a| canonical.starts_with(a)) {
             return None;
         }
-        if let Some(hit) = self.extra_deny.iter().find(|d| canonical.starts_with(d)) {
+        if let Some(hit) = self.extra_deny.iter().find(|d| {
+            canonical.starts_with(d)
+                && !self
+                    .extra_deny_exempt
+                    .iter()
+                    .any(|e| canonical.starts_with(e) && e.starts_with(d))
+        }) {
             return Some(format!(
                 "operator-marked sensitive path ({})",
                 hit.display()
@@ -386,5 +407,54 @@ mod tests {
                 .classify(Path::new("/home/alice/.aws/credentials"))
                 .is_none()
         );
+    }
+
+    /// Audit 2026-10-28 (P3): `shell.exec`'s confiner denies every
+    /// instance's config/state dirs and `~/.aivyx-pa`; `fs.write` /
+    /// `fs.delete` consult this policy, which must deny the same set, so the
+    /// agent cannot rewrite the daemon's own config (tool-process and MCP
+    /// commands, access level, autonomy), team config, installed tool packs
+    /// or tool-process settings, all of which the next daemon start obeys at
+    /// daemon privilege. The binary builds the list from `InstancePaths`.
+    #[test]
+    fn audit_portcullis_covers_the_daemons_own_config_and_tool_binaries() {
+        let g = SensitivePolicy::new(
+            vec![],
+            vec![
+                PathBuf::from("/home/alice/.config/aivyx-pa"),
+                PathBuf::from("/home/alice/.local/share/aivyx-pa"),
+                PathBuf::from("/home/alice/.aivyx-pa"),
+            ],
+        );
+        let writable: Vec<&str> = [
+            "/home/alice/.config/aivyx-pa/aivyx-pa.toml",
+            "/home/alice/.config/aivyx-pa/instances/work/aivyx-pa.toml",
+            "/home/alice/.config/aivyx-pa/team.toml",
+            "/home/alice/.aivyx-pa/packs/evil/1.0.0/bin/tool",
+            "/home/alice/.aivyx-pa/tool-processes/gmail/config.toml",
+            "/home/alice/.aivyx-pa/tool-processes/brand-new/config.toml",
+        ]
+        .into_iter()
+        .filter(|p| g.classify_write(Path::new(p)).is_none())
+        .collect();
+        assert!(
+            writable.is_empty(),
+            "fs.write may overwrite the daemon's own config / tool binaries: {writable:?}"
+        );
+    }
+
+    #[test]
+    fn an_exempt_working_folder_is_lifted_only_from_the_prefix_that_holds_it() {
+        let g = SensitivePolicy::new(vec![], vec![PathBuf::from("/home/alice/.aivyx-pa")])
+            .with_extra_deny_exempt(vec![PathBuf::from("/home/alice/.aivyx-pa/workspace")]);
+        assert!(g.classify_write(Path::new("/home/alice/.aivyx-pa/workspace/notes.md")).is_none());
+        assert!(g.classify_write(Path::new("/home/alice/.aivyx-pa/packs/x/bin/t")).is_some());
+        // The built-in rules still apply inside the exempt folder.
+        assert!(g.classify_write(Path::new("/home/alice/.aivyx-pa/workspace/.env")).is_some());
+        // A root that merely CONTAINS the state dir never lifts it.
+        let g = SensitivePolicy::new(vec![], vec![PathBuf::from("/home/alice/.aivyx-pa")])
+            .with_extra_deny_exempt(vec![PathBuf::from("/home/alice"), PathBuf::from("/")]);
+        assert!(g.classify_write(Path::new("/home/alice/.aivyx-pa/aivyx-pa.toml")).is_some());
+        assert!(g.classify(Path::new("/home/alice/.aivyx-pa/tool-processes/proton/cred")).is_some());
     }
 }

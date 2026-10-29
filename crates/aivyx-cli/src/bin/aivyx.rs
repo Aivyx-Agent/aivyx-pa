@@ -6816,18 +6816,84 @@ fn shell_confine_deny_paths(
     deny
 }
 
-/// Ward's extra-deny list: paths the agent's read (and shell) tools must
-/// never reach on top of the built-in secret set — the kvcache store and
-/// the Studio's automatic token (first-run coherence A2), so an agent can't
-/// read the token and sign itself into the Studio's control plane.
+/// Ward's extra-deny list: paths the agent's file tools must never reach on
+/// top of the built-in secret set, for reads AND writes (Portcullis shares
+/// the list):
+///
+/// - the kvcache store and the Studio's automatic token (first-run coherence
+///   A2), so an agent can't read the token and sign itself into the Studio's
+///   control plane;
+/// - every instance's config, data, `~/.aivyx-pa` (packs, tool-process
+///   directories and their credentials) and runtime directories, built from
+///   `InstancePaths` like the shell confiner's list. The next daemon start
+///   obeys what is written there at daemon privilege (`[[tool_process]]`,
+///   `[[mcp_server]]`, `[access] level`, `[autonomy]`, installed tool-pack
+///   binaries), so a file tool that could write them would let the agent
+///   widen its own reach (audit 2026-10-28, P3). This holds at every access
+///   level, for creating new files as well as overwriting.
+///
+/// The agent's own working folders inside those directories (the default
+/// workspace is `~/.aivyx-pa/workspace`) are carved out with
+/// [`SensitivePolicy::with_extra_deny_exempt`] by the caller.
 fn ward_extra_deny(
     kvcache_store_path: &std::path::Path,
     studio_token_path: &std::path::Path,
 ) -> Vec<std::path::PathBuf> {
-    vec![
+    let instance = aivyx_instance::InstancePaths::current();
+    if let Err(e) = &instance {
+        eprintln!(
+            "aivyx-pa: warning: can't resolve the instance folders ({e}); the file tools' \
+             guard denies only the kvcache store and Studio token"
+        );
+    }
+    ward_extra_deny_for(kvcache_store_path, studio_token_path, instance.ok().as_ref())
+}
+
+fn ward_extra_deny_for(
+    kvcache_store_path: &std::path::Path,
+    studio_token_path: &std::path::Path,
+    instance: Option<&aivyx_instance::InstancePaths>,
+) -> Vec<std::path::PathBuf> {
+    let mut deny = vec![
         kvcache_store_path.to_path_buf(),
         studio_token_path.to_path_buf(),
-    ]
+    ];
+    if let Some(instance) = instance {
+        deny.extend(instance.all_instances_state_dirs());
+    }
+    // Resolved spellings too: the guard classifies canonical paths.
+    let resolved: Vec<std::path::PathBuf> = deny
+        .iter()
+        .filter_map(|d| std::fs::canonicalize(d).ok())
+        .filter(|c| !deny.contains(c))
+        .collect();
+    deny.extend(resolved);
+    deny
+}
+
+/// The working folders [`ward_extra_deny`] lifts when they sit inside a
+/// denied state folder: the file tools' root, the agent's personal workspace,
+/// and the folder generated images land in. Each in both spellings (raw and
+/// symlink-resolved), since the guard classifies canonical paths.
+fn ward_extra_deny_exempt(
+    fs_root: &std::path::Path,
+    workspace_root: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let vision_output = aivyx_instance::InstancePaths::current()
+        .ok()
+        .and_then(|i| i.home_data_dir())
+        .map(|d| d.join("vision"));
+    let mut out = Vec::new();
+    for p in [Some(fs_root), workspace_root, vision_output.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        out.push(p.to_path_buf());
+        if let Ok(c) = std::fs::canonicalize(p) {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)] // Startup wiring; bundling deferred to SDK phase
@@ -7990,6 +8056,9 @@ async fn run_async(
             allow_sensitive_paths.clone(),
             ward_extra_deny(&kvcache_store_path, &studio_token_path),
         )
+        // The agent's own working folders (the file tools' root, the personal
+        // workspace) stay usable when they sit inside a denied state folder.
+        .with_extra_deny_exempt(ward_extra_deny_exempt(&fs_root, workspace_root.as_deref()))
     } else {
         aivyx_core::sensitive_paths::SensitivePolicy::disabled()
     });
@@ -16833,6 +16902,57 @@ mod tests {
             overridden_guard.classify(&default_path).is_none(),
             "once overridden, the stale default path must no longer be the one protected"
         );
+    }
+
+    /// Audit 2026-10-28 (P3): the file tools' guard denies the daemon's own
+    /// config, packs and tool-process directories for every instance, at
+    /// every access level, for new files as well as overwrites, while the
+    /// agent's own workspace inside `~/.aivyx-pa` stays usable.
+    #[test]
+    fn file_tool_guard_denies_the_daemons_own_state_but_not_the_workspace() {
+        use aivyx_instance::{BaseDirs, InstanceName, InstancePaths};
+        let home = std::env::temp_dir().join(format!("aivyx-ward-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".aivyx-pa/workspace")).unwrap();
+        let dirs = BaseDirs {
+            home: Some(home.clone()),
+            xdg_config_home: None,
+            xdg_data_home: None,
+            xdg_runtime_dir: None,
+        };
+        let work = InstancePaths::new(InstanceName::parse("work").unwrap(), dirs);
+        let deny = ward_extra_deny_for(
+            &home.join(".local/share/aivyx-pa/kvcache"),
+            &home.join(".aivyx-pa/studio-token"),
+            Some(&work),
+        );
+        for (level_root, label) in [(home.clone(), "home"), (std::path::PathBuf::from("/"), "full")] {
+            let guard = aivyx_core::sensitive_paths::SensitivePolicy::new(Vec::new(), deny.clone())
+                .with_extra_deny_exempt(vec![level_root, home.join(".aivyx-pa/workspace")]);
+            for p in [
+                ".config/aivyx-pa/aivyx-pa.toml",
+                ".config/aivyx-pa/instances/work/aivyx-pa.toml",
+                ".config/aivyx-pa/team.toml",
+                ".aivyx-pa/packs/new-pack/1.0.0/bin/tool",
+                ".aivyx-pa/tool-processes/brand-new/config.toml",
+                ".aivyx-pa/instances/work/tool-processes/gmail/config.toml",
+            ] {
+                assert!(
+                    guard.classify_write(&home.join(p)).is_some(),
+                    "{label}: a write to {p} must be refused"
+                );
+            }
+            assert!(
+                guard.classify(&home.join(".aivyx-pa/tool-processes/proton/credential")).is_some(),
+                "{label}: reads of tool-process credentials must be refused"
+            );
+            assert!(
+                guard.classify_write(&home.join(".aivyx-pa/workspace/notes.md")).is_none(),
+                "{label}: the agent's workspace stays writable"
+            );
+            assert!(guard.classify_write(&home.join("project/src/main.rs")).is_none());
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
