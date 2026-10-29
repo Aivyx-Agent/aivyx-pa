@@ -6299,8 +6299,9 @@ fn warn_checkpoints_refused_once(root: &std::path::Path, reason: &str) {
     if first {
         eprintln!(
             "aivyx-pa: warning: checkpoints are off for {}, so agent changes there can't be \
-             undone or rolled back: {reason}",
-            root.display()
+             undone or rolled back: {}",
+            root.display(),
+            doctor::shown_checkpoint_reason(reason)
         );
     }
 }

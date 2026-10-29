@@ -147,12 +147,27 @@ async fn check_checkpoints(cfg: &AivyxConfig) {
     }
 }
 
+/// A checkpoint refusal reason as it may reach a terminal: control
+/// characters (escape sequences, newlines) dropped, cut to 300 characters
+/// so a long list of settings stays one readable line.
+pub(crate) fn shown_checkpoint_reason(reason: &str) -> String {
+    const MAX_CHARS: usize = 300;
+    let clean: String = reason.chars().filter(|c| !c.is_control()).collect();
+    let clean = clean.trim();
+    let mut detail: String = clean.chars().take(MAX_CHARS).collect();
+    if clean.chars().count() > MAX_CHARS {
+        detail.push('…');
+    }
+    detail
+}
+
 /// One doctor line for a refused repository.
 fn checkpoints_refused_line(root: &Path, reason: &str) -> String {
     format!(
         "checkpoints are off for {}, so agent changes there can't be undone or rolled back: \
-         {reason}",
-        root.display()
+         {}",
+        root.display(),
+        shown_checkpoint_reason(reason)
     )
 }
 
@@ -1171,6 +1186,17 @@ mod tests {
         assert!(line.contains("core.sshcommand"), "{line}");
         assert!(line.contains("undone"), "{line}");
         assert!(!line.contains("SECRET-VALUE"), "{line}");
+    }
+
+    #[test]
+    fn a_checkpoint_reason_is_stripped_of_control_characters_and_cut() {
+        let line = checkpoints_refused_line(
+            Path::new("/r"),
+            &format!("bad\u{1b}[2K\nsetting {}", "x".repeat(1000)),
+        );
+        assert!(!line.contains('\u{1b}') && !line.contains('\n'), "{line:?}");
+        assert!(line.ends_with('…'), "{line}");
+        assert!(line.chars().count() < 450, "{}", line.chars().count());
     }
 
     #[test]

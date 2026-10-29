@@ -284,7 +284,7 @@ crossterm = "0.29"
 # outright (E0425). The only one of the four shipped targets
 # aivyx-confine had never actually been cross-compiled for before --
 # it wasn't adopted until 2026-08-17, after aivyx's last real release.
-aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "7de5380de0b861e47d51d56342b521b75f194c34", default-features = false }
+aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "e4b604e2dfa90a87cb1a6ccb0bb627cda00b3fe8", default-features = false }
 
 # Shared git-ref checkpoint/rollback for fs_root's mutating tools
 # (fs.write, fs.delete, shell.exec), adopted from the sibling aivyx-coder
@@ -303,7 +303,7 @@ aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "7
 # `.git/config`, the checkpointer's own git invocation won't run it.
 # Defense in depth alongside the tool-level `.git`-write block in
 # `aivyx-core::tools::fs::touches_git_metadata`.
-aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "a41da4090a99813c95d69361f94504f07bca52cb" }
+aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "55f4c93ee87c593f58b5e0ca206263cead98f20d" }
 
 # KV-cache persistence against a llama-server backend (LlmPlanner/
 # SpecialistFactory `with_kv_cache`), adopted from the sibling aivyx-coder
@@ -335,7 +335,7 @@ aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "6dce9d4
 # aivyx-confine/aivyx-kvcache above. No platform-specific backend, so no
 # default-features/target-gating split is needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "a506c9c961b82715806bdec67e53704f1a11ed8d" }
+aivyx-injection-guard = { git = "https://github.com/Aivyx-Agent/aivyx-injection-guard", rev = "a3eb989ea86b4784a3bd118d21530c5731ae21f6" }
 aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "ffaff98acf1bd32955e6abdb659444215218416e" }
 
 # Task-aware model routing (capability matching, tiering, discovery),
@@ -348,7 +348,7 @@ aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "1ab89
 # Extracted from crates/aivyx-pack into its own repo 2026-10-07. Not on
 # crates.io — pinned by commit SHA, same as the shared crates above.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "eedbf350820c0483c6a1649de4c83bb1a45844ad" }
+aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "aec62513f35e20ffc59bbc45e299bc8f3a7127f1" }
 
 # Shared tool-call grammar (Chapters Stencil/Emboss), extracted 2026-10-18.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
@@ -365,9 +365,9 @@ aivyx-stencil = { git = "https://github.com/Aivyx-Agent/aivyx-toolbench", rev = 
 # out of lockstep with each other. No platform-specific backend, so no
 # target-gating needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "226663984b64fe2832afb58158b6ad9be1414c9e" }
-aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "226663984b64fe2832afb58158b6ad9be1414c9e" }
-aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "226663984b64fe2832afb58158b6ad9be1414c9e" }
+aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "070189478d27bc4a04210d9c850c72fab02d8a6a" }
+aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "070189478d27bc4a04210d9c850c72fab02d8a6a" }
+aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "070189478d27bc4a04210d9c850c72fab02d8a6a" }
 
 # The profile that 'dist' will build with
 [profile.dist]

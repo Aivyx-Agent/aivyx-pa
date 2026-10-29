@@ -102,10 +102,12 @@ ignore = [
 
     # paste — RUSTSEC-2024-0436 (unmaintained proc-macro). Pulled via
     #   paste → frankenstein (+ macro_rules_attribute) → aivyx-telegram
+    #   paste → gemm → candle-core → candle-nn → mistralrs → aivyx-llm
+    #     (all-features graph: the local-model stack)
     # frankenstein is our Telegram Bot API wrapper; a 0.50 bump may drop
     # it, deferred to the Channel Activation Milestone (Telegram can't be
     # live-verified outside it). Not vulnerable.
-    { id = "RUSTSEC-2024-0436", reason = "unmaintained, not vulnerable; transitive under frankenstein (aivyx-telegram); revisit at the frankenstein 0.50 bump" },
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained, not vulnerable; transitive under frankenstein (aivyx-telegram) and under gemm/candle-core (mistralrs → aivyx-llm); revisit when both frankenstein and candle drop paste" },
 
     # ── aivyx-desktop GTK3 webview stack ──────────────────────────────
     # The native desktop app (crates/aivyx-desktop) is a thin wry + tao
@@ -161,9 +163,11 @@ ignore = [
     # zbus 4.4.0 stack — RUSTSEC-2026-0370 (zvariant), 0371 (zbus_names),
     # 0372 (zvariant_derive), all unmaintained. Pulled via
     #   zbus 4.4.0 → keyring 3.6.3 / secret-service 4.0.0 → aivyx-channel
-    # (Linux secret-service keyring). keyring 4 exists but changes the store
-    # API (separate store crates); migration is deferred. Not vulnerable.
-    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained, not vulnerable; transitive under zbus 4.4.0 via keyring 3 (aivyx-channel); revisit at the keyring 4 migration" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained, not vulnerable; transitive under zbus 4.4.0 via keyring 3 (aivyx-channel); revisit at the keyring 4 migration" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained, not vulnerable; transitive under zbus 4.4.0 via keyring 3 (aivyx-channel); revisit at the keyring 4 migration" },
+    # (Linux secret-service keyring). keyring 4's default Linux store still
+    # uses zbus 5, so moving to keyring 4 is not the exit; the exits are a
+    # zbus 6 based secret-service, or keyring's dbus/libdbus store. Not
+    # vulnerable.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained, not vulnerable; transitive under zbus 4.4.0 via keyring 3 (aivyx-channel); revisit when secret-service moves to zbus 6 or keyring uses its dbus (libdbus) store" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained, not vulnerable; transitive under zbus 4.4.0 via keyring 3 (aivyx-channel); revisit when secret-service moves to zbus 6 or keyring uses its dbus (libdbus) store" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained, not vulnerable; transitive under zbus 4.4.0 via keyring 3 (aivyx-channel); revisit when secret-service moves to zbus 6 or keyring uses its dbus (libdbus) store" },
 ]

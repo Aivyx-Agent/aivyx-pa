@@ -243,7 +243,7 @@ dependencies = [
 [[package]]
 name = "aivyx-checkpoint"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-checkpoint?rev=a41da4090a99813c95d69361f94504f07bca52cb#a41da4090a99813c95d69361f94504f07bca52cb"
+source = "git+https://github.com/Aivyx-Agent/aivyx-checkpoint?rev=55f4c93ee87c593f58b5e0ca206263cead98f20d#55f4c93ee87c593f58b5e0ca206263cead98f20d"
 dependencies = [
  "tokio",
  "tokio-util",
@@ -327,7 +327,7 @@ dependencies = [
 [[package]]
 name = "aivyx-confine"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-confine?rev=7de5380de0b861e47d51d56342b521b75f194c34#7de5380de0b861e47d51d56342b521b75f194c34"
+source = "git+https://github.com/Aivyx-Agent/aivyx-confine?rev=e4b604e2dfa90a87cb1a6ccb0bb627cda00b3fe8#e4b604e2dfa90a87cb1a6ccb0bb627cda00b3fe8"
 dependencies = [
  "globset",
  "landlock",
@@ -545,7 +545,7 @@ dependencies = [
 [[package]]
 name = "aivyx-injection-guard"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=a506c9c961b82715806bdec67e53704f1a11ed8d#a506c9c961b82715806bdec67e53704f1a11ed8d"
+source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=a3eb989ea86b4784a3bd118d21530c5731ae21f6#a3eb989ea86b4784a3bd118d21530c5731ae21f6"
 
 [[package]]
 name = "aivyx-instance"
@@ -738,7 +738,7 @@ dependencies = [
 [[package]]
 name = "aivyx-pack"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-pack?rev=eedbf350820c0483c6a1649de4c83bb1a45844ad#eedbf350820c0483c6a1649de4c83bb1a45844ad"
+source = "git+https://github.com/Aivyx-Agent/aivyx-pack?rev=aec62513f35e20ffc59bbc45e299bc8f3a7127f1#aec62513f35e20ffc59bbc45e299bc8f3a7127f1"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -1005,7 +1005,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-core"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=226663984b64fe2832afb58158b6ad9be1414c9e#226663984b64fe2832afb58158b6ad9be1414c9e"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=070189478d27bc4a04210d9c850c72fab02d8a6a#070189478d27bc4a04210d9c850c72fab02d8a6a"
 dependencies = [
  "async-trait",
  "thiserror 2.0.21",
@@ -1014,7 +1014,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-mold"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=226663984b64fe2832afb58158b6ad9be1414c9e#226663984b64fe2832afb58158b6ad9be1414c9e"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=070189478d27bc4a04210d9c850c72fab02d8a6a#070189478d27bc4a04210d9c850c72fab02d8a6a"
 dependencies = [
  "aivyx-vision-core",
  "async-trait",
@@ -1031,7 +1031,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-svg"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=226663984b64fe2832afb58158b6ad9be1414c9e#226663984b64fe2832afb58158b6ad9be1414c9e"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=070189478d27bc4a04210d9c850c72fab02d8a6a#070189478d27bc4a04210d9c850c72fab02d8a6a"
 dependencies = [
  "async-trait",
  "svg-hush",
@@ -1199,7 +1199,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1210,7 +1210,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4401,7 +4401,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9827,7 +9827,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10772,7 +10772,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10852,7 +10852,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 1.0.11",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11842,7 +11842,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12425,7 +12425,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13418,7 +13418,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14332,7 +14332,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
