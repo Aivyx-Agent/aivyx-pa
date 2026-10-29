@@ -93,7 +93,7 @@ pub use tokio_util::sync::CancellationToken;
 // through `default_confiner`, which already picks the right backend per
 // platform). Re-exporting it would put a Linux-only-real type in a
 // cross-platform crate's public API.
-pub use aivyx_checkpoint::GitCheckpointer;
+pub use aivyx_checkpoint::{DetectOutcome, GitCheckpointer};
 pub use aivyx_confine::{
     ConfineOptions, ExecutionConfiner, NoopConfiner, default_confiner,
     default_confiner_with_options, kill_process_group,

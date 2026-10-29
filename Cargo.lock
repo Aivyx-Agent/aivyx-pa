@@ -243,7 +243,7 @@ dependencies = [
 [[package]]
 name = "aivyx-checkpoint"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-checkpoint?rev=5ecd5e26b442b5568bab8730fd4608d7e379e369#5ecd5e26b442b5568bab8730fd4608d7e379e369"
+source = "git+https://github.com/Aivyx-Agent/aivyx-checkpoint?rev=a41da4090a99813c95d69361f94504f07bca52cb#a41da4090a99813c95d69361f94504f07bca52cb"
 dependencies = [
  "tokio",
  "tokio-util",

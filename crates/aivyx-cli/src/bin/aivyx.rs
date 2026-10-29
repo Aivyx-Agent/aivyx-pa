@@ -6269,9 +6269,40 @@ async fn checkpointer_for(
         walk_cache.insert(root.to_path_buf(), walked.clone());
         walked
     };
-    aivyx_core::GitCheckpointer::detect(root, deny_paths)
-        .await
-        .map(std::sync::Arc::new)
+    match aivyx_core::GitCheckpointer::detect_outcome(root, deny_paths).await {
+        aivyx_core::DetectOutcome::Ready(checkpointer) => Some(std::sync::Arc::new(checkpointer)),
+        aivyx_core::DetectOutcome::Refused(reason) => {
+            warn_checkpoints_refused_once(root, &reason);
+            None
+        }
+        aivyx_core::DetectOutcome::NotARepo(_) => None,
+    }
+}
+
+/// A git work tree whose checkpoints aivyx-checkpoint refuses (its config
+/// or layout could steer the unsandboxed checkpoint git) gets no undo or
+/// rollback. That must not look like "not a repository": warn once per
+/// root per process — `fs_root`, `workspace_root` and a `[git] repos`
+/// entry can be the same directory — and `aivyx-pa doctor` reports it too
+/// (its "Checkpoints" section).
+fn warn_checkpoints_refused_once(root: &std::path::Path, reason: &str) {
+    static WARNED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
+    > = std::sync::OnceLock::new();
+    let first = WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(root.to_path_buf());
+    // stderr, like the other operator warnings here: the terminal for an
+    // interactive run, the service journal for the daemon.
+    if first {
+        eprintln!(
+            "aivyx-pa: warning: checkpoints are off for {}, so agent changes there can't be \
+             undone or rolled back: {reason}",
+            root.display()
+        );
+    }
 }
 
 // `run_async` sits right at the binary's composition root: it takes

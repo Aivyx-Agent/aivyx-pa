@@ -105,6 +105,10 @@ pub async fn run_doctor() -> Result<(), String> {
         println!("  \u{26a0} {notice}");
     }
 
+    // aivyx-checkpoint's refusal — informational, never fails the doctor;
+    // printed only for a git repository whose checkpoints are refused.
+    check_checkpoints(&cfg).await;
+
     println!();
     if all_ok {
         println!("✓ Looks good — your agent is ready. Run `aivyx-pa` to start.");
@@ -112,6 +116,44 @@ pub async fn run_doctor() -> Result<(), String> {
     } else {
         Err("one or more checks failed — see the notes above.".into())
     }
+}
+
+/// The roots the agent checkpoints (`fs_root` and every `[git] repos`
+/// entry) that are git repositories but whose checkpoints aivyx-checkpoint
+/// refuses: the agent then has no undo or rollback there, which otherwise
+/// looks exactly like a folder that isn't a repository. Informational.
+async fn check_checkpoints(cfg: &AivyxConfig) {
+    let mut roots: Vec<PathBuf> = vec![cfg.fs_root.value.clone()];
+    if let Some(git) = &cfg.git {
+        roots.extend(git.repos.iter().map(|repo| repo.value.clone()));
+    }
+    let mut refused: Vec<String> = Vec::new();
+    for root in roots {
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        if let aivyx_core::DetectOutcome::Refused(reason) =
+            aivyx_core::GitCheckpointer::detect_outcome(&root, Vec::new()).await
+        {
+            let line = checkpoints_refused_line(&root, &reason);
+            if !refused.contains(&line) {
+                refused.push(line);
+            }
+        }
+    }
+    if !refused.is_empty() {
+        println!("\nCheckpoints:");
+        for line in refused {
+            println!("  \u{26a0} {line}");
+        }
+    }
+}
+
+/// One doctor line for a refused repository.
+fn checkpoints_refused_line(root: &Path, reason: &str) -> String {
+    format!(
+        "checkpoints are off for {}, so agent changes there can't be undone or rolled back: \
+         {reason}",
+        root.display()
+    )
 }
 
 /// Chapter Anchor — report whether the daemon is installed as a persistent
@@ -1105,6 +1147,31 @@ fn load_config_for_inspection() -> Result<AivyxConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_refused_repository_gets_a_checkpoints_line() {
+        let dir = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "core.sshCommand", "SECRET-VALUE"],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(dir.path())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+        let reason =
+            match aivyx_core::GitCheckpointer::detect_outcome(dir.path(), Vec::new()).await {
+                aivyx_core::DetectOutcome::Refused(reason) => reason,
+                _ => panic!("expected the repository to be refused"),
+            };
+        let line = checkpoints_refused_line(dir.path(), &reason);
+        assert!(line.contains("core.sshcommand"), "{line}");
+        assert!(line.contains("undone"), "{line}");
+        assert!(!line.contains("SECRET-VALUE"), "{line}");
+    }
 
     #[test]
     fn truncate_shortens_long_strings() {

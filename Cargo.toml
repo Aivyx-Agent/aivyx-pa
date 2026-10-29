@@ -303,7 +303,7 @@ aivyx-confine = { git = "https://github.com/Aivyx-Agent/aivyx-confine", rev = "7
 # `.git/config`, the checkpointer's own git invocation won't run it.
 # Defense in depth alongside the tool-level `.git`-write block in
 # `aivyx-core::tools::fs::touches_git_metadata`.
-aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "5ecd5e26b442b5568bab8730fd4608d7e379e369" }
+aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", rev = "a41da4090a99813c95d69361f94504f07bca52cb" }
 
 # KV-cache persistence against a llama-server backend (LlmPlanner/
 # SpecialistFactory `with_kv_cache`), adopted from the sibling aivyx-coder
