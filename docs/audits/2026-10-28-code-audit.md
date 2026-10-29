@@ -56,6 +56,12 @@ The fixes are a separate, later piece of work.
 | Medium | 4 | P4, P5, P6, P7 |
 | Low | 7 | P8 to P14 |
 
+P1 and P3 chain: on the TUI and the chat channels, which cannot ask in-line,
+P1 removes the overwrite confirmation that P3 relies on to make a config
+rewrite visible, so a refused-then-unrelated-message sequence can replace
+`aivyx-pa.toml` with no prompt at all (the new-file variants of P3 never
+asked).
+
 ## Findings
 
 ### P1 (High) The "operator replied" ledger approves any later call to the same tool
@@ -73,6 +79,22 @@ The fixes are a separate, later piece of work.
   refusal for `todo.md`, or one unanswered "send this to Alice", pre-approves
   the next call to anyone, with any arguments, as soon as any new message
   arrives in the session, including an unrelated question.
+- **Preconditions, exactly:** (1) a confirm-first or ask-first call was
+  refused earlier in the same session on a frontend that cannot ask; (2) any
+  later message arrives in that session (the code does not check that it is
+  an answer, or even about the same thing); (3) the daemon has not restarted
+  and fewer than 1024 other refusals have been recorded (nothing else expires
+  it). The first refusal can itself be model-induced: a fetched page or an
+  email the agent reads can make it attempt the call, which is refused and
+  recorded. The next operator message can be entirely unrelated ("what's the
+  weather"). A model-supplied `confirmed: true` is only honoured when that
+  entry exists.
+- **Regression from documented intent:** `confirm.rs` documents the ledger as
+  keyed by "a tool-chosen target (a resolved path, a repo, a skill name, ...)".
+  Commit `12e07683` ("confirm-first tools just ask; the agent owns operator
+  confirmation") moved the check into `run_tool_call`, which passes
+  `tool.name()` as the target, so the per-target key no longer exists. The
+  old per-tool ledgers were removed in the same commit.
 - **Who is exposed:** only frontends that never ask in-line use this path.
   Telegram, Discord, Slack, Matrix, Signal, Proton and the TUI never send
   `SetApprovals` (see the comments at `telegram_daemon_frontend.rs:659` and
@@ -139,8 +161,10 @@ The fixes are a separate, later piece of work.
   (installed tool-pack binaries) and `~/.aivyx-pa/tool-processes/*`. The next
   daemon start obeys them at daemon privilege: `[[tool_process]]` and
   `[[mcp_server]]` commands, `[access] level = "full"`, `[autonomy]`,
-  `[confine]`. That breaks "an agent can never widen its own reach or
-  autonomy". Overwriting an existing file asks first at every level short of
+  `[confine]`. This plainly breaks the CLAUDE.md invariant "an agent can never
+  widen its own reach or autonomy": the agent edits the file, the next start
+  obeys `[[tool_process]]`, `[[mcp_server]]`, `[access] level` and
+  `[autonomy]`. Overwriting an existing file asks first at every level short of
   `unleashed`, but creating a new file does not (a new instance config, a new
   pack folder), and the ask itself can be bypassed through P1 on the TUI.
   Precondition: access level `home` or `full` (or a `workspace` root that
@@ -442,3 +466,34 @@ The fixes are a separate, later piece of work.
 - The full workspace test suite was not rerun as a baseline. Targeted tests in
   the crates touched by the scratch branch compile and run.
 - Dependency advisories (`cargo deny`) were left to the dependency pass.
+
+## Revision 1
+
+- **Every proof test run on `audit/2026-10-28` (99a61924), from a clean
+  worktree.** 14 proof tests, 14 fail on current code; the one control test
+  passes.
+
+| Crate / target | Proof tests | Failing | Notes |
+|---|---|---|---|
+| aivyx-core `--lib audit_` | 5 | 5 | P1 (2), P3 (2), P4 (1); 11 unrelated tests with "audit_" in the name pass |
+| aivyx-channel `--lib audit_` | 4 | 4 | P4 prompt, P5 (2), P9; 19 unrelated tests pass |
+| aivyx-channel `--test audit_2026_10_28` | 2 | 2 | P2, P7 (structural guard) |
+| aivyx-telegram `--test audit_2026_10_28` | 2 | 1 | P8 fails; the `getUpdates` control passes by design |
+| aivyx-cli `pack_check::tests::audit_a` | 2 | 2 | P6 |
+
+- **P1** now states its preconditions, that the first refusal can be
+  model-induced, that the next message can be unrelated, and the regression
+  from `confirm.rs`'s documented per-target key (commit `12e07683`). Rank stays
+  High.
+- **P3** now says it breaks the "can never widen its own reach or autonomy"
+  invariant.
+- **Chain sentence** added before the findings.
+- **Data-reader probe (was "not run").** A scratch test wrote a 500,000 row by
+  8 column workbook (4 million cells, 10.06 MB compressed, so over the 8 MiB
+  cap and truncated by the real reader) and called `parse_xlsx` under
+  `ulimit -v`: it parsed in 12 s (debug build) within a 1.5 GB limit and
+  failed at an 0.8 GB limit with an allocation error. So memory scales with
+  cell count and the parse blocks an async worker for seconds, but a
+  within-cap workbook of ordinary compressibility did not exhaust a modest
+  limit. A hand-built maximally compressible zip (the real bomb case) was still
+  not built. Stays under "Not confirmed"; the blocking-parse point is a Low.
