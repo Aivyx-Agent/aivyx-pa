@@ -134,10 +134,17 @@ for a command that removes or overwrites (`rm`, `find -delete`, `mv`/`cp`/`>`/
 `&&`, `||`, pipes, `$( )`, backticks, `sh -c`, `xargs`, `find -exec`). The check
 is conservative, not a shell parser: a command it cannot read with confidence
 (an unterminated quote, a command name built from a variable) asks too. It is
-a seatbelt against mistakes, not a sandbox: a script the agent wrote and then
-runs (`./cleanup.sh`) is not read.
+a seatbelt against mistakes, not a sandbox. It also asks for what it cannot
+see: a shell reading a script or stdin (`sh x.sh`, `./x.sh`, `source x`,
+`... | sh`), an interpreter running code (`python`, `perl`, `node`, `ruby`,
+`php` with `-c`/`-e` or a file), `ex`/`vim`, `crontab`, output flags onto an
+existing file (`curl -o`, `sort -o`, `wget -O`, `awk -i inplace`), `rsync` into
+an existing path, and the git forms that discard work (`checkout <path>`,
+`restore`, `rm`, `push :ref`, `worktree remove`). What stays unseen: build and
+task tools that run files the agent wrote (`make`, `npm run`, `cargo build`
+with a `build.rs`): the command is named plainly, its effects are not read.
 
-**Deferred follow-ons.** (1) Read the scripts a shell command runs. (2) A policy-aware operator GATE with auto-resume
+**Deferred follow-ons.** (1) Follow build tools into the files they run. (2) A policy-aware operator GATE with auto-resume
 + headless-always-block for confirm-first — the current gate is the
 conversational `confirmed: true` checkpoint (model shows the op, operator
 approves, model re-calls confirmed); a true `RequiresEscalation` gate that

@@ -46,6 +46,9 @@ const KEYWORDS: &[&str] = &[
 
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "ash", "fish"];
 
+/// Interpreters whose code (`-c`, `-e`, a file) is invisible here.
+const INTERPRETERS: &[&str] = &["python", "perl", "node", "nodejs", "ruby", "php", "lua", "deno", "bun"];
+
 const MAX_DEPTH: usize = 6;
 
 /// One lexed word: its text with quotes removed, and whether it contains
@@ -154,6 +157,21 @@ impl State<'_> {
                 "the command name comes from an expansion, so it cannot be checked".into(),
             );
         }
+        // A script or program named by path (`./clean.sh`, `../bin/tool`,
+        // `/home/me/x.sh`) is code this check cannot see. System binary
+        // directories are the exception: they are named by what they are.
+        if first.text.contains('/') {
+            let dir = first.text.rsplit_once('/').map_or("", |(d, _)| d);
+            const SYSTEM_BINS: &[&str] = &[
+                "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin",
+            ];
+            if !SYSTEM_BINS.contains(&dir) {
+                return Some(format!(
+                    "`{}` runs a program or script this check cannot read",
+                    first.text
+                ));
+            }
+        }
         let name = first.text.rsplit('/').next().unwrap_or(&first.text).to_string();
         let args = &words[1..];
         self.check_named(&name, args, depth)
@@ -222,8 +240,31 @@ impl State<'_> {
                     };
                 }
             }
-            // `sh script.sh`: the script is not visible here; not flagged.
-            return None;
+            // No `-c`: the shell reads a script file or stdin (`sh x.sh`,
+            // `... | sh`, `sh < x`), which this check cannot see.
+            if args.iter().all(|w| w.text == "--version" || w.text == "-h" || w.text == "--help") && !args.is_empty() {
+                return None;
+            }
+            return Some(format!("`{name}` runs a script or stdin this check cannot read"));
+        }
+        if INTERPRETERS.iter().any(|i| name == *i || name.strip_prefix(*i).is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit() || c == '.')))
+        {
+            if !args.is_empty()
+                && args.iter().all(|w| matches!(w.text.as_str(), "--version" | "-V" | "-v" | "-h" | "--help"))
+            {
+                return None;
+            }
+            return Some(format!("`{name}` runs code this check cannot read"));
+        }
+        if matches!(name, ".") || name == "source" {
+            return Some("`source` runs a script this check cannot read".into());
+        }
+        if matches!(name, "ex" | "ed" | "vim" | "vi" | "nvim" | "view") {
+            return Some(format!("`{name}` can rewrite files from a script"));
+        }
+        if name == "crontab" {
+            return (!args.iter().all(|w| w.text == "-l"))
+                .then(|| "`crontab` replaces or removes the scheduled jobs".into());
         }
         if name == "eval" {
             if args.iter().any(|w| w.dynamic) {
@@ -251,10 +292,20 @@ impl State<'_> {
             "chmod" | "chown" | "chgrp" => (has_flag('R', "--recursive"))
                 .then(|| format!("`{name} -R` changes permissions across a whole tree")),
             "find" => self.check_find(args, depth),
-            "rsync" => args
-                .iter()
-                .any(|w| w.text.starts_with("--delete") || w.text == "--remove-source-files")
-                .then(|| "`rsync` is set to delete files".into()),
+            "rsync" => {
+                if args
+                    .iter()
+                    .any(|w| w.text.starts_with("--delete") || w.text == "--remove-source-files")
+                {
+                    return Some("`rsync` is set to delete files".into());
+                }
+                let pos = positionals();
+                let dest = pos.last()?;
+                if pos.len() >= 2 && !dest.text.contains(':') && (dest.dynamic || self.exists(dest)) {
+                    return Some(format!("`rsync` writes into the existing `{}`", dest.text));
+                }
+                None
+            }
             "sed" | "perl" | "ruby" => args
                 .iter()
                 .any(|w| {
@@ -265,6 +316,16 @@ impl State<'_> {
                                 && w.text[1..].chars().take_while(|c| c.is_ascii_alphabetic()).any(|c| c == 'i')))
                 })
                 .then(|| format!("`{name} -i` rewrites files in place")),
+            "awk" | "gawk" => args
+                .iter()
+                .enumerate()
+                .any(|(i, w)| {
+                    w.text == "-iinplace"
+                        || w.text == "--include=inplace"
+                        || (w.text == "-i" && args.get(i + 1).is_some_and(|n| n.text == "inplace"))
+                })
+                .then(|| format!("`{name} -i inplace` rewrites files in place")),
+            "curl" | "wget" | "sort" => self.check_output_flags(name, args),
             "tee" => {
                 if has_flag('a', "--append") {
                     return None;
@@ -278,6 +339,40 @@ impl State<'_> {
             "git" => self.check_git(args),
             _ => None,
         }
+    }
+
+    /// `-o`/`-O`/`--output` on a tool that then overwrites that file.
+    fn check_output_flags(&self, name: &str, args: &[Word]) -> Option<String> {
+        let (shorts, longs): (&[&str], &[&str]) = match name {
+            "curl" => (&["-o"], &["--output"]),
+            "wget" => (&["-O"], &["--output-document"]),
+            _ => (&["-o"], &["--output"]),
+        };
+        for (i, w) in args.iter().enumerate() {
+            let t = w.text.as_str();
+            if name == "curl" && (t == "-O" || t == "--remote-name" || t == "--remote-name-all") {
+                return Some("`curl -O` writes a file named by the server".into());
+            }
+            let value: Option<Word> = if shorts.contains(&t) || longs.contains(&t) {
+                args.get(i + 1).cloned()
+            } else if let Some(v) = longs.iter().find_map(|l| t.strip_prefix(&format!("{l}="))) {
+                Some(Word { text: v.to_string(), dynamic: w.dynamic, quoted: w.quoted })
+            } else if let Some(v) = shorts.iter().find_map(|sh| t.strip_prefix(sh)).filter(|v| !v.is_empty() && !t.starts_with("--")) {
+                Some(Word { text: v.to_string(), dynamic: w.dynamic, quoted: w.quoted })
+            } else {
+                continue;
+            };
+            let Some(v) = value else {
+                return Some(format!("`{name}` has an output flag with no visible target"));
+            };
+            if v.text == "-" || v.text.starts_with("/dev/") {
+                continue;
+            }
+            if v.dynamic || self.exists(&v) {
+                return Some(format!("`{name}` would overwrite `{}`", v.text));
+            }
+        }
+        None
     }
 
     fn check_find(&mut self, args: &[Word], depth: usize) -> Option<String> {
@@ -408,7 +503,8 @@ impl State<'_> {
             "clean" => (!any(&|t| t == "-n" || t == "--dry-run"))
                 .then_some("`git clean` deletes untracked files"),
             "push" => any(&|t| {
-                t == "-f"
+                t.starts_with(':')
+                    || t == "-f"
                     || t == "--force"
                     || t.starts_with("--force-with-lease")
                     || t == "--delete"
@@ -419,11 +515,19 @@ impl State<'_> {
                     || (t.starts_with('-') && !t.starts_with("--") && t[1..].contains('f'))
             })
             .then_some("`git push` would force-update or delete remote history"),
-            "checkout" => any(&|t| t == "-f" || t == "--force" || t == "--" || t == "." || t == "-B")
-                .then_some("`git checkout` would overwrite working-tree changes"),
-            "restore" | "switch" if sub.text == "restore" => {
-                Some("`git restore` overwrites working-tree changes")
+            "checkout" => {
+                let path_arg = rest.iter().any(|w| {
+                    !w.text.starts_with('-') && (w.dynamic || self.cwd.join(&w.text).exists())
+                });
+                (any(&|t| t == "-f" || t == "--force" || t == "--" || t == "." || t == "-B") || path_arg)
+                    .then_some("`git checkout` would overwrite working-tree changes")
             }
+            "switch" => any(&|t| t == "-f" || t == "--force" || t == "--discard-changes")
+                .then_some("`git switch` would discard working-tree changes"),
+            "restore" => Some("`git restore` overwrites working-tree changes"),
+            "rm" => Some("`git rm` deletes files from the work tree"),
+            "worktree" => any(&|t| t == "remove" || t == "prune")
+                .then_some("`git worktree remove` deletes a working tree"),
             "stash" => any(&|t| t == "drop" || t == "clear")
                 .then_some("`git stash drop/clear` loses stashed work"),
             "branch" => any(&|t| t == "-D" || t == "--delete" || t == "-d" || t == "-M" || t == "-f")
@@ -1001,5 +1105,85 @@ mod tests {
         ] {
             assert!(asks(c), "should ask: {c:?}");
         }
+    }
+
+    #[test]
+    fn commands_that_run_code_it_cannot_see_ask() {
+        for c in [
+            "sh x.sh",
+            "bash x.sh",
+            "sh",
+            "echo rm | sh",
+            "sh < x.sh",
+            "./x.sh",
+            "../tools/clean",
+            "/home/me/clean.sh",
+            ". ./env.sh",
+            "source env.sh",
+            "python3 -c 'import os'",
+            "python x.py",
+            "perl -e 'unlink 1'",
+            "perl x.pl",
+            "node -e 'x()'",
+            "node x.js",
+            "ruby x.rb",
+            "php -r 'x();'",
+            "echo x | python3",
+            "ex -s file",
+            "vim -es file",
+            "crontab -r",
+            "crontab mycron",
+        ] {
+            assert!(asks(c), "should ask: {c:?}");
+        }
+        for c in ["/usr/bin/ls", "python3 --version", "crontab -l", "sh --version"] {
+            assert!(!asks(c), "should not ask: {c:?}");
+        }
+    }
+
+    #[test]
+    fn more_git_and_output_flag_forms_ask() {
+        let d = scratch();
+        std::fs::write(d.join("out.bin"), "x").unwrap();
+        for c in [
+            "git push origin :old-branch",
+            "git push --delete origin old",
+            "git checkout -- exists.txt",
+            "git checkout exists.txt",
+            "git checkout $X",
+            "git restore exists.txt",
+            "git rm exists.txt",
+            "git worktree remove wt",
+            "git worktree remove -f wt",
+            "git switch --discard-changes main",
+            "curl -o out.bin http://x",
+            "curl --output out.bin http://x",
+            "curl -oout.bin http://x",
+            "curl -O http://x/a",
+            "wget -O out.bin http://x",
+            "sort -o out.bin in",
+            "sort --output=out.bin in",
+            "curl -o $F http://x",
+            "awk -i inplace '{print}' exists.txt",
+            "sed -i s/a/b/ exists.txt",
+            "rsync -a src/ exists.txt",
+            "rsync -a src/ sub/",
+        ] {
+            assert!(classify(c, &d).is_some(), "should ask: {c:?}");
+        }
+        for c in [
+            "git checkout main",
+            "git checkout -b feature",
+            "git push origin main",
+            "curl -o fresh.bin http://x",
+            "curl http://x",
+            "sort in",
+            "awk '{print}' exists.txt",
+            "rsync -a src/ newdir/",
+            "git status",
+        ] {
+            assert!(classify(c, &d).is_none(), "should not ask: {c:?}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
