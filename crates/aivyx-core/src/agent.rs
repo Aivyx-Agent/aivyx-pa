@@ -637,7 +637,9 @@ impl ConcreteAgent {
         let session_id = channel.session_id();
         // The ledger of refused calls counts turns per session: this one is
         // the "operator's reply" to whatever the previous turn refused.
-        self.confirms.begin_turn(session_id, turn_id);
+        let approves = message.origin == MessageOrigin::Operator
+            && matches!(&message.content, crate::MessageContent::Text(t) if crate::confirm::is_affirmative(t));
+        self.confirms.begin_turn(session_id, turn_id, approves);
         // Captured up front: `message` is consumed before the arming step.
         let origin = message.origin;
         let tier = channel.trust_tier();
@@ -8536,6 +8538,57 @@ mod tests {
         assert!(matches!(yes, TurnOutcome::Completed { .. }), "{yes:?}");
         let repeat = agent.turn(Message::text(channel.session, "again"), &channel).await;
         assert!(matches!(repeat, TurnOutcome::Escalated { .. }), "{repeat:?}");
+    }
+
+    /// The operator's reply decides: after a refusal, the same call is
+    /// re-issued in the next turn. "no" and unrelated messages leave it
+    /// refused; only a short yes lets it run (once).
+    async fn reply_then_reissue(reply: &str) -> (TurnOutcome, bool) {
+        let tool = ConfirmFirstTool::new();
+        let agent = per_turn_plans_agent(
+            fs_read_caps(),
+            vec![tool.clone()],
+            vec![
+                delete_plan(tool.id, json!({"path": "todo.md"})),
+                delete_plan(tool.id, json!({"path": "todo.md", "confirmed": true})),
+            ],
+        );
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let first = agent.turn(Message::text(channel.session, "delete todo.md"), &channel).await;
+        assert!(matches!(first, TurnOutcome::Escalated { .. }), "{first:?}");
+        let second = agent.turn(Message::text(channel.session, reply), &channel).await;
+        let ran_confirmed = tool
+            .ran_with
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|v| v["confirmed"] == json!(true));
+        (second, ran_confirmed)
+    }
+
+    #[tokio::test]
+    async fn a_no_does_not_approve_the_reissued_call() {
+        for reply in ["no", "No, don't", "n"] {
+            let (out, ran) = reply_then_reissue(reply).await;
+            assert!(matches!(out, TurnOutcome::Escalated { .. }), "{reply}: {out:?}");
+            assert!(!ran, "{reply}: the call ran");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unrelated_message_does_not_approve_the_reissued_call() {
+        let (out, ran) = reply_then_reissue("what's the weather like?").await;
+        assert!(matches!(out, TurnOutcome::Escalated { .. }), "{out:?}");
+        assert!(!ran);
+    }
+
+    #[tokio::test]
+    async fn a_yes_approves_the_reissued_call_once() {
+        for reply in ["yes", "Y", "ok", "approve", "go ahead", "Yes, delete it"] {
+            let (out, ran) = reply_then_reissue(reply).await;
+            assert!(matches!(out, TurnOutcome::Completed { .. }), "{reply}: {out:?}");
+            assert!(ran, "{reply}");
+        }
     }
 
     /// An unanswered ask is good for the operator's very next turn only.

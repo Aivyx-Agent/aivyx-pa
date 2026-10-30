@@ -110,8 +110,16 @@ impl OperatorConfirmations {
     /// A turn begins in `session`. Entries recorded in the previous turn
     /// become approvable (this one is "the operator's reply"); older ones
     /// are dead.
-    pub fn begin_turn(&self, session: SessionId, turn: TurnId) {
+    ///
+    /// `approves` says whether the operator's message that starts this turn
+    /// is a short affirmative ([`is_affirmative`]). Any other message drops
+    /// the session's pending entries: a "no", an unrelated question or a
+    /// scheduled turn never approves a refused call.
+    pub fn begin_turn(&self, session: SessionId, turn: TurnId, approves: bool) {
         let Ok(mut inner) = self.0.lock() else { return };
+        if !approves {
+            inner.refused.retain(|(s, _, _), _| *s != session);
+        }
         if inner.epochs.len() > 1024 {
             // Forget everything: the cost is one more "please confirm".
             inner.epochs.clear();
@@ -181,6 +189,28 @@ impl OperatorConfirmations {
     }
 }
 
+/// Whether an operator's reply is a short "yes": `yes`, `y`, `ok`, `okay`,
+/// `approve(d)`, `confirm(ed)`, `go ahead`, `do it`, `sure`, `yep`, `yeah`,
+/// trimmed and case-insensitive, optionally followed by a few more words after
+/// a comma or full stop ("yes, send it"). Anything else, "no" included, is
+/// not an approval.
+pub fn is_affirmative(reply: &str) -> bool {
+    const YES: &[&str] = &[
+        "yes", "y", "ok", "okay", "approve", "approved", "confirm", "confirmed", "go ahead",
+        "do it", "sure", "yep", "yeah",
+    ];
+    let lower = reply.trim().to_lowercase();
+    if lower.is_empty() || lower.split_whitespace().count() > 6 {
+        return false;
+    }
+    let head = lower
+        .split([',', '.', '!', ';', ':', '\n'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    YES.contains(&head)
+}
+
 /// Whether a tool's input schema declares the `confirmed` flag — how a
 /// bridged (out-of-process) tool says it is confirm-first.
 pub fn declares_confirmed(schema: &Value) -> bool {
@@ -217,7 +247,7 @@ mod tests {
     /// Begin turns the way the agent does and return the new turn id.
     fn turn(l: &OperatorConfirmations, s: SessionId) -> TurnId {
         let t = TurnId::new();
-        l.begin_turn(s, t);
+        l.begin_turn(s, t, true);
         t
     }
 
@@ -266,6 +296,31 @@ mod tests {
         l.record_refusal(s, t1, "fs.delete", a);
         l.forget_turn(s, t1, "fs.delete");
         let t2 = turn(&l, s);
+        assert!(!l.take_refusal(s, t2, "fs.delete", a));
+    }
+
+    #[test]
+    fn only_a_short_yes_is_an_approval() {
+        for yes in ["yes", " Yes ", "y", "OK", "okay.", "approve", "go ahead", "Yes, send it", "do it!"] {
+            assert!(is_affirmative(yes), "{yes:?}");
+        }
+        for no in [
+            "no", "n", "no, yes", "nope", "don't", "what's the weather", "", "yesterday was fine",
+            "yes but first delete everything else in the downloads folder please",
+        ] {
+            assert!(!is_affirmative(no), "{no:?}");
+        }
+    }
+
+    #[test]
+    fn a_reply_that_is_not_a_yes_drops_the_pending_entries() {
+        let l = OperatorConfirmations::default();
+        let s = SessionId::new();
+        let a = d(json!({"path": "a"}));
+        let t1 = turn(&l, s);
+        l.record_refusal(s, t1, "fs.delete", a);
+        let t2 = TurnId::new();
+        l.begin_turn(s, t2, false);
         assert!(!l.take_refusal(s, t2, "fs.delete", a));
     }
 }
