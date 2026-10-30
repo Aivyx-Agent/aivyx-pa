@@ -1488,6 +1488,47 @@ mod tests {
         assert_eq!(stdout_of(&tool, "cat pa-state/daemon.env").await, "");
     }
 
+    /// A shell command cannot create a config pa's next start would obey: the
+    /// command scan refuses the name wherever it is written, and the confiner
+    /// (given the bare names, as the binary does) refuses to overwrite one that
+    /// exists. (Landlock cannot pre-deny a file that does not exist yet.)
+    #[tokio::test]
+    async fn shell_cannot_write_a_config_named_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let tool = ShellExecToolConfig::new(root.clone())
+            .with_deny_paths(vec![PathBuf::from("aivyx-pa.toml"), PathBuf::from("team.toml")])
+            .build()
+            .unwrap()
+            .with_sensitive_policy(Arc::new(crate::sensitive_paths::SensitivePolicy::new(
+                vec![],
+                vec![],
+            )));
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        for cmd in [
+            "printf x > aivyx-pa.toml".to_string(),
+            format!("printf x > {}/aivyx-pa.toml", root.display()),
+            "printf x >> team.toml".to_string(),
+        ] {
+            let out = tool.execute(json!({"cmd": cmd}), &ctx).await;
+            assert!(matches!(out, ToolOutcome::Failed(_)), "{cmd}: {out:?}");
+        }
+        assert!(!root.join("aivyx-pa.toml").exists() && !root.join("team.toml").exists());
+
+        // An existing one is also out of the confiner's reach.
+        std::fs::write(root.join("aivyx-pa.toml"), "original").unwrap();
+        let confiner_only = ShellExecToolConfig::new(root.clone())
+            .with_deny_paths(vec![PathBuf::from("aivyx-pa.toml")])
+            .build()
+            .unwrap();
+        let _ = confiner_only
+            .execute(json!({"cmd": "sh -c 'printf x > aivyx-pa.toml'"}), &ctx)
+            .await;
+        assert_eq!(std::fs::read_to_string(root.join("aivyx-pa.toml")).unwrap(), "original");
+    }
+
     #[tokio::test]
     async fn with_deny_paths_drops_an_entry_that_contains_cwd_root() {
         let dir = tempfile::tempdir().unwrap();

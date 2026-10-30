@@ -106,6 +106,11 @@ const PERSISTENCE_BASENAMES: &[&str] = &[
     "authorized_keys",
     "crontab",
     ".xprofile",
+    // pa's own config. `aivyx-pa` reads `./aivyx-pa.toml` from its working
+    // directory (the installed service runs in `$HOME`), so a file by this
+    // name anywhere is a config the next start obeys. Same for the team file.
+    "aivyx-pa.toml",
+    "team.toml",
 ];
 
 /// The read-guard policy: the built-in secret set above, minus operator
@@ -456,5 +461,20 @@ mod tests {
             .with_extra_deny_exempt(vec![PathBuf::from("/home/alice"), PathBuf::from("/")]);
         assert!(g.classify_write(Path::new("/home/alice/.aivyx-pa/aivyx-pa.toml")).is_some());
         assert!(g.classify(Path::new("/home/alice/.aivyx-pa/tool-processes/proton/cred")).is_some());
+    }
+
+    #[test]
+    fn a_file_named_like_pas_config_is_refused_for_writes_anywhere() {
+        let g = SensitivePolicy::new(vec![], vec![]);
+        for p in [
+            "/home/alice/aivyx-pa.toml",
+            "/home/alice/team.toml",
+            "/home/alice/project/aivyx-pa.toml",
+            "/srv/anything/team.toml",
+        ] {
+            assert!(g.classify_write(Path::new(p)).is_some(), "{p} must be refused");
+        }
+        assert!(g.classify(Path::new("/home/alice/project/team.toml")).is_none(), "reads stay open");
+        assert!(g.classify_write(Path::new("/home/alice/project/teams.toml")).is_none());
     }
 }

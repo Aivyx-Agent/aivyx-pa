@@ -6803,12 +6803,19 @@ fn shell_confine_deny_paths(
     storage_path: &std::path::Path,
     kvcache_store_path: &std::path::Path,
     studio_token_path: &std::path::Path,
+    config_files: &[std::path::PathBuf],
 ) -> Vec<std::path::PathBuf> {
     let mut deny = vec![
         storage_path.to_path_buf(),
         kvcache_store_path.to_path_buf(),
         studio_token_path.to_path_buf(),
     ];
+    deny.extend(config_files.iter().cloned());
+    // Any config-named file under the shell root that exists (the confiner
+    // resolves bare names). One that does not exist yet cannot be carved
+    // out of a writable folder; `shell.exec`'s command scan refuses those.
+    deny.push(std::path::PathBuf::from("aivyx-pa.toml"));
+    deny.push(std::path::PathBuf::from("team.toml"));
     // Every instance's, not just this one's: a named instance must not
     // reach the default instance's `daemon.env` either.
     match aivyx_instance::InstancePaths::current() {
@@ -6819,6 +6826,37 @@ fn shell_confine_deny_paths(
         ),
     }
     deny
+}
+
+/// The files pa reads as its own config, whether or not they exist yet:
+/// the resolved config path (which includes `$AIVYX_PA_CONFIG_PATH` and a
+/// `./aivyx-pa.toml` in the working directory, `$HOME` for the installed
+/// service), the env override itself and the `[team] config_path` target.
+/// The next start obeys what is in them, so the agent must not write them.
+fn own_config_files(team_config_path: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
+    let mut files = vec![aivyx_config::resolve_config_path()];
+    if let Ok(p) = std::env::var(aivyx_config::ENV_CONFIG_PATH)
+        && !p.is_empty()
+    {
+        files.push(std::path::PathBuf::from(p));
+    }
+    if let Some(t) = team_config_path {
+        files.push(t.to_path_buf());
+    }
+    // A relative spelling is relative to the working directory.
+    if let Ok(cwd) = std::env::current_dir() {
+        for f in &mut files {
+            if f.is_relative() {
+                *f = cwd.join(&*f);
+            }
+        }
+        files.push(cwd.join("aivyx-pa.toml"));
+    }
+    let resolved: Vec<_> = files.iter().filter_map(|f| std::fs::canonicalize(f).ok()).collect();
+    files.extend(resolved);
+    files.sort();
+    files.dedup();
+    files
 }
 
 /// Ward's extra-deny list: paths the agent's file tools must never reach on
@@ -6843,6 +6881,7 @@ fn shell_confine_deny_paths(
 fn ward_extra_deny(
     kvcache_store_path: &std::path::Path,
     studio_token_path: &std::path::Path,
+    config_files: &[std::path::PathBuf],
 ) -> Vec<std::path::PathBuf> {
     let instance = aivyx_instance::InstancePaths::current();
     if let Err(e) = &instance {
@@ -6851,18 +6890,25 @@ fn ward_extra_deny(
              guard denies only the kvcache store and Studio token"
         );
     }
-    ward_extra_deny_for(kvcache_store_path, studio_token_path, instance.ok().as_ref())
+    ward_extra_deny_for(
+        kvcache_store_path,
+        studio_token_path,
+        instance.ok().as_ref(),
+        config_files,
+    )
 }
 
 fn ward_extra_deny_for(
     kvcache_store_path: &std::path::Path,
     studio_token_path: &std::path::Path,
     instance: Option<&aivyx_instance::InstancePaths>,
+    config_files: &[std::path::PathBuf],
 ) -> Vec<std::path::PathBuf> {
     let mut deny = vec![
         kvcache_store_path.to_path_buf(),
         studio_token_path.to_path_buf(),
     ];
+    deny.extend(config_files.iter().cloned());
     if let Some(instance) = instance {
         deny.extend(instance.all_instances_state_dirs());
     }
@@ -8059,7 +8105,11 @@ async fn run_async(
     let sensitive_policy = std::sync::Arc::new(if guard_sensitive_paths.value {
         aivyx_core::sensitive_paths::SensitivePolicy::new(
             allow_sensitive_paths.clone(),
-            ward_extra_deny(&kvcache_store_path, &studio_token_path),
+            ward_extra_deny(
+                &kvcache_store_path,
+                &studio_token_path,
+                &own_config_files(config_team_config_path.as_deref()),
+            ),
         )
         // The agent's own working folders (the file tools' root, the personal
         // workspace) stay usable when they sit inside a denied state folder.
@@ -8791,7 +8841,12 @@ async fn run_async(
         &fs_root,
         std::sync::Arc::clone(&sensitive_policy),
         confine_options.clone(),
-        shell_confine_deny_paths(&storage_path.value, &kvcache_store_path, &studio_token_path),
+        shell_confine_deny_paths(
+            &storage_path.value,
+            &kvcache_store_path,
+            &studio_token_path,
+            &own_config_files(config_team_config_path.as_deref()),
+        ),
         confirm_destructive,
     )? {
         Some((shell, scope)) => {
@@ -16934,6 +16989,7 @@ mod tests {
             &home.join(".local/share/aivyx-pa/kvcache"),
             &home.join(".aivyx-pa/studio-token"),
             Some(&work),
+            &[],
         );
         for (level_root, label) in [(home.clone(), "home"), (std::path::PathBuf::from("/"), "full")] {
             let guard = aivyx_core::sensitive_paths::SensitivePolicy::new(Vec::new(), deny.clone())
@@ -16984,7 +17040,7 @@ mod tests {
         let kvcache = effective_kvcache_store_path(&load_phase_122_config(""));
         let guard = aivyx_core::sensitive_paths::SensitivePolicy::new(
             Vec::new(),
-            ward_extra_deny(&kvcache, &token_path),
+            ward_extra_deny(&kvcache, &token_path, &[]),
         );
         assert!(
             guard.classify(&token_path).is_some(),

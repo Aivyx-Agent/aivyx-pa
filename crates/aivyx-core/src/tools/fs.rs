@@ -839,6 +839,19 @@ impl Tool for FsWriteTool {
         // parent and re-verifying against the canonical sandbox root.
         // The canonical check catches any symlink in the parent
         // chain that escapes.
+        // The guard sees the typed (lexical) target first: a refused write
+        // must not leave directories behind. The canonical re-check below
+        // still covers symlinked parents.
+        if let Some(reason) = self.sensitive.classify_write(&lexical_parent.join(&file_name)) {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!(
+                    "refusing to write {} — {reason}. Add it to `[access] \
+                     allow_sensitive_paths` if you intend the agent to write it.",
+                    lexical_parent.join(&file_name).display()
+                ),
+            });
+        }
         if let Err(e) = std::fs::create_dir_all(&lexical_parent) {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -2462,6 +2475,24 @@ mod tests {
         // Ordinary files under the same root are untouched.
         let ok = run_execute(&tool, json!({"path": "notes.md", "content": "hi"}));
         assert!(matches!(ok, ToolOutcome::Completed { .. }), "{ok:?}");
+    }
+
+    /// A file named like pa's config is refused wherever it is, whether or not
+    /// it exists, and a refused write creates no directories either.
+    #[test]
+    fn fs_write_refuses_config_named_files_and_creates_no_directories() {
+        use crate::sensitive_paths::SensitivePolicy;
+        let sandbox = SandboxDir::new(); // plays $HOME
+        let tool = FsWriteToolConfig::new(sandbox.root.clone())
+            .with_sensitive_policy(Arc::new(SensitivePolicy::new(vec![], vec![])))
+            .build()
+            .unwrap();
+        for path in ["aivyx-pa.toml", "team.toml", "phantom/instance/aivyx-pa.toml"] {
+            let outcome = run_execute(&tool, json!({"path": path, "content": "x"}));
+            assert!(matches!(outcome, ToolOutcome::Failed(_)), "{path}: {outcome:?}");
+            assert!(!sandbox.root.join(path).exists(), "{path} was written");
+        }
+        assert!(!sandbox.root.join("phantom").exists(), "a refused write created a directory");
     }
 
     // ---- FsWriteTool: construction + config -----------------------
