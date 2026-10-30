@@ -45,7 +45,7 @@ pub use git::{
     GitCommitTool, GitDiffTool, GitReadToolConfig, GitStatusTool, GitWriteToolConfig, gitfile_repos,
 };
 pub use net_dns::NetDnsTool;
-pub use process_group::kill_all_process_groups;
+pub use process_group::{CommandRun, kill_all_process_groups, run_command_in_group};
 pub use role_switch::{ChildAgentFactory, RoleSwitchTool};
 pub use routing::{
     RoutingCandidate, RoutingConversation, RoutingEscalation, RoutingExplainTool, RoutingStatus,

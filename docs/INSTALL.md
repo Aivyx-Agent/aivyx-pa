@@ -5857,7 +5857,8 @@ default_priority = 100       # optional, default 100
 # Phase 174 — driver-side gate verification (strongly recommended).
 gate_command = "cargo test"  # the driver re-runs this to verify the tree
 gate_timeout_secs = 600      # optional, default 600 — kill + treat as red
-working_dir = "/path/to/repo"  # optional, default: the daemon's CWD
+working_dir = "/path/to/repo"  # required with gate_command: the gate runs confined to this folder
+gate_env = ["CARGO_HOME"]    # optional — extra env vars the gate may inherit (it starts from a cleared env)
 max_run_secs = 7200          # optional — wall-clock cap, in seconds
 
 # Phase 175 — cross-iteration progress log.
@@ -5924,10 +5925,14 @@ highest-trust-stakes action Aivyx PA takes. The guardrails:
 - **The canonical prompt** — instructs the agent to mark a
   story done ONLY after gates pass and the change is committed.
 
-**The gate command runs at daemon privilege** — it is operator
-config (like a cron), executed directly by the daemon, not an
-agent tool, so it is not capability-gated. Point it only at a
-command you trust (your build/test invocation).
+**The gate command executes the agent's work.** `cargo test` runs the
+`build.rs`, tests and scripts the loop agent just wrote, so the gate does
+not run with the daemon's privileges: it runs under the same
+Landlock/seccomp confinement as `shell.exec` (only `working_dir` is
+writable, pa's own state is denied), with a cleared environment holding
+only `PATH`, `HOME`, `LANG`, `TERM` and the variables listed in
+`gate_env`, in its own process group that is killed on timeout and at
+daemon shutdown. Point it only at your build/test invocation.
 
 **Stop-on-red is non-destructive:** the driver does *not* roll
 back the agent's commit when the gate fails — it halts the run

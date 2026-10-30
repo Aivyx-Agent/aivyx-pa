@@ -486,6 +486,10 @@ pub struct DaemonConfig {
     /// `RejectAndAbort` (headless) records the refusal and finalizes without a
     /// gate. Per-run/per-driver overrides come later (H.4/H.5).
     pub gate_policy: GatePolicy,
+    /// The operator's `[confine]` posture, for the processes the daemon
+    /// itself starts on the agent's behalf (the loop's gate command). `None`
+    /// is the strict default.
+    pub confine_options: Option<aivyx_core::ConfineOptions>,
     /// Chapter O — proactive journaling cadence. `Some(interval)` (and an
     /// audit log present) spawns the workspace-journal driver, which on each
     /// tick checks for recent activity and, if any, fires a journaling turn
@@ -827,6 +831,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         team_missions,
         step_parker,
         gate_policy,
+        confine_options,
         workspace_journaling_interval,
         pricing,
         config_toml_path,
@@ -1052,11 +1057,17 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             let ld_gate: Option<Arc<dyn crate::loop_gate::GateRunner>> =
                 loop_config.as_ref().and_then(|c| {
                     c.gate_command.as_ref().map(|cmd| {
-                        Arc::new(crate::loop_gate::ShellGateRunner::new(
-                            cmd.clone(),
-                            c.working_dir.as_ref().map(std::path::PathBuf::from),
-                            std::time::Duration::from_secs(c.gate_timeout_secs),
-                        )) as Arc<dyn crate::loop_gate::GateRunner>
+                        Arc::new(
+                            crate::loop_gate::ShellGateRunner::new(
+                                cmd.clone(),
+                                c.working_dir.as_ref().map(std::path::PathBuf::from),
+                                std::time::Duration::from_secs(c.gate_timeout_secs),
+                            )
+                            .with_env_passthrough(c.gate_env.clone())
+                            .with_confine_options(
+                                confine_options.clone().unwrap_or_default(),
+                            ),
+                        ) as Arc<dyn crate::loop_gate::GateRunner>
                     })
                 });
             let ld_max_run_secs = loop_config.as_ref().and_then(|c| c.max_run_secs);
@@ -4248,6 +4259,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         team_missions: None,
         step_parker: None,
         gate_policy: GatePolicy::default(),
+        confine_options: None,
         pricing: Default::default(),
         config_toml_path: None,
         role_override: None,

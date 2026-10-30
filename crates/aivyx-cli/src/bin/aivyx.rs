@@ -11286,6 +11286,7 @@ async fn run_async(
             // now; the `--headless` flag + operator-absent drivers (H.4/H.5)
             // set RejectAndAbort per run.
             gate_policy: aivyx_core::GatePolicy::default(),
+            confine_options: Some(confine_options.clone()),
             // Chapter O.5 — proactive journaling cadence: armed only when the
             // workspace AND journaling are both enabled.
             workspace_journaling_interval: if workspace_enabled.value

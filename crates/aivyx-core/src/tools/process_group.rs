@@ -290,6 +290,33 @@ pub(crate) async fn run_in_own_group(
     }
 }
 
+/// How [`run_command_in_group`] ended.
+#[derive(Debug)]
+pub enum CommandRun {
+    /// The command exited; its status and everything it wrote.
+    Finished(Output),
+    /// The timeout fired first; the whole group was sent SIGTERM, then SIGKILL.
+    TimedOut,
+}
+
+/// Run an (already confined) command under the process-group contract with a
+/// wall-clock `timeout`, for callers outside this crate (the loop's gate
+/// command). The command leads its own group, the group is killed when the
+/// command exits or this future is dropped, on timeout, and by
+/// [`kill_all_process_groups`] when the daemon shuts down.
+pub async fn run_command_in_group(
+    command: Command,
+    timeout: Duration,
+) -> Result<CommandRun, String> {
+    match run_in_own_group(command, Some(timeout), None).await {
+        Ok(GroupRun::Finished(output) | GroupRun::Cancelled(output)) => {
+            Ok(CommandRun::Finished(output))
+        }
+        Ok(GroupRun::TimedOut) => Ok(CommandRun::TimedOut),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// [`run_in_own_group`] without a timeout, as an `io::Result<Output>`
 /// like `Command::output()`. stdin is `/dev/null`.
 pub(crate) async fn confined_output(mut command: Command) -> std::io::Result<Output> {

@@ -3308,9 +3308,15 @@ pub struct LoopConfig {
     /// runs longer than this many seconds. Default
     /// [`DEFAULT_LOOP_GATE_TIMEOUT_SECS`].
     pub gate_timeout_secs: u64,
-    /// Phase 174 — directory the gate command runs in. `None` →
-    /// the daemon's current working directory.
+    /// Phase 174 — directory the gate command runs in, and the only
+    /// folder it can write (it runs confined, like `shell.exec`). Required
+    /// when `gate_command` is set: with none, the gate does not run.
     pub working_dir: Option<String>,
+    /// Environment variables the gate command may inherit from the daemon
+    /// (for example `CARGO_HOME` or a proxy). The gate runs with a cleared
+    /// environment plus `PATH`, `HOME`, `LANG` and `TERM`; list anything
+    /// else it needs here. Never list a secret you would not hand the agent.
+    pub gate_env: Vec<String>,
     /// Phase 174 — wall-clock cap (seconds). A run stops once it
     /// has been running this long (checked between iterations).
     /// `None` → no wall-clock cap (`max_iterations` only).
@@ -5814,6 +5820,8 @@ struct RawLoop {
     gate_timeout_secs: Option<u64>,
     #[serde(default)]
     working_dir: Option<String>,
+    #[serde(default)]
+    gate_env: Option<Vec<String>>,
     #[serde(default)]
     max_run_secs: Option<u64>,
     // Phase 175 — progress-log injection count.
@@ -10383,6 +10391,7 @@ fn build_loop_config(
         || raw.gate_command.is_some()
         || raw.gate_timeout_secs.is_some()
         || raw.working_dir.is_some()
+        || raw.gate_env.is_some()
         || raw.max_run_secs.is_some()
         || raw.progress_inject_count.is_some()
         || raw.max_run_tokens.is_some()
@@ -10413,6 +10422,22 @@ fn build_loop_config(
         .as_ref()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let gate_env: Vec<String> = raw
+        .gate_env
+        .iter()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if let Some(bad) = gate_env.iter().find(|n| {
+        n.starts_with(|c: char| c.is_ascii_digit())
+            || !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }) {
+        return Err(ConfigError::Invalid {
+            field: "loop.gate_env",
+            reason: format!("`{bad}` is not an environment variable name"),
+        });
+    }
     let max_run_secs = raw.max_run_secs.filter(|n| *n > 0);
     let progress_inject_count = raw
         .progress_inject_count
@@ -10455,6 +10480,7 @@ fn build_loop_config(
         gate_command,
         gate_timeout_secs,
         working_dir,
+        gate_env,
         max_run_secs,
         progress_inject_count,
         max_run_tokens,

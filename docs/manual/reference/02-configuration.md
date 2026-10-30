@@ -913,7 +913,8 @@ The autonomous loop: works through a queue of stories until done or a limit is h
 | `default_priority` | integer |  | Priority assigned to a story added via `aivyx-pa loop add` without an explicit `--priority`. Lower runs first. |
 | `gate_command` | string |  | The shell command the driver runs to verify the tree is green (e.g. `"cargo test"`). |
 | `gate_timeout_secs` | integer |  | Kill the gate command + treat it as red if it runs longer than this many seconds. Default `600`. |
-| `working_dir` | string |  | Directory the gate command runs in. Unset → the daemon's current working directory. |
+| `working_dir` | string |  | Directory the gate command runs in, and the only folder it can write (it runs confined, like `shell.exec`). Required when `gate_command` is set: with none, the gate does not run. |
+| `gate_env` | list of string |  | Environment variables the gate command may inherit from the daemon (for example `CARGO_HOME` or a proxy). The gate runs with a cleared environment plus `PATH`, `HOME`, `LANG` and `TERM`; list anything else it needs here. |
 | `max_run_secs` | integer |  | Wall-clock cap (seconds). A run stops once it has been running this long (checked between iterations). |
 | `progress_inject_count` | integer |  | How many recent progress-log notes the driver injects into each fresh iteration's prompt (the cross-iteration learning, the Ralph `progress.txt` analog). `0` disables injection. |
 | `max_run_tokens` | integer |  | Per-run token-budget cap. A run stops once the total token usage (input + output) of every turn that completes during the run exceeds this. |
