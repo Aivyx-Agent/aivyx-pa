@@ -32,6 +32,7 @@ pub(crate) mod process_group;
 pub mod role_switch;
 pub mod routing;
 pub mod shell;
+mod shell_destructive;
 pub mod skill_defaults;
 pub mod skills;
 pub mod web_fetch;

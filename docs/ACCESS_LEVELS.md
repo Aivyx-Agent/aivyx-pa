@@ -127,9 +127,17 @@ the level still sets the `fs_root` boundary, but the role's declared scopes win
 over the default grant. So `level = "home"` + a narrow role = home-rooted but
 tool-restricted.
 
-**Deferred follow-ons.** (1) Destructive `shell.exec` detection — gating
-arbitrary shell commands needs fragile command parsing; today only `fs.delete`
-and `fs.write`-overwrite gate. (2) A policy-aware operator GATE with auto-resume
+**Destructive shell.** With `confirm_destructive` on, `shell.exec` asks first
+for a command that removes or overwrites (`rm`, `find -delete`, `mv`/`cp`/`>`/
+`tee`/`sed -i` onto an existing path, `git reset --hard`/`clean`/forced push,
+`dd`, `mkfs`, `truncate`, `chmod -R` ...) anywhere in a compound line (`;`,
+`&&`, `||`, pipes, `$( )`, backticks, `sh -c`, `xargs`, `find -exec`). The check
+is conservative, not a shell parser: a command it cannot read with confidence
+(an unterminated quote, a command name built from a variable) asks too. It is
+a seatbelt against mistakes, not a sandbox: a script the agent wrote and then
+runs (`./cleanup.sh`) is not read.
+
+**Deferred follow-ons.** (1) Read the scripts a shell command runs. (2) A policy-aware operator GATE with auto-resume
 + headless-always-block for confirm-first — the current gate is the
 conversational `confirmed: true` checkpoint (model shows the op, operator
 approves, model re-calls confirmed); a true `RequiresEscalation` gate that

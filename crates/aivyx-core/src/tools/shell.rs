@@ -127,6 +127,7 @@ pub struct ShellExecToolConfig {
     cwd_root: PathBuf,
     confine_options: ConfineOptions,
     deny_paths: Vec<PathBuf>,
+    confirm_destructive: bool,
 }
 
 impl ShellExecToolConfig {
@@ -135,7 +136,16 @@ impl ShellExecToolConfig {
             cwd_root: cwd_root.into(),
             confine_options: ConfineOptions::new(),
             deny_paths: Vec::new(),
+            confirm_destructive: false,
         }
+    }
+
+    /// `[access] confirm_destructive`: a command that looks destructive
+    /// (removal, overwrite, forced git, ...) escalates for an operator
+    /// confirmation first; see `shell_destructive`.
+    pub fn with_confirm_destructive(mut self, confirm: bool) -> Self {
+        self.confirm_destructive = confirm;
+        self
     }
 
     /// Paths the confiner carves out of every grant (aivyx-confine's
@@ -189,6 +199,7 @@ impl ShellExecToolConfig {
             // binary installs a real policy (mirrors `fs.read`/`fs.write`).
             sensitive: Arc::new(crate::sensitive_paths::SensitivePolicy::disabled()),
             confiner,
+            confirm_destructive: self.confirm_destructive,
         })
     }
 }
@@ -219,6 +230,8 @@ pub struct ShellExecTool {
     /// `with_confiner` explicitly (mirrors `sensitive`'s own "default
     /// disabled ⇒ safe" shape, but inverted: this one defaults ON).
     confiner: Arc<dyn ExecutionConfiner>,
+    /// Ask the operator before a command that looks destructive.
+    confirm_destructive: bool,
 }
 
 // Hand-rolled (not `#[derive(Debug)]`): `dyn ExecutionConfiner` has no
@@ -413,6 +426,13 @@ fn shell_exec_input_schema_value() -> Value {
                     }
                 },
                 "additionalProperties": false
+            },
+            "confirmed": {
+                "type": "boolean",
+                "description": "Set true only after the operator agrees: \
+                                a command that looks destructive (rm, overwriting \
+                                mv/cp/>, git reset --hard, ...) is held until the \
+                                operator approves it."
             }
         },
         "required": ["cmd"],
@@ -594,6 +614,23 @@ impl Tool for ShellExecTool {
                     self.cwd_root
                 ),
             });
+        }
+
+        // ---- Destructive-command confirmation ---------------------
+        //
+        // `confirmed` is set by the agent only for an operator-approved call
+        // (see `confirm.rs`); the model's own claim never reaches here.
+        if self.confirm_destructive
+            && !crate::confirm::is_confirmed(&input)
+            && let Some(why) = crate::tools::shell_destructive::classify(&cmd, &canonical_cwd)
+        {
+            return ToolOutcome::RequiresEscalation {
+                reason: format!(
+                    "`{cmd}` needs approval before it runs: {why}. {}",
+                    crate::confirm::ASK_THEN_END_TURN
+                ),
+                scope: None,
+            };
         }
 
         // ---- Spawn + bounded wait ---------------------------------
@@ -792,6 +829,13 @@ mod tests {
             .expect("shell tool builds against a real directory")
     }
 
+    fn build_confirming_tool(root: &Path) -> ShellExecTool {
+        ShellExecToolConfig::new(root)
+            .with_confirm_destructive(true)
+            .build()
+            .expect("shell tool builds against a real directory")
+    }
+
     // ---- Minimal ChannelContext fake for ToolContext construction --
 
     struct NoopChannel {
@@ -961,6 +1005,57 @@ mod tests {
     }
 
     // ---- Execution happy path --------------------------------------
+
+    /// Audit 2026-10-28 (P16): the live reproduction. A destructive command
+    /// inside a compound line asks, and nothing is removed.
+    #[tokio::test]
+    async fn destructive_command_in_a_compound_line_asks_first() {
+        let scratch = Scratch::new();
+        std::fs::create_dir_all(scratch.dir.join("victim")).unwrap();
+        let tool = build_confirming_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+
+        let out = tool
+            .execute(json!({"cmd": "echo ok && rm -rf victim && echo done"}), &ctx)
+            .await;
+        assert!(matches!(out, ToolOutcome::RequiresEscalation { .. }), "{out:?}");
+        assert!(scratch.dir.join("victim").exists(), "nothing ran");
+
+        // The operator's approval (confirmed: true, set by the agent) runs it.
+        let out = tool
+            .execute(
+                json!({"cmd": "echo ok && rm -rf victim && echo done", "confirmed": true}),
+                &ctx,
+            )
+            .await;
+        assert!(matches!(out, ToolOutcome::Completed { .. }), "{out:?}");
+        assert!(!scratch.dir.join("victim").exists());
+    }
+
+    #[tokio::test]
+    async fn harmless_commands_do_not_ask_and_the_gate_is_off_by_default() {
+        let scratch = Scratch::new();
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let tool = build_confirming_tool(&scratch.dir);
+        let out = tool.execute(json!({"cmd": "ls"}), &ctx).await;
+        assert!(matches!(out, ToolOutcome::Completed { .. }), "{out:?}");
+
+        std::fs::write(scratch.dir.join("f"), "x").unwrap();
+        let off = build_tool(&scratch.dir);
+        let out = off.execute(json!({"cmd": "rm f"}), &ctx).await;
+        assert!(matches!(out, ToolOutcome::Completed { .. }), "{out:?}");
+    }
+
+    #[test]
+    fn shell_exec_declares_confirmed_so_the_agent_treats_it_as_confirm_first() {
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        assert!(crate::confirm::declares_confirmed(tool.input_schema()));
+    }
 
     #[tokio::test]
     async fn execute_captures_stdout_and_exit_code() {

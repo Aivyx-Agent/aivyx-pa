@@ -345,6 +345,7 @@ fn build_shell_exec_for_channel(
     sensitive: std::sync::Arc<aivyx_core::sensitive_paths::SensitivePolicy>,
     confine_options: aivyx_core::ConfineOptions,
     confine_deny_paths: Vec<std::path::PathBuf>,
+    confirm_destructive: bool,
 ) -> Result<GatedToolRegistration, String> {
     match channel_kind {
         // Phase 135 — Voice runs in-process on the
@@ -361,6 +362,10 @@ fn build_shell_exec_for_channel(
                 // Aivyx PA's own state, unreachable even when the root
                 // covers $HOME (see `shell_confine_deny_paths`).
                 .with_deny_paths(confine_deny_paths)
+                // Docs and the init wizard promise destructive shell asks
+                // first (audit P16): detected per command, see
+                // `shell_destructive`.
+                .with_confirm_destructive(confirm_destructive)
                 .build()
                 .map_err(|e| format!("failed to build shell.exec tool: {e}"))?
                 // Chapters Ward/Portcullis on shell.exec — refuse commands
@@ -8787,6 +8792,7 @@ async fn run_async(
         std::sync::Arc::clone(&sensitive_policy),
         confine_options.clone(),
         shell_confine_deny_paths(&storage_path.value, &kvcache_store_path, &studio_token_path),
+        confirm_destructive,
     )? {
         Some((shell, scope)) => {
             tool_list.push(shell);
@@ -12980,6 +12986,7 @@ mod tests {
             // production's default posture.
             aivyx_core::ConfineOptions::new(),
             Vec::new(),
+            false,
         )
         .expect("local branch must build shell.exec cleanly");
         let (tool, scope) = result.expect("local must receive shell.exec");
@@ -13133,6 +13140,7 @@ mod tests {
             // match production's default posture.
             aivyx_core::ConfineOptions::new(),
             Vec::new(),
+            false,
         )
         .expect("telegram branch must not error — it's a no-op");
         assert!(
