@@ -10342,6 +10342,53 @@ fn loop_gate_defaults() {
     drop(env);
 }
 
+/// Loads `[loop]` text and returns the `Invalid` field + reason.
+fn loop_invalid(name: &str, body: &str) -> (&'static str, String) {
+    let env = EnvScope::new();
+    let tmp = TempDir::new(name);
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    std::fs::write(&toml_path, body).unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must error");
+    drop(env);
+    match err {
+        ConfigError::Invalid { field, reason } => (field, reason),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+/// An armed gate without a working_dir is reported when the config loads.
+#[test]
+fn loop_gate_without_working_dir_is_invalid_at_load() {
+    let (field, _) = loop_invalid(
+        "loop-gate-no-dir",
+        "\n[loop]\nenabled = true\ngate_command = \"cargo test\"\n",
+    );
+    assert_eq!(field, "loop.working_dir");
+}
+
+/// `gate_env` never hands the gate a secret.
+#[test]
+fn loop_gate_env_refuses_secret_names() {
+    for name in ["AIVYX_PA_PASSPHRASE", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "MY_SECRET_X", "1BAD"] {
+        let (field, _) = loop_invalid(
+            "loop-gate-env",
+            &format!(
+                "\n[loop]\nenabled = true\ngate_command = \"cargo test\"\n\
+                 working_dir = \"/tmp/w\"\ngate_env = [\"{name}\"]\n"
+            ),
+        );
+        assert_eq!(field, "loop.gate_env", "{name}");
+    }
+}
+
 /// Enabled with a gate but `gate_timeout_secs = 0` → `Invalid`.
 #[test]
 fn loop_enabled_zero_gate_timeout_is_invalid() {
@@ -10351,7 +10398,7 @@ fn loop_enabled_zero_gate_timeout_is_invalid() {
     std::fs::write(
         &toml_path,
         "\n[loop]\nenabled = true\ngate_command = \"cargo test\"\n\
-         gate_timeout_secs = 0\n",
+         working_dir = \"/tmp/w\"\ngate_timeout_secs = 0\n",
     )
     .unwrap();
     let opts = LoadOptions {

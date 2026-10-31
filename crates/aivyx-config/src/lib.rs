@@ -10438,6 +10438,23 @@ fn build_loop_config(
             reason: format!("`{bad}` is not an environment variable name"),
         });
     }
+    // The gate executes the loop agent's work: it never inherits a secret.
+    if let Some(secret) = gate_env.iter().find(|n| {
+        let u = n.to_ascii_uppercase();
+        u == "AIVYX_PA_PASSPHRASE"
+            || u.starts_with("AIVYX_PA_")
+            || u.ends_with("_API_KEY")
+            || u.ends_with("_TOKEN")
+            || u.contains("SECRET")
+    }) {
+        return Err(ConfigError::Invalid {
+            field: "loop.gate_env",
+            reason: format!(
+                "`{secret}` looks like a secret; the gate runs code the agent wrote and \
+                 never inherits passphrases, API keys or tokens"
+            ),
+        });
+    }
     let max_run_secs = raw.max_run_secs.filter(|n| *n > 0);
     let progress_inject_count = raw
         .progress_inject_count
@@ -10463,6 +10480,14 @@ fn build_loop_config(
         // A gate is opt-in, but if one is configured its timeout
         // must be positive (a 0-second timeout would kill every
         // gate instantly = the tree is always "red").
+        if gate_command.is_some() && working_dir.is_none() {
+            return Err(ConfigError::Invalid {
+                field: "loop.working_dir",
+                reason: "`working_dir` is required when a `gate_command` is set: the gate \
+                         runs confined to that folder"
+                    .into(),
+            });
+        }
         if gate_command.is_some() && gate_timeout_secs == 0 {
             return Err(ConfigError::Invalid {
                 field: "loop.gate_timeout_secs",
