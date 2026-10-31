@@ -6940,6 +6940,32 @@ fn ward_extra_deny_for(
     deny
 }
 
+/// The `$HOME` dot-entry rule for the file tools (audit review round 4):
+/// when `fs_root` covers `home`, writes to `~/.*` are refused except under
+/// the personal workspace and the generated-image folder, the same
+/// carve-outs `shell.exec`'s confiner leaves. `None` when the root does not
+/// cover `$HOME` (the named list in `sensitive_paths` applies then).
+fn home_dot_guard_for(
+    home: &std::path::Path,
+    fs_root: &std::path::Path,
+    workspace_root: Option<&std::path::Path>,
+    vision_output: Option<&std::path::Path>,
+) -> Option<(std::path::PathBuf, Vec<std::path::PathBuf>)> {
+    let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    let root = std::fs::canonicalize(fs_root).unwrap_or_else(|_| fs_root.to_path_buf());
+    if !home.starts_with(&root) {
+        return None;
+    }
+    let mut carve = Vec::new();
+    for p in [workspace_root, vision_output].into_iter().flatten() {
+        carve.push(p.to_path_buf());
+        if let Ok(c) = std::fs::canonicalize(p) {
+            carve.push(c);
+        }
+    }
+    Some((home, carve))
+}
+
 /// The working folders [`ward_extra_deny`] lifts when they sit inside a
 /// denied state folder: the file tools' root, the agent's personal workspace,
 /// and the folder generated images land in. Each in both spellings (raw and
@@ -8132,6 +8158,18 @@ async fn run_async(
         // The agent's own working folders (the file tools' root, the personal
         // workspace) stay usable when they sit inside a denied state folder.
         .with_extra_deny_exempt(ward_extra_deny_exempt(&fs_root, workspace_root.as_deref()))
+        .with_home_dot_guard_opt(std::env::var_os("HOME").and_then(|h| {
+            let vision = aivyx_instance::InstancePaths::current()
+                .ok()
+                .and_then(|i| i.home_data_dir())
+                .map(|d| d.join("vision"));
+            home_dot_guard_for(
+                std::path::Path::new(&h),
+                &fs_root,
+                workspace_root.as_deref(),
+                vision.as_deref(),
+            )
+        }))
     } else {
         aivyx_core::sensitive_paths::SensitivePolicy::disabled()
     });
@@ -16984,6 +17022,19 @@ mod tests {
             overridden_guard.classify(&default_path).is_none(),
             "once overridden, the stale default path must no longer be the one protected"
         );
+    }
+
+    #[test]
+    fn the_home_dot_rule_applies_only_when_the_root_covers_home() {
+        use std::path::Path;
+        let home = std::env::temp_dir().join(format!("aivyx-dotrule-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("proj")).unwrap();
+        let ws = home.join(".aivyx-pa/workspace");
+        let covers = home_dot_guard_for(&home, &home, Some(&ws), None).expect("root == home");
+        assert!(covers.1.contains(&ws));
+        assert!(home_dot_guard_for(&home, Path::new("/"), Some(&ws), None).is_some());
+        assert!(home_dot_guard_for(&home, &home.join("proj"), Some(&ws), None).is_none());
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

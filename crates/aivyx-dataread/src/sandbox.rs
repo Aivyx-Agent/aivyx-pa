@@ -254,7 +254,7 @@ impl ReaderSandbox {
 
         // Chapter Portcullis — refuse a sensitive write location even
         // inside the sandbox, matching fs.write's guard.
-        if let Some(reason) = self.sensitive.classify_write(&canonical_target) {
+        if let Some(reason) = self.sensitive.classify_file_write(&canonical_target) {
             return Err(fail(
                 tool,
                 format!(

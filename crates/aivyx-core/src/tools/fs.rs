@@ -866,7 +866,7 @@ impl Tool for FsWriteTool {
         // The nearest existing ancestor is resolved through symlinks first, so a
         // link into a denied folder cannot be used to create directories there.
         let early_target = resolve_through_existing_ancestor(&lexical_parent).join(&file_name);
-        if let Some(reason) = self.sensitive.classify_write(&early_target) {
+        if let Some(reason) = self.sensitive.classify_file_write(&early_target) {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: format!(
@@ -929,7 +929,7 @@ impl Tool for FsWriteTool {
         // read-sensitive set) even inside the sandbox — the persistence /
         // backdoor vector `confirm_destructive` only soft-gates. Checked on
         // the resolved parent + name (the file itself may not exist yet).
-        if let Some(reason) = self.sensitive.classify_write(&canonical_target) {
+        if let Some(reason) = self.sensitive.classify_file_write(&canonical_target) {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: format!(
@@ -1367,7 +1367,7 @@ impl Tool for FsDeleteTool {
         // Ward/Portcullis already refuse to read or overwrite it.
         // `confirm_destructive` alone doesn't cover this — it's a
         // self-declared `confirmed: true` flag, not a categorical block.
-        if let Some(reason) = self.sensitive.classify_write(&target) {
+        if let Some(reason) = self.sensitive.classify_file_write(&target) {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: format!(
@@ -2537,6 +2537,37 @@ mod tests {
         let outcome = run_execute(&tool, json!({"path": "link/a/b/c.txt", "content": "x"}));
         assert!(matches!(outcome, ToolOutcome::Failed(_)), "{outcome:?}");
         assert!(!denied.join("a").exists(), "a directory was created in the denied folder");
+    }
+
+    /// At access `home` the file tools refuse every dot entry of `$HOME`
+    /// (login and session files), carving out the workspace and honouring
+    /// `allow_sensitive_paths`; a normal folder stays writable.
+    #[test]
+    fn fs_write_at_home_refuses_dot_entries() {
+        use crate::sensitive_paths::SensitivePolicy;
+        let sandbox = SandboxDir::new(); // plays $HOME
+        let home = sandbox.root.canonicalize().unwrap();
+        let policy = SensitivePolicy::new(vec![home.join(".config/allowed")], vec![])
+            .with_home_dot_guard(home.clone(), vec![home.join(".aivyx-pa/workspace")]);
+        let tool = FsWriteToolConfig::new(sandbox.root.clone())
+            .with_sensitive_policy(Arc::new(policy))
+            .build()
+            .unwrap();
+        for path in [
+            ".config/hypr/hyprland.conf",
+            ".config/uwsm/env",
+            ".local/share/applications/x.desktop",
+            ".kshrc",
+        ] {
+            let out = run_execute(&tool, json!({"path": path, "content": "x"}));
+            assert!(matches!(out, ToolOutcome::Failed(_)), "{path}: {out:?}");
+            assert!(!home.join(path).exists(), "{path} was written");
+        }
+        assert!(!home.join(".config").exists(), "a refused write created directories");
+        for path in ["notes/todo.md", ".config/allowed/ok.conf", ".aivyx-pa/workspace/j.md"] {
+            let out = run_execute(&tool, json!({"path": path, "content": "x"}));
+            assert!(matches!(out, ToolOutcome::Completed { .. }), "{path}: {out:?}");
+        }
     }
 
     // ---- FsWriteTool: construction + config -----------------------

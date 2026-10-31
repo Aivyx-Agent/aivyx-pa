@@ -31,6 +31,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
   `XDG_CONFIG_HOME` for the next login. `shell.exec` also asks for awk/sed
   programs that run commands or write files, git aliases that run a shell, and
   the destructive archiver forms.
+- **At access `home`/`full` the file tools refuse every dot entry of `$HOME`.**
+  Login and session files cannot be listed by name (`uwsm/env`,
+  `hypr/hyprland.conf`, `niri`, `sway`, fish `functions`, `.kshrc`,
+  `~/.local/share/applications/*.desktop`, ...), and each sets
+  `AIVYX_PA_CONFIG_PATH` or runs code at the next login. `fs.write`,
+  `fs.delete` and the data writers now apply the rule `shell.exec`'s confiner
+  already enforces: nothing under `~/.*` is writable, except the personal
+  workspace, the generated-image folder and `[access] allow_sensitive_paths`.
+  **Behaviour change:** the agent can no longer edit dotfiles under `$HOME`
+  unless you allow the path. The named list still applies to roots that do not
+  cover `$HOME`. `shell.exec`'s confirmation now skips options per wrapper
+  (`time -p`, `sudo -E`, `timeout -s KILL 5`) and asks for more wrappers,
+  interpreters, git settings that store a command, `git apply`, `find -fprint`
+  and similar.
 - **An approval applies to exactly one call.** The "operator replied" ledger
   was keyed by tool name, so one refusal or one declined prompt let a later
   call to the same tool run unasked. It is now keyed by the call itself

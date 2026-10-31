@@ -127,6 +127,16 @@ the level still sets the `fs_root` boundary, but the role's declared scopes win
 over the default grant. So `level = "home"` + a narrow role = home-rooted but
 tool-restricted.
 
+**Dot entries under `$HOME`.** When the file-tool root covers `$HOME` (`home`,
+`full`), `fs.write`, `fs.delete` and the data writers refuse any path under
+`~/.*`, recursively: login and session settings live there and are obeyed at
+the next login (`~/.config/environment.d`, `uwsm/env`, compositor configs,
+`~/.local/share/applications`, `.kshrc`, fish `functions`, ...). The same rule
+is enforced on `shell.exec` by its confiner. Carved out: the personal
+workspace, the generated-image folder, and any path under
+`[access] allow_sensitive_paths`. For roots that do not cover `$HOME` the
+named list of persistence and secret locations applies.
+
 **Destructive shell.** With `confirm_destructive` on, `shell.exec` asks first
 for a command that removes or overwrites (`rm`, `find -delete`, `mv`/`cp`/`>`/
 `tee`/`sed -i` onto an existing path, `git reset --hard`/`clean`/forced push,

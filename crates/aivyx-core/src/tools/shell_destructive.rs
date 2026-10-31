@@ -27,16 +27,35 @@
 
 use std::path::Path;
 
-/// Wrappers whose remaining words are themselves a command.
-const WRAPPERS: &[&str] = &[
-    "sudo", "doas", "env", "nohup", "nice", "ionice", "time", "command", "exec", "builtin",
-    "timeout", "setsid", "stdbuf", "xargs", "chroot", "unbuffer", "busybox", "watch", "script",
+/// Wrappers whose remaining words are themselves a command, with the options
+/// of each that take a separate value word.
+const WRAPPERS: &[(&str, &[&str])] = &[
+    ("sudo", &["-u", "-g", "-h", "-p", "-C", "-D", "-R", "-r", "-t", "-T", "-U"]),
+    ("doas", &["-u", "-C"]),
+    ("env", &["-u", "-C", "-S"]),
+    ("nohup", &[]),
+    ("nice", &["-n"]),
+    ("ionice", &["-c", "-n", "-p", "-P", "-u"]),
+    ("time", &["-f", "-o"]),
+    ("command", &[]),
+    ("exec", &["-a"]),
+    ("builtin", &[]),
+    ("timeout", &["-s", "-k", "--signal", "--kill-after"]),
+    ("setsid", &[]),
+    ("stdbuf", &["-i", "-o", "-e"]),
+    ("xargs", &["-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a"]),
+    ("chroot", &["-u", "-g"]),
+    ("unbuffer", &[]),
+    ("busybox", &[]),
+    ("watch", &["-n", "-d"]),
 ];
 
-/// Wrapper options that take a separate value word.
-const WRAPPER_VALUE_FLAGS: &[&str] = &[
-    "-u", "-g", "-h", "-p", "-C", "-D", "-R", "-r", "-t", "-T", "-U", "-n", "-c", "-s", "-a", "-I",
-    "-L", "-P", "-d", "-E", "-S", "-N", "--user", "--group", "--chdir",
+/// Wrappers and tools that run a command through option syntax too varied to
+/// skip reliably (or read it from stdin): they ask.
+const OPAQUE_WRAPPERS: &[&str] = &[
+    "parallel", "flock", "script", "su", "runuser", "unshare", "fakeroot", "proot", "firejail",
+    "bwrap", "chrt", "taskset", "strace", "ltrace", "valgrind", "systemd-run", "at", "batch",
+    "gdb", "nsenter", "setpriv", "cpulimit", "dbus-launch", "ssh-agent", "tmux", "screen",
 ];
 
 /// Shell keywords that precede a command in a compound statement.
@@ -47,7 +66,10 @@ const KEYWORDS: &[&str] = &[
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "ash", "fish"];
 
 /// Interpreters whose code (`-c`, `-e`, a file) is invisible here.
-const INTERPRETERS: &[&str] = &["python", "perl", "node", "nodejs", "ruby", "php", "lua", "deno", "bun"];
+const INTERPRETERS: &[&str] = &[
+    "python", "perl", "node", "nodejs", "ruby", "php", "lua", "deno", "bun", "julia", "pwsh",
+    "powershell", "tclsh", "wish", "Rscript", "R", "osascript", "expect", "groovy", "scala",
+];
 
 const MAX_DEPTH: usize = 6;
 
@@ -225,17 +247,22 @@ impl State<'_> {
         }
 
         // Wrappers: the rest of the words are a command.
-        if WRAPPERS.contains(&name) {
+        if let Some((_, value_flags)) = WRAPPERS.iter().find(|(n, _)| *n == name) {
             let mut i = 0;
+            let mut positionals_to_skip = usize::from(name == "timeout"); // the duration
             while i < args.len() {
                 let w = &args[i];
                 if name == "env" && w.text.contains('=') && !w.text.starts_with('-') {
                     i += 1;
                 } else if flag(w) {
-                    let takes_value = WRAPPER_VALUE_FLAGS.contains(&w.text.as_str());
+                    // `--opt=value` carries its value; a bare option that
+                    // takes one consumes the next word.
+                    let takes_value =
+                        !w.text.contains('=') && value_flags.contains(&w.text.as_str());
                     i += 1 + usize::from(takes_value);
-                } else if name == "timeout" && i == 0 {
-                    i += 1; // the duration
+                } else if positionals_to_skip > 0 {
+                    positionals_to_skip -= 1;
+                    i += 1;
                 } else {
                     break;
                 }
@@ -248,6 +275,14 @@ impl State<'_> {
                 truncating: Vec::new(),
             };
             return self.check(&rest, depth + 1);
+        }
+        if OPAQUE_WRAPPERS.contains(&name) {
+            if !args.is_empty()
+                && args.iter().all(|w| matches!(w.text.as_str(), "--version" | "--help" | "-h" | "-V"))
+            {
+                return None;
+            }
+            return Some(format!("`{name}` runs a command this check cannot parse"));
         }
 
         // In git-only mode nothing below matters except the shells and `eval`
@@ -353,6 +388,10 @@ impl State<'_> {
                 })
                 .then(|| format!("`{name} -i` rewrites files in place"))
                 .or_else(|| {
+                    (name == "sed" && args.iter().any(|w| w.text == "-f" || w.text == "--file" || w.text.starts_with("--file=")))
+                        .then(|| "`sed -f` runs a script file this check cannot read".into())
+                })
+                .or_else(|| {
                     (name == "sed" && args.iter().filter(|w| !flag(w) || w.text == "-e").any(|w| sed_script_writes(&w.text)))
                         .then(|| "a `sed` script writes files or runs commands (`w`/`e`)".into())
                 }),
@@ -364,6 +403,9 @@ impl State<'_> {
                 });
                 if inplace {
                     return Some(format!("`{name} -i inplace` rewrites files in place"));
+                }
+                if args.iter().any(|w| w.text == "-f" || w.text == "--file" || w.text.starts_with("--file=")) {
+                    return Some(format!("`{name} -f` runs a program file this check cannot read"));
                 }
                 // A program that runs commands or writes files.
                 args.iter()
@@ -382,7 +424,7 @@ impl State<'_> {
                     })
                     .then(|| format!("`{name}` program runs commands or writes files"))
             }
-            "gzip" | "bzip2" | "xz" | "zstd" | "lz4" | "lzma" => {
+            "gzip" | "bzip2" | "xz" | "zstd" | "lz4" | "lzma" | "gunzip" | "bunzip2" | "unxz" | "unzstd" | "unlz4" | "unlzma" => {
                 let keeps = args.iter().any(|w| {
                     matches!(w.text.as_str(), "--keep" | "--stdout" | "--to-stdout" | "--test" | "--list" | "--version")
                         || (flag(w) && !w.text.starts_with("--") && w.text[1..].chars().any(|c| matches!(c, 'k' | 'c' | 't' | 'l' | 'V')))
@@ -404,7 +446,12 @@ impl State<'_> {
             }
             "zip" => has_flag('m', "--move")
                 .then(|| "`zip -m` deletes the files it adds".into()),
-            "patch" => Some("`patch` rewrites files".into()),
+            "patch" => (!args.iter().any(|w| w.text == "--dry-run" || w.text == "-C" || w.text == "--check"))
+                .then(|| "`patch` rewrites files".into()),
+            "7z" | "7za" | "7zr" | "7zz" => args
+                .iter()
+                .any(|w| w.text == "-y" || w.text.starts_with("-ao"))
+                .then(|| "`7z` is set to overwrite files".into()),
             "rename" | "prename" | "mmv" => Some(format!("`{name}` renames or overwrites files")),
             "curl" | "wget" | "sort" => self.check_output_flags(name, args),
             "tee" => {
@@ -465,6 +512,11 @@ impl State<'_> {
     }
 
     fn check_find(&mut self, args: &[Word], depth: usize) -> Option<String> {
+        if let Some(w) = args.iter().find(|w| {
+            matches!(w.text.as_str(), "-fprint" | "-fprint0" | "-fprintf" | "-fls")
+        }) {
+            return Some(format!("`find {}` writes a file", w.text));
+        }
         if args.iter().any(|w| w.text == "-delete") {
             return Some("`find -delete` removes every match".into());
         }
@@ -572,12 +624,7 @@ impl State<'_> {
         let mut i = 0;
         while i < args.len() {
             let t = args[i].text.as_str();
-            if t == "-c"
-                && args.get(i + 1).is_some_and(|v| {
-                    let v = v.text.to_ascii_lowercase();
-                    v.starts_with("alias.") && v.contains("=!") || v.contains("core.sshcommand") || v.contains("core.pager") || v.contains("core.editor") || v.contains("core.fsmonitor")
-                })
-            {
+            if t == "-c" && args.get(i + 1).is_some_and(|v| sets_command_key(&v.text)) {
                 return Some("a `git -c` setting runs a shell command".into());
             }
             if matches!(t, "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace") {
@@ -625,9 +672,16 @@ impl State<'_> {
             "rm" => Some("`git rm` deletes files from the work tree"),
             "worktree" => any(&|t| t == "remove" || t == "prune")
                 .then_some("`git worktree remove` deletes a working tree"),
-            "config" => (any(&|t| t.starts_with('!') || t.contains("=!"))
-                || (any(&|t| t.starts_with("alias.")) && any(&|t| t.starts_with('!'))))
-                .then_some("`git config` sets an alias that runs a shell command"),
+            "config" => {
+                let reads = any(&|t| {
+                    matches!(t, "--get" | "--get-all" | "--get-regexp" | "--list" | "-l" | "--unset" | "--unset-all")
+                });
+                (!reads && rest.iter().any(|w| sets_command_key(&w.text) || w.text.starts_with('!')))
+                    .then_some("`git config` stores a setting that runs a command")
+            }
+            "apply" => Some("`git apply` rewrites files"),
+            "mv" => any(&|t| t == "-f" || t == "--force")
+                .then_some("`git mv -f` overwrites an existing path"),
             "stash" => any(&|t| t == "drop" || t == "clear")
                 .then_some("`git stash drop/clear` loses stashed work"),
             "branch" => any(&|t| t == "-D" || t == "--delete" || t == "-d" || t == "-M" || t == "-f")
@@ -646,6 +700,30 @@ impl State<'_> {
         };
         reason.map(str::to_string)
     }
+}
+
+/// Whether a `key` or `key=value` names a git setting that runs a command
+/// (a `!` alias, `core.fsmonitor`, hooks path, pager, editor, ssh command,
+/// `diff.external`, `filter.*`, `credential.helper`).
+fn sets_command_key(setting: &str) -> bool {
+    let s = setting.to_ascii_lowercase();
+    let key = s.split('=').next().unwrap_or("");
+    (key.starts_with("alias.") && s.contains("=!"))
+        || [
+            "core.fsmonitor",
+            "core.hookspath",
+            "core.pager",
+            "core.editor",
+            "core.sshcommand",
+            "sequence.editor",
+            "diff.external",
+            "credential.helper",
+            "gpg.program",
+        ]
+        .contains(&key)
+        || key.starts_with("filter.")
+        || key.starts_with("diff.") && key.ends_with(".textconv")
+        || key.starts_with("merge.") && key.ends_with(".driver")
 }
 
 /// Whether a sed script contains a `w` (write to file) or `e` (execute)
@@ -1344,6 +1422,82 @@ mod tests {
             "sed 's/a/b/' in",
             "git config user.name x",
             "curl -sSL http://x",
+        ] {
+            assert!(classify(c, &d).is_none(), "should not ask: {c:?}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn wrapper_options_are_skipped_per_wrapper() {
+        let d = scratch();
+        for c in [
+            "time -p rm x",
+            "sudo -E rm x",
+            "sudo -u root rm x",
+            "timeout -s KILL 5 rm x",
+            "timeout --signal=KILL 5 rm x",
+            "timeout -k 2 5 rm x",
+            "timeout 5 rm x",
+            "nice -n 5 rm x",
+            "env -u FOO rm x",
+            "xargs -n 1 rm",
+            "parallel rm ::: a b",
+            "flock lock rm x",
+            "script -qc 'rm x' /dev/null",
+            "su -c 'rm x' root",
+            "runuser -u me -- rm x",
+            "unshare -r rm x",
+            "fakeroot rm x",
+            "proot rm x",
+            "firejail rm x",
+            "bwrap --bind / / rm x",
+            "chrt 10 rm x",
+            "taskset 1 rm x",
+            "strace -o log rm x",
+            "ltrace rm x",
+            "valgrind rm x",
+            "systemd-run --user rm x",
+            "at now",
+            "batch",
+            "gdb -batch -ex 'shell rm x'",
+            "julia -e 'rm(\"x\")'",
+            "pwsh -c 'rm x'",
+            "tclsh x.tcl",
+            "Rscript -e 'unlink(1)'",
+            "osascript -e 'x'",
+            "expect -c 'spawn rm x'",
+            "awk -f prog.awk in",
+            "sed -f prog.sed in",
+            "git config core.fsmonitor 'rm x'",
+            "git config core.hooksPath /tmp/h",
+            "git config sequence.editor 'sh x'",
+            "git config diff.external x",
+            "git config filter.x.clean 'sh x'",
+            "git config credential.helper '!sh x'",
+            "git -c core.pager='sh x' log",
+            "git apply p.diff",
+            "git mv -f a b",
+            "gunzip -f a.gz",
+            "gunzip a.gz",
+            "7z x -y a.7z",
+            "find . -fprint out.txt",
+            "find . -fprintf out.txt '%p'",
+        ] {
+            assert!(classify(c, &d).is_some(), "should ask: {c:?}");
+        }
+        for c in [
+            "time -p ls",
+            "sudo -E ls",
+            "timeout -s KILL 5 ls",
+            "timeout 5 sleep 1",
+            "patch --dry-run -p1",
+            "git config --get core.pager",
+            "git config user.email a@b",
+            "git mv a b",
+            "gunzip -k a.gz",
+            "7z l a.7z",
+            "find . -name x -print",
         ] {
             assert!(classify(c, &d).is_none(), "should not ask: {c:?}");
         }

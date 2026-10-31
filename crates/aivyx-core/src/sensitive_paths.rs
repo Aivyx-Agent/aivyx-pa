@@ -146,6 +146,11 @@ pub struct SensitivePolicy {
     /// A path under one is not matched by the extra-deny prefix that holds
     /// the folder; the built-in rules still apply to it.
     extra_deny_exempt: Vec<PathBuf>,
+    /// When the file tools' root covers `$HOME`: `(home, carve-outs)`. File
+    /// WRITES to any dot entry of `home` (any `~/.*` file or directory,
+    /// recursively) are refused except under a carve-out. See
+    /// [`Self::classify_file_write`].
+    home_dots: Option<(PathBuf, Vec<PathBuf>)>,
 }
 
 impl SensitivePolicy {
@@ -158,7 +163,49 @@ impl SensitivePolicy {
             allow,
             extra_deny,
             extra_deny_exempt: Vec::new(),
+            home_dots: None,
         }
+    }
+
+    /// Refuse file-tool writes to `home`'s dot entries (login and session
+    /// files, shell and desktop configs, `~/.local/share/applications`, ...),
+    /// except under `carve_outs` (the personal workspace, the generated-image
+    /// folder). This is the rule `shell.exec`'s confiner applies when its
+    /// root covers `$HOME`; a named list of such files cannot be complete.
+    pub fn with_home_dot_guard(mut self, home: PathBuf, carve_outs: Vec<PathBuf>) -> Self {
+        self.home_dots = Some((home, carve_outs));
+        self
+    }
+
+    /// [`Self::with_home_dot_guard`] when there is a guard to install.
+    pub fn with_home_dot_guard_opt(self, guard: Option<(PathBuf, Vec<PathBuf>)>) -> Self {
+        match guard {
+            Some((home, carve)) => self.with_home_dot_guard(home, carve),
+            None => self,
+        }
+    }
+
+    /// [`Self::classify_write`] plus the `$HOME` dot-entry rule, for the file
+    /// tools (`fs.write`, `fs.delete`, the data writers). `shell.exec`'s
+    /// command scan uses `classify_write` only: its confiner enforces the dot
+    /// rule on what the command actually does.
+    pub fn classify_file_write(&self, canonical: &Path) -> Option<String> {
+        if let Some(reason) = self.classify_write(canonical) {
+            return Some(reason);
+        }
+        if !self.enabled || self.allow.iter().any(|a| canonical.starts_with(a)) {
+            return None;
+        }
+        let (home, carve) = self.home_dots.as_ref()?;
+        let first = canonical.strip_prefix(home).ok()?.components().next()?;
+        let first = first.as_os_str().to_str()?;
+        if first.starts_with('.') && !carve.iter().any(|c| canonical.starts_with(c)) {
+            return Some(format!(
+                "a dot entry under $HOME ({first}) — login, session and desktop settings \
+                 live there and are obeyed at the next login"
+            ));
+        }
+        None
     }
 
     /// Carve working folders out of the extra-deny prefixes that contain
@@ -177,6 +224,7 @@ impl SensitivePolicy {
             allow: Vec::new(),
             extra_deny: Vec::new(),
             extra_deny_exempt: Vec::new(),
+            home_dots: None,
         }
     }
 
@@ -513,5 +561,37 @@ mod tests {
         ] {
             assert!(g.classify_write(Path::new(p)).is_some(), "{p} must be refused");
         }
+    }
+
+    #[test]
+    fn home_dot_entries_are_refused_for_file_writes_with_carve_outs_and_allow() {
+        let home = PathBuf::from("/home/alice");
+        let g = SensitivePolicy::new(vec![PathBuf::from("/home/alice/.config/allowed")], vec![])
+            .with_home_dot_guard(home.clone(), vec![home.join(".aivyx-pa/workspace")]);
+        for p in [
+            "/home/alice/.config/hypr/hyprland.conf",
+            "/home/alice/.config/uwsm/env",
+            "/home/alice/.local/share/applications/x.desktop",
+            "/home/alice/.kshrc",
+            "/home/alice/.config/niri/config.kdl",
+            "/home/alice/.config/fish/functions/x.fish",
+            "/home/alice/.newdotdir/file",
+        ] {
+            assert!(g.classify_file_write(Path::new(p)).is_some(), "{p}");
+        }
+        for p in [
+            "/home/alice/notes/todo.md",
+            "/home/alice/aivyx-pa-sandbox/a.txt",
+            "/home/alice/.aivyx-pa/workspace/journal.md",
+            "/home/alice/.config/allowed/x.conf",
+            "/elsewhere/.hidden/file",
+        ] {
+            assert!(g.classify_file_write(Path::new(p)).is_none(), "{p}");
+        }
+        // classify_write (the shell command scan) does not apply the dot rule.
+        assert!(g.classify_write(Path::new("/home/alice/.config/hypr/hyprland.conf")).is_none());
+        // No guard configured (root does not cover $HOME): unchanged.
+        let g = SensitivePolicy::new(vec![], vec![]);
+        assert!(g.classify_file_write(Path::new("/home/alice/.kshrc")).is_none());
     }
 }
