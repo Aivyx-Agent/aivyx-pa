@@ -415,12 +415,12 @@ mod tests {
     }
 
     /// Audit 2026-10-28 (P3): `shell.exec`'s confiner denies every
-    /// instance's config/state dirs and `~/.aivyx-pa`; `fs.write` /
-    /// `fs.delete` consult this policy, which must deny the same set, so the
-    /// agent cannot rewrite the daemon's own config (tool-process and MCP
-    /// commands, access level, autonomy), team config, installed tool packs
-    /// or tool-process settings, all of which the next daemon start obeys at
-    /// daemon privilege. The binary builds the list from `InstancePaths`.
+    /// instance's config/state dirs and `~/.aivyx-pa`, and `fs.write` /
+    /// `fs.delete` consult this policy, which denies the same set. The agent
+    /// therefore cannot rewrite the daemon's own config, team config,
+    /// installed tool packs or tool-process settings, all of which the next
+    /// start obeys at daemon privilege. The binary builds the list from
+    /// `InstancePaths`.
     #[test]
     fn audit_portcullis_covers_the_daemons_own_config_and_tool_binaries() {
         let g = SensitivePolicy::new(

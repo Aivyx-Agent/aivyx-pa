@@ -1,10 +1,10 @@
-//! Audit 2026-10-28 probe (scratch branch).
+//! Audit 2026-10-28 (P2) regression test.
 //!
-//! `[loop] gate_command` (e.g. `cargo test`) runs at daemon privilege, in the
-//! directory the loop's CONFINED agent writes to (`working_dir`), with the
-//! daemon's full environment. Whatever the agent left there (`build.rs`, a
-//! test, `./gate.sh`, `.cargo/config.toml`) therefore runs unconfined and can
-//! read `AIVYX_PA_PASSPHRASE` and every provider key.
+//! `[loop] gate_command` (e.g. `cargo test`) runs in the directory the loop's
+//! confined agent writes to (`working_dir`). What the agent left there
+//! (`build.rs`, a test, `./gate.sh`, `.cargo/config.toml`) is executed by the
+//! gate, so the gate runs confined with a cleared environment and cannot read
+//! `AIVYX_PA_PASSPHRASE` or a provider key.
 use std::time::Duration;
 
 use aivyx_channel::loop_gate::{GateOutcome, GateRunner, ShellGateRunner};

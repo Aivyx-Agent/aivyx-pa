@@ -2436,9 +2436,9 @@ mod tests {
 
     /// Audit 2026-10-28 (P3): at access `home`/`full` the sandbox root is
     /// `$HOME`. With the guard built from the instance's state directories,
-    /// fs.write must refuse the daemon's own config, new files in the
-    /// tool-process directory and the packs directory: the next start obeys
-    /// them at daemon privilege (`[[tool_process]]`, `[[mcp_server]]`,
+    /// fs.write refuses the daemon's own config, new files in the
+    /// tool-process directory and the packs directory (the next start obeys
+    /// them at daemon privilege: `[[tool_process]]`, `[[mcp_server]]`,
     /// `[access]`).
     #[test]
     fn audit_fs_write_cannot_rewrite_the_daemons_own_config() {

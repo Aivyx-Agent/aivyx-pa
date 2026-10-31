@@ -387,7 +387,7 @@ mod tests {
     }
 
     /// Audit 2026-10-28 (P2): the gate executes what the confined loop
-    /// agent wrote, so it must not see the daemon's environment.
+    /// agent wrote, so it sees a cleared environment, not the daemon's.
     #[tokio::test]
     async fn the_gate_sees_a_cleared_environment_not_the_daemons_secrets() {
         let dir = scratch_dir();
@@ -416,8 +416,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Audit 2026-10-28 (P2): a gate that writes outside its folder is
-    /// refused by the confiner (the folder is the only writable place).
+    /// Audit 2026-10-28 (P2): the confiner refuses a gate that writes outside
+    /// its folder (the folder is the only writable place).
     #[tokio::test]
     async fn the_gate_cannot_write_outside_its_folder() {
         let dir = scratch_dir();

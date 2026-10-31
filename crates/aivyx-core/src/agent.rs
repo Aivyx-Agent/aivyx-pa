@@ -8440,7 +8440,7 @@ mod tests {
         assert_eq!(kinds(plain_events), kinds(armed_audit.snapshot()));
     }
 
-    // ---- Audit 2026-10-28 (scratch branch): the "operator replied" ledger ----
+    // ---- Audit 2026-10-28 (P1, P15): the "operator replied" ledger ----
 
     /// An agent whose n-th turn plays `plans[n]` (the last plan repeats).
     fn per_turn_plans_agent(
@@ -8457,10 +8457,9 @@ mod tests {
         })
     }
 
-    /// P-A: a refusal for ONE call (`todo.md`) is remembered per tool NAME, so
-    /// in any later turn of the session a call with a different target and a
-    /// model-supplied `confirmed: true` runs without the operator ever having
-    /// been asked about that target.
+    /// P1: a refusal covers ONE call (`todo.md`). A later call with a
+    /// different target and a model-supplied `confirmed: true` asks again,
+    /// since the operator was never asked about that target.
     #[tokio::test]
     async fn audit_a_refusal_for_one_target_does_not_approve_another_target() {
         let tool = ConfirmFirstTool::new();
@@ -8614,8 +8613,8 @@ mod tests {
         assert!(matches!(late, TurnOutcome::Escalated { .. }), "{late:?}");
     }
 
-    /// P-A (ask path): same for a withheld integration write. One unanswered
-    /// refusal of `email.send` to alice lets the next turn send to anyone.
+    /// P1 (ask path): the same for a withheld integration write. An unanswered
+    /// refusal of `email.send` to alice leaves a send to anyone else asking.
     #[tokio::test]
     async fn audit_a_refused_send_to_one_recipient_does_not_approve_another() {
         let tool = Arc::new(FakeTool::new_bare("gmail.send", "email.send"));
