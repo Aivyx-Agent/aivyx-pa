@@ -346,6 +346,7 @@ fn build_shell_exec_for_channel(
     confine_options: aivyx_core::ConfineOptions,
     confine_deny_paths: Vec<std::path::PathBuf>,
     confirm_destructive: bool,
+    confirm_destructive_git: bool,
 ) -> Result<GatedToolRegistration, String> {
     match channel_kind {
         // Phase 135 — Voice runs in-process on the
@@ -366,6 +367,7 @@ fn build_shell_exec_for_channel(
                 // first (audit P16): detected per command, see
                 // `shell_destructive`.
                 .with_confirm_destructive(confirm_destructive)
+                .with_confirm_destructive_git(confirm_destructive_git)
                 .build()
                 .map_err(|e| format!("failed to build shell.exec tool: {e}"))?
                 // Chapters Ward/Portcullis on shell.exec — refuse commands
@@ -8848,6 +8850,7 @@ async fn run_async(
             &own_config_files(config_team_config_path.as_deref()),
         ),
         confirm_destructive,
+        confirm_destructive_git,
     )? {
         Some((shell, scope)) => {
             tool_list.push(shell);
@@ -13042,6 +13045,7 @@ mod tests {
             aivyx_core::ConfineOptions::new(),
             Vec::new(),
             false,
+            false,
         )
         .expect("local branch must build shell.exec cleanly");
         let (tool, scope) = result.expect("local must receive shell.exec");
@@ -13195,6 +13199,7 @@ mod tests {
             // match production's default posture.
             aivyx_core::ConfineOptions::new(),
             Vec::new(),
+            false,
             false,
         )
         .expect("telegram branch must not error — it's a no-op");

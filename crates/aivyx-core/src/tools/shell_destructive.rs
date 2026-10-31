@@ -71,14 +71,34 @@ struct Command {
 /// Why `cmd` (run with `cwd` as its working directory) should ask first, or
 /// `None` when it is not destructive as far as this check can tell.
 pub fn classify(cmd: &str, cwd: &Path) -> Option<String> {
+    classify_for(cmd, cwd, Mode::All)
+}
+
+/// Which destructive commands count: the postures of the file area and the
+/// git area can differ, so `shell.exec` asks for git commands under the git
+/// posture and for everything else under the file posture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Everything.
+    All,
+    /// Everything except `git` subcommands.
+    NoGit,
+    /// Only `git` subcommands (and what could hide one).
+    GitOnly,
+}
+
+/// [`classify`] for the given [`Mode`].
+pub fn classify_for(cmd: &str, cwd: &Path, mode: Mode) -> Option<String> {
     let mut st = State {
         cwd,
         cwd_unknown: false,
+        mode,
     };
     st.scan(cmd, 0)
 }
 
 struct State<'a> {
+    mode: Mode,
     cwd: &'a Path,
     /// A `cd` ran earlier in the line, so relative paths mean nothing here.
     cwd_unknown: bool,
@@ -124,7 +144,7 @@ impl State<'_> {
     }
 
     fn check(&mut self, c: &Command, depth: usize) -> Option<String> {
-        for target in &c.truncating {
+        for target in c.truncating.iter().filter(|_| self.mode != Mode::GitOnly) {
             if target.dynamic || target.text.is_empty() {
                 return Some("it redirects output (`>`) to a path it cannot resolve".into());
             }
@@ -230,6 +250,19 @@ impl State<'_> {
             return self.check(&rest, depth + 1);
         }
 
+        // In git-only mode nothing below matters except the shells and `eval`
+        // (which can carry a git command) and `git` itself.
+        if self.mode == Mode::GitOnly
+            && !SHELLS.contains(&name)
+            && name != "eval"
+            && name != "git"
+        {
+            return None;
+        }
+        if self.mode == Mode::NoGit && name == "git" {
+            return None;
+        }
+
         // `sh -c "..."`, `eval ...`.
         if SHELLS.contains(&name) {
             for (i, w) in args.iter().enumerate() {
@@ -239,6 +272,9 @@ impl State<'_> {
                         _ => Some("a shell script string it cannot see".into()),
                     };
                 }
+            }
+            if self.mode == Mode::GitOnly {
+                return None;
             }
             // No `-c`: the shell reads a script file or stdin (`sh x.sh`,
             // `... | sh`, `sh < x`), which this check cannot see.

@@ -330,14 +330,35 @@ pub(crate) async fn confined_output(mut command: Command) -> std::io::Result<Out
     }
 }
 
-/// Read a child's captured pipe to EOF. A read error ends the capture
-/// early with what was read so far — the command's own exit status is
-/// what the caller acts on, not a broken pipe.
+/// The most a captured stream keeps: its last 1 MiB. A command that prints
+/// without end (a build log, `yes`) must not grow the daemon without bound.
+pub(crate) const MAX_CAPTURED_OUTPUT: usize = 1024 * 1024;
+
+/// Read a child's captured pipe to EOF, keeping only the last
+/// [`MAX_CAPTURED_OUTPUT`] bytes while reading. A read error ends the capture
+/// early with what was read so far — the command's own exit status is what
+/// the caller acts on, not a broken pipe.
 async fn read_pipe<R: tokio::io::AsyncRead + Unpin>(pipe: Option<&mut R>) -> Vec<u8> {
     use tokio::io::AsyncReadExt;
     let mut buf = Vec::new();
     if let Some(pipe) = pipe {
-        let _ = pipe.read_to_end(&mut buf).await;
+        let mut chunk = vec![0u8; 64 * 1024];
+        loop {
+            match pipe.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.len() > 2 * MAX_CAPTURED_OUTPUT {
+                        let excess = buf.len() - MAX_CAPTURED_OUTPUT;
+                        buf.drain(..excess);
+                    }
+                }
+            }
+        }
+        if buf.len() > MAX_CAPTURED_OUTPUT {
+            let excess = buf.len() - MAX_CAPTURED_OUTPUT;
+            buf.drain(..excess);
+        }
     }
     buf
 }

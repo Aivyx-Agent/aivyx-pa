@@ -5,6 +5,38 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- **An approval applies to exactly one call.** The "operator replied" ledger
+  was keyed by tool name, so one refusal or one declined prompt let a later
+  call to the same tool run unasked. It is now keyed by the call itself
+  (tool, arguments, resolved target), counts only in the operator's next
+  turn, expires after ten minutes, is used once, and honours only a short
+  yes (`yes`, `y`, `ok`, `approve`, `go ahead`, ...): a "no" or any other
+  message drops the pending approval.
+- **The agent can no longer write pa's own config, packs or tool-process
+  files.** The file tools' guard denies the instance config, data,
+  `~/.aivyx-pa` and runtime folders, any file named `aivyx-pa.toml` or
+  `team.toml`, and the resolved config paths, at every access level, for new
+  files as well as overwrites. A refused `fs.write` leaves no directories
+  behind.
+- **The loop's gate command runs confined.** It executes what the loop agent
+  wrote, so it now runs under the `shell.exec` confinement (only the
+  working folder is writable), with a cleared environment, in its own process
+  group. **Behaviour change:** `[loop] working_dir` is required when
+  `gate_command` is set (reported when the config loads), and the gate
+  inherits only `PATH`, `HOME`, `LANG`, `TERM` plus the new `[loop] gate_env`
+  list (secret-looking names are refused). Captured command output is capped
+  at its last 1 MiB.
+- **`shell.exec` asks before a destructive command** when
+  `confirm_destructive` is on, as the docs and the init wizard promise:
+  removals, overwrites, forced or history-rewriting git, `dd`, `mkfs`,
+  `chmod -R`, and what the check cannot read (scripts, interpreters,
+  `sh -c "$VAR"`). `git` commands follow the git area's posture, the rest the
+  file area's. The question is an escalation, so it also applies in loop,
+  trigger and headless runs: there it is refused or parked like any other
+  confirm-first call instead of running.
+
 ## [0.19.3] — 2026-10-29
 
 ### Security

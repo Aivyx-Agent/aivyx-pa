@@ -128,6 +128,7 @@ pub struct ShellExecToolConfig {
     confine_options: ConfineOptions,
     deny_paths: Vec<PathBuf>,
     confirm_destructive: bool,
+    confirm_destructive_git: bool,
 }
 
 impl ShellExecToolConfig {
@@ -137,7 +138,15 @@ impl ShellExecToolConfig {
             confine_options: ConfineOptions::new(),
             deny_paths: Vec::new(),
             confirm_destructive: false,
+            confirm_destructive_git: false,
         }
+    }
+
+    /// The git area's posture, for `git` commands run through the shell
+    /// (the stricter of this and [`Self::with_confirm_destructive`] applies).
+    pub fn with_confirm_destructive_git(mut self, confirm: bool) -> Self {
+        self.confirm_destructive_git = confirm;
+        self
     }
 
     /// `[access] confirm_destructive`: a command that looks destructive
@@ -200,6 +209,7 @@ impl ShellExecToolConfig {
             sensitive: Arc::new(crate::sensitive_paths::SensitivePolicy::disabled()),
             confiner,
             confirm_destructive: self.confirm_destructive,
+            confirm_destructive_git: self.confirm_destructive_git,
         })
     }
 }
@@ -232,6 +242,8 @@ pub struct ShellExecTool {
     confiner: Arc<dyn ExecutionConfiner>,
     /// Ask the operator before a command that looks destructive.
     confirm_destructive: bool,
+    /// The same for `git` subcommands, under the git area's posture.
+    confirm_destructive_git: bool,
 }
 
 // Hand-rolled (not `#[derive(Debug)]`): `dyn ExecutionConfiner` has no
@@ -620,9 +632,16 @@ impl Tool for ShellExecTool {
         //
         // `confirmed` is set by the agent only for an operator-approved call
         // (see `confirm.rs`); the model's own claim never reaches here.
-        if self.confirm_destructive
+        use crate::tools::shell_destructive::{Mode, classify_for};
+        let mode = match (self.confirm_destructive, self.confirm_destructive_git) {
+            (true, true) => Some(Mode::All),
+            (true, false) => Some(Mode::NoGit),
+            (false, true) => Some(Mode::GitOnly),
+            (false, false) => None,
+        };
+        if let Some(mode) = mode
             && !crate::confirm::is_confirmed(&input)
-            && let Some(why) = crate::tools::shell_destructive::classify(&cmd, &canonical_cwd)
+            && let Some(why) = classify_for(&cmd, &canonical_cwd, mode)
         {
             return ToolOutcome::RequiresEscalation {
                 reason: format!(
@@ -1055,6 +1074,55 @@ mod tests {
         let scratch = Scratch::new();
         let tool = build_tool(&scratch.dir);
         assert!(crate::confirm::declares_confirmed(tool.input_schema()));
+    }
+
+    /// A command that prints far more than the cap keeps its last megabyte.
+    #[tokio::test]
+    async fn runaway_output_is_capped_to_its_tail() {
+        let scratch = Scratch::new();
+        let tool = build_tool(&scratch.dir);
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let out = tool
+            .execute(
+                json!({"cmd": "head -c 6000000 /dev/zero | tr '\\0' a; printf END",
+                       "args": {"timeout_ms": 60000}}),
+                &ctx,
+            )
+            .await;
+        match out {
+            ToolOutcome::Completed { output, .. } => {
+                let stdout = output["stdout"].as_str().unwrap();
+                assert!(stdout.len() <= crate::tools::process_group::MAX_CAPTURED_OUTPUT + 4);
+                assert!(stdout.ends_with("END"), "the tail is the part kept");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn git_commands_follow_the_git_posture_and_the_rest_the_file_posture() {
+        let scratch = Scratch::new();
+        let channel = fresh_channel();
+        let audit = NullAuditHook;
+        let ctx = make_ctx(&channel, &audit);
+        let git_only = ShellExecToolConfig::new(&scratch.dir)
+            .with_confirm_destructive_git(true)
+            .build()
+            .unwrap();
+        let out = git_only.execute(json!({"cmd": "git reset --hard"}), &ctx).await;
+        assert!(matches!(out, ToolOutcome::RequiresEscalation { .. }), "{out:?}");
+        std::fs::write(scratch.dir.join("f"), "x").unwrap();
+        let out = git_only.execute(json!({"cmd": "rm f"}), &ctx).await;
+        assert!(matches!(out, ToolOutcome::Completed { .. }), "git-only posture ignores rm: {out:?}");
+
+        let files_only = ShellExecToolConfig::new(&scratch.dir)
+            .with_confirm_destructive(true)
+            .build()
+            .unwrap();
+        let out = files_only.execute(json!({"cmd": "git reset --hard"}), &ctx).await;
+        assert!(!matches!(out, ToolOutcome::RequiresEscalation { .. }), "{out:?}");
     }
 
     #[tokio::test]
