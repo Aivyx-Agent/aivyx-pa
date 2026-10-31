@@ -140,7 +140,10 @@ see: a shell reading a script or stdin (`sh x.sh`, `./x.sh`, `source x`,
 `php` with `-c`/`-e` or a file), `ex`/`vim`, `crontab`, output flags onto an
 existing file (`curl -o`, `sort -o`, `wget -O`, `awk -i inplace`), `rsync` into
 an existing path, and the git forms that discard work (`checkout <path>`,
-`restore`, `rm`, `push :ref`, `worktree remove`). What stays unseen: build and
+`restore`, `rm`, `push :ref`, `worktree remove`), awk/sed programs that run
+commands or write files, git aliases that run a shell, compressors without
+`-k` (`gzip`, `xz`, `bzip2`), `tar -x`, `unzip -o`, `patch` and `rename`. What
+stays unseen: build and
 task tools that run files the agent wrote (`make`, `npm run`, `cargo build`
 with a `build.rs`): the command is named plainly, its effects are not read.
 

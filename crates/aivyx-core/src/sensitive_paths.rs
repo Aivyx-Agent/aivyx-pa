@@ -83,6 +83,15 @@ const SENSITIVE_EXTENSIONS: &[&str] = &["pem", "key", "p12", "pfx", "redb"];
 /// (auto-start, service units, scheduled jobs, git hooks). Chapter Portcullis.
 const PERSISTENCE_DIR_SEGMENTS: &[&str] = &[
     "autostart", // ~/.config/autostart/*.desktop
+    // Login/session environment: read by the systemd user manager, PAM and
+    // the desktop session, then handed to every service (a planted
+    // AIVYX_PA_CONFIG_PATH or XDG_CONFIG_HOME would steer the daemon).
+    "environment.d",    // ~/.config/environment.d/*.conf
+    "plasma-workspace", // ~/.config/plasma-workspace/env/*.sh
+    "conf.d",           // ~/.config/fish/conf.d/*.fish
+    "Xsession.d",
+    "profile.d",
+    ".MacOSX", // ~/.MacOSX/environment.plist
     "systemd",   // ~/.config/systemd/user, /etc/systemd
     "cron.d",
     "cron.daily",
@@ -106,9 +115,16 @@ const PERSISTENCE_BASENAMES: &[&str] = &[
     "authorized_keys",
     "crontab",
     ".xprofile",
-    // pa's own config. `aivyx-pa` reads `./aivyx-pa.toml` from its working
-    // directory (the installed service runs in `$HOME`), so a file by this
-    // name anywhere is a config the next start obeys. Same for the team file.
+    ".xsessionrc",
+    ".xinitrc",
+    ".xsession",
+    ".pam_environment",
+    "environment.plist",
+    "config.fish",
+    // pa's own config and team file. The loader no longer reads a working
+    // directory config, but a file by these names anywhere is what an
+    // operator would point `AIVYX_PA_CONFIG_PATH` at, and the agent must not
+    // be able to author it.
     "aivyx-pa.toml",
     "team.toml",
 ];
@@ -476,5 +492,26 @@ mod tests {
         }
         assert!(g.classify(Path::new("/home/alice/project/team.toml")).is_none(), "reads stay open");
         assert!(g.classify_write(Path::new("/home/alice/project/teams.toml")).is_none());
+    }
+
+    #[test]
+    fn login_and_session_environment_files_are_refused_for_writes() {
+        let g = SensitivePolicy::new(vec![], vec![]);
+        for p in [
+            "/home/a/.config/environment.d/50-pa.conf",
+            "/home/a/.pam_environment",
+            "/home/a/.xsessionrc",
+            "/home/a/.xinitrc",
+            "/home/a/.xsession",
+            "/home/a/.config/autostart/x.desktop",
+            "/home/a/.config/plasma-workspace/env/pa.sh",
+            "/home/a/.config/fish/conf.d/pa.fish",
+            "/home/a/.config/fish/config.fish",
+            "/home/a/.MacOSX/environment.plist",
+            "/Users/a/Library/LaunchAgents/x.plist",
+            "/etc/profile.d/pa.sh",
+        ] {
+            assert!(g.classify_write(Path::new(p)).is_some(), "{p} must be refused");
+        }
     }
 }

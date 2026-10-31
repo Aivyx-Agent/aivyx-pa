@@ -6828,35 +6828,53 @@ fn shell_confine_deny_paths(
     deny
 }
 
-/// The files pa reads as its own config, whether or not they exist yet:
-/// the resolved config path (which includes `$AIVYX_PA_CONFIG_PATH` and a
-/// `./aivyx-pa.toml` in the working directory, `$HOME` for the installed
-/// service), the env override itself and the `[team] config_path` target.
-/// The next start obeys what is in them, so the agent must not write them.
+/// The files pa reads as its own config, whether or not they exist yet: the
+/// resolved config path (`$AIVYX_PA_CONFIG_PATH`, else the instance's standard
+/// file), the env override itself and the `[team] config_path` target. The
+/// next start obeys what is in them, so the agent must not write them.
 fn own_config_files(team_config_path: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
-    let mut files = vec![aivyx_config::resolve_config_path()];
-    if let Ok(p) = std::env::var(aivyx_config::ENV_CONFIG_PATH)
-        && !p.is_empty()
-    {
-        files.push(std::path::PathBuf::from(p));
-    }
-    if let Some(t) = team_config_path {
-        files.push(t.to_path_buf());
-    }
-    // A relative spelling is relative to the working directory.
-    if let Ok(cwd) = std::env::current_dir() {
-        for f in &mut files {
-            if f.is_relative() {
-                *f = cwd.join(&*f);
-            }
-        }
-        files.push(cwd.join("aivyx-pa.toml"));
+    own_config_files_for(
+        aivyx_config::resolve_config_path(),
+        std::env::var(aivyx_config::ENV_CONFIG_PATH).ok(),
+        team_config_path,
+        std::env::current_dir().ok().as_deref(),
+    )
+}
+
+/// [`own_config_files`] over explicit inputs. The team file is resolved the
+/// way the loader does it: a relative `[team] config_path` is joined to the
+/// directory of the loaded config, not to the working directory.
+fn own_config_files_for(
+    config_path: std::path::PathBuf,
+    env_override: Option<String>,
+    team_config_path: Option<&std::path::Path>,
+    cwd: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let absolute = |p: std::path::PathBuf| match cwd {
+        Some(cwd) if p.is_relative() => cwd.join(p),
+        _ => p,
+    };
+    let config = absolute(config_path);
+    let base = config.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+    let mut files = vec![
+        config.clone(),
+        aivyx_cli_team_target(team_config_path, &base),
+    ];
+    if let Some(p) = env_override.filter(|p| !p.is_empty()) {
+        files.push(absolute(std::path::PathBuf::from(p)));
     }
     let resolved: Vec<_> = files.iter().filter_map(|f| std::fs::canonicalize(f).ok()).collect();
     files.extend(resolved);
     files.sort();
     files.dedup();
     files
+}
+
+fn aivyx_cli_team_target(
+    configured: Option<&std::path::Path>,
+    base: &std::path::Path,
+) -> std::path::PathBuf {
+    team::team_write_target(configured, base)
 }
 
 /// Ward's extra-deny list: paths the agent's file tools must never reach on
@@ -16966,6 +16984,30 @@ mod tests {
             overridden_guard.classify(&default_path).is_none(),
             "once overridden, the stale default path must no longer be the one protected"
         );
+    }
+
+    #[test]
+    fn own_config_files_resolve_the_team_file_beside_the_config_not_the_cwd() {
+        use std::path::{Path, PathBuf};
+        let files = own_config_files_for(
+            PathBuf::from("/etc/pa/aivyx-pa.toml"),
+            Some("/etc/pa/aivyx-pa.toml".into()),
+            Some(Path::new("roster.toml")),
+            Some(Path::new("/home/me")),
+        );
+        assert!(files.contains(&PathBuf::from("/etc/pa/roster.toml")), "{files:?}");
+        assert!(!files.contains(&PathBuf::from("/home/me/roster.toml")), "{files:?}");
+        // No [team] config_path: the conventional team.toml beside the config.
+        let files = own_config_files_for(PathBuf::from("/c/aivyx-pa.toml"), None, None, None);
+        assert!(files.contains(&PathBuf::from("/c/team.toml")), "{files:?}");
+        // A relative env path is relative to the cwd.
+        let files = own_config_files_for(
+            PathBuf::from("rel/aivyx-pa.toml"),
+            Some("rel/aivyx-pa.toml".into()),
+            None,
+            Some(Path::new("/w")),
+        );
+        assert!(files.contains(&PathBuf::from("/w/rel/aivyx-pa.toml")), "{files:?}");
     }
 
     /// Audit 2026-10-28 (P3): the file tools' guard denies the daemon's own

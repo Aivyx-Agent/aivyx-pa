@@ -351,16 +351,61 @@ impl State<'_> {
                                 && w.text[1..].starts_with(|c: char| c.is_ascii_alphabetic())
                                 && w.text[1..].chars().take_while(|c| c.is_ascii_alphabetic()).any(|c| c == 'i')))
                 })
-                .then(|| format!("`{name} -i` rewrites files in place")),
-            "awk" | "gawk" => args
-                .iter()
-                .enumerate()
-                .any(|(i, w)| {
+                .then(|| format!("`{name} -i` rewrites files in place"))
+                .or_else(|| {
+                    (name == "sed" && args.iter().filter(|w| !flag(w) || w.text == "-e").any(|w| sed_script_writes(&w.text)))
+                        .then(|| "a `sed` script writes files or runs commands (`w`/`e`)".into())
+                }),
+            "awk" | "gawk" | "mawk" | "nawk" => {
+                let inplace = args.iter().enumerate().any(|(i, w)| {
                     w.text == "-iinplace"
                         || w.text == "--include=inplace"
                         || (w.text == "-i" && args.get(i + 1).is_some_and(|n| n.text == "inplace"))
-                })
-                .then(|| format!("`{name} -i inplace` rewrites files in place")),
+                });
+                if inplace {
+                    return Some(format!("`{name} -i inplace` rewrites files in place"));
+                }
+                // A program that runs commands or writes files.
+                args.iter()
+                    .filter(|w| !flag(w))
+                    .any(|w| {
+                        let t = w.text.as_str();
+                        t.contains("system(")
+                            || t.contains("| \"")
+                            || t.contains("|\"")
+                            || t.contains("> \"")
+                            || t.contains(">\"")
+                            || t.contains(">>")
+                            || t.contains("print >")
+                            || t.contains("printf >")
+                            || t.contains("close(")
+                    })
+                    .then(|| format!("`{name}` program runs commands or writes files"))
+            }
+            "gzip" | "bzip2" | "xz" | "zstd" | "lz4" | "lzma" => {
+                let keeps = args.iter().any(|w| {
+                    matches!(w.text.as_str(), "--keep" | "--stdout" | "--to-stdout" | "--test" | "--list" | "--version")
+                        || (flag(w) && !w.text.starts_with("--") && w.text[1..].chars().any(|c| matches!(c, 'k' | 'c' | 't' | 'l' | 'V')))
+                });
+                (!keeps).then(|| format!("`{name}` replaces its input file with the compressed one"))
+            }
+            "unzip" => has_flag('o', "--overwrite")
+                .then(|| "`unzip -o` overwrites existing files".into()),
+            "tar" | "bsdtar" => {
+                let extracts = args.iter().any(|w| {
+                    w.text == "--extract"
+                        || w.text == "--get"
+                        || (flag(w) && !w.text.starts_with("--") && w.text[1..].contains('x'))
+                        // old style without a dash: `tar xzf a.tgz`
+                        || (!flag(w) && args.first().is_some_and(|f| std::ptr::eq(f, w)) && w.text.starts_with('x'))
+                });
+                (extracts && !args.iter().any(|w| w.text == "--keep-old-files" || w.text == "-k"))
+                    .then(|| "`tar` extraction overwrites existing files".into())
+            }
+            "zip" => has_flag('m', "--move")
+                .then(|| "`zip -m` deletes the files it adds".into()),
+            "patch" => Some("`patch` rewrites files".into()),
+            "rename" | "prename" | "mmv" => Some(format!("`{name}` renames or overwrites files")),
             "curl" | "wget" | "sort" => self.check_output_flags(name, args),
             "tee" => {
                 if has_flag('a', "--append") {
@@ -389,7 +434,15 @@ impl State<'_> {
             if name == "curl" && (t == "-O" || t == "--remote-name" || t == "--remote-name-all") {
                 return Some("`curl -O` writes a file named by the server".into());
             }
-            let value: Option<Word> = if shorts.contains(&t) || longs.contains(&t) {
+            // Combined short flags ending in the output flag: `-sSLo out`.
+            let cluster_o = t.len() > 2
+                && t.starts_with('-')
+                && !t.starts_with("--")
+                && shorts.iter().any(|sh| t.ends_with(&sh[1..]));
+            if name == "curl" && t.len() > 2 && t.starts_with('-') && !t.starts_with("--") && t[1..].contains('O') {
+                return Some("`curl -O` writes a file named by the server".into());
+            }
+            let value: Option<Word> = if shorts.contains(&t) || cluster_o || longs.contains(&t) {
                 args.get(i + 1).cloned()
             } else if let Some(v) = longs.iter().find_map(|l| t.strip_prefix(&format!("{l}="))) {
                 Some(Word { text: v.to_string(), dynamic: w.dynamic, quoted: w.quoted })
@@ -519,6 +572,14 @@ impl State<'_> {
         let mut i = 0;
         while i < args.len() {
             let t = args[i].text.as_str();
+            if t == "-c"
+                && args.get(i + 1).is_some_and(|v| {
+                    let v = v.text.to_ascii_lowercase();
+                    v.starts_with("alias.") && v.contains("=!") || v.contains("core.sshcommand") || v.contains("core.pager") || v.contains("core.editor") || v.contains("core.fsmonitor")
+                })
+            {
+                return Some("a `git -c` setting runs a shell command".into());
+            }
             if matches!(t, "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace") {
                 i += 2;
             } else if t.starts_with('-') {
@@ -564,6 +625,9 @@ impl State<'_> {
             "rm" => Some("`git rm` deletes files from the work tree"),
             "worktree" => any(&|t| t == "remove" || t == "prune")
                 .then_some("`git worktree remove` deletes a working tree"),
+            "config" => (any(&|t| t.starts_with('!') || t.contains("=!"))
+                || (any(&|t| t.starts_with("alias.")) && any(&|t| t.starts_with('!'))))
+                .then_some("`git config` sets an alias that runs a shell command"),
             "stash" => any(&|t| t == "drop" || t == "clear")
                 .then_some("`git stash drop/clear` loses stashed work"),
             "branch" => any(&|t| t == "-D" || t == "--delete" || t == "-d" || t == "-M" || t == "-f")
@@ -582,6 +646,20 @@ impl State<'_> {
         };
         reason.map(str::to_string)
     }
+}
+
+/// Whether a sed script contains a `w` (write to file) or `e` (execute)
+/// command or `s///` flag. Conservative: it may ask about a harmless script.
+fn sed_script_writes(script: &str) -> bool {
+    let t = script.trim_start();
+    t.starts_with("w ")
+        || t.starts_with("w/")
+        || t.starts_with("e ")
+        || ["/w ", "/w/", ";w ", "\nw ", "}w ", "/e;", "/ge", "/ew", "/eg", ";e ", "/pw ", "/gw "]
+            .iter()
+            .any(|p| script.contains(p))
+        || t.ends_with("/e")
+        || t.ends_with("/w")
 }
 
 /// Lex one command line into simple commands. Returns the commands and the
@@ -1217,6 +1295,55 @@ mod tests {
             "awk '{print}' exists.txt",
             "rsync -a src/ newdir/",
             "git status",
+        ] {
+            assert!(classify(c, &d).is_none(), "should not ask: {c:?}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn program_text_that_writes_or_runs_commands_asks() {
+        let d = scratch();
+        std::fs::write(d.join("out.bin"), "x").unwrap();
+        for c in [
+            "awk 'BEGIN{system(\"rm x\")}'",
+            "awk '{print > \"out.txt\"}' in",
+            "awk '{print | \"sh\"}' in",
+            "sed 's/a/b/w out.txt' in",
+            "sed -e 'w out.txt' in",
+            "sed -n '/x/w out.txt' in",
+            "sed 's/a/b/e' in",
+            "git -c alias.x=!rm status",
+            "git config alias.x '!rm -rf .'",
+            "git config --global alias.ci '!sh run'",
+            "curl -sSLo out.bin http://x",
+            "curl -fsSLo out.bin http://x",
+            "curl -sSLO http://x/a",
+            "gzip file",
+            "xz file",
+            "bzip2 file",
+            "unzip -o a.zip",
+            "tar xzf a.tgz",
+            "tar -xf a.tar",
+            "tar --extract -f a.tar",
+            "patch -p1",
+            "rename s/a/b/ f",
+            "zip -m a.zip f",
+        ] {
+            assert!(classify(c, &d).is_some(), "should ask: {c:?}");
+        }
+        for c in [
+            "gzip -k file",
+            "gzip -c file",
+            "xz --keep file",
+            "tar -tf a.tar",
+            "tar czf a.tgz dir",
+            "unzip a.zip",
+            "awk '{print $1}' in",
+            "sed -n 1,3p in",
+            "sed 's/a/b/' in",
+            "git config user.name x",
+            "curl -sSL http://x",
         ] {
             assert!(classify(c, &d).is_none(), "should not ask: {c:?}");
         }

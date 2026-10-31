@@ -24,6 +24,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
   `aivyx-pa.toml` that the next start would obey (tool processes, MCP
   servers, access level). Configs are now loaded only from the explicit path
   or the instance's standard path.
+- **Login and session environment files are protected from the file tools**
+  (`~/.config/environment.d`, `.pam_environment`, `.xsessionrc`, `.xinitrc`,
+  `plasma-workspace/env`, fish `conf.d`, macOS `environment.plist` and
+  `LaunchAgents`), so the agent cannot set `AIVYX_PA_CONFIG_PATH` or
+  `XDG_CONFIG_HOME` for the next login. `shell.exec` also asks for awk/sed
+  programs that run commands or write files, git aliases that run a shell, and
+  the destructive archiver forms.
 - **An approval applies to exactly one call.** The "operator replied" ledger
   was keyed by tool name, so one refusal or one declined prompt let a later
   call to the same tool run unasked. It is now keyed by the call itself

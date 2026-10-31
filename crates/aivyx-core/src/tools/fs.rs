@@ -531,6 +531,27 @@ fn write_deny_scope() -> Scope {
 /// affected and getting their approval — the same operator-in-the-loop
 /// pattern as the irreversible `skills.teach`. Until then the tool refuses,
 /// so a hallucinated path can't silently destroy data.
+/// `path` with its nearest existing ancestor canonicalised (symlinks
+/// resolved) and the not-yet-existing remainder re-appended.
+fn resolve_through_existing_ancestor(path: &Path) -> PathBuf {
+    let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut cur = path;
+    loop {
+        if let Ok(c) = std::fs::canonicalize(cur) {
+            let mut out = c;
+            out.extend(rest.iter().rev());
+            return out;
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                cur = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 fn is_confirmed(input: &Value) -> bool {
     input.get("confirmed").and_then(|v| v.as_bool()) == Some(true)
 }
@@ -842,13 +863,16 @@ impl Tool for FsWriteTool {
         // The guard sees the typed (lexical) target first: a refused write
         // must not leave directories behind. The canonical re-check below
         // still covers symlinked parents.
-        if let Some(reason) = self.sensitive.classify_write(&lexical_parent.join(&file_name)) {
+        // The nearest existing ancestor is resolved through symlinks first, so a
+        // link into a denied folder cannot be used to create directories there.
+        let early_target = resolve_through_existing_ancestor(&lexical_parent).join(&file_name);
+        if let Some(reason) = self.sensitive.classify_write(&early_target) {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: format!(
                     "refusing to write {} — {reason}. Add it to `[access] \
                      allow_sensitive_paths` if you intend the agent to write it.",
-                    lexical_parent.join(&file_name).display()
+                    early_target.display()
                 ),
             });
         }
@@ -2493,6 +2517,26 @@ mod tests {
             assert!(!sandbox.root.join(path).exists(), "{path} was written");
         }
         assert!(!sandbox.root.join("phantom").exists(), "a refused write created a directory");
+    }
+
+    /// A symlink into a denied folder cannot be used to create directories
+    /// there: the early guard resolves the nearest existing ancestor.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_write_through_a_symlink_creates_no_directories() {
+        use crate::sensitive_paths::SensitivePolicy;
+        let sandbox = SandboxDir::new();
+        let root = sandbox.root.canonicalize().unwrap();
+        let denied = root.join("state");
+        std::fs::create_dir_all(&denied).unwrap();
+        std::os::unix::fs::symlink(&denied, root.join("link")).unwrap();
+        let tool = FsWriteToolConfig::new(sandbox.root.clone())
+            .with_sensitive_policy(Arc::new(SensitivePolicy::new(vec![], vec![denied.clone()])))
+            .build()
+            .unwrap();
+        let outcome = run_execute(&tool, json!({"path": "link/a/b/c.txt", "content": "x"}));
+        assert!(matches!(outcome, ToolOutcome::Failed(_)), "{outcome:?}");
+        assert!(!denied.join("a").exists(), "a directory was created in the denied folder");
     }
 
     // ---- FsWriteTool: construction + config -----------------------
