@@ -12,8 +12,7 @@ the **Example** column below comes from it.
 The first that exists wins:
 
 1. `$AIVYX_PA_CONFIG_PATH`
-2. `./aivyx-pa.toml` in the current directory
-3. your instance's config file — `~/.config/aivyx-pa/aivyx-pa.toml` for the
+2. your instance's config file — `~/.config/aivyx-pa/aivyx-pa.toml` for the
    default instance, `~/.config/aivyx-pa/instances/<name>/aivyx-pa.toml`
    for a named one (see [Files and paths](04-files-and-paths.md))
 

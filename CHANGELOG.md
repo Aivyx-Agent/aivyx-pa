@@ -5,8 +5,25 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **A `./aivyx-pa.toml` in the current directory is no longer read.** The
+  config comes from `AIVYX_PA_CONFIG_PATH` or the instance's own file
+  (`~/.config/aivyx-pa/aivyx-pa.toml`). To keep using a config elsewhere, set
+  `AIVYX_PA_CONFIG_PATH=/path/to/aivyx-pa.toml`. `aivyx-pa daemon install`
+  run from a folder that holds a config now writes that path into the unit;
+  `aivyx-pa doctor` (and a one-line notice on start) reports a config left in
+  the current directory or the service's working directory, and says how to
+  point at it. Re-run `aivyx-pa daemon install` for a service that relied on
+  its working directory.
+
 ### Security
 
+- **The daemon no longer loads a config from its working directory.** The
+  installed service runs in `$HOME`, where the agent's shell could create an
+  `aivyx-pa.toml` that the next start would obey (tool processes, MCP
+  servers, access level). Configs are now loaded only from the explicit path
+  or the instance's standard path.
 - **An approval applies to exactly one call.** The "operator replied" ledger
   was keyed by tool name, so one refusal or one declined prompt let a later
   call to the same tool run unasked. It is now keyed by the call itself

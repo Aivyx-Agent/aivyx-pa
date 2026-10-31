@@ -65,8 +65,8 @@ keyring, or — with no keyring — in a file only you can read), offers
 the default background routines, and finishes by checking that your
 model answers. The config lands in
 `~/.config/aivyx-pa/aivyx-pa.toml`, so `aivyx-pa` works from any
-directory. (A `./aivyx-pa.toml` in the current directory, or
-`AIVYX_PA_CONFIG_PATH`, takes precedence.) Want a head start?
+directory. (`AIVYX_PA_CONFIG_PATH` points at a config elsewhere; a
+`./aivyx-pa.toml` in the current directory is not read.) Want a head start?
 `aivyx-pa init --template coder` (or `researcher` / `personal`) pre-fills
 the wizard — see [`docs/TEMPLATES.md`](docs/TEMPLATES.md).
 

@@ -6272,13 +6272,16 @@ pub const ENV_CONFIG_PATH: &str = "AIVYX_PA_CONFIG_PATH";
 const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 
 /// Where `aivyx-pa.toml` is read from and written to, from any directory:
-/// `$AIVYX_PA_CONFIG_PATH`, else a `./aivyx-pa.toml` that exists (an
-/// existing per-directory setup keeps working unchanged), else
-/// `$XDG_CONFIG_HOME/aivyx-pa/aivyx-pa.toml` (default `~/.config`). The
+/// `$AIVYX_PA_CONFIG_PATH`, else the instance's standard path
+/// (`$XDG_CONFIG_HOME/aivyx-pa/aivyx-pa.toml`, default `~/.config`). The
 /// file may not exist yet — `init` creates it there.
+///
+/// A `./aivyx-pa.toml` in the current directory is deliberately NOT read: the
+/// installed service runs in `$HOME`, where the agent's file tools can create
+/// files, and the next start would obey one. Point at such a file with
+/// `AIVYX_PA_CONFIG_PATH`.
 /// Task 3: now uses InstancePaths for the default branch.
 pub fn resolve_config_path() -> PathBuf {
-    let cwd = std::env::current_dir().ok();
     let paths = aivyx_instance::InstancePaths::current()
         .unwrap_or_else(|_| {
             // Fallback if instance resolution fails
@@ -6294,17 +6297,17 @@ pub fn resolve_config_path() -> PathBuf {
         });
     resolve_config_path_from_for(
         env_string(ENV_CONFIG_PATH).as_deref(),
-        cwd.as_deref(),
+        None,
         &paths,
     )
 }
 
 /// Resolve the config path for a given instance (explicit inputs).
-/// Empty strings count as unset. Only the CWD file's existence is checked on disk.
+/// Empty strings count as unset. `cwd` is accepted for compatibility and ignored.
 /// Task 3: the default branch now uses InstancePaths.
 pub fn resolve_config_path_from_for(
     env_override: Option<&str>,
-    cwd: Option<&Path>,
+    _cwd: Option<&Path>,
     paths: &aivyx_instance::InstancePaths,
 ) -> PathBuf {
     fn set(v: Option<&str>) -> Option<&str> {
@@ -6313,21 +6316,16 @@ pub fn resolve_config_path_from_for(
     if let Some(explicit) = set(env_override) {
         return PathBuf::from(explicit);
     }
-    if let Some(local) = cwd.map(|d| d.join(CONFIG_FILE_NAME)) {
-        if local.exists() {
-            return local;
-        }
-    }
     paths
         .config_file()
         .unwrap_or_else(|| PathBuf::from(CONFIG_FILE_NAME))
 }
 
 /// [`resolve_config_path`] over explicit inputs (empty strings count as
-/// unset). Only the CWD file's existence is checked on disk.
+/// unset). `cwd` is accepted for compatibility and ignored.
 pub fn resolve_config_path_from(
     env_override: Option<&str>,
-    cwd: Option<&Path>,
+    _cwd: Option<&Path>,
     xdg_config_home: Option<&str>,
     home: Option<&str>,
 ) -> PathBuf {
@@ -6336,11 +6334,6 @@ pub fn resolve_config_path_from(
     }
     if let Some(explicit) = set(env_override) {
         return PathBuf::from(explicit);
-    }
-    if let Some(local) = cwd.map(|d| d.join(CONFIG_FILE_NAME)) {
-        if local.exists() {
-            return local;
-        }
     }
     aivyx_instance::InstancePaths::new(
         aivyx_instance::InstanceName::default_instance(),

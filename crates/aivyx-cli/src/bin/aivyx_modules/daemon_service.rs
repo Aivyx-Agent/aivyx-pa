@@ -145,6 +145,9 @@ pub fn render_systemd_unit_for(
     } else {
         String::new()
     };
+    let config_env = explicit_config_path(working_dir)
+        .map(|p| format!("Environment=AIVYX_PA_CONFIG_PATH={}\n", systemd_quote(&p)))
+        .unwrap_or_default();
     format!(
         "[Unit]\n\
          Description=Aivyx personal-assistant daemon\n\
@@ -156,6 +159,7 @@ pub fn render_systemd_unit_for(
          Type=simple\n\
          ExecStart={bin_path} daemon run{instance_flag}{web_ui_flag}\n\
          WorkingDirectory={working_dir}\n\
+         {config_env}\
          EnvironmentFile=-{env_file}\n\
          Restart=on-failure\n\
          RestartSec=5\n\
@@ -549,6 +553,14 @@ pub fn render_launchd_plist_for(
     if web_ui {
         program_args.push_str("        <string>--web-ui</string>\n");
     }
+    let config_env = explicit_config_path(working_dir)
+        .map(|p| {
+            format!(
+                "        <key>AIVYX_PA_CONFIG_PATH</key>\n        <string>{}</string>\n",
+                xml_escape(&p)
+            )
+        })
+        .unwrap_or_default();
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -559,7 +571,7 @@ pub fn render_launchd_plist_for(
          \x20   <key>ProgramArguments</key>\n    <array>\n{program_args}    </array>\n\
          \x20   <key>WorkingDirectory</key>\n    <string>{workdir}</string>\n\
          \x20   <key>EnvironmentVariables</key>\n    <dict>\n\
-         \x20       <key>AIVYX_PA_PASSPHRASE</key>\n        <string>{pass}</string>\n    </dict>\n\
+         \x20       <key>AIVYX_PA_PASSPHRASE</key>\n        <string>{pass}</string>\n{config_env}    </dict>\n\
          \x20   <key>RunAtLoad</key>\n    <true/>\n\
          \x20   <key>KeepAlive</key>\n    <dict>\n        <key>SuccessfulExit</key>\n        <false/>\n    </dict>\n\
          </dict>\n\
@@ -745,8 +757,27 @@ fn user_config_dir() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(".config"))
 }
 
-/// The daemon loads `aivyx-pa.toml` from its working directory — use the install
-/// cwd when it holds a config, else `$HOME`.
+/// The service's config, when it lives in its working directory rather than
+/// at the instance's standard path: the daemon no longer reads a
+/// `./aivyx-pa.toml` implicitly, so the unit names it explicitly
+/// (`AIVYX_PA_CONFIG_PATH`). `None` when the directory holds no config.
+fn explicit_config_path(working_dir: &str) -> Option<String> {
+    let p = std::path::Path::new(working_dir).join("aivyx-pa.toml");
+    p.is_file().then(|| p.display().to_string())
+}
+
+/// A systemd `Environment=` value: unquoted when plain, else double-quoted.
+fn systemd_quote(value: &str) -> String {
+    if value.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+:@%".contains(c)) {
+        value.to_string()
+    } else {
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+}
+
+/// Where the install is run from: the current directory when it holds an
+/// `aivyx-pa.toml` (the unit then names that file explicitly, see
+/// [`explicit_config_path`]), else `$HOME`.
 fn install_working_dir() -> String {
     if let Ok(cwd) = std::env::current_dir() {
         if cwd.join("aivyx-pa.toml").exists() {
@@ -810,6 +841,28 @@ mod tests {
         // wedge the unit at load time.
         assert!(unit.contains("EnvironmentFile=-/home/u/.config/aivyx-pa/daemon.env"));
         assert!(unit.contains("WorkingDirectory=/home/u"));
+    }
+
+    #[test]
+    fn a_config_in_the_install_dir_is_named_explicitly_in_the_unit() {
+        let dir = std::env::temp_dir().join(format!("aivyx-unit-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wd = dir.display().to_string();
+        let without = render_systemd_unit("/b/aivyx-pa", false, "/e", &wd);
+        assert!(!without.contains("AIVYX_PA_CONFIG_PATH"), "{without}");
+        std::fs::write(dir.join("aivyx-pa.toml"), "").unwrap();
+        let with = render_systemd_unit("/b/aivyx-pa", false, "/e", &wd);
+        assert!(
+            with.contains(&format!("Environment=AIVYX_PA_CONFIG_PATH={wd}/aivyx-pa.toml\n")),
+            "{with}"
+        );
+        let paths = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::default_instance(),
+            aivyx_instance::BaseDirs { home: None, xdg_config_home: None, xdg_data_home: None, xdg_runtime_dir: None },
+        );
+        let plist = render_launchd_plist_for("/b/aivyx-pa", false, &wd, "pw", &paths);
+        assert!(plist.contains("<key>AIVYX_PA_CONFIG_PATH</key>"), "{plist}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

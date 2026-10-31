@@ -56,8 +56,55 @@ fn not_set_up_message(cfg: &AivyxConfig) -> Option<String> {
     })
 }
 
+/// `aivyx-pa.toml` files in the current directory and in the installed
+/// service's working directory that are no longer read (configs come from
+/// `AIVYX_PA_CONFIG_PATH` or the standard path only). One line each, saying
+/// how to point at the file explicitly.
+fn ignored_local_config_notices(
+    candidates: &[PathBuf],
+    active: &std::path::Path,
+    explicit: bool,
+) -> Vec<String> {
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut out = Vec::new();
+    for c in candidates {
+        let file = c.join(aivyx_config::CONFIG_FILE_NAME);
+        let canon = std::fs::canonicalize(&file).unwrap_or_else(|_| file.clone());
+        let active_canon = std::fs::canonicalize(active).unwrap_or_else(|_| active.to_path_buf());
+        if !file.is_file() || canon == active_canon || seen.contains(&canon) || explicit {
+            continue;
+        }
+        seen.push(canon);
+        out.push(format!(
+            "{} exists but is no longer read (configs are not loaded from a working \
+             directory). To use it, set {}={} (for the service: re-run `aivyx-pa daemon \
+             install` from that folder), or move it to {}.",
+            file.display(),
+            aivyx_config::ENV_CONFIG_PATH,
+            file.display(),
+            active.display()
+        ));
+    }
+    out
+}
+
+fn print_ignored_local_configs() {
+    let mut dirs: Vec<PathBuf> = std::env::current_dir().into_iter().collect();
+    if let Some(unit) = super::daemon_service::installed_unit_path()
+        && let Ok(text) = std::fs::read_to_string(unit)
+        && let Some(wd) = text.lines().find_map(|l| l.strip_prefix("WorkingDirectory="))
+    {
+        dirs.push(PathBuf::from(wd.trim()));
+    }
+    let explicit = std::env::var_os(aivyx_config::ENV_CONFIG_PATH).is_some_and(|v| !v.is_empty());
+    for note in ignored_local_config_notices(&dirs, &config_path(), explicit) {
+        println!("  \u{26a0} {note}");
+    }
+}
+
 /// `aivyx-pa doctor` — run the health checks and report.
 pub async fn run_doctor() -> Result<(), String> {
+    print_ignored_local_configs();
     let cfg = load_config_for_inspection()?;
     if let Some(message) = not_set_up_message(&cfg) {
         return Err(message);
@@ -1554,5 +1601,21 @@ mod tests {
             .parse()
             .unwrap();
         assert!(!check_team_pack(&doc, Path::new("/tmp/aivyx-pa.toml")));
+    }
+
+    #[test]
+    fn a_config_in_a_working_directory_is_reported_as_no_longer_read() {
+        let dir = std::env::temp_dir().join(format!("doctor-localcfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let active = dir.join("standard/aivyx-pa.toml");
+        assert!(ignored_local_config_notices(std::slice::from_ref(&dir), &active, false).is_empty());
+        std::fs::write(dir.join("aivyx-pa.toml"), "").unwrap();
+        let notes = ignored_local_config_notices(&[dir.clone(), dir.clone()], &active, false);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("AIVYX_PA_CONFIG_PATH"), "{notes:?}");
+        // The file that IS the active config, or an explicit override, is silent.
+        assert!(ignored_local_config_notices(std::slice::from_ref(&dir), &dir.join("aivyx-pa.toml"), false).is_empty());
+        assert!(ignored_local_config_notices(std::slice::from_ref(&dir), &active, true).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

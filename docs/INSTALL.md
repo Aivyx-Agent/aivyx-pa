@@ -387,7 +387,7 @@ phase); until then `docker compose up --build` builds it locally from source.
 | File | Default location | Configurable? |
 |---|---|---|
 | `aivyx-pa` binary | `~/.cargo/bin/aivyx-pa` | Yes — `--install-path` flag on the installer |
-| Config | `~/.config/aivyx-pa/aivyx-pa.toml` (where `init` writes it); a `./aivyx-pa.toml` in the current directory takes precedence when present | Yes — `AIVYX_PA_CONFIG_PATH=<path>` |
+| Config | `~/.config/aivyx-pa/aivyx-pa.toml` (where `init` writes it); a `./aivyx-pa.toml` in the current directory is **not** read | Yes — `AIVYX_PA_CONFIG_PATH=<path>` |
 | Encrypted store | `~/.local/share/aivyx-pa/store.redb` (what `init` suggests) | Yes — TOML `[storage] path` |
 | Studio sign-in token | `studio-token` next to the store | No — `aivyx-pa studio` prints the link |
 | Saved passphrase (no OS keyring) | `~/.config/aivyx-pa/daemon.env`, `0600` | Delete it to be asked each time |
@@ -438,9 +438,9 @@ Good to know:
 - **`remove` refuses** the `default` instance, a running instance, and
   one with an installed service — stop it and run
   `aivyx-pa --instance <n> daemon uninstall` first.
-- **A `./aivyx-pa.toml` still wins.** If the current directory has one,
-  every instance started there reads it; a named instance says so when
-  that happens. `AIVYX_PA_CONFIG_PATH` also overrides as before.
+- **A `./aivyx-pa.toml` is not read.** Configs come from
+  `AIVYX_PA_CONFIG_PATH` or the instance's own file only; a file in the
+  current directory is reported by `aivyx-pa doctor` and ignored.
 - **Same OS user, separate files.** Instances are kept apart by Aivyx PA,
   not by the operating system. Ward never lets an agent read a `*.redb`
   store or a `daemon.env`, so one instance's agent can't read another's
@@ -464,9 +464,9 @@ After install:
    systemd user session, or macOS), and finishes by checking that your
    model answers.
    Writes `~/.config/aivyx-pa/aivyx-pa.toml` with `0600` permissions —
-   found from any directory (a `./aivyx-pa.toml` in the current
-   directory still takes precedence; `AIVYX_PA_CONFIG_PATH` points
-   anywhere else).
+   found from any directory (`AIVYX_PA_CONFIG_PATH` points
+   anywhere else; a `./aivyx-pa.toml` in the current directory is
+   not read).
 
    **Phase 181 — the guided identity builder.** The wizard's
    identity step is a *guided builder* that shapes who your

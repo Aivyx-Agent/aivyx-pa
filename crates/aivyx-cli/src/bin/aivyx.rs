@@ -282,8 +282,8 @@ const DEFAULT_BROKER_BASE_URL: &str = "http://127.0.0.1:8899";
 const DEFAULT_LEMONADE_BASE_URL: &str = "http://127.0.0.1:13305/api";
 
 /// The TOML config file the binary reads (and `init` writes): see
-/// [`aivyx_config::resolve_config_path`] — `$AIVYX_PA_CONFIG_PATH`, else an
-/// existing `./aivyx-pa.toml`, else `~/.config/aivyx-pa/aivyx-pa.toml`. A
+/// [`aivyx_config::resolve_config_path`] — `$AIVYX_PA_CONFIG_PATH`, else
+/// `~/.config/aivyx-pa/aivyx-pa.toml` (never the working directory). A
 /// missing file is silently ignored (env-only launches still work).
 fn default_toml_path() -> PathBuf {
     aivyx_config::resolve_config_path()
@@ -577,13 +577,12 @@ fn main() -> ExitCode {
     // Store stripped args in the static for use by parse_cli_args().
     let _ = CLI_ARGS.set(stripped_args.clone());
 
-    // A stray ./aivyx-pa.toml would otherwise silently take over a named
-    // instance's config (it outranks the instance's own file).
-    if let Ok(instance) = aivyx_instance::InstanceName::from_env() {
+    // A ./aivyx-pa.toml in the current directory is no longer read implicitly.
+    {
         let has_override = std::env::var_os(aivyx_config::ENV_CONFIG_PATH)
             .is_some_and(|v| !v.is_empty());
         let local = std::path::Path::new(aivyx_config::CONFIG_FILE_NAME).exists();
-        if let Some(notice) = local_config_notice(&instance, has_override, local) {
+        if let Some(notice) = local_config_notice(has_override, local) {
             eprintln!("{notice}");
         }
     }
@@ -3022,17 +3021,16 @@ struct CliMcpSse {
     url: String,
 }
 
-/// The one-line notice printed when a named instance is about to read
-/// `./aivyx-pa.toml` from the current directory instead of its own config.
-fn local_config_notice(
-    instance: &aivyx_instance::InstanceName,
-    has_config_override: bool,
-    local_config_exists: bool,
-) -> Option<String> {
-    (!instance.is_default() && !has_config_override && local_config_exists).then(|| {
+/// The one-line notice printed when the current directory holds an
+/// `aivyx-pa.toml` that is no longer read implicitly.
+fn local_config_notice(has_config_override: bool, local_config_exists: bool) -> Option<String> {
+    (!has_config_override && local_config_exists).then(|| {
         format!(
-            "aivyx-pa: using ./{} from the current directory for instance `{instance}`",
-            aivyx_config::CONFIG_FILE_NAME
+            "aivyx-pa: ignoring ./{name} in the current directory: configs are no longer \
+             read from the working directory. To use it, set \
+             {env}=$PWD/{name} (run `aivyx-pa doctor` for details).",
+            name = aivyx_config::CONFIG_FILE_NAME,
+            env = aivyx_config::ENV_CONFIG_PATH,
         )
     })
 }
@@ -15156,13 +15154,10 @@ mod tests {
     }
 
     #[test]
-    fn local_config_notice_only_for_a_named_instance_without_an_override() {
-        let named = aivyx_instance::InstanceName::parse("research").unwrap();
-        let default = aivyx_instance::InstanceName::default_instance();
-        assert!(local_config_notice(&named, false, true).is_some());
-        assert!(local_config_notice(&named, true, true).is_none()); // AIVYX_PA_CONFIG_PATH wins
-        assert!(local_config_notice(&named, false, false).is_none()); // no ./aivyx-pa.toml
-        assert!(local_config_notice(&default, false, true).is_none());
+    fn local_config_notice_only_when_a_cwd_config_exists_without_an_override() {
+        assert!(local_config_notice(false, true).is_some());
+        assert!(local_config_notice(true, true).is_none()); // AIVYX_PA_CONFIG_PATH wins
+        assert!(local_config_notice(false, false).is_none());
     }
 
     #[test]

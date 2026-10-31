@@ -210,15 +210,16 @@ mod tests {
     fn set_writes_access_section_and_drops_stale_root() {
         // `set home --yes` writes [access] level=home, leaves confirmation to
         // the autonomy level, and removes a stale [access] root, in an
-        // isolated temp cwd.
+        // isolated temp config.
         let dir = std::env::temp_dir().join(format!("aivyx-access-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let toml = dir.join("aivyx-pa.toml");
         std::fs::write(&toml, "[access]\nlevel = \"workspace\"\nroot = \"/old\"\n").unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&dir).unwrap();
+        // The config is named explicitly: it is no longer found from the cwd.
+        // SAFETY: the only test in this binary that sets this variable.
+        unsafe { std::env::set_var(aivyx_config::ENV_CONFIG_PATH, &toml) };
         let res = run_access_set(AccessLevel::Home, None, true);
-        std::env::set_current_dir(prev).unwrap();
+        unsafe { std::env::remove_var(aivyx_config::ENV_CONFIG_PATH) };
         res.unwrap();
         let written = std::fs::read_to_string(&toml).unwrap();
         assert!(written.contains("level = \"home\""), "{written}");

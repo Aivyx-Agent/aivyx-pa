@@ -135,10 +135,9 @@ echo "dev-run:   store    = $DEV_DIR/store.redb"
 echo "dev-run:   args     = ${PASSTHROUGH[*]:-(none)}"
 echo
 
-# CWD is .dev-run/ so the binary's default ./aivyx-pa.toml lookup is
-# isolated from the repo root — drop a .dev-run/aivyx-pa.toml later if a
-# dev role config is wanted; nothing in the repo gets picked up by
-# accident.
+# CWD is .dev-run/. A config is never read from the working directory;
+# set AIVYX_PA_CONFIG_PATH (or put one under the dev HOME's
+# .config/aivyx-pa/) if a dev role config is wanted.
 cd "$DEV_DIR"
 mapfile -t HOME_ENV < <(dev_home_env "$DEV_DIR")
 exec env \

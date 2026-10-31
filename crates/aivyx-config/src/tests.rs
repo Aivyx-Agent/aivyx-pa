@@ -12738,11 +12738,12 @@ fn lite_profile_without_embedding_does_not_warn() {
     drop(env);
 }
 
-/// First-run D1 — the config is found from any directory: an explicit
-/// `AIVYX_PA_CONFIG_PATH` wins, then a `./aivyx-pa.toml` that exists (so an
-/// existing setup keeps working unchanged), then the XDG config dir.
+/// The config is found from any directory: an explicit
+/// `AIVYX_PA_CONFIG_PATH` wins, else the XDG config dir. A `./aivyx-pa.toml`
+/// in the current directory is never read implicitly (the installed service
+/// runs in `$HOME`, where the agent can create files).
 #[test]
-fn the_config_path_resolves_env_then_an_existing_cwd_file_then_xdg() {
+fn the_config_path_resolves_env_then_xdg_and_ignores_the_cwd_file() {
     use crate::resolve_config_path_from;
     use std::path::Path;
 
@@ -12764,11 +12765,17 @@ fn the_config_path_resolves_env_then_an_existing_cwd_file_then_xdg() {
         Path::new("/home/me/.config/aivyx-pa/aivyx-pa.toml")
     );
 
-    // An existing CWD file wins over XDG.
+    // An existing CWD file is NOT read implicitly.
     std::fs::write(cwd.join("aivyx-pa.toml"), "").unwrap();
     assert_eq!(
         resolve_config_path_from(None, Some(&cwd), Some("/x/cfg"), Some("/home/me")),
-        cwd.join("aivyx-pa.toml")
+        Path::new("/x/cfg/aivyx-pa/aivyx-pa.toml")
+    );
+    // ... unless it is named explicitly.
+    let explicit = cwd.join("aivyx-pa.toml");
+    assert_eq!(
+        resolve_config_path_from(explicit.to_str(), Some(&cwd), Some("/x/cfg"), None),
+        explicit
     );
 
     // The env override wins over both; empty means unset.
@@ -12778,7 +12785,7 @@ fn the_config_path_resolves_env_then_an_existing_cwd_file_then_xdg() {
     );
     assert_eq!(
         resolve_config_path_from(Some(""), Some(&cwd), None, Some("/home/me")),
-        cwd.join("aivyx-pa.toml")
+        Path::new("/home/me/.config/aivyx-pa/aivyx-pa.toml")
     );
 
     // Nothing to go on: the bare relative name, as before.
