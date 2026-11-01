@@ -1579,11 +1579,22 @@ pub fn read_memory_profile(path: &Path) -> Result<Option<String>, ConfigWriteErr
 /// `rag_min_similarity`/`recall_window_turns`/`recall_gate_min_chars`
 /// and the Chapter Loom recall-fusion tuning fields stay TOML-only —
 /// not represented here at all.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 pub struct EmbeddingEntryWrite {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub api_key: Option<String>,
+}
+
+// Hand-written so a stray `{:?}` never prints the key (audit P14).
+impl std::fmt::Debug for EmbeddingEntryWrite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddingEntryWrite")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// Patch the `[embedding]` section, touching only the `Some` fields. An
@@ -3279,5 +3290,18 @@ mod tests {
         .unwrap();
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("enabled = false"));
+    }
+}
+
+#[cfg(test)]
+mod debug_redaction_tests {
+    #[test]
+    fn the_embedding_write_debug_hides_the_key() {
+        let e = super::EmbeddingEntryWrite {
+            api_key: Some("sk-secret-value".into()),
+            ..Default::default()
+        };
+        let shown = format!("{e:?}");
+        assert!(!shown.contains("sk-secret-value") && shown.contains("<redacted>"), "{shown}");
     }
 }

@@ -2672,7 +2672,7 @@ fn set_email_config_query(
 ) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-notify-channels".to_string(),
-        payload: QueryPayload::SetEmailConfig { host, port, tls_mode, username, password, from },
+        payload: QueryPayload::SetEmailConfig { host, port, tls_mode, username, password: password.map(Into::into), from },
     }
 }
 fn get_telegram_config_query() -> FrontendMessage {
@@ -2682,7 +2682,7 @@ fn set_telegram_config_query(token: Option<String>, chat_id: Option<i64>) -> Fro
     FrontendMessage::Query {
         id: "mc-notify-channels".to_string(),
         payload: QueryPayload::SetTelegramConfig {
-            token,
+            token: token.map(Into::into),
             chat_id,
             team_run_channel: None,
             team_trigger_rate_limit: None,
@@ -2697,7 +2697,7 @@ fn set_discord_config_query(token: Option<String>, application_id: Option<u64>) 
     FrontendMessage::Query {
         id: "mc-notify-channels".to_string(),
         payload: QueryPayload::SetDiscordConfig {
-            token,
+            token: token.map(Into::into),
             application_id,
             team_run_channel: None,
             team_trigger_rate_limit: None,
@@ -2712,8 +2712,8 @@ fn set_slack_config_query(bot_token: Option<String>, app_token: Option<String>, 
     FrontendMessage::Query {
         id: "mc-notify-channels".to_string(),
         payload: QueryPayload::SetSlackConfig {
-            bot_token,
-            app_token,
+            bot_token: bot_token.map(Into::into),
+            app_token: app_token.map(Into::into),
             team_id,
             team_run_channel: None,
             team_trigger_rate_limit: None,
@@ -7124,7 +7124,7 @@ fn embedding_config_query() -> FrontendMessage {
 fn set_embedding_config_query(base_url: Option<String>, model: Option<String>, api_key: Option<String>) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-settings-embedding".to_string(),
-        payload: QueryPayload::SetEmbeddingConfig { base_url, model, api_key },
+        payload: QueryPayload::SetEmbeddingConfig { base_url, model, api_key: api_key.map(Into::into) },
     }
 }
 fn proactive_config_query() -> FrontendMessage {

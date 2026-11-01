@@ -72,9 +72,16 @@ pub struct ToolkitConfig {
 /// Brave Search API config. Operator generates an API key at
 /// <https://api.search.brave.com/>; free tier allows 2000
 /// queries/month at the time of writing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BraveSearchConfig {
     pub api_key: String,
+}
+
+// Hand-written: the derived `Debug` would print the key (audit P14).
+impl std::fmt::Debug for BraveSearchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BraveSearchConfig").field("api_key", &"<redacted>").finish()
+    }
 }
 
 /// Default config path for a given instance:
@@ -134,6 +141,17 @@ pub fn load_config(path: &Path) -> Result<ToolkitConfig, ConfigFileError> {
 
 #[cfg(test)]
 mod tests {
+    /// Audit P14: `Debug` of the Brave config never prints the key.
+    #[test]
+    fn brave_debug_hides_the_key() {
+        let c = ToolkitConfig {
+            brave_search: Some(BraveSearchConfig { api_key: "BSA-SECRET-KEY".into() }),
+            ..Default::default()
+        };
+        let shown = format!("{c:?}");
+        assert!(!shown.contains("BSA-SECRET-KEY") && shown.contains("<redacted>"), "{shown}");
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 

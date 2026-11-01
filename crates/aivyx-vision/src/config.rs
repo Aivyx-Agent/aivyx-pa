@@ -85,12 +85,24 @@ pub enum ProviderChoice {
 /// `vision.generate_svg`) keeps working unchanged; `vision.generate_image`/
 /// `vision.generate_3d` simply aren't registered until this is configured.
 /// See `docs/superpowers/specs/2026-09-18-vision-image-3d-adoption-design.md`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MoldSettings {
     pub broker_url: String,
     pub mold_url: String,
     pub api_key: Option<String>,
     pub output_dir: PathBuf,
+}
+
+// Hand-written: the derived `Debug` would print the key (audit P14).
+impl std::fmt::Debug for MoldSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MoldSettings")
+            .field("broker_url", &self.broker_url)
+            .field("mold_url", &self.mold_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("output_dir", &self.output_dir)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +202,19 @@ pub fn load_config(path: &Path) -> Result<VisionConfig, ConfigFileError> {
 
 #[cfg(test)]
 mod tests {
+    /// Audit P14: `Debug` of the Mold settings never prints the key.
+    #[test]
+    fn mold_debug_hides_the_key() {
+        let m = MoldSettings {
+            broker_url: "http://127.0.0.1:1".into(),
+            mold_url: "http://127.0.0.1:2".into(),
+            api_key: Some("MOLD-SECRET-KEY".into()),
+            output_dir: std::path::PathBuf::from("/tmp/x"),
+        };
+        let shown = format!("{m:?}");
+        assert!(!shown.contains("MOLD-SECRET-KEY") && shown.contains("<redacted>"), "{shown}");
+    }
+
     use super::*;
 
     #[test]

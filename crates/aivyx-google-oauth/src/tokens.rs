@@ -34,7 +34,7 @@ pub const REFRESH_LEEWAY_SECS: i64 = 60;
 /// refresh token persists across refreshes forever (until
 /// `auth revoke` or until Google invalidates it for inactivity /
 /// password change / scope change).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenSet {
     /// Short-lived access token used as the bearer credential
     /// for Gmail API calls.
@@ -57,6 +57,19 @@ pub struct TokenSet {
     /// returns a different type so the bearer-header
     /// construction can be conditional.
     pub token_type: String,
+}
+
+// Hand-written: the derived `Debug` would print both tokens (audit P14).
+impl std::fmt::Debug for TokenSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenSet")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "<redacted>"))
+            .field("expires_at_unix_secs", &self.expires_at_unix_secs)
+            .field("granted_scope", &self.granted_scope)
+            .field("token_type", &self.token_type)
+            .finish()
+    }
 }
 
 impl TokenSet {
@@ -140,6 +153,21 @@ fn now_unix_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    /// Audit P14: `Debug` of a token set never prints a token.
+    #[test]
+    fn debug_hides_both_tokens() {
+        let t = TokenSet::from_exchange(
+            "ya29.ACCESS-SECRET".into(),
+            Some("1//REFRESH-SECRET".into()),
+            3600,
+            "scope".into(),
+            "Bearer".into(),
+        );
+        let shown = format!("{t:?}");
+        assert!(!shown.contains("ACCESS-SECRET") && !shown.contains("REFRESH-SECRET"), "{shown}");
+        assert!(shown.contains("<redacted>"), "{shown}");
+    }
+
     use super::*;
 
     fn sample_token_set() -> TokenSet {

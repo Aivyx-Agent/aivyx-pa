@@ -101,6 +101,39 @@ pub enum FrontendType {
     Signal,
 }
 
+/// A secret on the WRITE side of the wire (a password, bot token or API key
+/// a `Set…Config` query carries). Serializes as the plain string, so the wire
+/// format is unchanged, but `Debug` never prints it: a stray `{:?}` of a
+/// message can't put a credential in a log (audit P14).
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SecretString(String);
+
+impl SecretString {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+    /// The secret itself. Call only where it is used, never to format.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Phase 45 — IPC attachment for multimodal input
 // ---------------------------------------------------------------------------
@@ -758,7 +791,7 @@ pub enum QueryPayload {
         #[serde(default)]
         username: Option<String>,
         #[serde(default)]
-        password: Option<String>,
+        password: Option<SecretString>,
         #[serde(default)]
         from: Option<String>,
     },
@@ -768,7 +801,7 @@ pub enum QueryPayload {
     /// Responds with [`QueryResponsePayload::TelegramConfigApplied`].
     SetTelegramConfig {
         #[serde(default)]
-        token: Option<String>,
+        token: Option<SecretString>,
         #[serde(default)]
         chat_id: Option<i64>,
         #[serde(default)]
@@ -784,7 +817,7 @@ pub enum QueryPayload {
     /// Responds with [`QueryResponsePayload::DiscordConfigApplied`].
     SetDiscordConfig {
         #[serde(default)]
-        token: Option<String>,
+        token: Option<SecretString>,
         #[serde(default)]
         application_id: Option<u64>,
         #[serde(default)]
@@ -801,9 +834,9 @@ pub enum QueryPayload {
     /// [`QueryResponsePayload::SlackConfigApplied`].
     SetSlackConfig {
         #[serde(default)]
-        bot_token: Option<String>,
+        bot_token: Option<SecretString>,
         #[serde(default)]
-        app_token: Option<String>,
+        app_token: Option<SecretString>,
         #[serde(default)]
         team_id: Option<String>,
         #[serde(default)]
@@ -848,7 +881,7 @@ pub enum QueryPayload {
         #[serde(default)]
         model: Option<String>,
         #[serde(default)]
-        api_key: Option<String>,
+        api_key: Option<SecretString>,
     },
     /// Response: [`QueryResponsePayload::GetProactiveConfig`].
     GetProactiveConfig,
@@ -6138,6 +6171,23 @@ mod tests {
         assert_eq!(back, att);
     }
 
+    /// Audit P14: a `Set…Config` query's secret never reaches `Debug`, and the
+    /// wire form is still the bare string.
+    #[test]
+    fn set_config_secrets_are_hidden_from_debug_and_unchanged_on_the_wire() {
+        let q = QueryPayload::SetEmbeddingConfig {
+            base_url: None,
+            model: None,
+            api_key: Some(SecretString::new("sk-live-secret")),
+        };
+        let shown = format!("{q:?}");
+        assert!(!shown.contains("sk-live-secret") && shown.contains("<redacted>"), "{shown}");
+        let json = serde_json::to_string(&q).unwrap();
+        assert!(json.contains("\"api_key\":\"sk-live-secret\""), "{json}");
+        let back: QueryPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, q);
+    }
+
     #[test]
     fn redacted_secret_round_trips_without_the_real_value() {
         let s = RedactedSecret { configured: true, source: "toml".to_string() };
@@ -6310,7 +6360,7 @@ mod tests {
     #[test]
     fn set_slack_config_round_trips() {
         let msg = QueryPayload::SetSlackConfig {
-            bot_token: Some("xoxb-1".to_string()),
+            bot_token: Some("xoxb-1".to_string().into()),
             app_token: None,
             team_id: None,
             team_run_channel: None,

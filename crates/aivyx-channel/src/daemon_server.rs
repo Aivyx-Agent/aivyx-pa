@@ -6466,7 +6466,7 @@ async fn handle_query(
                 Some(p) => p,
                 None => return no_config_file_error(),
             };
-            let entry = aivyx_config::config_write::EmbeddingEntryWrite { base_url, model, api_key };
+            let entry = aivyx_config::config_write::EmbeddingEntryWrite { base_url, model, api_key: api_key.map(aivyx_ipc::protocol::SecretString::into_inner) };
             match aivyx_config::config_write::write_embedding_section(path, &entry) {
                 Ok(()) => {
                     audit_config_change(audit_log, "embedding", "updated");
@@ -6533,7 +6533,7 @@ async fn handle_query(
                 Some(p) => p,
                 None => return no_config_file_error(),
             };
-            let entry = aivyx_config::config_write::EmailEntryWrite { host, port, tls_mode, username, password, from };
+            let entry = aivyx_config::config_write::EmailEntryWrite { host, port, tls_mode, username, password: password.map(aivyx_ipc::protocol::SecretString::into_inner), from };
             match aivyx_config::config_write::write_email_section(path, &entry) {
                 Ok(()) => {
                     audit_config_change(audit_log, "email", "updated");
@@ -6567,7 +6567,7 @@ async fn handle_query(
                 None => return no_config_file_error(),
             };
             let entry = aivyx_config::config_write::TelegramEntryWrite {
-                token, chat_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders,
+                token: token.map(aivyx_ipc::protocol::SecretString::into_inner), chat_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders,
             };
             match aivyx_config::config_write::write_telegram_section(path, &entry) {
                 Ok(()) => {
@@ -6602,7 +6602,7 @@ async fn handle_query(
                 None => return no_config_file_error(),
             };
             let entry = aivyx_config::config_write::DiscordEntryWrite {
-                token, application_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders,
+                token: token.map(aivyx_ipc::protocol::SecretString::into_inner), application_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders,
             };
             match aivyx_config::config_write::write_discord_section(path, &entry) {
                 Ok(()) => {
@@ -6637,7 +6637,9 @@ async fn handle_query(
                 None => return no_config_file_error(),
             };
             let entry = aivyx_config::config_write::SlackEntryWrite {
-                bot_token, app_token, team_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders,
+                bot_token: bot_token.map(aivyx_ipc::protocol::SecretString::into_inner),
+                app_token: app_token.map(aivyx_ipc::protocol::SecretString::into_inner),
+                team_id, team_run_channel, team_trigger_rate_limit, team_command_allowed_senders,
             };
             match aivyx_config::config_write::write_slack_section(path, &entry) {
                 Ok(()) => {
