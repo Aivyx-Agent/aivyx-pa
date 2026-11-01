@@ -88,7 +88,9 @@ pub fn run_pack(sub: PackSubcommand) -> Result<(), String> {
                     println!("signature: NOT TRUSTED — {e}");
                     println!("(--allow-untrusted: printing the manifest anyway)");
                 }
-                Err(e) => return Err(e.to_string()),
+                Err(e) => {
+                    return Err(verify_failure_text(&e, find_aivyx_toml().as_deref()));
+                }
             }
             match read_any_manifest(&bundle.payload).map_err(|e| e.to_string())? {
                 Manifest::Binary(manifest) => print!("{}", render_manifest(&manifest)),
@@ -108,7 +110,8 @@ fn install(file: &Path) -> Result<(), String> {
     let home = dirs_home()?;
     let bundle = read_bundle(file).map_err(|e| e.to_string())?;
     let trusted = trusted_publishers()?;
-    verify_bundle(&bundle, &trusted).map_err(|e| e.to_string())?;
+    verify_bundle(&bundle, &trusted)
+        .map_err(|e| verify_failure_text(&e, find_aivyx_toml().as_deref()))?;
     let manifest = read_manifest(&bundle.payload).map_err(|e| e.to_string())?;
 
     // Host + daemon gates before anything touches disk.
@@ -382,6 +385,31 @@ fn install_trusted_publishers(dirs: &BaseDirs) -> Result<Vec<String>, String> {
         .map_err(|e| format!("failed to load {}: {e}", config.display()))
 }
 
+/// The text for a failed signature check. For an untrusted publisher the
+/// shared crate's message says "add it to `[pack] trusted_publishers`" without
+/// saying whose config; this adds the file, and how to look inside first
+/// (audit P22).
+pub fn verify_failure_text(e: &PackError, config: Option<&Path>) -> String {
+    let base = e.to_string();
+    if !matches!(e, PackError::UntrustedPublisher { .. }) {
+        return base;
+    }
+    let file = match config {
+        Some(p) => format!("`{}`", p.display()),
+        None => "your `aivyx-pa.toml` (the default instance's: `aivyx-pa init` creates it)".to_string(),
+    };
+    format!(
+        "{base}\n  The list is read from {file}; a new named instance trusts the default \
+         instance's list, not its own.\n  To see what the pack contains before deciding: \
+         `aivyx-pa pack inspect <file> --allow-untrusted`."
+    )
+}
+
+/// The config file `install_trusted_publishers` reads (the default instance's).
+fn install_trust_config(dirs: &BaseDirs) -> Option<PathBuf> {
+    InstancePaths::new(InstanceName::default_instance(), dirs.clone()).config_file()
+}
+
 /// What to do after a config pack installs.
 pub fn next_steps(instance: &InstanceName, summary: &PaPartSummary, port: u16) -> String {
     let m = &summary.manifest;
@@ -422,7 +450,8 @@ pub fn next_steps(instance: &InstanceName, summary: &PaPartSummary, port: u16) -
 pub async fn run_config_install(file: &Path) -> Result<(), String> {
     let dirs = BaseDirs::from_process();
     let bundle = read_bundle(file).map_err(|e| e.to_string())?;
-    verify_bundle(&bundle, &install_trusted_publishers(&dirs)?).map_err(|e| e.to_string())?;
+    verify_bundle(&bundle, &install_trusted_publishers(&dirs)?)
+        .map_err(|e| verify_failure_text(&e, install_trust_config(&dirs).as_deref()))?;
     let Manifest::Config(manifest) = read_any_manifest(&bundle.payload).map_err(|e| e.to_string())?
     else {
         return Err("this is a tool pack; install it into an existing agent".into());
@@ -606,6 +635,22 @@ pub fn render_manifest(m: &PackManifest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit P22: the untrusted-publisher message names the file the list is
+    /// read from, and the way to look inside first.
+    #[test]
+    fn an_untrusted_publisher_message_names_the_config_file() {
+        let e = PackError::UntrustedPublisher { hint: "abcd1234".into() };
+        let cfg = Path::new("/home/me/.config/aivyx-pa/aivyx-pa.toml");
+        let text = verify_failure_text(&e, Some(cfg));
+        assert!(text.contains("/home/me/.config/aivyx-pa/aivyx-pa.toml"), "{text}");
+        assert!(text.contains("trusted_publishers") && text.contains("--allow-untrusted"), "{text}");
+        assert!(text.contains("default instance"), "{text}");
+        // another failure keeps its own text
+        assert_eq!(verify_failure_text(&PackError::BadSignature, Some(cfg)), PackError::BadSignature.to_string());
+        // no config yet: still tells where to put it
+        assert!(verify_failure_text(&e, None).contains("aivyx-pa.toml"));
+    }
 
     #[test]
     fn render_manifest_shows_pack_text_escaped_and_args_quoted() {
