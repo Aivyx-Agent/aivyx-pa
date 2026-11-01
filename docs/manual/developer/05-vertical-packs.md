@@ -68,6 +68,15 @@ area) can't go above `supervised`, the team config and skills must load,
 and integrations must be ones Aivyx PA knows (`gmail`, `calendar`, `drive`,
 `contacts`, `notion`, `obsidian`, `n8n`, `toolkit`, `vision`).
 
+Every capability scope the pack's `[[role]]` entries and team members ask for
+is listed by `pack check`, `pack inspect` and `pack install` (`*` marks scopes
+that can change things). A pack can't ask for scopes that run programs
+(`shell.*`), delete (`fs.delete`), send (`email.send`, `message.send`, any
+`*.send`), post (`net.post`), write files or git history (`fs.write`,
+`git.write`) or change the configuration (`config.write`); `pack check` and
+`pack install` refuse it. The operator adds those to their own config after
+install if they want them.
+
 The template may only set `[agent]`, `[profile]`, `[persona_seed]`,
 `[[role]]`, `[autonomy]`, `[[schedule]]`, `[team]`, `[memory]` and
 `[skill_defaults]` — who the assistant is and what it does. Anything else

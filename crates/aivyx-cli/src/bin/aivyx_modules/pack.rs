@@ -431,8 +431,11 @@ pub async fn run_config_install(file: &Path) -> Result<(), String> {
     let existing = aivyx_instance::list_instances(&dirs);
     let install = prepare_config_install(&bundle.payload, &manifest, &selected, &dirs, &existing)?;
     println!(
-        "Setting up `{}` from pack {} v{}.\n",
-        install.instance, manifest.name, manifest.version
+        "Setting up `{}` from pack {} v{}.\n{}",
+        install.instance,
+        manifest.name,
+        manifest.version,
+        super::pack_check::grants_lines(&install.summary)
     );
 
     let config = InstancePaths::new(install.instance.clone(), dirs.clone()).config_file();
@@ -547,9 +550,10 @@ pub fn render_config_inspect(
     match check {
         None => {}
         Some(Ok(s)) => pa_lines.push_str(&format!(
-            "  routines: {}\n  autonomy: {}\n  checks: OK\n",
+            "  routines: {}\n  autonomy: {}\n{}  checks: OK\n",
             s.routines,
-            super::pack_check::autonomy_line(s)
+            super::pack_check::autonomy_line(s),
+            super::pack_check::grants_lines(s)
         )),
         Some(Err(problems)) => {
             pa_lines.push_str(&format!(
@@ -768,7 +772,8 @@ mod tests {
         let text = render_config_inspect(&Manifest::Config(m), Some(&check_payload(&payload)));
         assert!(text.contains("kind:        config pack"), "{text}");
         assert!(text.contains("  requires: gmail\n"), "{text}");
-        assert!(text.contains("  routines: 1\n  autonomy: assisted (fs: supervised)\n  checks: OK"), "{text}");
+        assert!(text.contains("  routines: 1\n  autonomy: assisted (fs: supervised)\n  capability scopes asked for"), "{text}");
+        assert!(text.contains("team member `manager`") && text.contains("team.delegate") && text.contains("  checks: OK"), "{text}");
 
         let bad = good_pack("inspect-bad");
         rewrite(&bad, "pa/aivyx-pa.toml", |t| t.replace(r#"level = "assisted""#, r#"level = "unleashed""#));

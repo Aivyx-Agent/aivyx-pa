@@ -35,6 +35,66 @@ pub struct PaPartSummary {
     pub autonomy: AutonomyLevel,
     /// The template's per-area overrides, as `(area, level)`.
     pub autonomy_overrides: Vec<(String, AutonomyLevel)>,
+    /// Every capability scope the pack's roles and team members ask for
+    /// (audit P6), as `(who, scopes)`, in a stable order.
+    pub grants: Vec<(String, Vec<String>)>,
+}
+
+/// Scope bases a pack may never grant: they run programs, delete, send on
+/// the operator's behalf, post to the network, write history or change the
+/// config. The vertical-packs spec says a config pack "adds no capabilities;
+/// it can do only what the products already do" and the Business Manager
+/// pack's own roles are drafts and reads, so there is no reason for a pack to
+/// hold these — the operator adds them to their own config if they want them.
+/// Matching is by base and by the verb the base ends in, so a base added to
+/// the registry later (`foo.send`) is refused too until it is judged here.
+fn refused_scope(scope: &str) -> Option<&'static str> {
+    let base = scope.split(':').next().unwrap_or(scope);
+    const EXACT: &[(&str, &str)] = &[
+        ("fs.write", "writes files"),
+        ("git.write", "writes git history"),
+        ("config.write", "changes the configuration"),
+        ("tool.allowlist", "overrides the tool allowlist"),
+    ];
+    if let Some((_, why)) = EXACT.iter().find(|(b, _)| *b == base) {
+        return Some(why);
+    }
+    if base.starts_with("shell.") {
+        return Some("runs programs");
+    }
+    match base.rsplit('.').next().unwrap_or("") {
+        "exec" | "spawn" => Some("runs programs"),
+        "delete" => Some("deletes"),
+        "send" => Some("sends on the operator's behalf"),
+        "post" => Some("posts to the network"),
+        _ => None,
+    }
+}
+
+/// Scopes a pack may hold that still change things (listed for the
+/// operator, not refused).
+fn changes_things(scope: &str) -> bool {
+    let base = scope.split(':').next().unwrap_or(scope);
+    base.ends_with(".write") || base.ends_with(".update") || base.ends_with(".create")
+}
+
+/// "who: scopes" lines for `pack check`, `pack inspect` and the install
+/// output. Scopes that can change things are marked with `*`.
+pub fn grants_lines(summary: &PaPartSummary) -> String {
+    if summary.grants.is_empty() {
+        return "  capability scopes asked for: none\n".to_string();
+    }
+    let mut out = String::from(
+        "  capability scopes asked for (* = can change things):\n",
+    );
+    for (who, scopes) in &summary.grants {
+        let shown: Vec<String> = scopes
+            .iter()
+            .map(|s| if changes_things(s) { format!("{s}*") } else { s.clone() })
+            .collect();
+        out.push_str(&format!("    {who}: {}\n", if shown.is_empty() { "(none)".into() } else { shown.join(", ") }));
+    }
+    out
 }
 
 /// Check the aivyx-pa part of an unpacked config pack or a staging folder.
@@ -112,6 +172,7 @@ pub fn check_pa_part(dir: &Path) -> Result<PaPartSummary, Vec<String>> {
     let mut routines = 0;
     let mut autonomy = AutonomyLevel::default();
     let mut autonomy_overrides = Vec::new();
+    let mut grants: Vec<(String, Vec<String>)> = Vec::new();
 
     // The template loads as a real aivyx-pa config, within the ceiling.
     let template = dir.join(&pa.template);
@@ -145,6 +206,9 @@ pub fn check_pa_part(dir: &Path) -> Result<PaPartSummary, Vec<String>> {
                     }
                     autonomy_overrides.push((o.domain.clone(), o.level));
                 }
+                for (name, role) in &cfg.roles {
+                    grants.push((format!("role `{name}`"), role.capability_scopes.value.iter().map(|s| s.to_string()).collect()));
+                }
                 routines = cfg.schedules.len();
                 // The config loader accepts any cron text; a bad pattern
                 // would only fail once the scheduler runs, so check here.
@@ -164,7 +228,15 @@ pub fn check_pa_part(dir: &Path) -> Result<PaPartSummary, Vec<String>> {
     // The team config loads.
     if let Some(rel) = &pa.team_config {
         match aivyx_team::TeamConfig::load(dir.join(rel)) {
-            Ok(team) => team_members = team.members.len(),
+            Ok(team) => {
+                team_members = team.members.len();
+                for m in &team.members {
+                    grants.push((
+                        format!("team member `{}` (ceiling {:?})", m.name, m.trust_ceiling),
+                        m.capability_scopes.clone(),
+                    ));
+                }
+            }
             Err(e) => problems.push(format!("the team config doesn't load: {e}")),
         }
     }
@@ -212,8 +284,30 @@ pub fn check_pa_part(dir: &Path) -> Result<PaPartSummary, Vec<String>> {
         }
     }
 
+    // Audit P6: a pack's roles and team members carry capability scopes; the
+    // dangerous ones are refused, the rest are shown to the operator.
+    grants.retain(|(_, scopes)| !scopes.is_empty());
+    for (who, scopes) in &grants {
+        for scope in scopes {
+            if let Some(why) = refused_scope(scope) {
+                problems.push(format!(
+                    "{who} asks for `{scope}` ({why}); a pack can't grant shell, delete, send, \
+                     post or write-history scopes — the operator adds those to their own config"
+                ));
+            }
+        }
+    }
+
     if problems.is_empty() {
-        Ok(PaPartSummary { manifest, skills, team_members, routines, autonomy, autonomy_overrides })
+        Ok(PaPartSummary {
+            manifest,
+            skills,
+            team_members,
+            routines,
+            autonomy,
+            autonomy_overrides,
+            grants,
+        })
     } else {
         Err(problems)
     }
@@ -240,7 +334,7 @@ pub fn render_ok(s: &PaPartSummary) -> String {
         "✓ {} v{} — aivyx-pa part looks good\n  \
          template loads; autonomy {} (within supervised)\n  \
          team: {} members · skills: {} · routines: {}\n  \
-         requires: {} · optional: {}\n",
+         requires: {} · optional: {}\n{}",
         s.manifest.name,
         s.manifest.version,
         autonomy_line(s),
@@ -249,6 +343,7 @@ pub fn render_ok(s: &PaPartSummary) -> String {
         s.routines,
         list(&pa.requires),
         list(&pa.optional),
+        grants_lines(s),
     )
 }
 
@@ -493,4 +588,62 @@ trust_ceiling = "Trusted"
         assert!(check_pa_part(&d).is_ok(), "{:?}", check_pa_part(&d));
     }
 
+
+    // ---- Audit 2026-10-28, P6 ----
+
+    /// A role's `capability_scopes` is its capability envelope: a pack can't
+    /// grant shell, delete, send or post.
+    #[test]
+    fn audit_a_pack_role_cannot_grant_itself_capability_scopes() {
+        let d = good_pack("rolescopes");
+        rewrite(&d, "pa/aivyx-pa.toml", |t| {
+            format!(
+                "{t}\n[[role]]\nname = \"default\"\ncapability_scopes = \
+                 [\"shell.exec\", \"fs.delete\", \"net.post\", \"email.send\", \"message.send\"]\n"
+            )
+        });
+        let problems = check_pa_part(&d).expect_err("dangerous role scopes must be refused");
+        for scope in ["shell.exec", "fs.delete", "net.post", "email.send", "message.send"] {
+            assert!(problems.iter().any(|p| p.contains(&format!("`{scope}`")) && p.contains("role")), "{scope}: {problems:?}");
+        }
+    }
+
+    #[test]
+    fn audit_a_pack_team_member_cannot_hold_dangerous_scopes() {
+        let d = good_pack("teamscopes");
+        rewrite(&d, "pa/team.toml", |t| {
+            t.replace(
+                r#"capability_scopes = ["team.delegate"]"#,
+                r#"capability_scopes = ["shell.exec", "fs.delete", "email.send"]"#,
+            )
+        });
+        let problems = check_pa_part(&d).expect_err("dangerous member scopes must be refused");
+        assert!(problems.iter().any(|p| p.contains("team member `manager`") && p.contains("`shell.exec`")), "{problems:?}");
+    }
+
+    #[test]
+    fn a_qualified_dangerous_scope_and_a_future_send_base_are_refused() {
+        assert!(refused_scope("shell.exec:cmd:ls*").is_some());
+        assert!(refused_scope("slack.send").is_some());
+        assert!(refused_scope("fs.write").is_some());
+        for ok in ["memory.read", "memory.write:topic:leads*", "email.write", "calendar.write", "net.fetch", "web.search", "team.delegate"] {
+            assert!(refused_scope(ok).is_none(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn the_scopes_a_pack_asks_for_are_listed_with_the_changing_ones_marked() {
+        let d = good_pack("listscopes");
+        rewrite(&d, "pa/team.toml", |t| {
+            t.replace(
+                r#"capability_scopes = ["team.delegate"]"#,
+                r#"capability_scopes = ["team.delegate", "email.write", "memory.read"]"#,
+            )
+        });
+        let s = check_pa_part(&d).unwrap();
+        let text = render_ok(&s);
+        assert!(text.contains("capability scopes asked for"), "{text}");
+        assert!(text.contains("team member `manager`") && text.contains("email.write*") && text.contains("memory.read"), "{text}");
+        assert!(!text.contains("memory.read*"), "{text}");
+    }
 }
