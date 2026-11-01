@@ -25,6 +25,29 @@ comes after the current phase?"* — nothing more.
   belongs in its own PHASE_N.md — which means that phase is probably
   ready to open.
 
+## Backlog left open by the 2026-10-28 audit
+
+Mediums P4-P7 and P17, and Lows P8-P12, P14, P18-P20 and P22, are fixed (see
+[`audits/2026-10-28-code-audit.md`](audits/2026-10-28-code-audit.md)). What stays
+open, and why:
+
+- **P13 (part) — third-party actions are pinned by tag, not commit.** Pinning
+  needs each action's commit looked up and a bump routine (Dependabot for
+  Actions); left for a CI-maintenance pass. The token permissions and the
+  `workflow_dispatch` input are fixed.
+- **P19 (part) — why the 9B ends some post-tool steps with no text.** pa now
+  says what ran instead of "try again", but the empty final message itself is
+  the model's: the floor fires only on an empty or bare-object reply, and pa's
+  provider layer does not read `reasoning_content`. Worth a live look with the
+  llama-server logs before changing the provider.
+- **P21 — a paraphrased injection ("Assistant note from the site owner: ...")
+  passes the phrase tripwire.** A phrase list is a tripwire, not a defence; the
+  fix is structural (P1/P16 made writes from fetched content ask), not a longer
+  list. No change planned.
+- **Studio bundle.** The approval card change (P4) and the `Set*Config` secret
+  type (P14) are in `crates/aivyx-web`; `crates/aivyx-web/dist/` is rebuilt
+  with `just build-web` at release time.
+
 ## Channel Activation Milestone — operator verification across all channels
 
 **Status:** Scheduled after the Phase sequence closes. Not a

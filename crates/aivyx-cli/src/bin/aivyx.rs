@@ -6966,10 +6966,12 @@ fn ward_extra_deny_for(
 }
 
 /// The `$HOME` dot-entry rule for the file tools (audit review round 4):
-/// when `fs_root` covers `home`, writes to `~/.*` are refused except under
-/// the personal workspace and the generated-image folder, the same
-/// carve-outs `shell.exec`'s confiner leaves. `None` when the root does not
-/// cover `$HOME` (the named list in `sensitive_paths` applies then).
+/// when `fs_root` covers `home`, writes to `~/.*` and `~/bin` are refused
+/// except under the personal workspace and the generated-image folder. These
+/// carve-outs belong to the file tools; the same dot-entry rule is enforced on
+/// `shell.exec` by aivyx-confine, which has its own (it also keeps `~/bin`
+/// read-only). `None` when the root does not cover `$HOME` (the named list in
+/// `sensitive_paths` applies then).
 fn home_dot_guard_for(
     home: &std::path::Path,
     fs_root: &std::path::Path,

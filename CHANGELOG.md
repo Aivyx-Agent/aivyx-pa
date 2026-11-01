@@ -36,9 +36,11 @@ All notable changes to Aivyx are recorded here. This project adheres to
   `hypr/hyprland.conf`, `niri`, `sway`, fish `functions`, `.kshrc`,
   `~/.local/share/applications/*.desktop`, ...), and each sets
   `AIVYX_PA_CONFIG_PATH` or runs code at the next login. `fs.write`,
-  `fs.delete` and the data writers now apply the rule `shell.exec`'s confiner
-  already enforces: nothing under `~/.*` is writable, except the personal
-  workspace, the generated-image folder and `[access] allow_sensitive_paths`.
+  `fs.delete` and the data writers now apply the same dot-entry rule
+  `shell.exec`'s confiner enforces: nothing under `~/.*` or `~/bin` is
+  writable, except the personal workspace, the generated-image folder and
+  `[access] allow_sensitive_paths` (those exceptions are the file tools' own;
+  the confiner has its own).
   **Behaviour change:** the agent can no longer edit dotfiles under `$HOME`
   unless you allow the path. The named list still applies to roots that do not
   cover `$HOME`. `shell.exec`'s confirmation now skips options per wrapper

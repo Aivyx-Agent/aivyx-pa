@@ -2558,6 +2558,7 @@ mod tests {
             ".config/uwsm/env",
             ".local/share/applications/x.desktop",
             ".kshrc",
+            "bin/tool", // on PATH by common default; the confiner keeps it read-only too
         ] {
             let out = run_execute(&tool, json!({"path": path, "content": "x"}));
             assert!(matches!(out, ToolOutcome::Failed(_)), "{path}: {out:?}");

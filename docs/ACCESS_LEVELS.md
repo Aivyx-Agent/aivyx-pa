@@ -129,12 +129,12 @@ tool-restricted.
 
 **Dot entries under `$HOME`.** When the file-tool root covers `$HOME` (`home`,
 `full`), `fs.write`, `fs.delete` and the data writers refuse any path under
-`~/.*`, recursively: login and session settings live there and are obeyed at
-the next login (`~/.config/environment.d`, `uwsm/env`, compositor configs,
+`~/.*` (and `~/bin`, which is on `PATH` by common default), recursively: login
+and session settings live there and are obeyed at the next login (`~/.config/environment.d`, `uwsm/env`, compositor configs,
 `~/.local/share/applications`, `.kshrc`, fish `functions`, ...). The same rule
-is enforced on `shell.exec` by its confiner. Carved out: the personal
-workspace, the generated-image folder, and any path under
-`[access] allow_sensitive_paths`. For roots that do not cover `$HOME` the
+is enforced on `shell.exec` by its confiner, with the confiner's own
+exceptions. For the file tools the carve-outs are: the personal workspace, the
+generated-image folder, and any path under `[access] allow_sensitive_paths`. For roots that do not cover `$HOME` the
 named list of persistence and secret locations applies.
 
 **Destructive shell.** With `confirm_destructive` on, `shell.exec` asks first

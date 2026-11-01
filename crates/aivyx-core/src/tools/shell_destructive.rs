@@ -246,6 +246,29 @@ impl State<'_> {
             return None;
         }
 
+        // `command -v rm` / `-V` only describes a name; it runs nothing.
+        if name == "command"
+            && args
+                .iter()
+                .take_while(|w| flag(w))
+                .any(|w| !w.text.starts_with("--") && (w.text.contains('v') || w.text.contains('V')))
+        {
+            return None;
+        }
+        // `env -S 'rm x'` / `--split-string=...` splits a STRING into the
+        // command to run: not a word list this check can walk.
+        if name == "env"
+            && args.iter().any(|w| {
+                // Not `flag(w)`: `-S'rm x'` is one quoted word.
+                w.text.starts_with('-')
+                    && (w.text == "--split-string"
+                        || w.text.starts_with("--split-string=")
+                        || (!w.text.starts_with("--") && w.text[1..].contains('S')))
+            })
+        {
+            return Some("`env -S` runs a command split from a string".into());
+        }
+
         // Wrappers: the rest of the words are a command.
         if let Some((_, value_flags)) = WRAPPERS.iter().find(|(n, _)| *n == name) {
             let mut i = 0;
@@ -627,6 +650,22 @@ impl State<'_> {
             if t == "-c" && args.get(i + 1).is_some_and(|v| sets_command_key(&v.text)) {
                 return Some("a `git -c` setting runs a shell command".into());
             }
+            // `--config-env=key=VAR` / `--config-env key=VAR`: the value is an
+            // environment variable this check cannot see, so a key that can run
+            // a command (or pull in a file that sets one) asks.
+            let config_env = if let Some(v) = t.strip_prefix("--config-env=") {
+                Some(v)
+            } else if t == "--config-env" {
+                args.get(i + 1).map(|v| v.text.as_str())
+            } else {
+                None
+            };
+            if let Some(kv) = config_env {
+                let key = kv.split('=').next().unwrap_or("").to_ascii_lowercase();
+                if sets_command_key(kv) || key.starts_with("alias.") {
+                    return Some("a `git --config-env` setting can run a shell command".into());
+                }
+            }
             if matches!(t, "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace") {
                 i += 2;
             } else if t.starts_with('-') {
@@ -703,12 +742,15 @@ impl State<'_> {
 }
 
 /// Whether a `key` or `key=value` names a git setting that runs a command
-/// (a `!` alias, `core.fsmonitor`, hooks path, pager, editor, ssh command,
+/// or pulls in a file that can (`include.path`, `includeIf.*.path`; a `!` alias, `core.fsmonitor`, hooks path, pager, editor, ssh command,
 /// `diff.external`, `filter.*`, `credential.helper`).
 fn sets_command_key(setting: &str) -> bool {
     let s = setting.to_ascii_lowercase();
     let key = s.split('=').next().unwrap_or("");
     (key.starts_with("alias.") && s.contains("=!"))
+        // An included file can set any of the keys below.
+        || key == "include.path"
+        || key.starts_with("includeif.") && key.ends_with(".path")
         || [
             "core.fsmonitor",
             "core.hookspath",
@@ -1476,6 +1518,17 @@ mod tests {
             "git config filter.x.clean 'sh x'",
             "git config credential.helper '!sh x'",
             "git -c core.pager='sh x' log",
+            "env -S 'rm x'",
+            "env -S'rm x'",
+            "env --split-string='rm x'",
+            "env -i -S 'rm x'",
+            "git config include.path /tmp/evil.cfg",
+            "git config includeIf.gitdir:/x/.path /tmp/evil.cfg",
+            "git -c include.path=/tmp/evil.cfg log",
+            "git --config-env=core.pager=EVIL log",
+            "git --config-env core.pager=EVIL log",
+            "git --config-env=include.path=EVIL log",
+            "git --config-env=alias.x=EVIL x",
             "git apply p.diff",
             "git mv -f a b",
             "gunzip -f a.gz",
@@ -1493,6 +1546,12 @@ mod tests {
             "timeout 5 sleep 1",
             "patch --dry-run -p1",
             "git config --get core.pager",
+            "git config --get include.path",
+            "git --config-env=user.name=NAME log",
+            "command -v rm",
+            "command -V rm",
+            "command -pv rm",
+            "env FOO=1 ls",
             "git config user.email a@b",
             "git mv a b",
             "gunzip -k a.gz",

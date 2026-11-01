@@ -148,7 +148,9 @@ pub struct SensitivePolicy {
     extra_deny_exempt: Vec<PathBuf>,
     /// When the file tools' root covers `$HOME`: `(home, carve-outs)`. File
     /// WRITES to any dot entry of `home` (any `~/.*` file or directory,
-    /// recursively) are refused except under a carve-out. See
+    /// recursively) and to `~/bin` (put on `PATH` by common defaults, so the
+    /// shell's confiner keeps it read-only too) are refused except under a
+    /// carve-out. See
     /// [`Self::classify_file_write`].
     home_dots: Option<(PathBuf, Vec<PathBuf>)>,
 }
@@ -199,11 +201,23 @@ impl SensitivePolicy {
         let (home, carve) = self.home_dots.as_ref()?;
         let first = canonical.strip_prefix(home).ok()?.components().next()?;
         let first = first.as_os_str().to_str()?;
-        if first.starts_with('.') && !carve.iter().any(|c| canonical.starts_with(c)) {
+        if carve.iter().any(|c| canonical.starts_with(c)) {
+            return None;
+        }
+        if first.starts_with('.') {
             return Some(format!(
                 "a dot entry under $HOME ({first}) — login, session and desktop settings \
                  live there and are obeyed at the next login"
             ));
+        }
+        // `~/bin` is on PATH by common default; aivyx-confine leaves it
+        // read-only at a home root, so the file tools match.
+        if first == "bin" {
+            return Some(
+                "~/bin is on PATH by common default — a file put there runs the next time \
+                 you type its name"
+                    .to_string(),
+            );
         }
         None
     }
