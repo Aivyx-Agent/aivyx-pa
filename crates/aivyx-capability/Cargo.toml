@@ -13,3 +13,4 @@ readme.workspace = true
 [dependencies]
 serde = { workspace = true }
 globset = { workspace = true }
+serde_json = { workspace = true }

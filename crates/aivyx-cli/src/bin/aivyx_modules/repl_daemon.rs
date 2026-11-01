@@ -182,8 +182,7 @@ pub async fn run_connected(
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         let approver: aivyx_channel::daemon_client::Approver =
             Arc::new(|summary: &str, reason: &str, input: &serde_json::Value| {
-                let text = aivyx_channel::approval_prompt::render(summary, reason, input);
-                aivyx_channel::approval_prompt::ask_tty(&text).unwrap_or(false)
+                aivyx_channel::approval_prompt::ask_for(summary, reason, input).unwrap_or(false)
             });
         session
             .enable_approvals(approver)

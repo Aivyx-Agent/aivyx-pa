@@ -11707,9 +11707,7 @@ async fn run_async(
             // can't be asked, so it keeps "reply to approve".
             let channel = if io::stdin().is_terminal() {
                 channel.with_approver(Arc::new(|r: &aivyx_core::ApprovalRequest| {
-                    let text =
-                        aivyx_channel::approval_prompt::render(&r.summary, &r.reason, &r.input);
-                    match aivyx_channel::approval_prompt::ask_tty(&text) {
+                    match aivyx_channel::approval_prompt::ask_for(&r.summary, &r.reason, &r.input) {
                         Some(true) => aivyx_core::Approval::Approved,
                         Some(false) => aivyx_core::Approval::Denied,
                         None => aivyx_core::Approval::Unavailable,

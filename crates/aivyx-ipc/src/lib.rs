@@ -58,6 +58,7 @@ pub use ledgers::{
     AccumulatedCorrections, AccumulatedHelpfulness, CooccurrencePatterns, PairScore,
     TopicCorrections, TopicScore,
 };
+pub use aivyx_capability::display;
 pub use federation::{RelayRequest, RelayResponse};
 pub use loop_state::LoopRunState;
 pub use persona::{

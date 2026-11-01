@@ -4339,14 +4339,11 @@ struct PendingApproval {
     expires_at_ms: f64,
 }
 
-/// The arguments as the card shows them: pretty, and bounded.
-fn approval_args_preview(input: &serde_json::Value) -> String {
-    let pretty = serde_json::to_string_pretty(input).unwrap_or_default();
-    if pretty.chars().count() > 2000 {
-        format!("{}…", pretty.chars().take(2000).collect::<String>())
-    } else {
-        pretty
-    }
+/// The arguments as the card shows them: every argument, short ones first
+/// (recipients before a long body), a long value cut with a count of what is
+/// hidden. The full text is one click away (audit P4).
+fn approval_args_preview(input: &serde_json::Value) -> aivyx_ipc::display::Described {
+    aivyx_ipc::display::describe_args(input, Some(2000))
 }
 
 /// Chat approvals — the paused call, with Approve / Deny. The answer goes to
@@ -4359,14 +4356,23 @@ fn ApprovalCard(p: PendingApproval) -> Element {
     let mut transcript = use_context::<Signal<Vec<ChatLine>>>();
     let minutes_left = ((p.expires_at_ms - js_sys::Date::now()) / 60_000.0).ceil().max(0.0);
     let args = approval_args_preview(&p.input);
+    let full = aivyx_ipc::display::describe_args(&p.input, None).text;
+    let summary_shown = aivyx_ipc::display::neutralise(&p.summary);
+    let reason_shown = aivyx_ipc::display::neutralise(&p.reason);
     let (p_yes, p_no) = (p.clone(), p.clone());
     rsx! {
         div { class: "glass-card approval-card",
-            h4 { "⚑ Approval needed — {p.summary}" }
-            p { class: "muted", "{p.reason}" }
-            details {
+            h4 { "⚑ Approval needed — {summary_shown}" }
+            p { class: "muted", "{reason_shown}" }
+            details { open: true,
                 summary { "Arguments" }
-                pre { class: "approval-args", "{args}" }
+                pre { class: "approval-args", "{args.text}" }
+            }
+            if args.hidden > 0 {
+                details {
+                    summary { "Show everything ({args.hidden} characters were cut)" }
+                    pre { class: "approval-args", "{full}" }
+                }
             }
             div { class: "approval-actions",
                 button {
@@ -4402,11 +4408,16 @@ fn ApprovalCard(p: PendingApproval) -> Element {
 #[cfg(test)]
 mod approval_card_tests {
     #[test]
-    fn args_preview_is_pretty_and_bounded() {
+    fn args_preview_lists_everything_and_counts_what_it_cuts() {
         let small = super::approval_args_preview(&serde_json::json!({"path": "todo.md"}));
-        assert!(small.contains("\"path\": \"todo.md\""), "{small}");
-        let big = super::approval_args_preview(&serde_json::json!({"content": "x".repeat(5000)}));
-        assert!(big.chars().count() <= 2001 && big.ends_with('…'), "{}", big.len());
+        assert!(small.text.contains("path: todo.md"), "{}", small.text);
+        assert_eq!(small.hidden, 0);
+        let big = super::approval_args_preview(
+            &serde_json::json!({"content": "x".repeat(5000), "to": ["a@b.c"]}),
+        );
+        assert!(big.text.starts_with("  to: a@b.c"), "{}", big.text);
+        assert_eq!(big.hidden, 3000);
+        assert!(big.text.contains("3,000 more characters hidden"));
     }
 }
 

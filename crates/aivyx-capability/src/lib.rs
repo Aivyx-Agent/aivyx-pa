@@ -13,6 +13,8 @@
 //! `effective = agent.capabilities().intersect(tier.default_ceiling())`.
 //! This intersection happens **once per turn**, before any LLM call.
 
+pub mod display;
+
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};

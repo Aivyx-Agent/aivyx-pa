@@ -1,0 +1,185 @@
+//! How an approval request is shown to the operator (audit P4).
+//!
+//! Shared by the agent's one-line summary, the terminal prompt and the Studio
+//! card, so all three agree: every argument the approval covers is listed,
+//! recipients come first, text that has to be shortened says how much is
+//! hidden, and characters that could disguise what is on screen (control,
+//! bidirectional-override, zero-width) are shown as visible escapes.
+
+use serde_json::Value;
+
+/// Keys whose values name who a call reaches. Strings or arrays of strings.
+pub const RECIPIENT_KEYS: [&str; 6] = ["to", "cc", "bcc", "recipient", "recipients", "attendees"];
+
+/// Characters that can hide or reorder text on screen.
+fn is_disguise(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200B}'..='\u{200F}'   // zero-width space/joiners, LRM, RLM
+                | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
+                | '\u{2060}'..='\u{206F}' // word joiner, invisible operators, isolates
+                | '\u{061C}'              // Arabic letter mark
+                | '\u{FEFF}'              // BOM / zero-width no-break space
+                | '\u{00AD}'              // soft hyphen
+        )
+}
+
+/// `text` with newlines, tabs and every disguising character replaced by a
+/// visible escape (`\n`, `\t`, `\u{202e}`), so the line shown is the line sent.
+pub fn neutralise(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if is_disguise(c) => out.push_str(&format!("\\u{{{:04x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The first `max` characters of `text` (neutralised) and how many were left
+/// out.
+pub fn clip(text: &str, max: usize) -> (String, usize) {
+    let total = text.chars().count();
+    if total <= max {
+        return (neutralise(text), 0);
+    }
+    let head: String = text.chars().take(max).collect();
+    (neutralise(&head), total - max)
+}
+
+/// "… 1,240 more characters hidden", with a thousands separator.
+pub fn hidden_note(hidden: usize) -> String {
+    let digits = hidden.to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    format!("… {grouped} more characters hidden")
+}
+
+/// Every recipient string in `input`, in key order of [`RECIPIENT_KEYS`],
+/// arrays flattened.
+pub fn recipients(input: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in RECIPIENT_KEYS {
+        match input.get(key) {
+            Some(Value::String(s)) if !s.trim().is_empty() => out.push(s.clone()),
+            Some(Value::Array(items)) => {
+                for item in items {
+                    match item {
+                        Value::String(s) if !s.trim().is_empty() => out.push(s.clone()),
+                        // {"email": "..", "name": ".."} style entries
+                        Value::Object(o) => {
+                            if let Some(Value::String(s)) = o.get("email").or_else(|| o.get("address")) {
+                                out.push(s.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The arguments as lines, `key: value`. Short values first (so recipients
+/// and subjects never sit behind a long body), every argument present. A
+/// string value longer than `per_value` characters is cut with a note of how
+/// much is hidden; `None` shows everything.
+pub fn describe_args(input: &Value, per_value: Option<usize>) -> Described {
+    let render = |v: &Value| -> (String, usize) {
+        let flat = match v {
+            Value::String(s) => s.clone(),
+            Value::Array(items) if items.iter().all(|i| i.is_string()) => items
+                .iter()
+                .filter_map(|i| i.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            other => other.to_string(),
+        };
+        match per_value {
+            Some(max) => clip(&flat, max),
+            None => (neutralise(&flat), 0),
+        }
+    };
+    let Some(obj) = input.as_object() else {
+        let (text, hidden) = render(input);
+        return Described { text, hidden };
+    };
+    let mut rows: Vec<(usize, &String, String, usize)> = obj
+        .iter()
+        .map(|(k, v)| {
+            let (text, hidden) = render(v);
+            (text.chars().count() + hidden, k, text, hidden)
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
+    let mut text = String::new();
+    let mut hidden_total = 0;
+    for (_, k, value, hidden) in rows {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&format!("  {}: {}", neutralise(k), value));
+        if hidden > 0 {
+            text.push(' ');
+            text.push_str(&hidden_note(hidden));
+            hidden_total += hidden;
+        }
+    }
+    Described { text, hidden: hidden_total }
+}
+
+/// Output of [`describe_args`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Described {
+    pub text: String,
+    /// Characters left out across all values (0 = nothing hidden).
+    pub hidden: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn disguising_characters_become_visible_escapes() {
+        assert_eq!(neutralise("a\u{202e}b\u{200b}c\nd"), "a\\u{202e}b\\u{200b}c\\nd");
+        assert_eq!(neutralise("plain ünï"), "plain ünï");
+    }
+
+    #[test]
+    fn recipients_flatten_arrays_and_objects() {
+        let i = json!({"to": ["a@x", "b@x"], "cc": "c@x", "bcc": [{"email": "d@x"}]});
+        assert_eq!(recipients(&i), ["a@x", "b@x", "c@x", "d@x"]);
+    }
+
+    #[test]
+    fn short_values_come_first_and_cuts_are_counted() {
+        let i = json!({"body": "x".repeat(1500), "to": ["a@x"], "subject": "a longer subject"});
+        let d = describe_args(&i, Some(1000));
+        let lines: Vec<&str> = d.text.lines().collect();
+        assert!(lines[0].contains("to: a@x"), "{}", d.text);
+        assert!(lines[1].contains("subject: a longer subject"));
+        assert!(lines[2].contains("500 more characters hidden"), "{}", d.text);
+        assert_eq!(d.hidden, 500);
+        assert_eq!(describe_args(&i, None).hidden, 0);
+    }
+
+    #[test]
+    fn the_count_has_a_thousands_separator() {
+        assert_eq!(hidden_note(1240), "… 1,240 more characters hidden");
+        assert_eq!(hidden_note(12), "… 12 more characters hidden");
+    }
+}

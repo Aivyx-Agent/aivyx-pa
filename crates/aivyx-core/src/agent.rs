@@ -1152,29 +1152,62 @@ impl ConcreteAgent {
     }
 }
 
-/// One line for an approval prompt: the tool and what it touches.
+/// One line for an approval prompt: the tool, what it touches, and who it
+/// reaches. Every recipient is named (arrays flattened); a long value keeps
+/// its END and says how much is hidden; disguising characters are shown as
+/// escapes (audit P4).
 pub(crate) fn approval_summary(tool_name: &str, input: &serde_json::Value) -> String {
-    const KEYS: [&str; 6] = ["path", "repo", "to", "recipient", "purchase_order_id", "name"];
-    let what = KEYS
+    use aivyx_capability::display::{hidden_note, neutralise, recipients};
+    const KEYS: [&str; 4] = ["path", "repo", "purchase_order_id", "name"];
+    let recips = recipients(input);
+    let target = KEYS
         .iter()
         .find_map(|k| input.get(*k).and_then(|v| v.as_str()))
         .map(str::to_string)
         .or_else(|| {
+            // No named target and no recipient: the first string value.
+            if !recips.is_empty() {
+                return None;
+            }
             input.as_object().and_then(|o| {
                 o.iter()
                     .filter(|(k, _)| k.as_str() != "confirmed")
                     .find_map(|(_, v)| v.as_str().map(str::to_string))
             })
         });
-    match what {
-        // Keep the END of a long value: for a path that's the file name.
-        Some(w) if w.chars().count() > 80 => {
-            let tail: String = w.chars().rev().take(79).collect::<Vec<_>>().into_iter().rev().collect();
-            format!("{tool_name} …{tail}")
+    let mut line = tool_name.to_string();
+    if let Some(w) = target {
+        let n = w.chars().count();
+        if n > 80 {
+            // Keep the END of a long value: for a path that's the file name.
+            let tail: String = w.chars().skip(n - 79).collect();
+            let note = hidden_note(n - 79).replacen("… ", "…(", 1);
+            line.push_str(&format!(" {note}) {}", neutralise(&tail)));
+        } else {
+            line.push(' ');
+            line.push_str(&neutralise(&w));
         }
-        Some(w) => format!("{tool_name} {w}"),
-        None => tool_name.to_string(),
     }
+    if !recips.is_empty() {
+        line.push_str(" → ");
+        let mut shown = Vec::new();
+        let mut used = 0usize;
+        for (i, r) in recips.iter().enumerate() {
+            let r = neutralise(r);
+            let len = r.chars().count();
+            // Always show the first; stop adding once the line gets long.
+            if i > 0 && used + len > 160 {
+                break;
+            }
+            used += len + 2;
+            shown.push(r);
+        }
+        line.push_str(&shown.join(", "));
+        if shown.len() < recips.len() {
+            line.push_str(&format!(" (+{} more recipients)", recips.len() - shown.len()));
+        }
+    }
+    line
 }
 
 /// The turn's wall-clock deadline, pausable while an approval prompt waits
@@ -8641,5 +8674,32 @@ mod tests {
             matches!(second, TurnOutcome::Escalated { .. }),
             "a send to a different recipient must ask again, got {second:?}"
         );
+    }
+
+    /// Audit P4: `proton.send` takes `to` as an array; the summary names every
+    /// recipient, not the tail of the body.
+    #[test]
+    fn audit_the_approval_of_a_send_names_who_it_goes_to() {
+        let input = json!({
+            "to": ["attacker@evil.example", "second@example.com"],
+            "subject": "Q3 numbers",
+            "body": "x".repeat(300),
+        });
+        let summary = approval_summary("proton.send", &input);
+        assert!(summary.contains("attacker@evil.example"), "{summary:?}");
+        assert!(summary.contains("second@example.com"), "{summary:?}");
+        assert!(!summary.contains("xxxx"), "the body is not the target: {summary:?}");
+    }
+
+    #[test]
+    fn approval_summary_says_how_much_of_a_long_value_is_hidden_and_escapes_bidi() {
+        let long = format!("/home/sam/{}/colours.txt", "deep/".repeat(30));
+        let summary = approval_summary("fs.write", &json!({ "path": long }));
+        assert!(summary.contains("more characters hidden"), "{summary}");
+        let tricky = approval_summary("fs.write", &json!({ "path": "a\u{202e}txt.exe" }));
+        assert!(tricky.contains("\\u{202e}") && !tricky.contains('\u{202e}'), "{tricky}");
+        let many: Vec<String> = (0..60).map(|i| format!("user{i}@example.com")).collect();
+        let s = approval_summary("proton.send", &json!({ "to": many }));
+        assert!(s.contains("user0@example.com") && s.contains("more recipients"), "{s}");
     }
 }
