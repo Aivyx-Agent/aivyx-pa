@@ -642,3 +642,27 @@ named instances; the message should name the file (and offer `pack inspect
 | High | 1 | P15 |
 | Medium | 2 | P16, P17 |
 | Low | 5 | P18 to P22 |
+
+## Resolution (Task 10b, 2026-11-01)
+
+Highs P1, P2, P3, P15 and P16 were fixed earlier (Task 10a). The rest:
+
+| ID | Status | Commit |
+|---|---|---|
+| P4 | Fixed: every recipient and argument shown, cuts counted, full text on request, control/bidi characters escaped | a30dd4a7 |
+| P5 | Fixed: both readers refuse non-regular files | 7783f181 |
+| P6 | Fixed: roles and team members can't ask for shell, delete, send, post, write scopes (refused); every scope listed in check, inspect and install | d9ca4e73 |
+| P7 | Fixed: the six in-process sessions apply the `manual` areas; behavioural tests replace the structural guard | f39d0c49 |
+| P8 | Fixed | 40ebdba1 |
+| P9 | Fixed (recall block and `memory.write`) | 19a44192 |
+| P10 | Fixed (bounded stderr tail) | f63f2273 |
+| P11 | Fixed: allowlist on bare `/approve`/`/reject` for Telegram, Discord, Slack; `ResolveGate` refused from an Untrusted channel (floor SemiTrusted, not Trusted, because the allowlisted bot frontends are SemiTrusted) | 3ab536af |
+| P12 | Fixed: the signed message names the recipient | e7841e09 |
+| P13 | Fixed except pinning actions by commit (open, see ROADMAP) | 1fb01cb5 |
+| P14 | Fixed | a6f28c6d |
+| P17 | Fixed | 18e892c3 |
+| P18 | Fixed | 18e892c3 |
+| P19 | Mitigated: an empty reply after tool calls says what ran. The empty final message itself is model-side (no off-by-one found); open in ROADMAP | 4561e752 |
+| P20 | Fixed: failed calls show their reason | 7789a6ef |
+| P21 | Stays open by design: a phrase tripwire is not a defence; see ROADMAP | none |
+| P22 | Fixed | 66fdd1e8 |
