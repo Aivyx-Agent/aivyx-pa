@@ -43,9 +43,16 @@ jobs:
 
       - name: Resolve tag + version
         id: v
+        env:
+          # Through the environment, never interpolated into the script: the
+          # dispatch input is free text (audit P13).
+          TAG_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -eu
-          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          TAG="$TAG_INPUT"
+          case "$TAG" in
+            *[!A-Za-z0-9._-]*) echo "refusing a tag with unexpected characters"; exit 1 ;;
+          esac
           if [ -z "$TAG" ]; then echo "no tag resolved"; exit 1; fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"

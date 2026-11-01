@@ -18,6 +18,10 @@ on:
     - cron: "17 3 * * 1"   # Mondays 03:17 UTC: catch new advisories and lints without a push
   workflow_dispatch:
 
+# Least privilege: the jobs here only read the repository (audit P13).
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

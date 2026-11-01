@@ -27,6 +27,11 @@ name: Quality Gate
 on:
   workflow_call:
 
+# Least privilege: reads the repository only (audit P13). A caller can grant
+# less, never more, so release.yml's wider token doesn't reach this job.
+permissions:
+  contents: read
+
 jobs:
   test-and-clippy:
     name: cargo test + clippy
