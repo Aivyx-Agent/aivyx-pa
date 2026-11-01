@@ -474,6 +474,17 @@ async fn handle_slack_incoming_command(
         );
     }
 
+    // Audit P11 — a bare `/approve` / `/reject` resolves a mission gate, and
+    // the daemon's `ResolveGate` doesn't check who asks; on a chat anyone can
+    // post in, only the same allowlist that guards `/team` may do it.
+    if gate_command::parse(text).is_some() && !sender_allowed(allowed_senders, &sender_id) {
+        return SlackIncomingOutcome::Reply(
+            "✗ you are not authorized to approve or reject mission gates \
+             (list your id in `team_command_allowed_senders`)."
+                .to_string(),
+        );
+    }
+
     match handle_slack_team_run_message(
         text,
         socket_path,
@@ -1211,6 +1222,47 @@ mod tests {
             SlackIncomingOutcome::ForwardToChatTurn => {
                 panic!("expected a denial reply, not a forward to chat turn")
             }
+        }
+    }
+
+    /// Audit P11: a sender outside the allowlist can't resolve a gate with a
+    /// bare `/approve` / `/reject`; an allowlisted one is passed on to do it.
+    #[tokio::test]
+    async fn only_an_allowlisted_sender_may_resolve_a_gate() {
+        for cmd in ["/approve m-001 g-abc", "/reject m-001 g-abc"] {
+            let mut pending_trigger = None;
+            let mut trigger_history = Vec::new();
+            let denied = handle_slack_incoming_command(
+                cmd,
+                std::path::Path::new("/nonexistent/unused.sock"),
+                &mut pending_trigger,
+                &mut trigger_history,
+                false,
+                None,
+                "U999NOTALLOWED".to_string(),
+                &["U123ALLOWED".to_string(), "U456ALLOWED".to_string()],
+            )
+            .await;
+            match denied {
+                SlackIncomingOutcome::Reply(text) => {
+                    assert!(text.contains("not authorized to approve or reject"), "{text}")
+                }
+                SlackIncomingOutcome::ForwardToChatTurn => {
+                    panic!("an unlisted sender's {cmd} reached the gate path")
+                }
+            }
+            let allowed = handle_slack_incoming_command(
+                cmd,
+                std::path::Path::new("/nonexistent/unused.sock"),
+                &mut pending_trigger,
+                &mut trigger_history,
+                false,
+                None,
+                "U123ALLOWED".to_string(),
+                &["U123ALLOWED".to_string(), "U456ALLOWED".to_string()],
+            )
+            .await;
+            assert_eq!(allowed, SlackIncomingOutcome::ForwardToChatTurn);
         }
     }
 

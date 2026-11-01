@@ -3035,6 +3035,25 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             gate_id,
                             approved,
                         } => {
+                            // Audit P11 — resolving a mission gate is the
+                            // operator's act. A connection whose channel is
+                            // Untrusted (a bot answering any chat) can't do
+                            // it; the bot frontends additionally check their
+                            // `team_command_allowed_senders` before sending.
+                            if matches!(
+                                channel.as_ref().map(|c| c.trust_tier()),
+                                Some(aivyx_capability::TrustTier::Untrusted)
+                            ) {
+                                let err = DaemonMessage::Error {
+                                    code: "gate_requires_trust".into(),
+                                    message: "an untrusted channel can't approve or reject \
+                                              mission gates"
+                                        .into(),
+                                };
+                                let frame = encode_frame(&err).unwrap_or_default();
+                                let _ = writer.write_all(&frame).await;
+                                continue;
+                            };
                             let Some(store) = &mission_store else {
                                 let err = DaemonMessage::Error {
                                     code: "no_mission_store".into(),

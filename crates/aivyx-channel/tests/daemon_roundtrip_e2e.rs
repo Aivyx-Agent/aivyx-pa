@@ -4010,6 +4010,46 @@ mod routing_visibility {
         handle.await.unwrap();
     }
 
+    /// Audit P11: a connection on an Untrusted channel can't resolve a
+    /// mission gate (the refusal comes before the mission is even looked up).
+    #[tokio::test]
+    async fn an_untrusted_channel_cannot_resolve_a_gate() {
+        let scratch = ScratchDir::new();
+        let guard = guard(&scratch).await;
+        let routed = Arc::new(escalating(Arc::clone(&guard)));
+        let channel = Arc::new(TierChannel(
+            aivyx_core::SessionId::new(),
+            aivyx_capability::TrustTier::Untrusted,
+        ));
+        let (mut conn, handle) = start(
+            &scratch,
+            routing_agent(&routed),
+            channel,
+            Some(Arc::clone(&guard)),
+            Some(routed),
+        )
+        .await;
+        let frame = encode_frame(&FrontendMessage::ResolveGate {
+            mission_id: "m-1".into(),
+            gate_id: "g-1".into(),
+            approved: true,
+        })
+        .unwrap();
+        conn.writer.write_all(&frame).await.unwrap();
+        loop {
+            match decode_frame::<DaemonEnvelope>(&conn.buf) {
+                Ok((DaemonEnvelope::Error { code, .. }, _)) => {
+                    assert_eq!(code, "gate_requires_trust");
+                    break;
+                }
+                Err(FrameError::IncompleteBuf) => read_more(&mut conn.reader, &mut conn.buf).await,
+                other => panic!("expected the refusal, got {other:?}"),
+            }
+        }
+        conn.close().await;
+        handle.await.unwrap();
+    }
+
     /// One consent-stopping turn over a channel at `tier`; returns its
     /// events and outcome.
     async fn consent_turn(tier: aivyx_capability::TrustTier) -> (Vec<StreamEventPayload>, String) {
