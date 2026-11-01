@@ -11949,6 +11949,7 @@ async fn run_async(
                 cycle_detection,
                 injection_scan_enabled,
                 injection_scan_exempt,
+                confirm_all_areas: confirm_all_areas.clone(),
                 // Task 4 security-audit fix round 3 — same [access]
                 // confirm_destructive posture as every other agent
                 // construction path in this function.
@@ -12084,6 +12085,7 @@ async fn run_async(
                 cycle_detection,
                 injection_scan_enabled,
                 injection_scan_exempt,
+                confirm_all_areas: confirm_all_areas.clone(),
                 // Task 4 security-audit fix round 3 — same [access]
                 // confirm_destructive posture as every other agent
                 // construction path in this function.
@@ -12187,6 +12189,7 @@ async fn run_async(
                 cycle_detection,
                 injection_scan_enabled,
                 injection_scan_exempt,
+                confirm_all_areas: confirm_all_areas.clone(),
                 confirm_integration_writes,
                 budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
                     config_budget.clone(),
@@ -12270,6 +12273,7 @@ async fn run_async(
                 cycle_detection,
                 injection_scan_enabled,
                 injection_scan_exempt,
+                confirm_all_areas: confirm_all_areas.clone(),
                 confirm_integration_writes,
                 budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
                     config_budget.clone(),
@@ -12364,6 +12368,7 @@ async fn run_async(
                 cycle_detection,
                 injection_scan_enabled,
                 injection_scan_exempt,
+                confirm_all_areas: confirm_all_areas.clone(),
                 confirm_integration_writes,
                 budget_gate: aivyx_channel::budget_gate::ChannelBudgetGate::new_gate(
                     config_budget.clone(),
@@ -12524,6 +12529,7 @@ async fn run_async(
                 cycle_detection,
                 injection_scan_enabled,
                 injection_scan_exempt,
+                confirm_all_areas: confirm_all_areas.clone(),
                 // Task 4 security-audit fix round 3 — same [access]
                 // confirm_destructive posture as every other agent
                 // construction path in this function.

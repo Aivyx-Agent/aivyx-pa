@@ -1044,6 +1044,7 @@ async fn run_telegram_session_drives_two_scripted_turns() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
+        confirm_all_areas: Default::default(),
         confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
@@ -1396,6 +1397,7 @@ async fn run_telegram_session_cancelled_turn_renders_and_continues() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
+        confirm_all_areas: Default::default(),
         confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
@@ -1868,6 +1870,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             cycle_detection: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
+            confirm_all_areas: Default::default(),
             confirm_integration_writes: false,
             budget_gate: None,
             rate_gate: None,
@@ -1885,6 +1888,7 @@ async fn run_telegram_session_two_chats_persistent_e2e() {
             cycle_detection: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
+            confirm_all_areas: Default::default(),
             confirm_integration_writes: false,
             budget_gate: None,
             rate_gate: None,
@@ -2363,6 +2367,7 @@ async fn run_telegram_session_in_band_cancel_cancels_current_turn() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
+        confirm_all_areas: Default::default(),
         confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
@@ -2626,6 +2631,7 @@ async fn run_telegram_session_scan_preserves_queued_normal_messages() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
+        confirm_all_areas: Default::default(),
         confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
@@ -2935,6 +2941,7 @@ async fn run_telegram_multi_session_three_chats_interleaved() {
             cycle_detection: None,
             injection_scan_enabled: true,
             injection_scan_exempt: std::collections::BTreeSet::new(),
+            confirm_all_areas: Default::default(),
             confirm_integration_writes: false,
             budget_gate: None,
             rate_gate: None,
@@ -3384,6 +3391,7 @@ async fn telegram_dispatched_mutating_tool_produces_a_checkpoint() {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
+        confirm_all_areas: Default::default(),
         confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
@@ -3653,6 +3661,7 @@ async fn telegram_injection_scan_disabled_skips_escalation() {
         cycle_detection: None,
         injection_scan_enabled: false,
         injection_scan_exempt: std::collections::BTreeSet::new(),
+        confirm_all_areas: Default::default(),
         confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
@@ -3867,4 +3876,261 @@ fn photo_picks_largest_size_rationale() {
     };
     assert!(msg.image.is_some());
     assert_eq!(msg.image.as_ref().unwrap().data.len(), 1024);
+}
+
+// ---------------------------------------------------------------------------
+// Audit P7 — the `manual` autonomy areas apply in both in-process Telegram
+// sessions (single chat and multi chat).
+// ---------------------------------------------------------------------------
+
+mod manual_areas {
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+
+    use aivyx_audit::{AuditBridge, HmacChainLog};
+    use aivyx_capability::{CapabilitySet, Scope};
+    use aivyx_core::{
+        AuditHook, CancellationToken, ConfirmAllAreas, Tool, ToolContext, ToolId, ToolOutcome,
+        ToolRegistry, Verification,
+    };
+    use aivyx_crypto::MasterKey;
+    use aivyx_llm::{
+        LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage,
+        NameResolution, ToolCallEnd,
+    };
+    use aivyx_storage::{RedbStorage, Storage, StorageConfig};
+
+    use crate::session::{
+        run_telegram_multi_session_with_transport, run_telegram_session_with_transport,
+    };
+    use crate::telegram_channel::TelegramChannel;
+    use super::ScriptedTransport;
+    use crate::transport::IncomingMessage;
+    use crate::TelegramSessionConfig;
+    use aivyx_core::ChannelContext;
+
+    struct WriteProbe {
+        id: ToolId,
+        schema: serde_json::Value,
+        ran: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for WriteProbe {
+        fn id(&self) -> ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            "probe.write"
+        }
+        fn description(&self) -> &str {
+            "changes something"
+        }
+        fn input_schema(&self) -> &serde_json::Value {
+            &self.schema
+        }
+        fn required_scope(&self, _input: &serde_json::Value) -> Scope {
+            Scope::parse("memory.write").unwrap()
+        }
+        async fn execute(&self, _input: serde_json::Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+            self.ran.fetch_add(1, Ordering::SeqCst);
+            ToolOutcome::Completed {
+                output: serde_json::json!({"ok": true}),
+                verified: Verification::NotApplicable,
+            }
+        }
+    }
+
+    struct Step {
+        events: Vec<LlmStreamEvent>,
+        terminal: LlmStepEnd,
+    }
+
+    struct Scripted {
+        queue: StdMutex<VecDeque<Step>>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for Scripted {
+        async fn chat_stream(
+            &self,
+            _request: LlmRequest<'_>,
+            _cancellation: &CancellationToken,
+        ) -> Result<Box<dyn LlmStream>, LlmError> {
+            let step = self
+                .queue
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| LlmError::Config("exhausted".into()))?;
+            Ok(Box::new(Stream { events: step.events.into_iter(), terminal: Some(step.terminal) }))
+        }
+    }
+
+    struct Stream {
+        events: std::vec::IntoIter<LlmStreamEvent>,
+        terminal: Option<LlmStepEnd>,
+    }
+
+    #[async_trait]
+    impl LlmStream for Stream {
+        async fn next_event(&mut self) -> Result<Option<LlmStreamEvent>, LlmError> {
+            Ok(self.events.next())
+        }
+        async fn finish(self: Box<Self>) -> Result<LlmStepEnd, LlmError> {
+            self.terminal.ok_or_else(|| LlmError::StreamEnded("double finish".into()))
+        }
+    }
+
+    fn done() -> Step {
+        Step {
+            events: vec![LlmStreamEvent::TextChunk("done".into())],
+            terminal: LlmStepEnd::FinalMessage { text: "done".into(), usage: LlmUsage::default() },
+        }
+    }
+
+    fn steps() -> VecDeque<Step> {
+        VecDeque::from(vec![
+            Step {
+                events: vec![],
+                terminal: LlmStepEnd::ToolCalls {
+                    calls: vec![ToolCallEnd {
+                        call_id: "toolu_1".into(),
+                        tool_name: "probe.write".into(),
+                        input: serde_json::json!({}),
+                        name_resolution: NameResolution::Known,
+                    }],
+                    text_so_far: String::new(),
+                    usage: LlmUsage::default(),
+                },
+            },
+            done(),
+            done(),
+        ])
+    }
+
+    async fn setup(
+        areas: ConfirmAllAreas,
+    ) -> (TelegramSessionConfig, Arc<AtomicUsize>, Arc<dyn LlmProvider>, Arc<dyn AuditHook>) {
+        let dir = std::env::temp_dir().join(format!(
+            "aivyx-tg-manual-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage: Arc<dyn Storage> = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([7u8; 32]),
+        )
+        .await
+        .unwrap();
+        let ran = Arc::new(AtomicUsize::new(0));
+        let tool = WriteProbe { id: ToolId::new(), schema: serde_json::json!({}), ran: Arc::clone(&ran) };
+        let cfg = TelegramSessionConfig {
+            model: "m".into(),
+            system_prompt: "telegram test".into(),
+            max_tokens: 128,
+            capabilities: CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]),
+            tools: Arc::new(ToolRegistry::new(vec![Arc::new(tool)])),
+            storage,
+            tool_allowlist: None,
+            memory_topic_prefix: None,
+            turn_timeout_secs: None,
+            cycle_detection: None,
+            injection_scan_enabled: true,
+            injection_scan_exempt: Default::default(),
+            confirm_all_areas: areas,
+            confirm_integration_writes: false,
+            budget_gate: None,
+            rate_gate: None,
+        };
+        let provider: Arc<dyn LlmProvider> = Arc::new(Scripted { queue: StdMutex::new(steps()) });
+        let audit: Arc<dyn AuditHook> = Arc::new(AuditBridge::new(HmacChainLog::new([42u8; 32].to_vec())));
+        (cfg, ran, provider, audit)
+    }
+
+    fn transport() -> Arc<ScriptedTransport> {
+        let t = Arc::new(ScriptedTransport::new());
+        t.push_update(IncomingMessage {
+            update_id: 10,
+            chat_id: 777,
+            user_id: 1,
+            text: "change it".into(),
+            image: None,
+        });
+        t
+    }
+
+    async fn single_runs(areas: ConfirmAllAreas) -> usize {
+        let (cfg, ran, provider, audit) = setup(areas).await;
+        let t = transport();
+        let channel = Arc::new(TelegramChannel::new("tg-manual", 777, Some(777), Arc::clone(&t)));
+        let (wt, wc) = (Arc::clone(&t), Arc::clone(&channel));
+        tokio::spawn(async move {
+            while wt.sent_snapshot().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            wc.cancellation_token().cancel();
+        });
+        tokio::time::timeout(
+            Duration::from_secs(8),
+            run_telegram_session_with_transport(channel, cfg, provider, audit, 1, CancellationToken::new()),
+        )
+        .await
+        .expect("session finishes")
+        .expect("session ok");
+        ran.load(Ordering::SeqCst)
+    }
+
+    async fn multi_runs(areas: ConfirmAllAreas) -> usize {
+        let (cfg, ran, provider, audit) = setup(areas).await;
+        let t = transport();
+        let shutdown = CancellationToken::new();
+        let (wt, ws) = (Arc::clone(&t), shutdown.clone());
+        tokio::spawn(async move {
+            while wt.sent_snapshot().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            ws.cancel();
+        });
+        tokio::time::timeout(
+            Duration::from_secs(8),
+            run_telegram_multi_session_with_transport(
+                "tg-manual", t, Some(777), cfg, provider, audit, None, 1, shutdown,
+            ),
+        )
+        .await
+        .expect("session finishes")
+        .expect("session ok");
+        ran.load(Ordering::SeqCst)
+    }
+
+    fn manual_memory() -> ConfirmAllAreas {
+        let mut a = ConfirmAllAreas::everywhere(false);
+        a.areas.insert("memory".into(), true);
+        a
+    }
+
+    #[tokio::test]
+    async fn the_single_chat_session_asks_in_a_manual_area() {
+        assert_eq!(single_runs(ConfirmAllAreas::everywhere(false)).await, 1, "control");
+        assert_eq!(single_runs(ConfirmAllAreas::everywhere(true)).await, 0);
+        assert_eq!(single_runs(manual_memory()).await, 0);
+    }
+
+    #[tokio::test]
+    async fn the_multi_chat_session_asks_in_a_manual_area() {
+        assert_eq!(multi_runs(ConfirmAllAreas::everywhere(false)).await, 1, "control");
+        assert_eq!(multi_runs(ConfirmAllAreas::everywhere(true)).await, 0);
+        assert_eq!(multi_runs(manual_memory()).await, 0);
+    }
 }

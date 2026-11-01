@@ -151,6 +151,7 @@ fn config(storage: Arc<dyn Storage>) -> MatrixSessionConfig {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
+        confirm_all_areas: Default::default(),
         confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
@@ -534,4 +535,113 @@ async fn a_logout_mid_turn_finishes_the_turn_then_ends_with_an_error() {
     let err = run.finish().await.unwrap_err();
     assert!(err.contains("connect matrix"), "{err}");
     assert_eq!(transport.sent().await[0].text, "done");
+}
+
+// ---------------------------------------------------------------------------
+// Audit P7 — the `manual` autonomy areas apply in the in-process session.
+// ---------------------------------------------------------------------------
+
+struct WriteProbe {
+    id: aivyx_core::ToolId,
+    schema: serde_json::Value,
+    ran: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl aivyx_core::Tool for WriteProbe {
+    fn id(&self) -> aivyx_core::ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "probe.write"
+    }
+    fn description(&self) -> &str {
+        "changes something"
+    }
+    fn input_schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &serde_json::Value) -> Scope {
+        Scope::parse("memory.write").unwrap()
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &aivyx_core::ToolContext<'_>,
+    ) -> aivyx_core::ToolOutcome {
+        self.ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        aivyx_core::ToolOutcome::Completed {
+            output: serde_json::json!({"ok": true}),
+            verified: aivyx_core::Verification::NotApplicable,
+        }
+    }
+}
+
+/// How many times `probe.write` ran when the model asked for it once, with
+/// `areas` as the session's `manual` areas.
+async fn probe_runs(areas: aivyx_core::ConfirmAllAreas) -> usize {
+    let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let tool = WriteProbe {
+        id: aivyx_core::ToolId::new(),
+        schema: serde_json::json!({}),
+        ran: Arc::clone(&ran),
+    };
+    let (storage, _dir) = scratch_storage("manual").await;
+    let mut cfg = config(storage);
+    cfg.capabilities = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+    cfg.tools = Arc::new(ToolRegistry::new(vec![Arc::new(tool)]));
+    cfg.confirm_all_areas = areas;
+    let steps = vec![
+        ScriptedStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![aivyx_llm::ToolCallEnd {
+                    call_id: "toolu_1".into(),
+                    tool_name: "probe.write".into(),
+                    input: serde_json::json!({}),
+                    name_resolution: aivyx_llm::NameResolution::Known,
+                }],
+                text_so_far: String::new(),
+                usage: LlmUsage::default(),
+            },
+        },
+        final_step(&["done"], "done"),
+        final_step(&["done"], "done"),
+    ];
+    let provider: Arc<dyn LlmProvider> = Arc::new(ScriptedProvider {
+        queue: StdMutex::new(steps.into()),
+        gate: None,
+        seen: Arc::default(),
+    });
+    let audit: Arc<dyn AuditHook> =
+        Arc::new(AuditBridge::new(HmacChainLog::new([42u8; 32].to_vec())));
+    let transport = operator_transport(vec![msg("!home:x", "@me:x", "change it", true)]);
+    let shutdown = CancellationToken::new();
+    let (watch_t, watch_s) = (Arc::clone(&transport), shutdown.clone());
+    tokio::spawn(async move {
+        while watch_t.sent().await.is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        watch_s.cancel();
+    });
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        run_matrix_session_with_transport(transport, policy(), cfg, provider, audit, None, shutdown),
+    )
+    .await
+    .expect("session finishes")
+    .expect("session ok");
+    ran.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[tokio::test]
+async fn a_tool_in_a_manual_area_asks_instead_of_running() {
+    // Control: no manual area, the tool runs.
+    assert_eq!(probe_runs(aivyx_core::ConfirmAllAreas::everywhere(false)).await, 1);
+    // `manual` everywhere, and `manual` for just its area: it does not run
+    // unasked (the session can't ask, so the turn ends waiting for a reply).
+    assert_eq!(probe_runs(aivyx_core::ConfirmAllAreas::everywhere(true)).await, 0);
+    let mut only_memory = aivyx_core::ConfirmAllAreas::everywhere(false);
+    only_memory.areas.insert("memory".into(), true);
+    assert_eq!(probe_runs(only_memory).await, 0);
 }

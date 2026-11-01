@@ -154,6 +154,10 @@ pub struct TelegramSessionConfig {
     /// `[agent] injection_scan_exempt` — per-tool-name exemption list for
     /// the active scan. See `aivyx_core::TurnSafety` for the full contract.
     pub injection_scan_exempt: std::collections::BTreeSet<String>,
+    /// Areas at `manual` autonomy (global or `[[autonomy.override]]`): every change in
+    /// them asks the operator first. Without this the in-process fallback ran
+    /// `manual` as `assisted` (audit P7).
+    pub confirm_all_areas: aivyx_core::ConfirmAllAreas,
 }
 
 /// How long to hold each `getUpdates` request open (seconds).
@@ -476,6 +480,7 @@ where
         config.injection_scan_enabled,
         config.injection_scan_exempt,
     )
+    .with_confirm_all_areas(config.confirm_all_areas.clone())
     .apply(agent);
 
     // ---- Long-poll loop ----------------------------------------------
@@ -856,6 +861,7 @@ where
         config.injection_scan_enabled,
         config.injection_scan_exempt,
     )
+    .with_confirm_all_areas(config.confirm_all_areas.clone())
     .apply(agent);
 
     let mut turns_run: usize = 0;

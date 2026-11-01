@@ -183,6 +183,7 @@ fn discord_session_config(storage: Arc<dyn Storage>) -> DiscordSessionConfig {
         cycle_detection: None,
         injection_scan_enabled: true,
         injection_scan_exempt: std::collections::BTreeSet::new(),
+        confirm_all_areas: Default::default(),
         confirm_integration_writes: false,
         budget_gate: None,
         rate_gate: None,
@@ -865,4 +866,137 @@ async fn discord_shutdown_drains_inflight_turns() {
     assert!(sent[0].text.contains("only reply"));
 
     let _ = std::fs::remove_dir_all(&parent);
+}
+
+// ---------------------------------------------------------------------------
+// Audit P7 — the `manual` autonomy areas apply in the in-process session.
+// ---------------------------------------------------------------------------
+
+struct WriteProbe {
+    id: aivyx_core::ToolId,
+    schema: serde_json::Value,
+    ran: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl aivyx_core::Tool for WriteProbe {
+    fn id(&self) -> aivyx_core::ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "probe.write"
+    }
+    fn description(&self) -> &str {
+        "changes something"
+    }
+    fn input_schema(&self) -> &serde_json::Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &serde_json::Value) -> Scope {
+        Scope::parse("memory.write").unwrap()
+    }
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &aivyx_core::ToolContext<'_>,
+    ) -> aivyx_core::ToolOutcome {
+        self.ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        aivyx_core::ToolOutcome::Completed {
+            output: serde_json::json!({"ok": true}),
+            verified: aivyx_core::Verification::NotApplicable,
+        }
+    }
+}
+
+/// The script: the model asks for `probe.write` once, then answers.
+fn probe_steps() -> Vec<ScriptedStep> {
+    vec![
+        ScriptedStep {
+            events: vec![],
+            terminal: LlmStepEnd::ToolCalls {
+                calls: vec![aivyx_llm::ToolCallEnd {
+                    call_id: "toolu_1".into(),
+                    tool_name: "probe.write".into(),
+                    input: serde_json::json!({}),
+                    name_resolution: aivyx_llm::NameResolution::Known,
+                }],
+                text_so_far: String::new(),
+                usage: LlmUsage::default(),
+            },
+        },
+        final_step(&["done"], "done"),
+        final_step(&["done"], "done"),
+    ]
+}
+
+/// `cfg` with the probe tool registered and `areas` as its `manual` areas.
+fn with_probe(
+    mut cfg: DiscordSessionConfig,
+    areas: aivyx_core::ConfirmAllAreas,
+) -> (DiscordSessionConfig, Arc<std::sync::atomic::AtomicUsize>) {
+    let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let tool = WriteProbe {
+        id: aivyx_core::ToolId::new(),
+        schema: serde_json::json!({}),
+        ran: Arc::clone(&ran),
+    };
+    cfg.capabilities = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+    cfg.tools = Arc::new(ToolRegistry::new(vec![Arc::new(tool)]));
+    cfg.confirm_all_areas = areas;
+    (cfg, ran)
+}
+
+#[tokio::test]
+async fn a_tool_in_a_manual_area_asks_instead_of_running() {
+    // Control: no manual area, the tool runs.
+    assert_eq!(probe_runs(aivyx_core::ConfirmAllAreas::everywhere(false)).await, 1);
+    // `manual` everywhere, and `manual` for just its area: it does not run
+    // unasked (the session can't ask, so the turn ends waiting for a reply).
+    assert_eq!(probe_runs(aivyx_core::ConfirmAllAreas::everywhere(true)).await, 0);
+    let mut only_memory = aivyx_core::ConfirmAllAreas::everywhere(false);
+    only_memory.areas.insert("memory".into(), true);
+    assert_eq!(probe_runs(only_memory).await, 0);
+}
+
+
+async fn probe_runs(areas: aivyx_core::ConfirmAllAreas) -> usize {
+    let (storage, _dir) = scratch_storage("manual").await;
+    let (cfg, ran) = with_probe(discord_session_config(storage), areas);
+    let provider: Arc<dyn LlmProvider> = Arc::new(ScriptedProvider {
+        queue: StdMutex::new(probe_steps().into()),
+    });
+    let audit: Arc<dyn AuditHook> =
+        Arc::new(AuditBridge::new(HmacChainLog::new([42u8; 32].to_vec())));
+    let transport = Arc::new(ScriptedTransport::with_queue(vec![IncomingMessage {
+        message_id: 1,
+        channel_id: 777,
+        author_id: 42,
+        text: "change it".to_string(),
+    }]));
+    let shutdown = CancellationToken::new();
+    let (watch_t, watch_s) = (Arc::clone(&transport), shutdown.clone());
+    tokio::spawn(async move {
+        while watch_t.sent().await.is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        watch_s.cancel();
+    });
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        run_discord_session_with_transport(
+            "aivyx-discord-test",
+            transport,
+            Some(777),
+            cfg,
+            provider,
+            audit,
+            None,
+            shutdown,
+        ),
+    )
+    .await
+    .expect("session finishes")
+    .expect("session ok");
+    ran.load(std::sync::atomic::Ordering::SeqCst)
 }

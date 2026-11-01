@@ -99,6 +99,9 @@ pub struct SlackSessionConfig {
     /// `[agent] injection_scan_exempt` — per-tool-name exemption list for
     /// the active scan. See `aivyx_core::TurnSafety` for the full contract.
     pub injection_scan_exempt: std::collections::BTreeSet<String>,
+    /// Areas at `manual` autonomy: every change in them asks the operator
+    /// first (audit P7).
+    pub confirm_all_areas: aivyx_core::ConfirmAllAreas,
     /// Task 4 security-audit fix round 3 — `[access] confirm_destructive`.
     /// Threaded into `ConcreteAgent::with_confirm_integration_writes(...)` at the
     /// construction site below, same pattern as `injection_scan_enabled`.
@@ -194,6 +197,7 @@ where
         config.injection_scan_enabled,
         config.injection_scan_exempt,
     )
+    .with_confirm_all_areas(config.confirm_all_areas.clone())
     .apply(agent);
 
     let mut turns_run: usize = 0;

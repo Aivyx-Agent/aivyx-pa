@@ -163,6 +163,10 @@ pub struct SignalSessionConfig {
     pub budget_gate: Option<Arc<dyn aivyx_core::BudgetGate>>,
     pub rate_gate: Option<Arc<dyn aivyx_core::RateGate>>,
     pub injection_scan_exempt: std::collections::BTreeSet<String>,
+    /// Areas at `manual` autonomy (global or `[[autonomy.override]]`): every change in
+    /// them asks the operator first. Without this the in-process fallback ran
+    /// `manual` as `assisted` (audit P7).
+    pub confirm_all_areas: aivyx_core::ConfirmAllAreas,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -207,6 +211,7 @@ fn build_agent(
         config.injection_scan_enabled,
         config.injection_scan_exempt,
     )
+    .with_confirm_all_areas(config.confirm_all_areas.clone())
     .apply(agent)
 }
 
