@@ -118,7 +118,15 @@ pub fn read_file(root: &Path, rel: &str) -> Result<DocFile, BrowseError> {
     }
     let size_bytes = md.len();
 
-    let file = std::fs::File::open(&path).map_err(|e| BrowseError::Io(e.to_string()))?;
+    // Audit P5: a FIFO in the folder (the agent can `mkfifo`) would block this
+    // open forever; open without blocking and refuse anything but a regular file.
+    let file = aivyx_core::tools::fs::open_regular_file(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::InvalidInput {
+            BrowseError::NotAFile
+        } else {
+            BrowseError::Io(e.to_string())
+        }
+    })?;
     let mut bytes = Vec::new();
     file.take(READ_CAP_BYTES as u64)
         .read_to_end(&mut bytes)
@@ -338,6 +346,25 @@ mod tests {
         assert!(f.truncated);
         assert_eq!(f.content.as_ref().unwrap().len(), READ_CAP_BYTES);
         assert_eq!(f.size_bytes, (READ_CAP_BYTES + 5000) as u64);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Audit P5: the Documents browser must refuse a FIFO, not block on it.
+    #[test]
+    fn audit_reading_a_fifo_does_not_hang_the_documents_browser() {
+        let root = seeded_root();
+        let fifo = root.join("notes.txt.fifo");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let root2 = root.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_file(&root2, "notes.txt.fifo").is_err());
+        });
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(3)),
+            Ok(true),
+            "read_file on a FIFO must refuse it, not block"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 

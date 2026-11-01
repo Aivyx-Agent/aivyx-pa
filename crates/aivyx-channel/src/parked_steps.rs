@@ -41,6 +41,8 @@ pub const KEEP_RESOLVED: usize = 200;
 pub const MAX_PENDING: usize = 100;
 /// How much of a file a preview shows.
 const PREVIEW_CHARS: usize = 1500;
+/// Bytes read to build a preview (UTF-8 can take 4 bytes a character).
+const PREVIEW_BYTES: u64 = 4 * PREVIEW_CHARS as u64;
 const DAY_SECS: i64 = 24 * 3600;
 
 #[derive(Debug, thiserror::Error)]
@@ -341,12 +343,28 @@ pub fn preview_for(step: &ParkedStep, root: Option<&Path>) -> Option<String> {
     };
     Some(match std::fs::metadata(&full) {
         Ok(m) if m.is_dir() => format!("Now: {path} is a folder."),
-        Ok(m) => {
-            let bytes = std::fs::read(&full).unwrap_or_default();
-            let text = String::from_utf8_lossy(&bytes);
-            let head: String = text.chars().take(PREVIEW_CHARS).collect();
-            let more = if text.chars().count() > PREVIEW_CHARS { "\n…" } else { "" };
-            format!("Now: {path} ({} bytes)\n{head}{more}", m.len())
+        Ok(_) => {
+            // Audit P5: a FIFO the agent made would block this open forever,
+            // and an endless file would grow the buffer without bound. Only a
+            // regular file is read, opened without blocking, and only the
+            // first PREVIEW_BYTES of it.
+            use std::io::Read;
+            match aivyx_core::tools::fs::open_regular_file(&full) {
+                Ok(file) => {
+                    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+                    let mut bytes = Vec::new();
+                    let _ = file.take(PREVIEW_BYTES).read_to_end(&mut bytes);
+                    let text = String::from_utf8_lossy(&bytes);
+                    let head: String = text.chars().take(PREVIEW_CHARS).collect();
+                    let more = if len > bytes.len() as u64 || text.chars().count() > PREVIEW_CHARS {
+                        "\n…"
+                    } else {
+                        ""
+                    };
+                    format!("Now: {path} ({len} bytes)\n{head}{more}")
+                }
+                Err(_) => format!("Now: {path} is not a regular file."),
+            }
         }
         Err(_) => format!("Now: {path} doesn't exist."),
     })
@@ -531,6 +549,38 @@ mod tests {
             Approval::Parked { id } => id,
             other => panic!("expected Parked, got {other:?}"),
         }
+    }
+
+    /// Audit P5: the review list builds a preview from a path in the parked
+    /// call; a FIFO the confined agent made must be refused, not opened.
+    #[test]
+    fn audit_a_preview_of_a_fifo_does_not_hang() {
+        let s = Scratch::new();
+        let fifo = s.dir.join("pipe");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let step = ParkedStep {
+            id: "abcd1234".into(),
+            tool: "fs.write".into(),
+            input: serde_json::json!({ "path": fifo.display().to_string(), "content": "x" }),
+            summary: "fs.write pipe".into(),
+            reason: "overwriting can't be undone".into(),
+            area: "fs".into(),
+            origin: "routine tidy".into(),
+            trust_tier: TrustTier::Trusted,
+            parked_at: 0,
+            state: ParkedState::Pending,
+            resolved_at: None,
+            result: None,
+            preview: None,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(preview_for(&step, None));
+        });
+        let got = rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("preview_for blocked on a FIFO: the Studio's review list would hang a worker thread");
+        assert!(got.unwrap().contains("not a regular file"));
     }
 
     #[tokio::test]
