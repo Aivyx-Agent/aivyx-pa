@@ -28,6 +28,9 @@ fn set(scopes: &[&str]) -> CapabilitySet {
     CapabilitySet::from_scopes(scopes.iter().map(|s| scope(s)))
 }
 
+/// This host's instance id: what peers sign their requests for.
+const HOST_ID: &str = "host";
+
 /// What handling a crossing's verb would need on the host — host-derived, never
 /// peer-supplied (a peer asks for *work*, the host decides what scopes that work
 /// touches; this is itself part of no-self-escalation).
@@ -55,7 +58,7 @@ fn receive(
 ) -> Result<(PeerContent, ConsentRequirement), Crossing> {
     let verb = req.verb();
     // PP.1 — identity: verify the signature against the peer's known key.
-    Identity::verify_request(peer_pubkey, header, body).map_err(|e| {
+    Identity::verify_request(peer_pubkey, HOST_ID, header, body).map_err(|e| {
         Crossing::inbound_denied(peer_id, verb, format!("signature: {e}"))
     })?;
     // PP.1 — replay guard.
@@ -87,7 +90,7 @@ async fn trusted_search_flows_end_to_end() {
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Search { query: "pour-over bloom".into() };
-    let (header, body) = peer.sign_relay(&req).await.unwrap();
+    let (header, body) = peer.sign_relay(HOST_ID, &req).await.unwrap();
 
     let (content, consent) = receive(
         "peer",
@@ -119,7 +122,7 @@ async fn task_is_attenuated_and_gated() {
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Task { goal: "update my notes".into() };
-    let (header, body) = peer.sign_relay(&req).await.unwrap();
+    let (header, body) = peer.sign_relay(HOST_ID, &req).await.unwrap();
 
     let (content, consent) = receive(
         "peer",
@@ -152,7 +155,7 @@ async fn unknown_peer_is_denied_by_default() {
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Task { goal: "do something".into() };
-    let (header, body) = peer.sign_relay(&req).await.unwrap();
+    let (header, body) = peer.sign_relay(HOST_ID, &req).await.unwrap();
 
     let (content, consent) = receive(
         "stranger",
@@ -182,7 +185,7 @@ async fn forged_body_is_rejected() {
     let guard = ReplayGuard::new();
 
     let (header, _body) = peer
-        .sign_relay(&RelayRequest::Chat { message: "hello".into() })
+        .sign_relay(HOST_ID, &RelayRequest::Chat { message: "hello".into() })
         .await
         .unwrap();
     // attacker swaps the body for a Task under the same (valid) header
@@ -214,7 +217,7 @@ async fn replayed_request_is_rejected() {
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Search { query: "x".into() };
-    let (header, body) = peer.sign_relay(&req).await.unwrap();
+    let (header, body) = peer.sign_relay(HOST_ID, &req).await.unwrap();
     let pk = peer.public_key_base64();
 
     // first arrival: accepted
@@ -240,7 +243,7 @@ async fn wrong_peer_key_is_rejected() {
     let guard = ReplayGuard::new();
 
     let req = RelayRequest::Search { query: "x".into() };
-    let (header, body) = alice.sign_relay(&req).await.unwrap();
+    let (header, body) = alice.sign_relay(HOST_ID, &req).await.unwrap();
 
     // host looks up "alice" but is given mallory's key → verification fails
     let refused = receive(
@@ -267,7 +270,7 @@ async fn revocation_narrows_reach_on_the_next_crossing() {
 
     async fn make(peer: &Identity) -> (RelayRequest, SignedHeader, Vec<u8>) {
         let req = RelayRequest::Task { goal: "write notes".into() };
-        let (header, body) = peer.sign_relay(&req).await.unwrap();
+        let (header, body) = peer.sign_relay(HOST_ID, &req).await.unwrap();
         (req, header, body)
     }
 

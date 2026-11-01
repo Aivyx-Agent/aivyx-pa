@@ -405,10 +405,18 @@ impl Identity {
     /// `&self` for exactly this reason — see its own doc comment), so
     /// there's no need to force callers into a `Mutex<Identity>` to hold a
     /// `&mut` across a multi-second `.await`.
-    pub async fn sign_request(&self, body: &[u8]) -> Result<SignedHeader, FederationError> {
+    ///
+    /// `recipient` is the receiving peer's instance id. It is part of the
+    /// signed message (with a fixed context string), so a request signed for
+    /// one peer does not verify at another (audit P12).
+    pub async fn sign_request(
+        &self,
+        recipient: &str,
+        body: &[u8],
+    ) -> Result<SignedHeader, FederationError> {
         let timestamp = now_secs();
         let body_hash = sha256_hex(body);
-        let message = format!("{}:{}:{}", self.instance_id, timestamp, body_hash);
+        let message = signed_message(recipient, &self.instance_id, timestamp, &body_hash);
         let signature_bytes = match &self.signer {
             IdentitySigner::Software(k) => k.sign(message.as_bytes()).to_bytes(),
             #[cfg(feature = "yubikey")]
@@ -441,14 +449,17 @@ impl Identity {
     }
 
     /// Verify a peer's signed request: fresh timestamp + valid signature over
-    /// `id:timestamp:body_hash` under `peer_public_key` (base64). Pair with a
-    /// [`ReplayGuard`] to reject replays within the freshness window.
+    /// the message built by [`signed_message`] under `peer_public_key`
+    /// (base64). `recipient` is *this* instance's id: a request the peer
+    /// signed for someone else fails here. Pair with a [`ReplayGuard`] to
+    /// reject replays within the freshness window.
     pub fn verify_request(
         peer_public_key: &str,
+        recipient: &str,
         header: &SignedHeader,
         body: &[u8],
     ) -> Result<(), FederationError> {
-        Self::verify_request_at(peer_public_key, header, body, now_secs())
+        Self::verify_request_at(peer_public_key, recipient, header, body, now_secs())
     }
 
     /// [`Self::verify_request`] with an explicit `now`, so a boundary test
@@ -458,6 +469,7 @@ impl Identity {
     /// exercise, not a parallel copy.
     fn verify_request_at(
         peer_public_key: &str,
+        recipient: &str,
         header: &SignedHeader,
         body: &[u8],
         now: u64,
@@ -483,7 +495,7 @@ impl Identity {
             .map_err(|_| FederationError::Identity("signature must be 64 bytes".into()))?;
         let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
         let body_hash = sha256_hex(body);
-        let message = format!("{}:{}:{}", header.instance_id, header.timestamp, body_hash);
+        let message = signed_message(recipient, &header.instance_id, header.timestamp, &body_hash);
         verifying_key
             .verify(message.as_bytes(), &signature)
             .map_err(|_| FederationError::Identity("federation signature verification failed".into()))
@@ -561,6 +573,12 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// What a request signature covers: a fixed context string, the receiving
+/// peer's instance id, the sender's id, the timestamp and the body hash.
+fn signed_message(recipient: &str, sender: &str, timestamp: u64, body_hash: &str) -> String {
+    format!("aivyx-federation-v1:{recipient}:{sender}:{timestamp}:{body_hash}")
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -674,39 +692,53 @@ mod tests {
     async fn sign_and_verify_roundtrips() {
         let id = Identity::generate("test-instance".into()).unwrap();
         let body = b"hello federation";
-        let header = id.sign_request(body).await.unwrap();
-        Identity::verify_request(&id.public_key_base64(), &header, body)
+        let header = id.sign_request("peer", body).await.unwrap();
+        Identity::verify_request(&id.public_key_base64(), "peer", &header, body)
             .expect("verification should pass");
     }
 
     #[tokio::test]
     async fn rejects_tampered_body() {
         let id = Identity::generate("test-instance".into()).unwrap();
-        let header = id.sign_request(b"original body").await.unwrap();
-        assert!(Identity::verify_request(&id.public_key_base64(), &header, b"tampered").is_err());
+        let header = id.sign_request("peer", b"original body").await.unwrap();
+        assert!(Identity::verify_request(&id.public_key_base64(), "peer", &header, b"tampered").is_err());
     }
 
     #[tokio::test]
     async fn rejects_expired_request() {
         let id = Identity::generate("test-instance".into()).unwrap();
-        let mut header = id.sign_request(b"body").await.unwrap();
+        let mut header = id.sign_request("peer", b"body").await.unwrap();
         header.timestamp -= MAX_REQUEST_AGE_SECS + 10;
-        assert!(Identity::verify_request(&id.public_key_base64(), &header, b"body").is_err());
+        assert!(Identity::verify_request(&id.public_key_base64(), "peer", &header, b"body").is_err());
+    }
+
+    /// Audit P12: the receiver's id is signed, so a request made for peer B is
+    /// not valid at peer C (it used to verify at any peer for 60 seconds).
+    #[tokio::test]
+    async fn a_request_signed_for_one_peer_does_not_verify_at_another() {
+        let id = Identity::generate("sender".into()).unwrap();
+        let header = id.sign_request("peer-b", b"body").await.unwrap();
+        Identity::verify_request(&id.public_key_base64(), "peer-b", &header, b"body")
+            .expect("verifies at the intended peer");
+        assert!(
+            Identity::verify_request(&id.public_key_base64(), "peer-c", &header, b"body").is_err(),
+            "a request signed for peer-b verified at peer-c"
+        );
     }
 
     #[tokio::test]
     async fn rejects_wrong_peer_key() {
         let a = Identity::generate("instance-a".into()).unwrap();
         let b = Identity::generate("instance-b".into()).unwrap();
-        let header = a.sign_request(b"secret").await.unwrap();
+        let header = a.sign_request("peer", b"secret").await.unwrap();
         // verifying A's signature with B's key must fail
-        assert!(Identity::verify_request(&b.public_key_base64(), &header, b"secret").is_err());
+        assert!(Identity::verify_request(&b.public_key_base64(), "peer", &header, b"secret").is_err());
     }
 
     #[tokio::test]
     async fn signature_is_64_bytes_and_header_is_well_formed() {
         let id = Identity::generate("struct-test".into()).unwrap();
-        let header = id.sign_request(b"payload").await.unwrap();
+        let header = id.sign_request("peer", b"payload").await.unwrap();
         assert_eq!(header.instance_id, "struct-test");
         assert_eq!(BASE64.decode(&header.signature).unwrap().len(), 64);
     }
@@ -714,7 +746,7 @@ mod tests {
     #[tokio::test]
     async fn replay_guard_rejects_second_use() {
         let id = Identity::generate("replay".into()).unwrap();
-        let header = id.sign_request(b"once").await.unwrap();
+        let header = id.sign_request("peer", b"once").await.unwrap();
         let guard = ReplayGuard::new();
         assert!(guard.check_and_record(&header).is_ok());
         assert!(guard.check_and_record(&header).is_err(), "replay must be rejected");
@@ -776,9 +808,9 @@ mod tests {
         // maximally fresh forever -- it would never expire. A future-skew
         // bound must reject it outright instead.
         let id = Identity::generate("future-dated".into()).unwrap();
-        let mut header = id.sign_request(b"body").await.unwrap();
+        let mut header = id.sign_request("peer", b"body").await.unwrap();
         header.timestamp = now_secs() + 3600; // 1 hour in the future
-        let result = Identity::verify_request(&id.public_key_base64(), &header, b"body");
+        let result = Identity::verify_request(&id.public_key_base64(), "peer", &header, b"body");
         assert!(
             result.is_err(),
             "a header timestamped an hour in the future must be rejected"
@@ -792,7 +824,7 @@ mod tests {
     /// is fine: `tests` is a descendant module of this file's module.
     fn sign_at(id: &Identity, body: &[u8], timestamp: u64) -> SignedHeader {
         let body_hash = sha256_hex(body);
-        let message = format!("{}:{}:{}", id.instance_id, timestamp, body_hash);
+        let message = signed_message("peer", &id.instance_id, timestamp, &body_hash);
         let signing_key = id
             .signer
             .as_software()
@@ -827,12 +859,12 @@ mod tests {
         let now = now_secs();
 
         let within_tolerance = sign_at(&id, body, now + FUTURE_SKEW_TOLERANCE_SECS);
-        Identity::verify_request_at(&id.public_key_base64(), &within_tolerance, body, now)
+        Identity::verify_request_at(&id.public_key_base64(), "peer", &within_tolerance, body, now)
             .expect("a header exactly FUTURE_SKEW_TOLERANCE_SECS ahead of now must be accepted");
 
         let one_past_tolerance = sign_at(&id, body, now + FUTURE_SKEW_TOLERANCE_SECS + 1);
         assert!(
-            Identity::verify_request_at(&id.public_key_base64(), &one_past_tolerance, body, now)
+            Identity::verify_request_at(&id.public_key_base64(), "peer", &one_past_tolerance, body, now)
                 .is_err(),
             "a header one second past FUTURE_SKEW_TOLERANCE_SECS ahead of now must be rejected"
         );
@@ -1014,8 +1046,8 @@ mod tests {
         let fake = FakeHardwareSigner::new("0006:00112233");
         let id =
             Identity::load_hardware_for_test("hw-instance".into(), fake, "0006:00112233").unwrap();
-        let header = id.sign_request(b"hello from hardware").await.unwrap();
-        Identity::verify_request(&id.public_key_base64(), &header, b"hello from hardware")
+        let header = id.sign_request("peer", b"hello from hardware").await.unwrap();
+        Identity::verify_request(&id.public_key_base64(), "peer", &header, b"hello from hardware")
             .expect("a hardware-backed signature must verify identically to a software one");
     }
 
@@ -1042,7 +1074,7 @@ mod tests {
         let id =
             Identity::load_hardware_for_test("hw-fails".into(), fake, "0006:00112233").unwrap();
         let err = id
-            .sign_request(b"anything")
+            .sign_request("peer", b"anything")
             .await
             .expect_err("a hardware signing failure must propagate as an Err, not a panic");
         match err {
@@ -1063,8 +1095,8 @@ mod tests {
         // reload yields the same identity + signing still verifies
         let b = Identity::load_or_generate("enc".into(), &path, &master).unwrap();
         assert_eq!(b.public_key_base64(), pubkey);
-        let header = b.sign_request(b"x").await.unwrap();
-        Identity::verify_request(&pubkey, &header, b"x").unwrap();
+        let header = b.sign_request("peer", b"x").await.unwrap();
+        Identity::verify_request(&pubkey, "peer", &header, b"x").unwrap();
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 

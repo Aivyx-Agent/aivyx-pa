@@ -53,8 +53,9 @@ trust (how much may they do), and the privacy line (what may cross). §§2–4.
 - Identity = `instance_id` + public key. Peers know each other by public key.
 - **Signed requests** (salvage: `SignedHeader`): every cross-boundary request
   carries `{ instance_id, timestamp, Ed25519 signature over
-  instance_id:timestamp:body_hash }`, verified against the peer's known public
-  key. A **replay guard** (timestamp window) blocks replays.
+  aivyx-federation-v1:recipient_id:instance_id:timestamp:body_hash }`, verified
+  against the peer's known public key; the signature names the receiving
+  instance, so a request made for one peer is worthless at another. A **replay guard** (timestamp window) blocks replays.
 - **Key material is never logged** (the archive's manual `Debug` on the keypair —
   keep that). Key rotation + revocation distribution is an open question (§11).
 
