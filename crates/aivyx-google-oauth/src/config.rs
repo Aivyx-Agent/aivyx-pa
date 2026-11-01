@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 /// no-scope [`Self::new`] constructor to populate them. This
 /// lift removes the Gmail-specific default from the shared
 /// substrate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthConfig {
     /// Google Cloud OAuth 2.0 client ID. Format:
     /// `XXXXXX-XXXXXXXX.apps.googleusercontent.com`.
@@ -49,6 +49,18 @@ pub struct OAuthConfig {
     /// [`Self::with_scopes`].
     #[serde(default)]
     pub scopes: Vec<String>,
+}
+
+// Hand-written so a stray `{:?}` never prints the secret (audit P14).
+impl std::fmt::Debug for OAuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .field("redirect_uri", &self.redirect_uri)
+            .field("scopes", &self.scopes)
+            .finish()
+    }
 }
 
 impl OAuthConfig {
@@ -91,6 +103,19 @@ impl OAuthConfig {
 
 #[cfg(test)]
 mod tests {
+    /// Audit P14: `Debug` of the OAuth client config hides the client secret.
+    #[test]
+    fn debug_hides_the_client_secret() {
+        let c = OAuthConfig {
+            client_id: "id".into(),
+            client_secret: "SECRET-CLIENT".into(),
+            redirect_uri: "http://localhost".into(),
+            scopes: vec![],
+        };
+        let shown = format!("{c:?}");
+        assert!(!shown.contains("SECRET-CLIENT") && shown.contains("<redacted>"), "{shown}");
+    }
+
     use super::*;
 
     #[test]

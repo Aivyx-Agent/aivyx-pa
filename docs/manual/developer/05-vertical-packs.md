@@ -70,12 +70,12 @@ and integrations must be ones Aivyx PA knows (`gmail`, `calendar`, `drive`,
 
 Every capability scope the pack's `[[role]]` entries and team members ask for
 is listed by `pack check`, `pack inspect` and `pack install` (`*` marks scopes
-that can change things). A pack can't ask for scopes that run programs
-(`shell.*`), delete (`fs.delete`), send (`email.send`, `message.send`, any
-`*.send`), post (`net.post`), write files or git history (`fs.write`,
-`git.write`) or change the configuration (`config.write`); `pack check` and
-`pack install` refuse it. The operator adds those to their own config after
-install if they want them.
+that can change things). A pack may ask only for reads, memory, web access,
+team messaging and a narrow set of writes (drafting mail, calendar, tasks,
+contacts, notes, budget, reminders); `pack check` and `pack install` refuse any
+other scope by name (shell, delete, send, post, file and git writes, config,
+role and schedule changes, MCP calls, ...). The operator adds those to their
+own config after install if they want them.
 
 The template may only set `[agent]`, `[profile]`, `[persona_seed]`,
 `[[role]]`, `[autonomy]`, `[[schedule]]`, `[team]`, `[memory]` and

@@ -12923,3 +12923,33 @@ fn autonomy_posture_resolves_per_area_and_base() {
     assert_eq!(looser, vec!["fs"]);
     drop(env);
 }
+
+/// Audit P14: the raw TOML shapes derive `Debug`; none of them prints a secret.
+#[test]
+fn raw_config_debug_never_prints_a_secret() {
+    let text = r#"
+[anthropic]
+api_key = "SECRET-ANTHROPIC"
+[openai]
+api_key = "SECRET-OPENAI"
+[daemon]
+web_ui_auth_token = "SECRET-STUDIO"
+[telegram]
+token = "SECRET-TELEGRAM"
+[discord]
+token = "SECRET-DISCORD"
+[slack]
+bot_token = "SECRET-SLACK-BOT"
+app_token = "SECRET-SLACK-APP"
+[email]
+password = "SECRET-EMAIL"
+[embedding]
+api_key = "SECRET-EMBEDDING"
+"#;
+    let raw: super::RawToml = toml::from_str(text).expect("parses");
+    let shown = format!("{raw:?}");
+    assert!(shown.contains("RawToml"), "premise: it printed something: {shown}");
+    assert!(!shown.contains("SECRET-"), "a secret reached Debug: {shown}");
+    // every key above was really read (not silently ignored as unknown)
+    assert!(shown.matches("<redacted>").count() >= 9, "{shown}");
+}

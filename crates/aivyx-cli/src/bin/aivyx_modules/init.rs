@@ -1411,7 +1411,7 @@ struct InitConfig {
 
 /// Chapter Engram — the `[embedding]` settings the wizard resolved for the
 /// chosen provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct EmbeddingFields {
     base_url: String,
     model: String,
@@ -1419,6 +1419,18 @@ struct EmbeddingFields {
     /// `Some` for the cloud (OpenAI) path; `None` for local Ollama, which
     /// needs no key.
     api_key: Option<String>,
+}
+
+// Hand-written so a stray `{:?}` never prints the secret (audit P14).
+impl std::fmt::Debug for EmbeddingFields {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddingFields")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("dimensions", &self.dimensions)
+            .field("api_key", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Render a ready-to-use `aivyx-pa.toml` from the wizard answers.
@@ -3165,6 +3177,11 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // Default starter routines (cron-scheduled), except for a config pack, which brings its own.
     toml.push_str(&starter_routines(&cfg, from_pack));
     write_config(&config_file, &toml)?;
+    // A named instance gets its own Studio port written into its config now,
+    // before the service offer below installs a unit that starts the daemon
+    // (audit P17/P18); the default instance keeps "unset means 7843".
+    let web_ui_port = super::instances::ensure_studio_port()
+        .unwrap_or(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT);
 
     // 7. Success message + next steps. This is the moment that shapes the
     // operator's first five minutes: where the config is, the passphrase (so
@@ -3249,10 +3266,6 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         }
     }
 
-    // A named instance gets its own Studio port written into its config here
-    // (audit P17/P18), so the text below names the port it will really use.
-    let web_ui_port = super::instances::ensure_studio_port()
-        .unwrap_or(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT);
     eprintln!("\nNext steps:");
     eprintln!("  aivyx-pa                   — chat with your agent in the terminal");
     // First-run coherence A2 — the Studio is on by default, behind a token
@@ -3275,6 +3288,20 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
 
 #[cfg(test)]
 mod tests {
+    /// Audit P17/P18: a named instance's port must be in its config BEFORE
+    /// the service offer installs a unit that starts the daemon, or the
+    /// service would start on the default port. Structural (the wizard needs a
+    /// terminal), pinned by position in the source.
+    #[test]
+    fn the_studio_port_is_written_before_the_service_is_offered() {
+        let src = include_str!("init.rs");
+        let wizard = &src[src.find("async fn run_init_wizard_inner").unwrap()..];
+        let write = wizard.find("write_config(&config_file, &toml)?;").unwrap();
+        let port = wizard.find("super::instances::ensure_studio_port()").unwrap();
+        let offer = wizard.find("offer_service_install(\n").unwrap();
+        assert!(write < port && port < offer, "{write} {port} {offer}");
+    }
+
     use super::*;
 
     // ---- Phase 181 — identity builder flow fixtures ----------

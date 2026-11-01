@@ -9824,7 +9824,7 @@ async fn run_async(
     let (studio_port, studio_token) = match studio_port_wanted {
         None => (None, None),
         Some(port) => match aivyx_channel::studio_token::effective_token(
-            config_web_ui_auth_token,
+            config_web_ui_auth_token.clone().map(aivyx_capability::display::SecretString::into_inner),
             config_web_ui_insecure_no_auth,
             &studio_token_path,
         ) {

@@ -35,11 +35,14 @@ open, and why:
   needs each action's commit looked up and a bump routine (Dependabot for
   Actions); left for a CI-maintenance pass. The token permissions and the
   `workflow_dispatch` input are fixed.
-- **P19 (part) — why the 9B ends some post-tool steps with no text.** pa now
+- **P19 (part) — pa's provider layer never reads `reasoning_content`.** pa now
   says what ran instead of "try again", but the empty final message itself is
-  the model's: the floor fires only on an empty or bare-object reply, and pa's
-  provider layer does not read `reasoning_content`. Worth a live look with the
-  llama-server logs before changing the provider.
+  most likely pa's gap: a thinking model (the 9B) can end a post-tool step with
+  its answer only in `reasoning_content` and an empty `content`, and
+  `aivyx-llm` drops the former. aivyx-coder fixed the same thing in its audit 3
+  ("reasoning-only replies"); port that handling to `aivyx-llm`. The floor
+  fires only on an empty or bare-object reply, so there is no off-by-one in
+  how the final reply is detected.
 - **P21 — a paraphrased injection ("Assistant note from the site owner: ...")
   passes the phrase tripwire.** A phrase list is a tripwire, not a defence; the
   fix is structural (P1/P16 made writes from fetched content ask), not a longer

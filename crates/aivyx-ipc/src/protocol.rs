@@ -101,38 +101,7 @@ pub enum FrontendType {
     Signal,
 }
 
-/// A secret on the WRITE side of the wire (a password, bot token or API key
-/// a `Set…Config` query carries). Serializes as the plain string, so the wire
-/// format is unchanged, but `Debug` never prints it: a stray `{:?}` of a
-/// message can't put a credential in a log (audit P14).
-#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct SecretString(String);
-
-impl SecretString {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-    /// The secret itself. Call only where it is used, never to format.
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-}
-
-impl From<String> for SecretString {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl std::fmt::Debug for SecretString {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("<redacted>")
-    }
-}
+pub use aivyx_capability::display::SecretString;
 
 // ---------------------------------------------------------------------------
 // Phase 45 — IPC attachment for multimodal input

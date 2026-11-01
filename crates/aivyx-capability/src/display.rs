@@ -6,31 +6,89 @@
 //! hidden, and characters that could disguise what is on screen (control,
 //! bidirectional-override, zero-width) are shown as visible escapes.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// A secret string (a password, bot token or API key). Serializes as the plain string, so the wire
+/// format is unchanged, but `Debug` never prints it: a stray `{:?}` of a
+/// message can't put a credential in a log (audit P14).
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SecretString(String);
+
+impl SecretString {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+    /// The secret itself. Call only where it is used, never to format.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl std::ops::Deref for SecretString {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
 
 /// Keys whose values name who a call reaches. Strings or arrays of strings.
 pub const RECIPIENT_KEYS: [&str; 6] = ["to", "cc", "bcc", "recipient", "recipients", "attendees"];
 
-/// Characters that can hide or reorder text on screen.
+/// Characters that can hide, reorder or fake text on screen: controls, every
+/// Unicode format (Cf) character (zero-width, bidi, invisible operators,
+/// tag characters, BOM, soft hyphen, Arabic letter mark, ...), the invisible
+/// fillers that render as blank, variation selectors, and the line/paragraph
+/// separators.
 fn is_disguise(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{200B}'..='\u{200F}'   // zero-width space/joiners, LRM, RLM
+            '\u{00AD}'                 // soft hyphen
+                | '\u{034F}'           // combining grapheme joiner
+                | '\u{061C}'           // Arabic letter mark
+                | '\u{115F}' | '\u{1160}' // Hangul fillers
+                | '\u{17B4}' | '\u{17B5}' // Khmer inherent vowels
+                | '\u{180B}'..='\u{180F}' // Mongolian selectors, vowel separator
+                | '\u{200B}'..='\u{200F}' // zero-width, LRM, RLM
+                | '\u{2028}' | '\u{2029}' // line / paragraph separators
                 | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
                 | '\u{2060}'..='\u{206F}' // word joiner, invisible operators, isolates
-                | '\u{061C}'              // Arabic letter mark
-                | '\u{FEFF}'              // BOM / zero-width no-break space
-                | '\u{00AD}'              // soft hyphen
+                | '\u{3164}'           // Hangul filler
+                | '\u{FE00}'..='\u{FE0F}' // variation selectors
+                | '\u{FEFF}'           // BOM / zero-width no-break space
+                | '\u{FFA0}'           // halfwidth Hangul filler
+                | '\u{FFF9}'..='\u{FFFB}' // interlinear annotation
+                | '\u{E0000}'..='\u{E007F}' // tag characters
+                | '\u{E0100}'..='\u{E01EF}' // variation selectors supplement
         )
 }
 
 /// `text` with newlines, tabs and every disguising character replaced by a
 /// visible escape (`\n`, `\t`, `\u{202e}`), so the line shown is the line sent.
+/// A literal backslash is doubled, so a typed `\u{202e}` cannot pass for an
+/// escape this function made.
 pub fn neutralise(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {
+            '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
@@ -152,6 +210,23 @@ pub struct Described {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn every_invisible_class_is_escaped_and_a_typed_escape_is_doubled() {
+        for c in [
+            '\u{E0041}', '\u{E007F}', '\u{FE0F}', '\u{E0100}', '\u{3164}', '\u{115F}',
+            '\u{1160}', '\u{180E}', '\u{034F}', '\u{2028}', '\u{2029}', '\u{200B}',
+            '\u{202E}', '\u{2066}', '\u{FEFF}', '\u{00AD}', '\u{061C}', '\u{FFA0}',
+        ] {
+            let shown = neutralise(&format!("a{c}b"));
+            assert!(!shown.contains(c), "{c:?} survived: {shown:?}");
+            assert!(shown.starts_with("a\\u{") && shown.ends_with("}b"), "{shown:?}");
+        }
+        // a typed escape can't pass for a real one: the backslash is doubled
+        assert_eq!(neutralise("x\\u{202e}y"), "x\\\\u{202e}y");
+        assert_ne!(neutralise("x\\u{202e}y"), neutralise("x\u{202e}y"));
+        assert_eq!(neutralise("C:\\dir"), "C:\\\\dir");
+    }
 
     #[test]
     fn disguising_characters_become_visible_escapes() {

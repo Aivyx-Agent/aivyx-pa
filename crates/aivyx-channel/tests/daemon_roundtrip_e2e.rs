@@ -4050,6 +4050,60 @@ mod routing_visibility {
         handle.await.unwrap();
     }
 
+    /// Audit P11: a connection that never started a session (no channel) is
+    /// refused too, not waved through.
+    #[tokio::test]
+    async fn resolving_a_gate_before_a_session_starts_is_refused() {
+        let scratch = ScratchDir::new();
+        let guard = guard(&scratch).await;
+        let routed = Arc::new(escalating(Arc::clone(&guard)));
+        let channel = Arc::new(TierChannel(
+            aivyx_core::SessionId::new(),
+            aivyx_capability::TrustTier::Trusted,
+        ));
+        let socket = scratch.socket_path();
+        let (agent, ch) = (routing_agent(&routed), channel);
+        let daemon_socket = socket.clone();
+        let handle = tokio::spawn(async move {
+            aivyx_channel::daemon_server::run_poc_daemon_with_routing(
+                &daemon_socket, agent, ch, None, None,
+            )
+            .await
+            .expect("daemon completes");
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let stream = UnixStream::connect(&socket).await.expect("connect");
+        let (mut reader, mut writer) = stream.into_split();
+        let mut buf = Vec::new();
+        let frame = encode_frame(&FrontendMessage::ResolveGate {
+            mission_id: "m-1".into(),
+            gate_id: "g-1".into(),
+            approved: true,
+        })
+        .unwrap();
+        writer.write_all(&frame).await.unwrap();
+        let mut refused = false;
+        for _ in 0..10 {
+            match decode_frame::<DaemonEnvelope>(&buf) {
+                Ok((DaemonEnvelope::DaemonReady { .. }, n)) => {
+                    buf.drain(..n);
+                }
+                Ok((DaemonEnvelope::Error { code, .. }, _)) => {
+                    assert_eq!(code, "gate_requires_trust");
+                    refused = true;
+                    break;
+                }
+                Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+                other => panic!("expected the refusal, got {other:?}"),
+            }
+        }
+        assert!(refused);
+        let _ = writer
+            .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
+            .await;
+        handle.await.unwrap();
+    }
+
     /// One consent-stopping turn over a channel at `tier`; returns its
     /// events and outcome.
     async fn consent_turn(tier: aivyx_capability::TrustTier) -> (Vec<StreamEventPayload>, String) {

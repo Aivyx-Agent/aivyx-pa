@@ -38,7 +38,7 @@ pub enum N8nClientError {
 /// Operator-supplied configuration. Two fields: the base
 /// URL of the operator's n8n instance + the API key
 /// generated in n8n's Settings → API page.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct N8nConfig {
     /// Base URL of the n8n instance — e.g.,
     /// `http://localhost:5678` or
@@ -47,6 +47,16 @@ pub struct N8nConfig {
     pub n8n_base_url: String,
     /// API key from n8n's Settings → API.
     pub n8n_api_key: String,
+}
+
+// Hand-written so a stray `{:?}` never prints the secret (audit P14).
+impl std::fmt::Debug for N8nConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("N8nConfig")
+            .field("n8n_base_url", &self.n8n_base_url)
+            .field("n8n_api_key", &"<redacted>")
+            .finish()
+    }
 }
 
 impl N8nConfig {
@@ -203,6 +213,14 @@ pub type SharedN8nClient = Arc<N8nClient>;
 
 #[cfg(test)]
 mod tests {
+    /// Audit P14: `Debug` of the n8n config hides the key.
+    #[test]
+    fn debug_hides_the_api_key() {
+        let c = N8nConfig { n8n_base_url: "http://x".into(), n8n_api_key: "SECRET-N8N".into() };
+        let shown = format!("{c:?}");
+        assert!(!shown.contains("SECRET-N8N") && shown.contains("<redacted>"), "{shown}");
+    }
+
     use super::*;
 
     #[test]

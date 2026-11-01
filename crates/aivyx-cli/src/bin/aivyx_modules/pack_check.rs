@@ -40,34 +40,56 @@ pub struct PaPartSummary {
     pub grants: Vec<(String, Vec<String>)>,
 }
 
-/// Scope bases a pack may never grant: they run programs, delete, send on
-/// the operator's behalf, post to the network, write history or change the
-/// config. The vertical-packs spec says a config pack "adds no capabilities;
-/// it can do only what the products already do" and the Business Manager
-/// pack's own roles are drafts and reads, so there is no reason for a pack to
-/// hold these — the operator adds them to their own config if they want them.
-/// Matching is by base and by the verb the base ends in, so a base added to
-/// the registry later (`foo.send`) is refused too until it is judged here.
+/// The scope bases a config pack's roles and team members may hold: reads,
+/// memory, the web, team messaging, and the narrow writes the shipped
+/// Business Manager pack needs (drafting mail, calendar, tasks, contacts,
+/// notes, budget, reminders). The vertical-packs spec says a config pack
+/// "adds no capabilities; it can do only what the products already do", so
+/// this is an ALLOW-list: every other base (shell, delete, send, post, file
+/// and git writes, config, role and schedule changes, MCP calls, apps, ...) is
+/// refused by name, and a base added to the registry later stays refused
+/// until it is judged here. The operator adds anything else to their own
+/// config after install.
+const PACK_ALLOWED_SCOPES: &[&str] = &[
+    "budget.read",
+    "budget.write",
+    "calc.eval",
+    "calendar.read",
+    "calendar.write",
+    "contacts.read",
+    "contacts.write",
+    "convert.units",
+    "date.compute",
+    "drive.read",
+    "email.read",
+    "email.write",
+    "fs.metadata",
+    "fs.read",
+    "health.read",
+    "memory.read",
+    "memory.write",
+    "net.fetch",
+    "notion.read",
+    "notion.write",
+    "remind.read",
+    "remind.write",
+    "skill_defaults.list",
+    "skill_defaults.read",
+    "task.read",
+    "task.write",
+    "team.delegate",
+    "team.message",
+    "web.fetch",
+    "web.search",
+];
+
+/// Why a scope is refused, or `None` when a pack may ask for it.
 fn refused_scope(scope: &str) -> Option<&'static str> {
     let base = scope.split(':').next().unwrap_or(scope);
-    const EXACT: &[(&str, &str)] = &[
-        ("fs.write", "writes files"),
-        ("git.write", "writes git history"),
-        ("config.write", "changes the configuration"),
-        ("tool.allowlist", "overrides the tool allowlist"),
-    ];
-    if let Some((_, why)) = EXACT.iter().find(|(b, _)| *b == base) {
-        return Some(why);
-    }
-    if base.starts_with("shell.") {
-        return Some("runs programs");
-    }
-    match base.rsplit('.').next().unwrap_or("") {
-        "exec" | "spawn" => Some("runs programs"),
-        "delete" => Some("deletes"),
-        "send" => Some("sends on the operator's behalf"),
-        "post" => Some("posts to the network"),
-        _ => None,
+    if PACK_ALLOWED_SCOPES.contains(&base) {
+        None
+    } else {
+        Some("not in the set a config pack may grant")
     }
 }
 
@@ -92,7 +114,11 @@ pub fn grants_lines(summary: &PaPartSummary) -> String {
             .iter()
             .map(|s| if changes_things(s) { format!("{s}*") } else { s.clone() })
             .collect();
-        out.push_str(&format!("    {who}: {}\n", if shown.is_empty() { "(none)".into() } else { shown.join(", ") }));
+        out.push_str(&format!(
+            "    {}: {}\n",
+            aivyx_capability::display::neutralise(who),
+            if shown.is_empty() { "(none)".into() } else { aivyx_capability::display::neutralise(&shown.join(", ")) }
+        ));
     }
     out
 }
@@ -290,9 +316,14 @@ pub fn check_pa_part(dir: &Path) -> Result<PaPartSummary, Vec<String>> {
     for (who, scopes) in &grants {
         for scope in scopes {
             if let Some(why) = refused_scope(scope) {
+                let (who, scope) = (
+                    aivyx_capability::display::neutralise(who),
+                    aivyx_capability::display::neutralise(scope),
+                );
                 problems.push(format!(
-                    "{who} asks for `{scope}` ({why}); a pack can't grant shell, delete, send, \
-                     post or write-history scopes — the operator adds those to their own config"
+                    "{who} asks for `{scope}` ({why}); a pack may only grant reads, memory, web, \
+                     team and the narrow writes the Business Manager pack uses — the operator \
+                     adds anything else to their own config"
                 ));
             }
         }
@@ -626,6 +657,24 @@ trust_ceiling = "Trusted"
         assert!(refused_scope("shell.exec:cmd:ls*").is_some());
         assert!(refused_scope("slack.send").is_some());
         assert!(refused_scope("fs.write").is_some());
+        for refused in [
+            "app.input", "role.switch", "role.update", "mcp.call", "schedule.create",
+            "webhook.create", "file_watch.create", "memory.forget", "net.dns", "shell.spawn",
+            "fs.delete", "net.post", "email.send", "message.send", "git.write", "config.write",
+        ] {
+            assert!(refused_scope(refused).is_some(), "{refused} should be refused");
+        }
+        // Every base the shipped Business Manager pack and the pa-base template ask for.
+        for ok in [
+            "budget.read", "budget.write", "calc.eval", "calendar.read", "calendar.write",
+            "contacts.read", "contacts.write", "date.compute", "drive.read", "email.read",
+            "email.write", "fs.read", "memory.read:topic:leads*", "memory.write", "net.fetch",
+            "notion.read", "notion.write", "remind.read", "remind.write", "skill_defaults.list",
+            "skill_defaults.read", "task.read", "task.write", "team.delegate", "team.message",
+            "web.fetch", "web.search",
+        ] {
+            assert!(refused_scope(ok).is_none(), "{ok} should be allowed");
+        }
         for ok in ["memory.read", "memory.write:topic:leads*", "email.write", "calendar.write", "net.fetch", "web.search", "team.delegate"] {
             assert!(refused_scope(ok).is_none(), "{ok}");
         }

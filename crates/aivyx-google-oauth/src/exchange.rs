@@ -51,13 +51,26 @@ pub enum ExchangeError {
 /// Wire-shape of Google's token-endpoint response. Fields
 /// `Option` so a partial response (refresh response without
 /// refresh_token is normal) deserializes cleanly.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct TokenResponse {
     access_token: Option<String>,
     refresh_token: Option<String>,
     expires_in: Option<i64>,
     scope: Option<String>,
     token_type: Option<String>,
+}
+
+// Hand-written so a stray `{:?}` never prints the secret (audit P14).
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("expires_in", &self.expires_in)
+            .field("scope", &self.scope)
+            .field("token_type", &self.token_type)
+            .finish()
+    }
 }
 
 /// Exchange an authorization code for a token set.

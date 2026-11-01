@@ -48,12 +48,21 @@ pub enum NotionClientError {
 /// Operator-supplied configuration. Mirrors the OAuth-
 /// flavored crates' `OAuthConfig` posture but much
 /// smaller — just the integration token.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotionConfig {
     /// Notion Integration Token. Format:
     /// `ntn_XXXXXXXXXXXXXXXXXXX` or the older
     /// `secret_XXXXXXXX` format.
     pub notion_token: String,
+}
+
+// Hand-written so a stray `{:?}` never prints the secret (audit P14).
+impl std::fmt::Debug for NotionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotionConfig")
+            .field("notion_token", &"<redacted>")
+            .finish()
+    }
 }
 
 impl NotionConfig {
@@ -169,6 +178,14 @@ pub type SharedNotionClient = Arc<NotionClient>;
 
 #[cfg(test)]
 mod tests {
+    /// Audit P14: `Debug` of the Notion config hides the token.
+    #[test]
+    fn debug_hides_the_token() {
+        let c = NotionConfig { notion_token: "SECRET-NOTION".into() };
+        let shown = format!("{c:?}");
+        assert!(!shown.contains("SECRET-NOTION") && shown.contains("<redacted>"), "{shown}");
+    }
+
     use super::*;
 
     #[test]

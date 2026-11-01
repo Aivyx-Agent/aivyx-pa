@@ -3040,10 +3040,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // Untrusted (a bot answering any chat) can't do
                             // it; the bot frontends additionally check their
                             // `team_command_allowed_senders` before sending.
-                            if matches!(
-                                channel.as_ref().map(|c| c.trust_tier()),
-                                Some(aivyx_capability::TrustTier::Untrusted)
-                            ) {
+                            // Fails closed: no session started (no channel) is
+                            // refused like an Untrusted one.
+                            if channel.as_ref().is_none_or(|c| {
+                                c.trust_tier() == aivyx_capability::TrustTier::Untrusted
+                            }) {
                                 let err = DaemonMessage::Error {
                                     code: "gate_requires_trust".into(),
                                     message: "an untrusted channel can't approve or reject \

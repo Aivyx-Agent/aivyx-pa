@@ -14,7 +14,7 @@ use aivyx_storage::{DomainHandle, KeyDomain, StorageError};
 // Data model
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WebhookRecord {
     pub webhook_id: String,
     pub role_name: String,
@@ -42,6 +42,25 @@ pub struct WebhookRecord {
     /// Phase 72 — see [`crate::schedule::ScheduleRecord::notify_when`].
     #[serde(default)]
     pub notify_when: aivyx_config::NotifyWhen,
+}
+
+// Hand-written so a stray `{:?}` never prints the secret (audit P14).
+impl std::fmt::Debug for WebhookRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookRecord")
+            .field("webhook_id", &self.webhook_id)
+            .field("role_name", &self.role_name)
+            .field("prompt", &self.prompt)
+            .field("enabled", &self.enabled)
+            .field("wrap_mission", &self.wrap_mission)
+            .field("created_at", &self.created_at)
+            .field("last_fired_at", &self.last_fired_at)
+            .field("secret", &"<redacted>")
+            .field("notify_target", &self.notify_target)
+            .field("notify_targets", &self.notify_targets)
+            .field("notify_when", &self.notify_when)
+            .finish()
+    }
 }
 
 impl WebhookRecord {

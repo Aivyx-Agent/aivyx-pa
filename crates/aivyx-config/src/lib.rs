@@ -1449,7 +1449,7 @@ pub struct AivyxConfig {
     /// token, and static routes prompt for it via HTTP Basic. This closes the
     /// unauthenticated control plane when the Studio is exposed off-host
     /// (`web_ui_host = "0.0.0.0"`); strongly recommended in that case.
-    pub web_ui_auth_token: Option<String>,
+    pub web_ui_auth_token: Option<aivyx_capability::display::SecretString>,
     /// Chapter Roster — the operator's team-config file. `[team] config_path`
     /// points at a `[team]`-rooted TOML document (the same shape packs like
     /// `kitchen-boh.toml` use, loaded via `aivyx_team::TeamConfig::load`). When
@@ -4376,7 +4376,7 @@ struct RawDaemon {
     web_ui_port: Option<u16>,
     web_ui_host: Option<String>,
     web_ui_allowed_origins: Option<Vec<String>>,
-    web_ui_auth_token: Option<String>,
+    web_ui_auth_token: Option<aivyx_capability::display::SecretString>,
     /// Chapter Gatehouse — the exposure-interlock escape hatch: binding
     /// beyond loopback with NO auth token is a config error unless this
     /// is explicitly `true` (the behind-my-own-reverse-proxy case).
@@ -4895,13 +4895,13 @@ fn default_true() -> bool {
 #[derive(Debug, Default, Deserialize)]
 struct RawAnthropic {
     #[serde(default)]
-    api_key: Option<String>,
+    api_key: Option<aivyx_capability::display::SecretString>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct RawOpenAi {
     #[serde(default)]
-    api_key: Option<String>,
+    api_key: Option<aivyx_capability::display::SecretString>,
     #[serde(default)]
     base_url: Option<String>,
     /// Chapter Emboss (EB.2) — grammar-constrained tool-calling for the
@@ -5081,7 +5081,7 @@ struct RawMemory {
 #[derive(Debug, Default, Deserialize)]
 struct RawTelegram {
     #[serde(default)]
-    token: Option<String>,
+    token: Option<aivyx_capability::display::SecretString>,
     /// Real TOML key is `chat_id` (see `docs/INSTALL.md`'s Telegram
     /// example). `#[serde(alias = "chat_filter")]` is a backward-
     /// compatibility safety net (Task 10 fix round 3, 2026-09-16):
@@ -5111,7 +5111,8 @@ struct RawTelegram {
     team_trigger_rate_limit: Option<u32>,
     /// Team-Command Sender Allowlist (2026-08-23) — the Telegram user
     /// ids allowed to issue any `/team ...` command (status/approve/
-    /// reject/pause/resume/abort/run) from this channel. Empty/absent:
+    /// reject/pause/resume/abort/run), and to resolve a mission gate with a
+    /// bare `/approve` or `/reject`, from this channel. Empty/absent:
     /// no sender is authorized — deny by default, closing a real gap
     /// (previously, any sender in a connected chat could act).
     #[serde(default)]
@@ -5124,7 +5125,7 @@ struct RawTelegram {
 #[derive(Debug, Default, Deserialize)]
 struct RawDiscord {
     #[serde(default)]
-    token: Option<String>,
+    token: Option<aivyx_capability::display::SecretString>,
     #[serde(default)]
     application_id: Option<u64>,
     /// Security-audit fix (Task 10, 2026-09-16) — see
@@ -5144,7 +5145,8 @@ struct RawDiscord {
     team_trigger_rate_limit: Option<u32>,
     /// Team-Command Sender Allowlist (2026-08-23) — the Discord user
     /// ids allowed to issue any `/team ...` command (status/approve/
-    /// reject/pause/resume/abort/run) from this channel. Empty/absent:
+    /// reject/pause/resume/abort/run), and to resolve a mission gate with a
+    /// bare `/approve` or `/reject`, from this channel. Empty/absent:
     /// no sender is authorized — deny by default, closing a real gap
     /// (previously, any sender in a connected chat could act).
     #[serde(default)]
@@ -5289,9 +5291,9 @@ fn is_aci(s: &str) -> bool {
 #[derive(Debug, Default, Deserialize)]
 struct RawSlack {
     #[serde(default)]
-    bot_token: Option<String>,
+    bot_token: Option<aivyx_capability::display::SecretString>,
     #[serde(default)]
-    app_token: Option<String>,
+    app_token: Option<aivyx_capability::display::SecretString>,
     #[serde(default)]
     team_id: Option<String>,
     /// Security-audit fix (Task 10, 2026-09-16) — see
@@ -5311,7 +5313,8 @@ struct RawSlack {
     team_trigger_rate_limit: Option<u32>,
     /// Team-Command Sender Allowlist (2026-08-23) — the Slack user
     /// ids allowed to issue any `/team ...` command (status/approve/
-    /// reject/pause/resume/abort/run) from this channel. Empty/absent:
+    /// reject/pause/resume/abort/run), and to resolve a mission gate with a
+    /// bare `/approve` or `/reject`, from this channel. Empty/absent:
     /// no sender is authorized — deny by default, closing a real gap
     /// (previously, any sender in a connected chat could act).
     #[serde(default)]
@@ -5359,7 +5362,7 @@ struct RawEmail {
     #[serde(default)]
     username: Option<String>,
     #[serde(default)]
-    password: Option<String>,
+    password: Option<aivyx_capability::display::SecretString>,
     #[serde(default)]
     from: Option<String>,
 }
@@ -5377,7 +5380,7 @@ struct RawEmbedding {
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
-    api_key: Option<String>,
+    api_key: Option<aivyx_capability::display::SecretString>,
     #[serde(default)]
     dimensions: Option<usize>,
     #[serde(default)]
@@ -6443,7 +6446,7 @@ impl AivyxConfig {
                 toml.anthropic
                     .api_key
                     .as_ref()
-                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+                    .map(|s| SourcedSecret::new(SecretString::from(s.to_string()), FieldSource::Toml))
             });
 
         // --- openai_api_key -----------------------------------------
@@ -6453,7 +6456,7 @@ impl AivyxConfig {
                 toml.openai
                     .api_key
                     .as_ref()
-                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+                    .map(|s| SourcedSecret::new(SecretString::from(s.to_string()), FieldSource::Toml))
             });
 
         // --- openai_base_url ----------------------------------------
@@ -6940,7 +6943,7 @@ impl AivyxConfig {
                 toml.telegram
                     .token
                     .as_ref()
-                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+                    .map(|s| SourcedSecret::new(SecretString::from(s.to_string()), FieldSource::Toml))
             });
 
         let telegram_chat_filter = match env_string(ENV_TELEGRAM_CHAT_ID) {
@@ -6982,7 +6985,7 @@ impl AivyxConfig {
                 toml.discord
                     .token
                     .as_ref()
-                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+                    .map(|s| SourcedSecret::new(SecretString::from(s.to_string()), FieldSource::Toml))
             });
 
         let discord_application_id = match env_string(ENV_DISCORD_APPLICATION_ID) {
@@ -7259,7 +7262,7 @@ impl AivyxConfig {
                 toml.slack
                     .bot_token
                     .as_ref()
-                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+                    .map(|s| SourcedSecret::new(SecretString::from(s.to_string()), FieldSource::Toml))
             });
         let slack_app_token = env_secret(ENV_SLACK_APP_TOKEN)
             .map(|s| SourcedSecret::new(s, FieldSource::Env))
@@ -7267,7 +7270,7 @@ impl AivyxConfig {
                 toml.slack
                     .app_token
                     .as_ref()
-                    .map(|s| SourcedSecret::new(SecretString::from(s.clone()), FieldSource::Toml))
+                    .map(|s| SourcedSecret::new(SecretString::from(s.to_string()), FieldSource::Toml))
             });
         let slack_team_id = match env_string(ENV_SLACK_TEAM_ID) {
             Some(s) => Some(Sourced::new(s, FieldSource::Env)),
@@ -8626,7 +8629,7 @@ impl AivyxConfig {
                 }
             })?),
         };
-        let web_ui_auth_token: Option<String> = match toml.daemon.web_ui_auth_token {
+        let web_ui_auth_token: Option<aivyx_capability::display::SecretString> = match toml.daemon.web_ui_auth_token {
             // A whitespace-only or empty token is a config error — it would
             // silently read as "auth on" while trivially guessable.
             Some(t) if t.trim().is_empty() => {
@@ -9679,7 +9682,7 @@ fn build_email_config(raw: &RawEmail) -> Result<Option<EmailConfig>, ConfigError
         });
     }
     let password = SourcedSecret::new(
-        secrecy::SecretString::from(password_str),
+        secrecy::SecretString::from(password_str.to_string()),
         FieldSource::Toml,
     );
 
@@ -9873,7 +9876,7 @@ fn build_embedding_config(
         .or_else(|| {
             raw.api_key.as_ref().map(|s| {
                 SourcedSecret::new(
-                    SecretString::from(s.clone()),
+                    SecretString::from(s.to_string()),
                     FieldSource::Toml,
                 )
             })

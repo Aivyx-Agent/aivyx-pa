@@ -643,7 +643,7 @@ The Telegram bot channel. See [Chat apps and accounts](../../guide/13-chat-apps-
 | `chat_id` | integer |  | Your chat with the bot. When set, only messages from this chat are handled. Unset, any chat can talk to the bot, at the `Untrusted` tier (public memory only). |
 | `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` from this channel. Unset/false: the command is recognized but always replies with a capability-denial message, both client-side (fail-fast UX) and server-side (the real enforcement). |
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour from this channel (client-side enforced). Unset = unlimited. |
-| `team_command_allowed_senders` | list of integer |  | The Telegram user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run) from this channel. Empty/unset: no sender is authorized — deny by default, closing a real gap (previously, any sender in a connected chat could act). |
+| `team_command_allowed_senders` | list of integer |  | The Telegram user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run), and to resolve a mission gate with a bare `/approve` or `/reject`, from this channel. |
 
 ### `[discord]`
 
@@ -656,7 +656,7 @@ The Discord bot channel. See [Chat apps and accounts](../../guide/13-chat-apps-a
 | `channel_filter` | integer |  | Optional channel_id filter, mirroring Telegram's `chat_filter`. Unset = no channel allowlisted; `id` = only the Discord channel with this snowflake is allowlisted. |
 | `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` from this channel. Unset/false: the command is recognized but always replies with a capability-denial message, both client-side (fail-fast UX) and server-side (the real enforcement). |
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour from this channel (client-side enforced). Unset = unlimited. |
-| `team_command_allowed_senders` | list of integer |  | The Discord user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run) from this channel. Empty/unset: no sender is authorized — deny by default, closing a real gap (previously, any sender in a connected chat could act). |
+| `team_command_allowed_senders` | list of integer |  | The Discord user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run), and to resolve a mission gate with a bare `/approve` or `/reject`, from this channel. |
 
 ### `[slack]`
 
@@ -670,7 +670,7 @@ The Slack bot channel (Socket Mode). See [Chat apps and accounts](../../guide/13
 | `channel_filter` | string |  | Optional channel_id filter, mirroring Telegram's `chat_filter` at Slack's own `channel_id` granularity (finer than `team_id`'s workspace-wide scope). Unset = no channel allowlisted. |
 | `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` from this channel. Unset/false: the command is recognized but always replies with a capability-denial message, both client-side (fail-fast UX) and server-side (the real enforcement). |
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour from this channel (client-side enforced). Unset = unlimited. |
-| `team_command_allowed_senders` | list of string |  | The Slack user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run) from this channel. Empty/unset: no sender is authorized — deny by default, closing a real gap (previously, any sender in a connected chat could act). |
+| `team_command_allowed_senders` | list of string |  | The Slack user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run), and to resolve a mission gate with a bare `/approve` or `/reject`, from this channel. |
 
 ### `[matrix]`
 

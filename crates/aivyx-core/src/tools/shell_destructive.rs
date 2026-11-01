@@ -114,6 +114,7 @@ pub fn classify_for(cmd: &str, cwd: &Path, mode: Mode) -> Option<String> {
     let mut st = State {
         cwd,
         cwd_unknown: false,
+        git_env_risky: false,
         mode,
     };
     st.scan(cmd, 0)
@@ -124,6 +125,31 @@ struct State<'a> {
     cwd: &'a Path,
     /// A `cd` ran earlier in the line, so relative paths mean nothing here.
     cwd_unknown: bool,
+    /// An assignment earlier on this command (`VAR=x git ...`, `env VAR=x git
+    /// ...`) sets an environment variable git runs a program from.
+    git_env_risky: bool,
+}
+
+/// Environment variables that make git (or the pager and editor it starts)
+/// run a program: `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n` and
+/// `GIT_CONFIG_PARAMETERS` set any config key, the rest name the program.
+fn is_risky_git_env(name: &str) -> bool {
+    matches!(
+        name,
+        "GIT_CONFIG_COUNT"
+            | "GIT_CONFIG_PARAMETERS"
+            | "GIT_EXTERNAL_DIFF"
+            | "GIT_PAGER"
+            | "PAGER"
+            | "GIT_EDITOR"
+            | "EDITOR"
+            | "VISUAL"
+            | "GIT_SSH"
+            | "GIT_SSH_COMMAND"
+            | "GIT_ASKPASS"
+            | "SSH_ASKPASS"
+    ) || name.starts_with("GIT_CONFIG_KEY_")
+        || name.starts_with("GIT_CONFIG_VALUE_")
 }
 
 impl State<'_> {
@@ -178,16 +204,23 @@ impl State<'_> {
             }
         }
         let mut words: &[Word] = &c.words;
+        if depth == 0 {
+            self.git_env_risky = false;
+        }
         // Leading `VAR=value` assignments and compound-statement keywords.
         while let Some(w) = words.first() {
             let t = w.text.as_str();
-            let assignment = !w.quoted
-                && t.split_once('=').is_some_and(|(k, _)| {
-                    !k.is_empty()
-                        && k.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-                        && !k.starts_with(|ch: char| ch.is_ascii_digit())
-                });
+            // A quoted value (`X='a b' cmd`) makes the word `quoted`, so a
+            // quote does not rule an assignment out.
+            let assignment = t.split_once('=').is_some_and(|(k, _)| {
+                !k.is_empty()
+                    && k.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                    && !k.starts_with(|ch: char| ch.is_ascii_digit())
+            });
             if assignment || (!w.quoted && KEYWORDS.contains(&t)) {
+                if assignment && is_risky_git_env(t.split('=').next().unwrap_or("")) {
+                    self.git_env_risky = true;
+                }
                 words = &words[1..];
             } else {
                 break;
@@ -256,17 +289,27 @@ impl State<'_> {
             return None;
         }
         // `env -S 'rm x'` / `--split-string=...` splits a STRING into the
-        // command to run: not a word list this check can walk.
-        if name == "env"
-            && args.iter().any(|w| {
-                // Not `flag(w)`: `-S'rm x'` is one quoted word.
-                w.text.starts_with('-')
-                    && (w.text == "--split-string"
-                        || w.text.starts_with("--split-string=")
-                        || (!w.text.starts_with("--") && w.text[1..].contains('S')))
-            })
-        {
-            return Some("`env -S` runs a command split from a string".into());
+        // command to run: not a word list this check can walk. Only the options
+        // before the wrapped command count (`env ls -S` is `ls -S`).
+        if name == "env" {
+            let mut i = 0;
+            while i < args.len() {
+                let t = args[i].text.as_str();
+                if t.contains('=') && !t.starts_with('-') {
+                    i += 1; // VAR=value
+                } else if t.starts_with('-') && t != "-" {
+                    if t == "--split-string"
+                        || t.starts_with("--split-string=")
+                        || (!t.starts_with("--") && t[1..].contains('S'))
+                    {
+                        return Some("`env -S` runs a command split from a string".into());
+                    }
+                    let takes_value = matches!(t, "-u" | "-C") && !t.contains('=');
+                    i += 1 + usize::from(takes_value);
+                } else {
+                    break; // the wrapped command
+                }
+            }
         }
 
         // Wrappers: the rest of the words are a command.
@@ -276,6 +319,9 @@ impl State<'_> {
             while i < args.len() {
                 let w = &args[i];
                 if name == "env" && w.text.contains('=') && !w.text.starts_with('-') {
+                    if is_risky_git_env(w.text.split('=').next().unwrap_or("")) {
+                        self.git_env_risky = true;
+                    }
                     i += 1;
                 } else if flag(w) {
                     // `--opt=value` carries its value; a bare option that
@@ -643,6 +689,9 @@ impl State<'_> {
     }
 
     fn check_git(&self, args: &[Word]) -> Option<String> {
+        if self.git_env_risky {
+            return Some("an environment variable set for git can make it run a program".into());
+        }
         // Skip global options (`-C dir`, `-c k=v`, `--git-dir=...`).
         let mut i = 0;
         while i < args.len() {
@@ -1519,6 +1568,16 @@ mod tests {
             "git config credential.helper '!sh x'",
             "git -c core.pager='sh x' log",
             "env -S 'rm x'",
+            "X='a b' rm x",
+            "GIT_PAGER='sh x' git log",
+            "PAGER='sh x' git log",
+            "env GIT_EXTERNAL_DIFF=/tmp/x git diff",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0='sh x' git log",
+            "env GIT_CONFIG_PARAMETERS=\"'core.pager=sh x'\" git log",
+            "GIT_SSH_COMMAND='sh x' git fetch",
+            "GIT_ASKPASS=/tmp/x git push origin main",
+            "GIT_EDITOR='sh x' git commit",
+            "sudo env GIT_PAGER=x git log",
             "env -S'rm x'",
             "env --split-string='rm x'",
             "env -i -S 'rm x'",
@@ -1549,6 +1608,11 @@ mod tests {
             "git config --get include.path",
             "git --config-env=user.name=NAME log",
             "command -v rm",
+            "env ls -S",
+            "env FOO=1 ls -S",
+            "PAGER=cat ls",
+            "GIT_AUTHOR_NAME=me git log",
+            "env GIT_AUTHOR_NAME=me git log",
             "command -V rm",
             "command -pv rm",
             "env FOO=1 ls",

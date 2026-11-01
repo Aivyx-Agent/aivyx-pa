@@ -54,7 +54,7 @@ pub struct KitchenConfig {
 }
 
 /// KitchenDB PostgREST connection. All three fields are required.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KitchenDbConfig {
     /// PostgREST base URL (no trailing `/rpc`). RPCs are POSTed to
     /// `<base_url>/rpc/<function>`.
@@ -63,6 +63,17 @@ pub struct KitchenDbConfig {
     pub api_key: String,
     /// The tenant id, passed as `p_organization_id` to every RPC.
     pub organization_id: String,
+}
+
+// Hand-written so a stray `{:?}` never prints the secret (audit P14).
+impl std::fmt::Debug for KitchenDbConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KitchenDbConfig")
+            .field("base_url", &self.base_url)
+            .field("api_key", &"<redacted>")
+            .field("organization_id", &self.organization_id)
+            .finish()
+    }
 }
 
 /// Default config path for a given instance: `~/.aivyx-pa[/instances/<n>]/tool-processes/kitchen/config.toml`.
@@ -101,6 +112,18 @@ pub fn load_config(path: &Path) -> Result<KitchenDbConfig, ConfigFileError> {
 
 #[cfg(test)]
 mod tests {
+    /// Audit P14: `Debug` of the kitchen DB config hides the key.
+    #[test]
+    fn debug_hides_the_api_key() {
+        let c = KitchenDbConfig {
+            base_url: "http://x".into(),
+            api_key: "SECRET-KITCHEN".into(),
+            organization_id: "org".into(),
+        };
+        let shown = format!("{c:?}");
+        assert!(!shown.contains("SECRET-KITCHEN") && shown.contains("<redacted>"), "{shown}");
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 

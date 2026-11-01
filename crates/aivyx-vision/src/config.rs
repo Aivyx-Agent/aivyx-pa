@@ -55,7 +55,7 @@ enum RawProvider {
     Openai,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct RawVisionConfig {
     provider: RawProvider,
     model: String,
@@ -64,12 +64,37 @@ struct RawVisionConfig {
     mold: Option<RawMoldConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+// Hand-written so a stray `{:?}` never prints the secret (audit P14).
+impl std::fmt::Debug for RawVisionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawVisionConfig")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("api_key", &"<redacted>")
+            .field("mold", &self.mold)
+            .finish()
+    }
+}
+
+#[derive(Deserialize)]
 struct RawMoldConfig {
     broker_url: String,
     mold_url: String,
     api_key: Option<String>,
     output_dir: Option<String>,
+}
+
+// Hand-written so a stray `{:?}` never prints the secret (audit P14).
+impl std::fmt::Debug for RawMoldConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawMoldConfig")
+            .field("broker_url", &self.broker_url)
+            .field("mold_url", &self.mold_url)
+            .field("api_key", &"<redacted>")
+            .field("output_dir", &self.output_dir)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]

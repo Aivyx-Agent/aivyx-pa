@@ -767,7 +767,10 @@ handling, same Profile + Persona + mission-gate behavior.
 **Daemon-mode `/approve` / `/reject` text-command routing**
 landed at Phase 111 (Adapter Production Wiring) alongside
 the Discord daemon-frontend. In-process and daemon-mode
-both resolve gates through the bot reply on Phase 111+.
+both resolve gates through the bot reply on Phase 111+. On Telegram,
+Discord and Slack the sender must be listed in the channel's
+`team_command_allowed_senders` (the list `/team` commands use; empty means
+nobody), or the bare `/approve` / `/reject` is refused.
 The daemon-frontends also recognize a `/team ...` command
 set for Nonagon team-mission control — `/team status [<id>]`,
 `/team approve|reject <id> <step>`, `/team pause|resume <id>`,
