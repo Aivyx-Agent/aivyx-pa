@@ -17,8 +17,36 @@ All notable changes to Aivyx are recorded here. This project adheres to
   point at it. Re-run `aivyx-pa daemon install` for a service that relied on
   its working directory.
 
+- **Mission-gate `/approve` and `/reject` on Telegram, Discord and Slack now
+  need your id in `team_command_allowed_senders`**, the list `/team` commands
+  already use (empty means nobody). Add your id if you resolve gates from
+  chat. Matrix, Signal and Proton admit only you already.
+- **A bare `daemon run --web-ui` now serves the Studio on the instance's
+  `[daemon] web_ui_port`** (it used the default port and ignored it, so a
+  named instance failed to bind). `init` for a named instance writes its own
+  port into the config and names it in "Next steps".
+- **A config pack can no longer ask for shell, delete, send, post or write
+  scopes** in its `[[role]]` entries or team members; `pack check`, `pack
+  inspect` and `pack install` list every scope a pack asks for.
+
 ### Security
 
+- **Approval prompts show everything they cover.** Recipients (`to`, `cc`,
+  `bcc`, arrays too) are named in the summary, every argument is listed with
+  short ones first, and any cut says how many characters are hidden: type `a`
+  at the terminal prompt to see it all; the Studio card has a "Show
+  everything" section. Control, bidirectional and zero-width characters are
+  shown as escapes. (audit P4)
+- **Chat sessions that run in-process (the fallback when the daemon is down)
+  now honour `manual` autonomy areas** like the daemon does. (audit P7)
+- **A parked-step preview and the Documents browser refuse a named pipe** in
+  the agent's folder instead of hanging a worker. (audit P5)
+- **Telegram photo-download errors no longer log the bot token; recalled
+  memory topics cannot forge a prompt section; a tool process's stderr is
+  drained; the federation signature names its recipient; secret-holding
+  structs print `<redacted>` under `{:?}`; CI tokens are read-only; a failed
+  tool call shows its reason; an empty reply after tool calls says what ran
+  rather than "try again".** (audit P8-P14, P19, P20, P22)
 - **The daemon no longer loads a config from its working directory.** The
   installed service runs in `$HOME`, where the agent's shell could create an
   `aivyx-pa.toml` that the next start would obey (tool processes, MCP
