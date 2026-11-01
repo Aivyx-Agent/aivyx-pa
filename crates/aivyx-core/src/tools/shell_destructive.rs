@@ -148,6 +148,9 @@ fn is_risky_git_env(name: &str) -> bool {
             | "GIT_SSH_COMMAND"
             | "GIT_ASKPASS"
             | "SSH_ASKPASS"
+            | "GIT_CONFIG_GLOBAL"
+            | "GIT_CONFIG_SYSTEM"
+            | "GIT_PROXY_COMMAND"
     ) || name.starts_with("GIT_CONFIG_KEY_")
         || name.starts_with("GIT_CONFIG_VALUE_")
 }
@@ -204,9 +207,8 @@ impl State<'_> {
             }
         }
         let mut words: &[Word] = &c.words;
-        if depth == 0 {
-            self.git_env_risky = false;
-        }
+        // `git_env_risky` is NOT reset per command: `X=... ; git ...` and
+        // `export X=...; git ...` set the variable for the git that follows.
         // Leading `VAR=value` assignments and compound-statement keywords.
         while let Some(w) = words.first() {
             let t = w.text.as_str();
@@ -273,6 +275,18 @@ impl State<'_> {
             }
             out
         };
+
+        // `export X=...`, `declare -x X=...`, `typeset`, `readonly`, `local`:
+        // the variable stays set for every later command on the line.
+        if matches!(name, "export" | "declare" | "typeset" | "readonly" | "local") {
+            if args
+                .iter()
+                .any(|w| is_risky_git_env(w.text.split('=').next().unwrap_or("")))
+            {
+                self.git_env_risky = true;
+            }
+            return None;
+        }
 
         if name == "cd" || name == "pushd" || name == "popd" {
             self.cwd_unknown = true;
@@ -1578,6 +1592,15 @@ mod tests {
             "GIT_ASKPASS=/tmp/x git push origin main",
             "GIT_EDITOR='sh x' git commit",
             "sudo env GIT_PAGER=x git log",
+            "export GIT_PAGER='sh x'; git log",
+            "GIT_PAGER='sh x'; git log",
+            "GIT_PAGER='sh x' && git log",
+            "declare -x GIT_EXTERNAL_DIFF=/tmp/x; git diff",
+            "typeset -x PAGER=x; git log",
+            "readonly GIT_SSH_COMMAND='sh x'; git fetch",
+            "export GIT_CONFIG_GLOBAL=/tmp/evil; git log",
+            "export GIT_CONFIG_SYSTEM=/tmp/evil; git log",
+            "export GIT_PROXY_COMMAND=/tmp/x; git fetch",
             "env -S'rm x'",
             "env --split-string='rm x'",
             "env -i -S 'rm x'",
@@ -1609,6 +1632,9 @@ mod tests {
             "git --config-env=user.name=NAME log",
             "command -v rm",
             "env ls -S",
+            "export FOO=1; git log",
+            "export GIT_AUTHOR_NAME=me; git log",
+            "GIT_PAGER=cat; ls",
             "env FOO=1 ls -S",
             "PAGER=cat ls",
             "GIT_AUTHOR_NAME=me git log",

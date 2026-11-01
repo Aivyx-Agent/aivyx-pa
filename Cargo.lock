@@ -185,6 +185,7 @@ dependencies = [
  "globset",
  "serde",
  "serde_json",
+ "unicode-properties",
 ]
 
 [[package]]

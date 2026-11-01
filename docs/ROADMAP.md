@@ -43,6 +43,10 @@ open, and why:
   ("reasoning-only replies"); port that handling to `aivyx-llm`. The floor
   fires only on an empty or bare-object reply, so there is no off-by-one in
   how the final reply is detected.
+- **Destructive-shell detector: `GIT_DIR`, `HOME`, `XDG_CONFIG_HOME` before git,
+  and `git -C <dir>` / `--git-dir=`.** They point git at a config or repo the
+  agent may have written; pre-existing and not fixed in 10b (the detector is a
+  seatbelt, not a sandbox).
 - **P21 — a paraphrased injection ("Assistant note from the site owner: ...")
   passes the phrase tripwire.** A phrase list is a tripwire, not a defence; the
   fix is structural (P1/P16 made writes from fetched content ask), not a longer

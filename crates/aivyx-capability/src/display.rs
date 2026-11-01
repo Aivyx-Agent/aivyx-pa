@@ -57,25 +57,19 @@ pub const RECIPIENT_KEYS: [&str; 6] = ["to", "cc", "bcc", "recipient", "recipien
 /// fillers that render as blank, variation selectors, and the line/paragraph
 /// separators.
 fn is_disguise(c: char) -> bool {
+    use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
     c.is_control()
+        || c.general_category() == GeneralCategory::Format
         || matches!(
             c,
-            '\u{00AD}'                 // soft hyphen
-                | '\u{034F}'           // combining grapheme joiner
-                | '\u{061C}'           // Arabic letter mark
+            '\u{034F}'                 // combining grapheme joiner
                 | '\u{115F}' | '\u{1160}' // Hangul fillers
                 | '\u{17B4}' | '\u{17B5}' // Khmer inherent vowels
-                | '\u{180B}'..='\u{180F}' // Mongolian selectors, vowel separator
-                | '\u{200B}'..='\u{200F}' // zero-width, LRM, RLM
+                | '\u{180B}'..='\u{180F}' // Mongolian selectors
                 | '\u{2028}' | '\u{2029}' // line / paragraph separators
-                | '\u{202A}'..='\u{202E}' // bidi embeddings and overrides
-                | '\u{2060}'..='\u{206F}' // word joiner, invisible operators, isolates
                 | '\u{3164}'           // Hangul filler
                 | '\u{FE00}'..='\u{FE0F}' // variation selectors
-                | '\u{FEFF}'           // BOM / zero-width no-break space
                 | '\u{FFA0}'           // halfwidth Hangul filler
-                | '\u{FFF9}'..='\u{FFFB}' // interlinear annotation
-                | '\u{E0000}'..='\u{E007F}' // tag characters
                 | '\u{E0100}'..='\u{E01EF}' // variation selectors supplement
         )
 }
@@ -210,6 +204,24 @@ pub struct Described {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Every Format (Cf) code point in Unicode is escaped, not a hand-picked list.
+    #[test]
+    fn every_cf_code_point_is_escaped() {
+        use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
+        let mut n = 0;
+        for c in (0..=0x10FFFFu32).filter_map(char::from_u32) {
+            if c.general_category() == GeneralCategory::Format {
+                n += 1;
+                assert!(neutralise(&c.to_string()).starts_with("\\u{"), "U+{:04X}", c as u32);
+            }
+        }
+        assert!(n > 100, "premise: found {n} Cf code points");
+        for cp in [0x1D173u32, 0x1BCA0, 0x13430, 0x0600, 0x06DD, 0x070F, 0x0890, 0x08E2, 0x110BD, 0x110CD] {
+            let c = char::from_u32(cp).unwrap();
+            assert!(neutralise(&c.to_string()).starts_with("\\u{"), "U+{cp:04X}");
+        }
+    }
 
     #[test]
     fn every_invisible_class_is_escaped_and_a_typed_escape_is_doubled() {

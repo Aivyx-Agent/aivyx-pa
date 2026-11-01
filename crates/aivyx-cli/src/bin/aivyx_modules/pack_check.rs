@@ -79,7 +79,6 @@ const PACK_ALLOWED_SCOPES: &[&str] = &[
     "task.write",
     "team.delegate",
     "team.message",
-    "web.fetch",
     "web.search",
 ];
 
@@ -671,7 +670,7 @@ trust_ceiling = "Trusted"
             "email.write", "fs.read", "memory.read:topic:leads*", "memory.write", "net.fetch",
             "notion.read", "notion.write", "remind.read", "remind.write", "skill_defaults.list",
             "skill_defaults.read", "task.read", "task.write", "team.delegate", "team.message",
-            "web.fetch", "web.search",
+            "web.search",
         ] {
             assert!(refused_scope(ok).is_none(), "{ok} should be allowed");
         }

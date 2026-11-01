@@ -3180,8 +3180,13 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // A named instance gets its own Studio port written into its config now,
     // before the service offer below installs a unit that starts the daemon
     // (audit P17/P18); the default instance keeps "unset means 7843".
-    let web_ui_port = super::instances::ensure_studio_port()
-        .unwrap_or(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT);
+    let web_ui_port = super::instances::ensure_studio_port().unwrap_or_else(|e| {
+        eprintln!(
+            "warning: couldn't record this instance's Studio port ({e}); set `[daemon] \
+             web_ui_port` in its config, or the Studio may try the default instance's port"
+        );
+        aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT
+    });
 
     // 7. Success message + next steps. This is the moment that shapes the
     // operator's first five minutes: where the config is, the passphrase (so
