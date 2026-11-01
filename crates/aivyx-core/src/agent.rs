@@ -2172,12 +2172,19 @@ impl ConcreteAgent {
         // allocation, safe to borrow into the event's `&'a str`
         // lifetime. Renderers that want more detail can keep their
         // own state keyed on `tool` across the start/finish pair.
-        let outcome_summary_str = tool_outcome_summary_str(&summary);
+        // Audit P20: a failed call names why ("refusing to reach … private
+        // address"), not just "failed", so the operator isn't left guessing.
+        let outcome_summary_owned = match &outcome {
+            // The tool's own words, without the "tool error in <uuid>:" prefix.
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => failure_label(detail),
+            ToolOutcome::Failed(err) => failure_label(&err.to_string()),
+            _ => tool_outcome_summary_str(&summary).to_string(),
+        };
         let _ = channel
             .stream_event(StreamEvent::ToolCallFinished {
                 tool: tool_id,
                 tool_name,
-                outcome_summary: outcome_summary_str,
+                outcome_summary: &outcome_summary_owned,
             })
             .await;
 
@@ -2308,6 +2315,17 @@ fn floor_unusable_final_message(msg: &str) -> Option<&'static str> {
         return Some(FLOOR);
     }
     None
+}
+
+/// "failed — <reason>" for a failed tool call: the reason neutralised and cut
+/// to 200 characters (audit P20).
+fn failure_label(reason: &str) -> String {
+    let (text, hidden) = aivyx_capability::display::clip(reason, 200);
+    if hidden > 0 {
+        format!("failed — {text}…")
+    } else {
+        format!("failed — {text}")
+    }
 }
 
 /// The reply for a turn whose tools ran but whose model then said nothing
@@ -4122,6 +4140,17 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_failed_call_label_carries_the_reason() {
+        assert_eq!(
+            failure_label("refusing to reach http://127.0.0.1:8765/ — target 127.0.0.1 is a private address."),
+            "failed — refusing to reach http://127.0.0.1:8765/ — target 127.0.0.1 is a private address."
+        );
+        let long = failure_label(&"x".repeat(500));
+        assert!(long.starts_with("failed — xxx") && long.ends_with('…') && long.len() < 260, "{long}");
+        assert!(!failure_label("bad\nnews\u{202e}").contains('\n'));
     }
 
     #[test]
