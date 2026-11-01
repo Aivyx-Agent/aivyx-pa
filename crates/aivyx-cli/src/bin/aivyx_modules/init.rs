@@ -3249,7 +3249,10 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         }
     }
 
-    let web_ui_port = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
+    // A named instance gets its own Studio port written into its config here
+    // (audit P17/P18), so the text below names the port it will really use.
+    let web_ui_port = super::instances::ensure_studio_port()
+        .unwrap_or(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT);
     eprintln!("\nNext steps:");
     eprintln!("  aivyx-pa                   — chat with your agent in the terminal");
     // First-run coherence A2 — the Studio is on by default, behind a token

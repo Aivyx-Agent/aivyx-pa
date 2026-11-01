@@ -450,8 +450,8 @@ pub async fn run_config_install(file: &Path) -> Result<(), String> {
     let Some(config) = config.filter(|c| c.exists()) else {
         return Err(undo("setup didn't finish, so nothing was installed".into()));
     };
-    let port = crate::instances::pick_port();
-    crate::instances::write_port(&config, port)?;
+    // The wizard already wrote this instance's port; report that one.
+    let port = crate::instances::ensure_studio_port()?;
     print!("\n{}", next_steps(&install.instance, &install.summary, port));
     Ok(())
 }

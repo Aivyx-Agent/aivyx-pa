@@ -83,6 +83,45 @@ pub(crate) fn write_port(config: &Path, port: u16) -> Result<(), String> {
     std::fs::write(config, doc.to_string()).map_err(|e| format!("write {}: {e}", config.display()))
 }
 
+/// The Studio port written in `config`'s `[daemon] web_ui_port`, if any.
+fn port_in_config(config: &Path) -> Option<u16> {
+    std::fs::read_to_string(config)
+        .ok()
+        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
+        .and_then(|doc| doc.get("daemon")?.get("web_ui_port")?.as_integer())
+        .and_then(|p| u16::try_from(p).ok())
+}
+
+/// The Studio port the instance whose config is `config` serves on, writing
+/// one into the config when a named instance has none (audit P17/P18: a
+/// named instance without its own port bound the default instance's, and the
+/// wizard's closing text named 7843 for it). The default instance keeps
+/// "unset means 7843". `pick` chooses the port to write.
+fn ensure_port_at(config: &Path, is_default: bool, pick: impl FnOnce() -> u16) -> Result<u16, String> {
+    if let Some(port) = port_in_config(config) {
+        return Ok(port);
+    }
+    if is_default {
+        return Ok(DEFAULT_PORT);
+    }
+    let port = pick();
+    write_port(config, port)?;
+    Ok(port)
+}
+
+/// [`ensure_port_at`] for the process's selected instance.
+pub(crate) fn ensure_studio_port() -> Result<u16, String> {
+    let name = InstanceName::from_env()?;
+    let is_default = name.is_default();
+    let config = paths_for(name)
+        .config_file()
+        .ok_or("can't resolve the instance's config path (is HOME set?)")?;
+    if !config.exists() {
+        return Ok(if is_default { DEFAULT_PORT } else { pick_port() });
+    }
+    ensure_port_at(&config, is_default, pick_port)
+}
+
 fn port_is_busy(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
 }
@@ -179,15 +218,15 @@ pub async fn run_create(name: &InstanceName) -> Result<(), String> {
     let port = pick_port();
     println!("Setting up instance `{name}` (Studio port {port}).\n");
 
+    // The wizard writes the instance's port into its config (it picks the same
+    // lowest free port), so what it prints matches this.
     crate::init::run_init_wizard(None).await?;
 
     let paths = paths_for(name.clone());
     let config = paths
         .config_file()
         .ok_or("can't resolve the new instance's config path (is HOME set?)")?;
-    if config.exists() {
-        write_port(&config, port)?;
-    }
+    let port = if config.exists() { ensure_port_at(&config, false, || port)? } else { port };
     println!(
         "\nInstance `{name}` is ready. Use it with `aivyx-pa --instance {name} …`;\n\
          its Studio runs on http://127.0.0.1:{port}."
@@ -253,6 +292,23 @@ mod tests {
     fn port_choice_skips_used_and_listening_ports() {
         assert_eq!(choose_port(&[7843], &[]), 7844);
         assert_eq!(choose_port(&[7843, 7844], &[7845]), 7846);
+    }
+
+    #[test]
+    fn a_named_instance_without_a_port_gets_one_written_and_the_default_keeps_7843() {
+        let dir = std::env::temp_dir().join(format!("aivyx-ensure-port-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("aivyx-pa.toml");
+        std::fs::write(&cfg, "[profile]\nassistant_name = \"X\"\n").unwrap();
+        // default instance: unset means the default, nothing written
+        assert_eq!(ensure_port_at(&cfg, true, || 9999).unwrap(), DEFAULT_PORT);
+        assert!(!std::fs::read_to_string(&cfg).unwrap().contains("web_ui_port"));
+        // named instance: picks and writes
+        assert_eq!(ensure_port_at(&cfg, false, || 7852).unwrap(), 7852);
+        assert!(std::fs::read_to_string(&cfg).unwrap().contains("web_ui_port = 7852"));
+        // an existing port is kept
+        assert_eq!(ensure_port_at(&cfg, false, || 7853).unwrap(), 7852);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

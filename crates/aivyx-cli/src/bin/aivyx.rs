@@ -3283,16 +3283,22 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         while di < args.len() {
             match args[di].as_str() {
                 "--web-ui" if mode == CliMode::DaemonRun => {
-                    daemon_web_ui_port = Some(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT);
+                    // No port given: the configured `[daemon] web_ui_port`, else
+                    // the default (resolved by `studio_port_wanted`, audit P17).
+                    daemon_web_ui_port = Some(BARE_WEB_UI_FLAG);
                     di += 1;
                 }
                 "--web-ui-port" if mode == CliMode::DaemonRun => {
                     let value = args
                         .get(di + 1)
                         .ok_or_else(|| "`--web-ui-port` requires a port number".to_string())?;
-                    let port: u16 = value.parse().map_err(|_| {
-                        format!("`--web-ui-port` value `{value}` is not a valid port number")
-                    })?;
+                    let port: u16 = value
+                        .parse()
+                        .ok()
+                        .filter(|p| *p != BARE_WEB_UI_FLAG)
+                        .ok_or_else(|| {
+                            format!("`--web-ui-port` value `{value}` is not a valid port number")
+                        })?;
                     daemon_web_ui_port = Some(port);
                     di += 2;
                 }
@@ -6699,6 +6705,25 @@ fn area_flags(
     }
 }
 
+/// `daemon run --web-ui` with no port is parsed as this (0 is never a real
+/// Studio port; an explicit `--web-ui-port 0` is refused).
+const BARE_WEB_UI_FLAG: u16 = 0;
+
+/// The Studio port `daemon run` serves on: an explicit `--web-ui-port` wins;
+/// a bare `--web-ui` means "serve it" on the instance's configured
+/// `[daemon] web_ui_port`, else the default; with no flag the config decides
+/// (audit P17: a bare flag used to pick the default port and ignore the
+/// configured one, so a named instance bound the default instance's port).
+fn studio_port_wanted(cli: Option<u16>, configured: Option<u16>) -> Option<u16> {
+    match cli {
+        Some(BARE_WEB_UI_FLAG) => {
+            Some(configured.unwrap_or(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT))
+        }
+        Some(port) => Some(port),
+        None => configured,
+    }
+}
+
 /// Which areas confirm every change — the `manual` autonomy level per area.
 fn confirm_all_areas(
     level: aivyx_config::AutonomyLevel,
@@ -9790,7 +9815,7 @@ async fn run_async(
     // Only `daemon run` serves the Studio: an in-process session must not
     // create the token file or report on a Studio it doesn't run.
     let studio_port_wanted = if mode == CliMode::DaemonRun {
-        cli_web_ui_port.or(config_web_ui_port)
+        studio_port_wanted(cli_web_ui_port, config_web_ui_port)
     } else {
         None
     };
@@ -15149,10 +15174,26 @@ mod tests {
     fn web_ui_flag_sets_default_port() {
         let parsed =
             parse_cli_args_from(&argv(&["daemon", "run", "--web-ui"])).expect("must parse");
-        assert_eq!(
-            parsed.web_ui_port,
-            Some(aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT)
-        );
+        assert_eq!(parsed.web_ui_port, Some(BARE_WEB_UI_FLAG));
+    }
+
+    /// Audit P17: a bare `--web-ui` uses the instance's configured port.
+    #[test]
+    fn a_bare_web_ui_flag_uses_the_configured_port() {
+        let default = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
+        assert_eq!(studio_port_wanted(Some(BARE_WEB_UI_FLAG), Some(7861)), Some(7861));
+        assert_eq!(studio_port_wanted(Some(BARE_WEB_UI_FLAG), None), Some(default));
+        assert_eq!(studio_port_wanted(Some(8080), Some(7861)), Some(8080));
+        assert_eq!(studio_port_wanted(None, Some(7861)), Some(7861));
+        assert_eq!(studio_port_wanted(None, None), None);
+        let parsed =
+            parse_cli_args_from(&argv(&["daemon", "run", "--web-ui"])).expect("must parse");
+        assert_eq!(studio_port_wanted(parsed.web_ui_port, Some(7861)), Some(7861));
+    }
+
+    #[test]
+    fn web_ui_port_zero_is_refused() {
+        assert!(parse_cli_args_from(&argv(&["daemon", "run", "--web-ui-port", "0"])).is_err());
     }
 
     #[test]
