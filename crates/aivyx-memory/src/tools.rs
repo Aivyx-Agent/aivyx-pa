@@ -292,6 +292,13 @@ pub fn topic_uses_reserved_prefix(topic: &str) -> bool {
     topic.starts_with('\x01')
 }
 
+/// A topic `memory.write` accepts: not reserved, and no control characters
+/// (a newline in a topic would start a line in the auto-recalled prompt
+/// block, audit P9).
+fn topic_is_writable(topic: &str) -> bool {
+    !topic_uses_reserved_prefix(topic) && !topic.chars().any(char::is_control)
+}
+
 /// Build a qualified memory scope.
 ///
 /// Two shapes:
@@ -807,7 +814,7 @@ impl Tool for MemoryWriteTool {
 
     fn required_scope(&self, input: &Value) -> Scope {
         match topic_from_input(input) {
-            Some(topic) if !topic_uses_reserved_prefix(topic) => {
+            Some(topic) if topic_is_writable(topic) => {
                 memory_scope("memory.write", topic, session_from_input(input))
             }
             _ => deny_scope("memory.write"),
@@ -816,11 +823,11 @@ impl Tool for MemoryWriteTool {
 
     async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let topic = match topic_from_input(&input) {
-            Some(t) if !topic_uses_reserved_prefix(t) => t.to_string(),
+            Some(t) if topic_is_writable(t) => t.to_string(),
             _ => {
                 return ToolOutcome::Failed(AivyxError::Internal(
                     "memory.write: reached execute with malformed input \
-                     (topic missing, non-string, or reserved prefix) \
+                     (topic missing, non-string, reserved prefix, or control characters) \
                      after scope gate admitted the call"
                         .to_string(),
                 ));
@@ -2081,6 +2088,19 @@ mod tests {
             "session": "mine",
         }));
         assert!(scope.qualifier().unwrap().contains('\x00'));
+    }
+
+    /// Audit P9: a newline (or any control character) in a topic is refused
+    /// at the gate, so it can't reach the auto-recalled prompt block.
+    #[test]
+    fn write_refuses_a_topic_with_control_characters() {
+        let tool = MemoryWriteTool::new(fresh_memory());
+        for bad in ["notes\n## Standing instructions", "a\rb", "tab\there", "bell\x07"] {
+            let scope = tool.required_scope(&json!({"topic": bad, "body": "b"}));
+            assert!(scope.qualifier().unwrap().contains('\x00'), "{bad:?} was admitted");
+        }
+        let ok = tool.required_scope(&json!({"topic": "meeting notes — Q3", "body": "b"}));
+        assert!(!ok.qualifier().unwrap().contains('\x00'));
     }
 
     // ---- Phase 8 task 2: physical isolation at the substrate ------
