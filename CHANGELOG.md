@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.19.4] — 2026-11-01
+
 ### Changed
 
 - **A `./aivyx-pa.toml` in the current directory is no longer read.** The
