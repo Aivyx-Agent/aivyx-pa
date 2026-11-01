@@ -158,7 +158,7 @@ impl ReqwestTransport {
         );
         let resp = reqwest::get(&url)
             .await
-            .map_err(|e| TransportError::Platform(format!("photo download: {e}")))?;
+            .map_err(|e| TransportError::Platform(format!("photo download: {}", e.without_url())))?;
 
         if !resp.status().is_success() {
             return Err(TransportError::Platform(format!(
@@ -170,7 +170,9 @@ impl ReqwestTransport {
         let data = resp
             .bytes()
             .await
-            .map_err(|e| TransportError::Platform(format!("photo download body: {e}")))?
+            .map_err(|e| {
+                TransportError::Platform(format!("photo download body: {}", e.without_url()))
+            })?
             .to_vec();
 
         // Infer MIME type from file extension.
@@ -289,5 +291,20 @@ impl TelegramTransport for ReqwestTransport {
             .await
             .map_err(|e| TransportError::Platform(format!("send_message: {e}")))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod token_in_errors_tests {
+    /// Audit P8: the file URL embeds the bot token, and reqwest prints the URL
+    /// in its errors; the download path strips it before formatting.
+    #[tokio::test]
+    async fn a_failed_photo_download_error_carries_no_token() {
+        let token = "123456:AAFAKE-SECRET-TOKEN-FOR-AUDIT";
+        let url = format!("http://127.0.0.1:9/file/bot{token}/photos/file_1.jpg");
+        let e = reqwest::get(&url).await.expect_err("closed port");
+        assert!(format!("{e}").contains(token), "premise: reqwest prints the URL");
+        let shown = format!("photo download: {}", e.without_url());
+        assert!(!shown.contains(token), "token in error text: {shown}");
     }
 }
