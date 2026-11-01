@@ -1012,7 +1012,24 @@ impl ConcreteAgent {
                 // other post-processing runs on it (Candor below, and
                 // Task 5's identifier-fidelity check once it lands).
                 if let Some(floor) = floor_unusable_final_message(&final_message) {
-                    final_message = floor.to_string();
+                    // Audit P19: when the turn DID run tools, "try again" would
+                    // repeat them (a second write, a second send). Say what ran.
+                    final_message = if observed.is_empty() {
+                        floor.to_string()
+                    } else {
+                        let ran: Vec<(String, &'static str)> = observed
+                            .iter()
+                            .map(|o| {
+                                let name = self
+                                    .tools
+                                    .get(o.tool_id)
+                                    .map(|t| t.name().to_string())
+                                    .unwrap_or_else(|| "a tool".to_string());
+                                (name, tool_outcome_summary_str(&o.summary))
+                            })
+                            .collect();
+                        ran_without_a_reply(&ran)
+                    };
                 }
 
                 // Chapter Candor (#12) — append an honest note if the message
@@ -2291,6 +2308,23 @@ fn floor_unusable_final_message(msg: &str) -> Option<&'static str> {
         return Some(FLOOR);
     }
     None
+}
+
+/// The reply for a turn whose tools ran but whose model then said nothing
+/// usable: what ran and how it ended, and a warning that asking again repeats
+/// it (audit P19). At most 8 calls are listed.
+fn ran_without_a_reply(ran: &[(String, &'static str)]) -> String {
+    let mut out = String::from(
+        "The tools below ran this turn, but I didn't write a reply. Check the result \
+         before asking again — a retry would run them a second time:",
+    );
+    for (name, result) in ran.iter().take(8) {
+        out.push_str(&format!("\n- {name}: {result}"));
+    }
+    if ran.len() > 8 {
+        out.push_str(&format!("\n- … and {} more", ran.len() - 8));
+    }
+    out
 }
 
 /// Append one Candor-style honest-note annotation ("⚠ {note}") to a
@@ -4059,6 +4093,35 @@ mod tests {
         });
         assert_eq!(cs.cfg.max_period, 2);
         assert_eq!(cs.cfg.min_repeats, 2);
+    }
+
+    /// Audit P19: a turn that ran a tool and then ended empty says what ran
+    /// instead of telling the operator to try again.
+    #[tokio::test]
+    async fn an_empty_reply_after_a_tool_call_names_what_ran() {
+        let tool = Arc::new(FakeTool::new_bare("fs.write", "memory.write"));
+        let tool_id = tool.id();
+        let agent_caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage(String::new()),
+        ];
+        let agent = make_agent(agent_caps, vec![tool], RecordingAudit::new(), plan);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let outcome = agent.turn(Message::text(channel.session, "write it"), &channel).await;
+        match outcome {
+            TurnOutcome::Completed { final_message, .. } => {
+                assert!(final_message.contains("fs.write: completed"), "{final_message}");
+                assert!(final_message.contains("a second time"), "{final_message}");
+                assert!(!final_message.contains("usable reply"), "{final_message}");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
     }
 
     #[test]
