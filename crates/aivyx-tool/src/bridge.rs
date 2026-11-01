@@ -171,7 +171,14 @@ pub struct ToolProcessBridge {
     pending: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<BridgeMessage>>>>,
     _child: Child,
     _reader_handle: tokio::task::JoinHandle<()>,
+    /// The tool process's last stderr lines (audit P10: the pipe used to go
+    /// unread, so a process logging more than the pipe buffer blocked).
+    stderr_tail: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
 }
+
+/// Stderr lines kept per tool process, and the longest kept line.
+const STDERR_TAIL_LINES: usize = 50;
+const STDERR_LINE_MAX: usize = 4096;
 
 impl std::fmt::Debug for ToolProcessBridge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -313,6 +320,49 @@ impl ToolProcessBridge {
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = child.stdout.take().expect("stdout piped");
 
+        // Drain stderr into a bounded tail so the process never blocks on a
+        // full pipe, and its own diagnostics survive for debugging.
+        let stderr_tail: Arc<std::sync::Mutex<std::collections::VecDeque<String>>> =
+            Arc::default();
+        if let Some(stderr) = child.stderr.take() {
+            let tail = Arc::clone(&stderr_tail);
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let mut stderr = stderr;
+                let mut chunk = [0u8; 4096];
+                // The current line, capped: bytes past the cap are dropped
+                // until the newline, so a process that never writes one
+                // can't grow this without bound.
+                let mut line: Vec<u8> = Vec::new();
+                let mut push = |bytes: &[u8]| {
+                    let text = String::from_utf8_lossy(bytes).into_owned();
+                    let mut g = tail.lock().unwrap();
+                    if g.len() >= STDERR_TAIL_LINES {
+                        g.pop_front();
+                    }
+                    g.push_back(text);
+                };
+                loop {
+                    match stderr.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            for &b in &chunk[..n] {
+                                if b == b'\n' {
+                                    push(&line);
+                                    line.clear();
+                                } else if line.len() < STDERR_LINE_MAX {
+                                    line.push(b);
+                                }
+                            }
+                        }
+                    }
+                }
+                if !line.is_empty() {
+                    push(&line);
+                }
+            });
+        }
+
         let stdin = Arc::new(Mutex::new(stdin));
         let pending: Arc<
             Mutex<HashMap<String, mpsc::UnboundedSender<BridgeMessage>>>,
@@ -358,7 +408,13 @@ impl ToolProcessBridge {
             pending,
             _child: child,
             _reader_handle: reader_handle,
+            stderr_tail,
         })
+    }
+
+    /// The tool process's most recent stderr lines, oldest first.
+    pub fn stderr_tail(&self) -> Vec<String> {
+        self.stderr_tail.lock().unwrap().iter().cloned().collect()
     }
 
     /// The tools this process registered.
@@ -652,6 +708,61 @@ sys.exit(0)
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    /// Audit P10: a tool process that logs more than a pipe buffer (64 KiB)
+    /// must not block on stderr, and its tail stays readable.
+    #[tokio::test]
+    async fn a_chatty_stderr_does_not_block_the_tool_process() {
+        let script = r#"
+import sys, json, struct
+
+def read_frame():
+    hdr = sys.stdin.buffer.read(4)
+    (n,) = struct.unpack(">I", hdr)
+    return json.loads(sys.stdin.buffer.read(n).decode("utf-8"))
+
+def write_frame(msg):
+    body = json.dumps(msg).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+
+read_frame()
+write_frame({"type": "ToolRegister", "tool_process_name": "chatty",
+  "tools": [{"name": "echo", "description": "e", "input_schema": {"type": "object"},
+             "required_scope": "memory.read"}]})
+inv = read_frame()
+for i in range(4000):
+    sys.stderr.write("log line %d %s\n" % (i, "x" * 60))
+sys.stderr.write("the last line\n")
+sys.stderr.flush()
+write_frame({"type": "ToolResult", "call_id": inv["call_id"], "verified": "NotApplicable", "output": {}})
+sys.exit(0)
+"#;
+        let config = ToolProcessConfig {
+            name: "chatty".into(),
+            command: "python3".into(),
+            args: vec!["-c".into(), script.into()],
+            env: vec![],
+            sandbox: None,
+            notification_sink: None,
+        };
+        let Ok(bridge) = ToolProcessBridge::spawn(config).await else {
+            eprintln!("skipping: python3 unavailable");
+            return;
+        };
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            bridge.invoke("echo", serde_json::json!({}), "turn-1"),
+        )
+        .await
+        .expect("the tool process blocked writing to an unread stderr pipe")
+        .expect("invoke");
+        assert!(matches!(outcome, InvocationOutcome::Completed { .. }));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let tail = bridge.stderr_tail();
+        assert!(tail.len() <= STDERR_TAIL_LINES);
+        assert_eq!(tail.last().map(String::as_str), Some("the last line"));
     }
 
     #[tokio::test]
