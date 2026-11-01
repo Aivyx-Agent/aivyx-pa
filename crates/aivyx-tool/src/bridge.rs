@@ -334,7 +334,7 @@ impl ToolProcessBridge {
                 // until the newline, so a process that never writes one
                 // can't grow this without bound.
                 let mut line: Vec<u8> = Vec::new();
-                let mut push = |bytes: &[u8]| {
+                let push = |bytes: &[u8]| {
                     let text = String::from_utf8_lossy(bytes).into_owned();
                     let mut g = tail.lock().unwrap();
                     if g.len() >= STDERR_TAIL_LINES {
