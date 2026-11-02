@@ -154,6 +154,7 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "zip 7.2.0 via candle-core (mistralrs, aivyx-llm local provider); the advisory is about ZipArchive::extract, which candle never calls (it reads npz/pth archives in memory); fixed only in zip 9, revisit when candle-core/mistralrs move" },
     { id = "RUSTSEC-2026-0368", reason = "zip 7.2.0 via candle-core (mistralrs, aivyx-llm local provider); the advisory is about ZipArchive::extract, which candle never calls (it reads npz/pth archives in memory); fixed only in zip 9, revisit when candle-core/mistralrs move" },
     { id = "RUSTSEC-2026-0369", reason = "zip 7.2.0 via candle-core (mistralrs, aivyx-llm local provider); the advisory is about ZipArchive::extract, which candle never calls (it reads npz/pth archives in memory); fixed only in zip 9, revisit when candle-core/mistralrs move" },
+    { id = "RUSTSEC-2026-0429", reason = "zip 7.2.0 via candle-core (mistralrs, aivyx-llm local provider); the advisory is about ZipArchive::extract sizing a symlink-target buffer, and candle never calls extract (it reads npz/pth archives in memory); fixed only in zip 9, revisit when candle-core/mistralrs move" },
 
     # anymap2 — RUSTSEC-2026-0319 (unmaintained). Pulled via
     #   anymap2 → matrix-sdk 0.19.1 → aivyx-matrix. Not a direct dep;
