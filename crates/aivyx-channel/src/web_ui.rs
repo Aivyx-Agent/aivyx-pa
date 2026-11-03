@@ -243,8 +243,8 @@ pub async fn run_web_ui_server_notify(
     }
     let listener = TcpListener::bind(addr)
         .await
-        .map_err(|source| DaemonError::Bind {
-            path: addr.to_string(),
+        .map_err(|source| DaemonError::WebUiBind {
+            addr: addr.to_string(),
             source,
         })?;
 

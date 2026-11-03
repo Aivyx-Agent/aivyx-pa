@@ -2303,6 +2303,22 @@ pub async fn spawn_daemon_and_wait(
     wait_for_socket(&mut child, socket_path, timeout).await
 }
 
+/// The last non-empty line of a daemon log, trimmed; `None` when the file is
+/// missing or has no text. Reads only the file's tail.
+pub fn last_log_line(log_path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(log_path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(8192))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    String::from_utf8_lossy(&buf)
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .map(str::to_string)
+}
+
 /// Poll for `child`'s socket to appear, with exponential backoff. A child
 /// that exits first (a wrong passphrase, a bad config) fails at once rather
 /// than after the whole `timeout`, pointing at its log. The child is not
@@ -2319,10 +2335,18 @@ async fn wait_for_socket(
             return Ok(socket_path.to_path_buf());
         }
         if let Ok(Some(status)) = child.try_wait() {
-            return Err(DaemonError::Internal(format!(
-                "the daemon exited during startup ({status}) — see {}",
-                daemon_log_path(socket_path).display(),
-            )));
+            let log = daemon_log_path(socket_path);
+            // The log's last line is the plain reason ("failed to bind
+            // daemon socket …"); show it so nobody has to open the file.
+            return Err(DaemonError::Internal(match last_log_line(&log) {
+                Some(reason) => {
+                    format!("the daemon exited during startup ({status}): {reason}")
+                }
+                None => format!(
+                    "the daemon exited during startup ({status}) — see {}",
+                    log.display()
+                ),
+            }));
         }
         if start.elapsed() > timeout {
             return Err(DaemonError::Internal(format!(
@@ -2499,6 +2523,22 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(3), "took {:?}", start.elapsed());
             assert!(err.contains("exited"), "{err}");
         });
+    }
+
+    #[test]
+    fn last_log_line_is_the_last_non_empty_line() {
+        let dir = std::env::temp_dir().join(format!("lastline-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("daemon.log");
+        std::fs::write(&log, "starting\nError: failed to bind daemon socket at /x\n\n  \n").unwrap();
+        assert_eq!(
+            last_log_line(&log).as_deref(),
+            Some("Error: failed to bind daemon socket at /x")
+        );
+        std::fs::write(&log, "").unwrap();
+        assert_eq!(last_log_line(&log), None);
+        assert_eq!(last_log_line(&dir.join("missing.log")), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -329,6 +329,52 @@ pub fn repl_studio_line(
     })
 }
 
+/// Where the Studio really is, from what the daemon recorded
+/// ([`aivyx_channel::studio_token::StudioState`]) rather than from the
+/// config alone: a Studio that failed to bind (its port taken) or whose
+/// daemon isn't running gets no address, hence no link. `cfg_addr` is `None`
+/// when the config turns the Studio off.
+pub fn studio_reach(
+    cfg_addr: Option<std::net::SocketAddr>,
+    state: &aivyx_channel::studio_token::StudioState,
+) -> Result<std::net::SocketAddr, String> {
+    use aivyx_channel::studio_token::{not_running_message, StudioState};
+    cfg_addr.ok_or_else(|| "the Studio is off (`[daemon] web_ui = false`).".to_string())?;
+    match state {
+        StudioState::Bound(addr) => Ok(*addr),
+        StudioState::Failed(port) => Err(not_running_message(*port)),
+        StudioState::Unknown => Err("The Studio isn't running: the daemon isn't up. Run \
+             `aivyx-pa` (it starts the daemon when it can get your passphrase) or \
+             `aivyx-pa daemon run`, then `aivyx-pa studio` again."
+            .to_string()),
+    }
+}
+
+/// The REPL banner's Studio line for a daemon's recorded state: the link
+/// for a Studio that bound, the plain failure sentence for one that did
+/// not, nothing when there is no record (the Studio is off, or the daemon
+/// has not got that far).
+pub fn repl_studio_banner(
+    state: &aivyx_channel::studio_token::StudioState,
+    configured_token: Option<&str>,
+    insecure_no_auth: bool,
+    auto_token: Option<&str>,
+    interactive: bool,
+) -> Option<String> {
+    use aivyx_channel::studio_token::{not_running_message, StudioState};
+    match state {
+        StudioState::Bound(addr) => repl_studio_line(
+            Some(*addr),
+            configured_token,
+            insecure_no_auth,
+            auto_token,
+            interactive,
+        ),
+        StudioState::Failed(port) => Some(not_running_message(*port)),
+        StudioState::Unknown => None,
+    }
+}
+
 /// `aivyx-pa studio [--token]` — what to print. With `token_only`, the bare
 /// token (empty when the Studio runs with no token at all), for scripts and
 /// the desktop app; otherwise the sign-in link (or the bare URL with no
@@ -362,6 +408,14 @@ fn studio_command_output(
         .unwrap_or_else(|| aivyx_channel::studio_token::studio_url(addr.ip(), addr.port())))
 }
 
+/// The recorded Studio state of the current instance's daemon.
+fn studio_state_for_cli() -> aivyx_channel::studio_token::StudioState {
+    match aivyx_channel::daemon_ipc::default_socket_path() {
+        Ok(sp) => aivyx_channel::studio_token::read_status(&sp),
+        Err(_) => aivyx_channel::studio_token::StudioState::Unknown,
+    }
+}
+
 /// `aivyx-pa studio [--token]`: print the Studio sign-in link (or, with
 /// `--token`, just the token) for this config. Reads the `0600` token file
 /// as the operator; never creates it (the daemon does). No daemon needed.
@@ -372,8 +426,16 @@ pub fn run_studio(token_only: bool) -> Result<(), String> {
     }
     let token_path = aivyx_channel::studio_token::token_path(&cfg.storage_path.value);
     let auto_token = aivyx_channel::studio_token::read_existing(&token_path);
+    // The link only for a Studio that really bound; `--token` stays a pure
+    // read of the token (the desktop app and scripts use it).
+    let addr = if token_only {
+        cfg.studio_addr()
+    } else {
+        let state = studio_state_for_cli();
+        Some(studio_reach(cfg.studio_addr(), &state)?)
+    };
     let out = studio_command_output(
-        cfg.studio_addr(),
+        addr,
         cfg.web_ui_auth_token.as_deref(),
         cfg.web_ui_insecure_no_auth,
         auto_token.as_deref(),
@@ -430,8 +492,16 @@ fn check_gatehouse(cfg: &AivyxConfig) {
             ),
         },
     }
+    // The link only for a Studio that really bound, at the address it is on.
+    let bound_addr = match studio_reach(Some(addr), &studio_state_for_cli()) {
+        Ok(a) => a,
+        Err(msg) => {
+            println!("  ⚠ {msg}");
+            return;
+        }
+    };
     if let Some(link) = studio_sign_in_link(
-        Some(addr),
+        Some(bound_addr),
         cfg.web_ui_auth_token.as_deref(),
         cfg.web_ui_insecure_no_auth,
         auto_token.as_deref(),
@@ -1362,6 +1432,33 @@ mod tests {
         let addr = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843));
         let missing = studio_command_output(addr, None, false, None, p, false).unwrap_err();
         assert!(missing.contains("aivyx-pa daemon run") && missing.contains("/s/studio-token"), "{missing}");
+    }
+
+    #[test]
+    fn studio_reach_and_banner_follow_what_the_daemon_recorded() {
+        use aivyx_channel::studio_token::StudioState;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let cfg = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843));
+        let bound = StudioState::Bound(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9000));
+        // Bound: the link is for the port it really bound, not the config's.
+        assert_eq!(studio_reach(cfg, &bound).unwrap().port(), 9000);
+        assert_eq!(
+            repl_studio_banner(&bound, None, false, Some("auto"), true).as_deref(),
+            Some("Studio: http://127.0.0.1:9000/?token=auto")
+        );
+        // Failed: the plain sentence, never a link or a token.
+        let failed = StudioState::Failed(7843);
+        let err = studio_reach(cfg, &failed).unwrap_err();
+        assert!(err.starts_with("The Studio isn't running: port 7843 is in use"), "{err}");
+        assert!(err.contains("`[daemon] web_ui_port`") && err.contains("`--web-ui-port`"), "{err}");
+        let line = repl_studio_banner(&failed, None, false, Some("auto"), true).unwrap();
+        assert_eq!(line, err);
+        assert!(!line.contains("token") && !line.contains("http"), "{line}");
+        // Unknown: no daemon record, no link, no banner line.
+        assert!(studio_reach(cfg, &StudioState::Unknown).unwrap_err().contains("daemon isn't up"));
+        assert_eq!(repl_studio_banner(&StudioState::Unknown, None, false, Some("auto"), true), None);
+        // Off in the config.
+        assert!(studio_reach(None, &bound).unwrap_err().contains("web_ui = false"));
     }
 
     #[test]

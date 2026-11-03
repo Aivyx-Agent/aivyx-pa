@@ -1502,8 +1502,18 @@ fn run() -> Result<(), String> {
                 let studio_line = || {
                     let token_path = aivyx_channel::studio_token::token_path(&storage_path);
                     let auto_token = aivyx_channel::studio_token::read_existing(&token_path);
-                    doctor::repl_studio_line(
-                        config.studio_addr(),
+                    // What the daemon says its web UI did: a daemon that was
+                    // only just started may not have bound (or failed) yet.
+                    let state = if config.studio_addr().is_some() {
+                        aivyx_channel::studio_token::read_status_waiting(
+                            &sp,
+                            std::time::Duration::from_secs(3),
+                        )
+                    } else {
+                        aivyx_channel::studio_token::StudioState::Unknown
+                    };
+                    doctor::repl_studio_banner(
+                        &state,
                         config.web_ui_auth_token.as_deref(),
                         config.web_ui_insecure_no_auth,
                         auto_token.as_deref(),

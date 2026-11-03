@@ -51,6 +51,13 @@ pub enum DaemonError {
         source: std::io::Error,
     },
 
+    /// The Studio (web UI) could not bind its TCP port.
+    #[error("failed to bind the Studio's port ({addr}): {source}")]
+    WebUiBind {
+        addr: String,
+        source: std::io::Error,
+    },
+
     /// Failed to accept an incoming connection.
     #[error("accept error: {0}")]
     Accept(std::io::Error),
@@ -913,6 +920,10 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
 
     let pid_path = socket_path.with_extension("pid");
     let _pid_guard = PidGuard::write(&pid_path)?;
+    // A fresh daemon has not bound the Studio yet: drop any record a
+    // previous (crashed) daemon left, and clear ours on the way out.
+    crate::studio_token::clear_status(socket_path);
+    let _studio_status_guard = StudioStatusGuard(socket_path.to_path_buf());
 
     // Crash-recovery detection (Phase 41 Task 4).
     let state_path = socket_path.with_extension("state");
@@ -1569,7 +1580,12 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         // printed only once the port is really bound (a taken port logs
         // the bind error below instead, and shows no link).
         let banner_token = web_ui_auth_token.clone();
+        let status_socket = socket_path.to_path_buf();
         let on_listening: crate::web_ui::OnListening = Box::new(move |addr| {
+            crate::studio_token::write_status(
+                &status_socket,
+                &crate::studio_token::StudioState::Bound(addr),
+            );
             eprintln!(
                 "{}",
                 crate::studio_token::banner_line(
@@ -1579,6 +1595,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 )
             );
         });
+        let failed_socket = socket_path.to_path_buf();
         tokio::spawn(async move {
             if let Err(e) = crate::web_ui::run_web_ui_server_notify(
                 web_socket_path,
@@ -1593,6 +1610,10 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             )
             .await
             {
+                crate::studio_token::write_status(
+                    &failed_socket,
+                    &crate::studio_token::StudioState::Failed(port),
+                );
                 eprintln!(
                     "aivyx-pa web ui error: {e}\n  \
                      the Studio is NOT running (the rest of the daemon is). Another program \
@@ -4465,6 +4486,15 @@ impl PidGuard {
         Ok(PidGuard {
             path: path.to_path_buf(),
         })
+    }
+}
+
+/// Removes the Studio status file when the daemon exits.
+struct StudioStatusGuard(PathBuf);
+
+impl Drop for StudioStatusGuard {
+    fn drop(&mut self) {
+        crate::studio_token::clear_status(&self.0);
     }
 }
 

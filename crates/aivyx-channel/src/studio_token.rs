@@ -246,9 +246,99 @@ pub fn banner_line(addr: std::net::SocketAddr, token: Option<&str>, interactive:
     let url = studio_url(addr.ip(), addr.port());
     match token {
         Some(t) if interactive => format!("Studio: {}", sign_in_url(addr.ip(), addr.port(), t)),
-        Some(_) => format!("Studio: {url} (sign-in link: run `aivyx-pa doctor`)"),
+        Some(_) => format!("Studio: {url} (sign-in link: run `aivyx-pa studio`)"),
         None => format!("Studio: {url}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Studio status file — whether the web UI really bound
+// ---------------------------------------------------------------------------
+
+/// What the daemon's web UI is doing, as recorded in the `daemon.studio`
+/// status file next to the socket (and the `.pid` / `.log`). The daemon
+/// writes it: `bound <addr>` once the port is really bound, `failed <port>`
+/// when the bind failed. Everything that prints a Studio link (the REPL
+/// banner, `aivyx-pa studio`, `doctor`) reads it instead of guessing from
+/// the config, so a link is shown only for a Studio that is there, at the
+/// address it is really on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StudioState {
+    /// The web UI is listening here.
+    Bound(std::net::SocketAddr),
+    /// The bind failed on this port; the rest of the daemon runs.
+    Failed(u16),
+    /// No record: no daemon is running, or it has not got that far yet.
+    Unknown,
+}
+
+/// The status file for a daemon socket.
+pub fn status_path(socket_path: &Path) -> PathBuf {
+    socket_path.with_extension("studio")
+}
+
+/// Record the web UI's state (daemon side). Best effort.
+pub fn write_status(socket_path: &Path, state: &StudioState) {
+    let body = match state {
+        StudioState::Bound(addr) => format!("bound {addr}\n"),
+        StudioState::Failed(port) => format!("failed {port}\n"),
+        StudioState::Unknown => return clear_status(socket_path),
+    };
+    let _ = std::fs::write(status_path(socket_path), body);
+}
+
+/// Forget the recorded state (daemon start and shutdown).
+pub fn clear_status(socket_path: &Path) {
+    let _ = std::fs::remove_file(status_path(socket_path));
+}
+
+/// Parse a status file's text.
+pub fn parse_status(text: &str) -> StudioState {
+    let mut parts = text.split_whitespace();
+    match (parts.next(), parts.next()) {
+        (Some("bound"), Some(a)) => a
+            .parse()
+            .map(StudioState::Bound)
+            .unwrap_or(StudioState::Unknown),
+        (Some("failed"), Some(p)) => p
+            .parse()
+            .map(StudioState::Failed)
+            .unwrap_or(StudioState::Unknown),
+        _ => StudioState::Unknown,
+    }
+}
+
+/// The recorded state, or [`StudioState::Unknown`] when there is no file or
+/// no daemon answers on the socket (a crashed daemon leaves a stale file).
+pub fn read_status(socket_path: &Path) -> StudioState {
+    #[cfg(unix)]
+    if std::os::unix::net::UnixStream::connect(socket_path).is_err() {
+        return StudioState::Unknown;
+    }
+    std::fs::read_to_string(status_path(socket_path))
+        .map(|t| parse_status(&t))
+        .unwrap_or(StudioState::Unknown)
+}
+
+/// [`read_status`], waiting up to `wait` for a daemon that has just started
+/// and not yet bound (or failed to bind) its web UI.
+pub fn read_status_waiting(socket_path: &Path, wait: std::time::Duration) -> StudioState {
+    let start = std::time::Instant::now();
+    loop {
+        let state = read_status(socket_path);
+        if state != StudioState::Unknown || start.elapsed() >= wait {
+            return state;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// The plain-words message for a Studio that failed to bind `port`.
+pub fn not_running_message(port: u16) -> String {
+    format!(
+        "The Studio isn't running: port {port} is in use (another program or another pa \
+         instance). Set `[daemon] web_ui_port` or pass `--web-ui-port`."
+    )
 }
 
 /// The Studio's base URL, `http://<host>:<port>/`, with the same wildcard
@@ -414,6 +504,16 @@ mod tests {
     }
 
     #[test]
+    fn status_file_round_trips_and_rejects_junk() {
+        let addr: std::net::SocketAddr = "127.0.0.1:7843".parse().unwrap();
+        assert_eq!(parse_status("bound 127.0.0.1:7843\n"), StudioState::Bound(addr));
+        assert_eq!(parse_status("failed 7843\n"), StudioState::Failed(7843));
+        assert_eq!(parse_status("bound nonsense"), StudioState::Unknown);
+        assert_eq!(parse_status(""), StudioState::Unknown);
+        assert!(not_running_message(7843).starts_with("The Studio isn't running: port 7843 is in use"));
+    }
+
+    #[test]
     fn sign_in_url_shape() {
         assert_eq!(
             sign_in_url(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843, "abc"),
@@ -458,7 +558,7 @@ mod tests {
         let line = banner_line(addr, Some("abc"), false);
         assert_eq!(
             line,
-            "Studio: http://127.0.0.1:7843/ (sign-in link: run `aivyx-pa doctor`)"
+            "Studio: http://127.0.0.1:7843/ (sign-in link: run `aivyx-pa studio`)"
         );
         assert!(!line.contains("abc"));
         assert_eq!(banner_line(addr, None, false), "Studio: http://127.0.0.1:7843/");

@@ -113,10 +113,15 @@ pub fn in_process_notice(reason: &InProcessReason) -> Option<String> {
 /// The in-process notice when starting (or connecting to) the daemon
 /// failed: it leads with the failure.
 pub fn start_failed_notice(error: &str, log_path: &std::path::Path) -> String {
-    format!(
-        "The aivyx-pa daemon didn't start ({error}; log: {}). {WITHOUT_THE_DAEMON}",
-        log_path.display()
-    )
+    // Name the log once: the error itself says "see <log>" when the log gave
+    // no reason line.
+    let path = log_path.display().to_string();
+    let log = if error.contains(&path) {
+        String::new()
+    } else {
+        format!("; log: {path}")
+    };
+    format!("The aivyx-pa daemon didn't start ({error}{log}). {WITHOUT_THE_DAEMON}")
 }
 
 /// The in-process startup warning when routing is enabled and
@@ -366,6 +371,22 @@ mod tests {
             overrides.contains("--provider") && overrides.contains("only to this session"),
             "{overrides}"
         );
+    }
+
+    #[test]
+    fn start_failed_notice_shows_the_reason_and_names_the_log_once() {
+        let log = Path::new("/r/aivyx-pa/daemon.log");
+        let reason = "the daemon exited during startup (exit status: 1): failed to bind \
+                      daemon socket at /r/aivyx-pa/daemon.sock: path must be shorter";
+        let n = start_failed_notice(reason, log);
+        assert!(n.contains("path must be shorter"), "{n}");
+        assert_eq!(n.matches("/r/aivyx-pa/daemon.log").count(), 1, "{n}");
+        // No reason line in the log: the error already points at the file.
+        let n = start_failed_notice(
+            "the daemon exited during startup (exit status: 1) — see /r/aivyx-pa/daemon.log",
+            log,
+        );
+        assert_eq!(n.matches("/r/aivyx-pa/daemon.log").count(), 1, "{n}");
     }
 
     #[test]
