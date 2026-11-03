@@ -254,11 +254,15 @@ code, kbd, samp, pre, .model-id, .ident { text-transform: none; letter-spacing: 
   background: var(--color-bg-surface);
   border-right: 1px solid var(--color-border-ghost);
   display: flex; flex-direction: column;
-  padding: 18px 12px;
+  padding: 18px 12px 12px;
   gap: 4px;
-  /* Scroll within the viewport: at laptop heights the full nav (26 items)
-     is taller than the screen, and Settings/Guide sat unreachable below. */
-  min-height: 0; overflow-y: auto;
+  /* The nav scrolls on its own; Guide and Settings stay pinned below it. */
+  min-height: 0; overflow: hidden;
+}
+.sidebar-nav { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.sidebar-pinned {
+  border-top: 1px solid var(--color-border-ghost);
+  padding-top: 8px; display: flex; flex-direction: column;
 }
 .sidebar .brand-lockup { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
 .sidebar .brand-lockup img { width: 26px; height: 26px; }
@@ -268,7 +272,7 @@ code, kbd, samp, pre, .model-id, .ident { text-transform: none; letter-spacing: 
 }
 .nav-item {
   display: flex; align-items: center; gap: 11px;
-  padding: 9px 12px; border-radius: 8px;
+  padding: 7px 12px; border-radius: 8px;
   color: var(--color-text-secondary);
   background: transparent; border: 0; width: 100%;
   font: inherit; font-size: 13.5px; cursor: pointer; text-align: left;
@@ -294,6 +298,34 @@ code, kbd, samp, pre, .model-id, .ident { text-transform: none; letter-spacing: 
   letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-disabled);
 }
 .nav-section { margin-top: 14px; padding: 0 12px 4px; }
+/* A screen with nested screens: the item plus a show/hide caret. */
+.nav-row { display: flex; align-items: center; gap: 2px; }
+.nav-row .nav-item { flex: 1; min-width: 0; }
+.nav-caret {
+  flex: 0 0 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 0; border-radius: 6px; cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.nav-caret:hover { background: var(--color-bg-elevated); color: var(--color-text-primary); }
+.nav-children { padding-left: 16px; }
+/* CSS-drawn chevron: points right when closed, down when open. */
+.chevron {
+  display: inline-block; width: 7px; height: 7px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform 0.15s var(--ease-smooth);
+}
+.nav-caret.open .chevron, .chevron.open { transform: rotate(45deg); }
+/* "More" is a group heading you can click. */
+.nav-more {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: transparent; border: 0; cursor: pointer; text-align: left;
+  padding-top: 4px; padding-bottom: 6px;
+}
+.nav-more:hover { color: var(--color-text-primary); }
+.nav-more .chevron { width: 6px; height: 6px; }
+.nav-item:focus-visible, .nav-caret:focus-visible, .nav-more:focus-visible {
+  outline: 2px solid var(--color-primary); outline-offset: -2px;
+}
 
 /* Topbar (inside main) */
 .main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -436,6 +468,24 @@ code, kbd, samp, pre, .model-id, .ident { text-transform: none; letter-spacing: 
 .feed { display: flex; flex-direction: column; gap: 14px; }
 .empty { color: var(--color-text-secondary); }
 .empty p { margin: 0 0 6px; }
+/* An empty screen whose feature is off (UX audit S2): what it does, how to
+   switch it on, and a way there. */
+.setup-hint { display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
+.setup-hint h3 { margin: 0; }
+.setup-hint p { margin: 0; }
+.setup-code {
+  margin: 0; padding: 8px 12px; border-radius: 6px; width: fit-content; max-width: 100%;
+  overflow-x: auto; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5;
+  background: var(--color-bg-code); border: 1px solid var(--color-border-ghost);
+  color: var(--color-text-primary);
+}
+pre.setup-code code { background: none; padding: 0; font-size: inherit; }
+.setup-hint p code, .view-stack .help code {
+  font-family: var(--font-mono); font-size: 0.92em; padding: 1px 5px; border-radius: 4px;
+  background: var(--color-bg-code); color: var(--color-text-primary);
+}
+.setup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.lattice > .setup-hint, .lattice > .empty { margin-top: 10px; }
 .mission { display: flex; flex-direction: column; gap: 10px; }
 .mission .row1 { display: flex; gap: 12px; align-items: baseline; }
 .mission .goal { flex: 1; font-weight: 500; color: var(--color-text-primary); }
@@ -577,6 +627,16 @@ code, kbd, samp, pre, .model-id, .ident { text-transform: none; letter-spacing: 
 .tool-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .tool-name { font-weight: 600; font-size: 14px; font-family: var(--font-mono); }
 .tool-desc { margin: 0; color: var(--color-text-primary); font-size: 13px; line-height: 1.5; }
+/* The full model-facing description, folded away (UX audit S6). */
+.tool-details { margin-top: auto; }
+.tool-details > summary {
+  cursor: pointer; font-size: 12px; color: var(--color-text-secondary); width: fit-content;
+}
+.tool-details > summary:hover { color: var(--color-text-primary); }
+.tool-desc-full {
+  margin: 6px 0 0; font-size: 12px; line-height: 1.5; color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
 
 /* Studio Gallery — ComfyUI generations. Mirrors the MCP/Tools grids. */
 .gallery { display: flex; flex-direction: column; gap: 12px; }
@@ -1003,7 +1063,7 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
   .app { grid-template-columns: 1fr; grid-template-areas: "main" "status"; }
   .sidebar {
     position: fixed; top: 0; left: 0; bottom: 0; z-index: 40;
-    width: min(82vw, 280px); overflow-y: auto;
+    width: min(82vw, 280px);
     transform: translateX(-100%);
     transition: transform 0.22s var(--ease-smooth);
     box-shadow: var(--shadow-md);

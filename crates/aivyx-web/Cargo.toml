@@ -27,10 +27,11 @@ serde_json = { workspace = true }
 # cross-page `<a>` links aren't Dioxus-managed — the panel catches clicks on the
 # container, finds the target anchor (`Element::closest`/`get_attribute`), and
 # switches page in-app.
+# `Storage` remembers which sidebar groups are open (`nav_state`).
 # `HtmlHeadElement`/`HtmlScriptElement` back the mermaid.js loader in
 # `FileViewer`: it appends a real `<script>` element to `<head>` (a
 # `dangerous_inner_html`-injected `<script>` tag never executes per spec).
-web-sys = { version = "0.3", features = ["Location", "Window", "Document", "Element", "Event", "UiEvent", "MouseEvent", "KeyboardEvent", "EventTarget", "HtmlHeadElement", "HtmlScriptElement"] }
+web-sys = { version = "0.3", features = ["Location", "Window", "Document", "Element", "Event", "UiEvent", "MouseEvent", "KeyboardEvent", "EventTarget", "HtmlHeadElement", "HtmlScriptElement", "Storage"] }
 # `Date::now()` for relative timestamps in the Command Center audit feed.
 js-sys = "0.3"
 # `JsCast` for casting the click target to an `Element` in the Guide screen's

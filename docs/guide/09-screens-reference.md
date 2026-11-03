@@ -3,6 +3,13 @@
 A quick reference to every screen in the sidebar. Several have their own detailed
 page in this guide; this is the map.
 
+The sidebar keeps a few screens folded away so it fits the window: **Mission
+Control** sits under **Missions**, **Wiki** and **Graph** under **Memory**
+(click the arrow beside them), and **Gallery**, **Voice**, **Sessions**, **MCP**
+and **Tools** are under **More**. **Guide** and **Settings** are always at the
+bottom. The Studio remembers which groups you left open, and **Ctrl+K** jumps
+to any screen by name.
+
 | Screen | What it's for |
 |---|---|
 | **Create** | The guided setup that gives your assistant its identity (see [Create your agent](03-create-your-agent.md)). |
@@ -23,9 +30,9 @@ page in this guide; this is the map.
 | **Teams** | View and edit your team of specialists (see [Teams](07-teams.md)). |
 | **Documents** | A file browser over the folders your assistant can access. |
 | **MCP** | The status of any external tool servers you've connected. |
-| **Tools** | A searchable catalog of every tool your assistant has, with the permission each one needs. |
+| **Tools** | A searchable catalog of every tool your assistant has, with the permission each one needs. Each card says in a sentence what the tool does; **Details** shows the full text the model reads. |
 | **Audit** | The tamper-evident log of everything the assistant did. |
-| **Sessions** | Every open conversation — which channel, its trust level, when it was last active. |
+| **Sessions** | What is connected to your assistant right now — each Studio tab, terminal chat and chat app, with its trust level and when it last sent a message. A session leaves the list when its tab or app closes; ones quiet for 30 minutes fold under "idle". |
 | **Gallery** | Browse images your assistant has generated through a connected ComfyUI server. |
 | **Models** | Which models routing can choose from, what's loaded, and which one this conversation uses — with a pin control (see [Models & routing](12-models-and-routing.md)). |
 | **Voice** | Set up talking to your assistant out loud. |

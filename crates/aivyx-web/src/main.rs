@@ -41,9 +41,12 @@ mod command_center;
 mod cron_text;
 /// End-user guide content + markdown rendering for the Guide screen.
 mod guide;
+mod nav_state;
 /// Routing visibility B4 — pure helpers for the Models screen, the status
 /// bar's model segment and the cloud-consent card.
 mod routing;
+mod sessions;
+mod tool_text;
 
 /// How many of the newest audit entries the `mc-audit` poll fetches. Nothing
 /// shows them any more: they only feed `nothing_has_happened_yet` (the
@@ -1174,6 +1177,9 @@ fn App() -> Element {
     use_context_provider(|| gate);
     use_context_provider(|| mission_ui);
     use_context_provider(|| routing);
+    // The Guide's page, so an empty screen can link straight to its page
+    // (`SetupHint`). The only `Signal<usize>` context.
+    use_context_provider(|| guide_page);
 
     // Reflect the theme signal onto `<html data-theme>`.
     use_effect(move || apply_theme(light()));
@@ -1545,12 +1551,27 @@ fn CommandPalette(view: Signal<View>, open: Signal<bool>) -> Element {
 
 /// One sidebar nav entry: its icon, label, and the view it opens.
 type NavEntry = (Asset, &'static str, View);
-/// A labeled sidebar group (`""` header ⇒ no label) and its entries.
-type NavGroup = (&'static str, Vec<NavEntry>);
 
-/// The sidebar navigation, grouped into labeled sections. Data-driven so the
-/// IA is one table to read/reorder, and every item closes the mobile drawer on
-/// click. An empty group header (`""`) renders no label (the lone Command item).
+/// A nav entry that may carry nested entries (Missions → Mission Control,
+/// Memory → Wiki and Graph), shown when its group is open.
+struct NavNode {
+    entry: NavEntry,
+    /// The `nav_state` key that opens the children, and the children.
+    children: Option<(&'static str, Vec<NavEntry>)>,
+}
+
+impl NavNode {
+    fn leaf(entry: NavEntry) -> Self {
+        NavNode { entry, children: None }
+    }
+}
+
+/// UX audit S4 — the sidebar is grouped so it fits a normal window: Mission
+/// Control sits under Missions, Wiki and Graph under Memory, rarely used
+/// screens under a collapsed "More", and Guide and Settings are pinned at
+/// the bottom. Which groups are open is remembered per browser
+/// (`nav_state`); a group opens by itself when you land on one of its
+/// screens.
 #[component]
 fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
     // Operator ask (2026-07-06): the Create wizard is a pre-genesis
@@ -1564,59 +1585,105 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
         .as_ref()
         .map(|p| p.assistant_name_source == "toml")
         .unwrap_or(true);
-    let agent_group: Vec<NavEntry> = if genesis_done {
-        vec![
-            (ICON_AGENTS, "Agents", View::Agents),
-            (ICON_SKILLS, "Skills", View::Skills),
-            (ICON_TEAMS, "Teams", View::Teams),
-        ]
-    } else {
-        vec![
-            (ICON_CREATE, "Create", View::Onboarding),
-            (ICON_AGENTS, "Agents", View::Agents),
-            (ICON_SKILLS, "Skills", View::Skills),
-            (ICON_TEAMS, "Teams", View::Teams),
-        ]
-    };
-    let groups: Vec<NavGroup> = vec![
-        ("", vec![(ICON_COMMAND, "Command", View::Command)]),
+    let mut open_groups = use_signal(nav_state::load);
+
+    // Landing on a nested screen (from the palette, a link or the URL)
+    // opens its group, so the active item is always visible.
+    use_effect(move || {
+        if let Some(group) = nav_state::group_of(view().slug())
+            && !open_groups.peek().contains(group)
+        {
+            open_groups.write().insert(group.to_string());
+            nav_state::save(&open_groups.peek());
+        }
+    });
+
+    // Keep the active item in sight when the nav scrolls (an open "More"
+    // runs past the fold at laptop heights). Deferred a tick so a group
+    // that just opened is already in the DOM.
+    use_effect(move || {
+        let _ = view();
+        let _ = open_groups();
+        spawn(async move {
+            TimeoutFuture::new(50).await;
+            if let Some(item) = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.query_selector(".sidebar-nav .nav-item.active").ok().flatten())
+            {
+                item.scroll_into_view_with_bool(false);
+            }
+        });
+    });
+
+    let mut agent_group: Vec<NavNode> = Vec::new();
+    if !genesis_done {
+        agent_group.push(NavNode::leaf((ICON_CREATE, "Create", View::Onboarding)));
+    }
+    agent_group.extend([
+        NavNode::leaf((ICON_AGENTS, "Agents", View::Agents)),
+        NavNode::leaf((ICON_SKILLS, "Skills", View::Skills)),
+        NavNode::leaf((ICON_TEAMS, "Teams", View::Teams)),
+    ]);
+    let groups: Vec<(&'static str, Vec<NavNode>)> = vec![
+        ("", vec![NavNode::leaf((ICON_COMMAND, "Command", View::Command))]),
         (
             "Workspace",
             vec![
-                (ICON_CHAT, "Chat", View::Chat),
-                (ICON_MISSIONS, "Missions", View::Missions),
-                (ICON_MISSION_CONTROL, "Mission Control", View::MissionControl),
-                (ICON_SCHEDULES, "Schedules", View::Schedules),
+                NavNode::leaf((ICON_CHAT, "Chat", View::Chat)),
+                NavNode {
+                    entry: (ICON_MISSIONS, "Missions", View::Missions),
+                    children: Some((
+                        nav_state::MISSIONS,
+                        vec![(ICON_MISSION_CONTROL, "Mission Control", View::MissionControl)],
+                    )),
+                },
+                NavNode::leaf((ICON_SCHEDULES, "Schedules", View::Schedules)),
             ],
         ),
         (
             "Knowledge",
-            vec![
-                (ICON_MEMORY, "Memory", View::Memory),
-                (ICON_WIKI, "Wiki", View::Wiki),
-                (ICON_GRAPH, "Graph", View::Lattice),
-            ],
+            vec![NavNode {
+                entry: (ICON_MEMORY, "Memory", View::Memory),
+                children: Some((
+                    nav_state::MEMORY,
+                    vec![(ICON_WIKI, "Wiki", View::Wiki), (ICON_GRAPH, "Graph", View::Lattice)],
+                )),
+            }],
         ),
         ("Agent", agent_group),
         (
             "System",
             vec![
-                (ICON_DOCUMENTS, "Documents", View::Documents),
-                (ICON_AUDIT, "Audit", View::Audit),
-                (ICON_SESSIONS, "Sessions", View::Sessions),
-                (ICON_GALLERY, "Gallery", View::Gallery),
-                (ICON_NOTIFICATIONS, "Notifications", View::Notifications),
-                (ICON_LOOP, "Loop", View::Loop),
-                (ICON_REMINDERS, "Reminders", View::Reminders),
-                (ICON_PLUGINS, "MCP", View::Mcp),
-                (ICON_TOOLS, "Tools", View::Tools),
-                (ICON_MODELS, "Models", View::Models),
-                (ICON_VOICE, "Voice", View::Voice),
-                (ICON_SETTINGS, "Settings", View::Settings),
-                (ICON_GUIDE, "Guide", View::Guide),
+                NavNode::leaf((ICON_DOCUMENTS, "Documents", View::Documents)),
+                NavNode::leaf((ICON_AUDIT, "Audit", View::Audit)),
+                NavNode::leaf((ICON_NOTIFICATIONS, "Notifications", View::Notifications)),
+                NavNode::leaf((ICON_LOOP, "Loop", View::Loop)),
+                NavNode::leaf((ICON_REMINDERS, "Reminders", View::Reminders)),
+                NavNode::leaf((ICON_MODELS, "Models", View::Models)),
             ],
         ),
     ];
+    let more: Vec<NavEntry> = vec![
+        (ICON_GALLERY, "Gallery", View::Gallery),
+        (ICON_VOICE, "Voice", View::Voice),
+        (ICON_SESSIONS, "Sessions", View::Sessions),
+        (ICON_PLUGINS, "MCP", View::Mcp),
+        (ICON_TOOLS, "Tools", View::Tools),
+    ];
+    let pinned: Vec<NavEntry> = vec![
+        (ICON_GUIDE, "Guide", View::Guide),
+        (ICON_SETTINGS, "Settings", View::Settings),
+    ];
+    let more_open = open_groups().contains(nav_state::MORE);
+    let mut toggle = move |key: &'static str| {
+        {
+            let mut g = open_groups.write();
+            if !g.remove(key) {
+                g.insert(key.to_string());
+            }
+        }
+        nav_state::save(&open_groups.peek());
+    };
 
     rsx! {
         aside { class: "sidebar",
@@ -1624,18 +1691,65 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                 img { src: LOGOMARK, alt: "Aivyx PA" }
                 span { class: "wordmark", "AIVYX PA" }
             }
-            nav { "aria-label": "Primary",
-                for (header, items) in groups {
+            nav { class: "sidebar-nav", "aria-label": "Primary",
+                for (header, nodes) in groups {
                     if !header.is_empty() {
                         div { class: "nav-section label-tech", "{header}" }
                     }
-                    for (icon, label, v) in items {
+                    for NavNode { entry: (icon, label, v), children } in nodes {
+                        match children {
+                            None => rsx! {
+                                NavItem { icon, label, active: view() == v,
+                                    onclick: move |_| { view.set(v); nav_open.set(false); } }
+                            },
+                            Some((key, kids)) => {
+                                let is_open = open_groups().contains(key);
+                                rsx! {
+                                    div { class: "nav-row",
+                                        NavItem { icon, label, active: view() == v,
+                                            onclick: move |_| { view.set(v); nav_open.set(false); } }
+                                        button {
+                                            class: if is_open { "nav-caret open" } else { "nav-caret" },
+                                            "aria-expanded": if is_open { "true" } else { "false" },
+                                            "aria-label": if is_open { format!("Hide the screens under {label}") } else { format!("Show the screens under {label}") },
+                                            title: if is_open { "Hide" } else { "Show more" },
+                                            onclick: move |_| toggle(key),
+                                            span { class: "chevron" }
+                                        }
+                                    }
+                                    if is_open {
+                                        div { class: "nav-children",
+                                            for (icon, label, v) in kids {
+                                                NavItem { icon, label, active: view() == v,
+                                                    onclick: move |_| { view.set(v); nav_open.set(false); } }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                button {
+                    class: "nav-section nav-more label-tech",
+                    "aria-expanded": if more_open { "true" } else { "false" },
+                    onclick: move |_| toggle(nav_state::MORE),
+                    "More"
+                    span { class: if more_open { "chevron open" } else { "chevron" } }
+                }
+                if more_open {
+                    for (icon, label, v) in more {
                         NavItem { icon, label, active: view() == v,
                             onclick: move |_| { view.set(v); nav_open.set(false); } }
                     }
                 }
             }
-            div { style: "flex:1" }
+            div { class: "sidebar-pinned",
+                for (icon, label, v) in pinned {
+                    NavItem { icon, label, active: view() == v,
+                        onclick: move |_| { view.set(v); nav_open.set(false); } }
+                }
+            }
         }
     }
 }
@@ -1794,6 +1908,8 @@ fn guide_page_for(v: View) -> usize {
         View::Skills | View::Agents => "skills-and-persona",
         View::Teams => "teams",
         View::Settings => "access-and-settings",
+        View::Models => "models-and-routing",
+        View::Schedules | View::Loop | View::Reminders | View::Notifications => "autonomy-and-routines",
         View::Onboarding => "create-your-agent",
         View::Guide => "welcome",
         // Command / Documents / Mcp / Voice → the screens overview.
@@ -1948,6 +2064,50 @@ fn SkeletonList(rows: usize) -> Element {
 
 /// Generic loading skeleton — `cards` shimmer cards in the auto-fill grid. For
 /// grid-style screens (Skills, MCP).
+/// The index of a Guide page by its id (`"memory"`), or the first page.
+fn guide_index(id: &str) -> usize {
+    guide::PAGES.iter().position(|p| p.id == id).unwrap_or(0)
+}
+
+/// UX audit S2 — an empty screen whose feature is switched off: one
+/// sentence on what it does, how to switch it on (`children`: the steps,
+/// with any config keys as a code line), a button where the Studio can
+/// take you to the setting, and the Guide page about it.
+#[component]
+fn SetupHint(
+    title: &'static str,
+    what: &'static str,
+    /// `(label, screen)` — only where the switch is already in the Studio.
+    action: Option<(&'static str, View)>,
+    /// The Guide page id (see `guide::PAGES`).
+    guide_id: &'static str,
+    children: Element,
+) -> Element {
+    let mut view = use_context::<Signal<View>>();
+    let mut guide_page = use_context::<Signal<usize>>();
+    let guide_title = guide::PAGES[guide_index(guide_id)].title;
+    rsx! {
+        div { class: "glass-card empty setup-hint",
+            h3 { "{title}" }
+            p { class: "help", "{what}" }
+            {children}
+            div { class: "setup-actions",
+                if let Some((label, target)) = action {
+                    button { class: "btn btn-primary btn-xs", onclick: move |_| view.set(target), "{label}" }
+                }
+                button {
+                    class: "btn btn-xs",
+                    onclick: move |_| {
+                        guide_page.set(guide_index(guide_id));
+                        view.set(View::Guide);
+                    },
+                    "Guide: {guide_title}"
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn SkeletonCards(cards: usize) -> Element {
     rsx! {
@@ -2504,7 +2664,7 @@ fn NotificationsPanel() -> Element {
                         div { class: "glass-card empty",
                             p { class: "help",
                                 if state.targets.is_empty() {
-                                    "No notify targets configured yet — add a [[notify_target]] to aivyx-pa.toml, or the Studio's own target arms automatically once one is running."
+                                    "Nothing sent yet. Routines and reminders reach you through targets: add one below to get messages on Telegram, by email or through a webhook."
                                 } else {
                                     "No notifications dispatched yet."
                                 }
@@ -2550,7 +2710,11 @@ fn NotificationsPanel() -> Element {
                             },
                         }
                     } else if state.configs.is_empty() {
-                        div { class: "glass-card empty", p { class: "help", "No `[[notify_target]]` entries configured yet." } }
+                        div { class: "glass-card empty",
+                            p { class: "help",
+                                "No targets set up yet. The Studio shows notifications while a tab is open; Add target also sends them to Telegram, email or a webhook."
+                            }
+                        }
                     } else {
                         div { class: "feed",
                             for cfg in state.configs.iter() {
@@ -3440,21 +3604,31 @@ fn NotificationHistoryRow(entry: NotificationHistoryEntry) -> Element {
 
 // ── /classic retirement — the Sessions screen ───────────────────────────
 
-/// One rendered row: channel/trust-tier badge, session id, age, last
-/// active. `SessionSummary` fields are all `Copy`/cheap to read
-/// directly — no separate row-view type needed.
+/// One session: the client that opened it (and "this tab" for the Studio
+/// tab showing the list), its trust tier, a short id to tell rows apart,
+/// and when it opened and last sent a message.
 #[component]
-fn SessionRow(entry: SessionSummary) -> Element {
+fn SessionRow(entry: SessionSummary, own: bool) -> Element {
+    let own_id = own.then_some(entry.session_id.as_str());
+    let title = sessions::session_title(&entry, own_id);
+    let tier = sessions::trust_label(&format!("{:?}", entry.trust_tier));
+    let short = sessions::short_id(&entry.session_id).to_string();
+    let last = if entry.last_active_at_ms <= entry.created_at_ms {
+        "no messages yet".to_string()
+    } else {
+        format!("last message {}", rel_time(entry.last_active_at_ms))
+    };
     rsx! {
         div { class: "glass-card routine-row",
             div { class: "row1",
                 span { class: "dot live" }
-                span { class: "name", "{entry.session_id}" }
-                span { class: "label-tech", "[{entry.channel:?} · {entry.trust_tier:?}]" }
+                span { class: "name", "{title}" }
+                span { class: "chip", "{tier}" }
+                span { class: "label-tech ident", title: "{entry.session_id}", "#{short}" }
             }
-            div { class: "row2 label-tech",
-                span { "created {rel_time(entry.created_at_ms)}" }
-                span { "active {rel_time(entry.last_active_at_ms)}" }
+            div { class: "row2 help",
+                span { "Opened {rel_time(entry.created_at_ms)}" }
+                span { "{last}" }
             }
         }
     }
@@ -3464,6 +3638,8 @@ fn SessionRow(entry: SessionSummary) -> Element {
 fn SessionsPanel() -> Element {
     let ws = use_context::<Sender>();
     let sessions = use_context::<Signal<SessionsState>>();
+    // This tab's own session (set from `SessionStarted`).
+    let own_session = use_context::<Signal<Option<String>>>();
 
     // Load the current session list each time the view opens.
     use_future(move || async move {
@@ -3474,25 +3650,46 @@ fn SessionsPanel() -> Element {
     });
 
     let state = sessions();
-    let mut rows = state.sessions.clone();
-    rows.sort_by_key(|a| std::cmp::Reverse(a.last_active_at_ms));
+    let own = own_session();
+    let (recent, idle) =
+        sessions::split_idle(&state.sessions, js_sys::Date::now() as u64, own.as_deref());
+    let total = recent.len() + idle.len();
+    let idle_n = idle.len();
 
     rsx! {
         div { class: "dash-grid",
             div { class: "dash-main",
                 section { class: "panel",
                     div { class: "panel-head",
-                        h3 { "Active sessions" }
-                        span { class: "label-tech", "{rows.len()} connected" }
+                        h3 { "Open sessions" }
+                        span { class: "label-tech", "{total} open" }
                     }
-                    if rows.is_empty() {
+                    p { class: "help",
+                        "Every Studio tab, terminal chat and chat app connected to your assistant right now. \
+                         A session ends when its tab or app closes."
+                    }
+                    if total == 0 {
                         div { class: "glass-card empty",
-                            p { class: "help", "No active sessions." }
+                            p { class: "help", "Nothing is connected right now." }
                         }
                     } else {
                         div { class: "feed",
-                            for s in rows.iter() {
-                                SessionRow { entry: s.clone() }
+                            for s in recent.iter() {
+                                SessionRow {
+                                    key: "{s.session_id}",
+                                    entry: s.clone(),
+                                    own: own.as_deref() == Some(s.session_id.as_str()),
+                                }
+                            }
+                        }
+                        if idle_n > 0 {
+                            details { class: "sessions-idle",
+                                summary { class: "help", "{idle_n} idle · no message in the last 30 minutes" }
+                                div { class: "feed",
+                                    for s in idle.iter() {
+                                        SessionRow { key: "{s.session_id}", entry: s.clone(), own: false }
+                                    }
+                                }
                             }
                         }
                     }
@@ -4771,26 +4968,48 @@ fn mem_conflicts_query() -> FrontendMessage {
 // source-entry refs). Read-only; pages are derived from memory.
 // ---------------------------------------------------------------------------
 
+/// Whether the memory profile is known to be Smart (which builds the wiki
+/// and the graph). Unknown (still loading) counts as not Smart.
+fn memory_is_smart(settings: &SettingsState) -> bool {
+    settings.memory_profile.as_ref().is_some_and(|m| m.profile == "smart")
+}
+
+/// The steps to switch on the wiki and graph (shared by both screens).
+#[component]
+fn MemoryProfileSteps() -> Element {
+    rsx! {
+        p { class: "help",
+            "To turn it on, set "
+            strong { "Memory profile" }
+            " to "
+            strong { "Smart" }
+            " in Settings (Smart also needs the embedding model set just below it), then restart the daemon. In the config file that is:"
+        }
+        pre { class: "setup-code", code { "[memory]\nprofile = \"smart\"" } }
+    }
+}
+
 #[component]
 fn WikiPanel() -> Element {
     let ws = use_context::<Sender>();
     let wiki = use_context::<Signal<WikiState>>();
+    let settings = use_context::<Signal<SettingsState>>();
 
-    // Load the page index each time the view opens.
+    // Load the page index (and whether memory is Smart) each time the view opens.
     use_future(move || async move {
         ws.send(wiki_list_query());
+        ws.send(memory_profile_config_query());
     });
 
     let w = wiki();
+    let smart_memory = memory_is_smart(&settings());
     let selected_topic = w.selected.as_ref().map(|p| p.topic.clone());
     rsx! {
         div { class: "mem",
             aside { class: "mem-rail",
                 div { class: "panel-head", h3 { "Pages" } span { class: "label-tech", "{w.pages.len()}" } }
                 if w.pages.is_empty() {
-                    p { class: "help", style: "padding:8px",
-                        "No pages yet. Set [memory] profile = \"smart\" (or [wiki] enabled = true) and the agent consolidates each memory topic into a page."
-                    }
+                    p { class: "help", style: "padding:8px", "No pages yet." }
                 }
                 for p in w.pages.iter() {
                     {
@@ -4810,6 +5029,22 @@ fn WikiPanel() -> Element {
             div { class: "mem-main",
                 match w.selected.clone() {
                     Some(page) => rsx! { WikiPageView { page } },
+                    None if w.pages.is_empty() && !smart_memory => rsx! {
+                        SetupHint {
+                            title: "The wiki is off",
+                            what: "Wiki pages sum up what your assistant knows about each topic, written from its memories in the background.",
+                            action: Some(("Open Settings", View::Settings)),
+                            guide_id: "memory",
+                            MemoryProfileSteps {}
+                        }
+                    },
+                    None if w.pages.is_empty() => rsx! {
+                        div { class: "glass-card empty",
+                            p { class: "help",
+                                "No pages yet. Your assistant writes a page for a topic once it has a few memories about it."
+                            }
+                        }
+                    },
                     None => rsx! {
                         div { class: "glass-card empty",
                             p { class: "help",
@@ -5293,7 +5528,11 @@ fn McpPanel() -> Element {
                     },
                 }
             } else if m.configs.is_empty() {
-                div { class: "glass-card empty", p { class: "help", "No `[[mcp_server]]` entries configured yet." } }
+                div { class: "glass-card empty",
+                    p { class: "help",
+                        "No servers set up yet. MCP servers give your assistant more tools; Add server connects one, such as ComfyUI for the Gallery."
+                    }
+                }
             } else {
                 div { class: "mcp-grid",
                     for cfg in m.configs.iter() {
@@ -5351,8 +5590,17 @@ fn LoopPanel() -> Element {
             if !l.loaded {
                 SkeletonCards { cards: 1 }
             } else if !l.armed {
-                div { class: "glass-card empty",
-                    p { class: "help", "No [loop] section configured -- nothing to start." }
+                SetupHint {
+                    title: "The loop is off",
+                    what: "The loop works through a list of tasks on its own, one attempt at a time, until the list is empty or a limit is reached.",
+                    action: None,
+                    guide_id: "autonomy-and-routines",
+                    p { class: "help",
+                        "To turn it on, add a loop section with its limits to aivyx-pa.toml and restart the daemon. Then add tasks with "
+                        code { "aivyx-pa loop add \"…\"" }
+                        " and press Start here."
+                    }
+                    pre { class: "setup-code", code { "[loop]\nenabled = true\nmax_iterations = 20" } }
                 }
             } else {
                 div { class: "glass-card",
@@ -5848,9 +6096,15 @@ fn GalleryPanel() -> Element {
             if !g.loaded {
                 SkeletonCards { cards: 6 }
             } else if !g.available {
-                div { class: "glass-card empty",
+                SetupHint {
+                    title: "The gallery is off",
+                    what: "The gallery shows the images your assistant makes with a ComfyUI server on your computer.",
+                    action: Some(("Open MCP", View::Mcp)),
+                    guide_id: "screens",
                     p { class: "help",
-                        "No `comfyui` MCP server is configured. Add a `[[mcp_server]]` block named \"comfyui\" in aivyx-pa.toml pointing at a running ComfyUI instance, then restart the daemon."
+                        "To turn it on, add ComfyUI's MCP server on the MCP screen with the name "
+                        code { "comfyui" }
+                        ", then restart the daemon."
                     }
                 }
             } else if g.images.is_empty() {
@@ -5941,19 +6195,17 @@ fn ModelsPanel() -> Element {
     if !st.enabled {
         return rsx! {
             div { class: "settings models",
-                div { class: "glass-card settings-section",
-                    h3 { "Model routing is off" }
-                    p {
-                        "Every turn uses your one configured model. To let Aivyx PA pick a model \
-                         per call — by tools, vision, context size and task — add "
-                        code { "[routing] enabled = true" }
-                        " to your config, list the other models as "
+                SetupHint {
+                    title: "Model routing is off",
+                    what: "Every request uses your one configured model. With routing on, your assistant picks a model for each request: a small, fast one for quick replies, a bigger one for hard questions.",
+                    action: None,
+                    guide_id: "models-and-routing",
+                    p { class: "help",
+                        "To turn it on, add this to aivyx-pa.toml with one "
                         code { "[[routing.models]]" }
-                        " entries, and restart the daemon."
+                        " entry per model, then restart the daemon:"
                     }
-                    p { class: "help sub",
-                        "See the example config's [routing] section for every option."
-                    }
+                    pre { class: "setup-code", code { "[routing]\nenabled = true" } }
                 }
             }
         };
@@ -6216,8 +6468,14 @@ fn ToolCard(entry: ToolCatalogEntry) -> Element {
                 span { class: "tool-name", "{entry.name}" }
                 span { class: tier_chip_class(entry.min_tier), "{tier_label(entry.min_tier)}" }
             }
-            p { class: "help", "{entry.scope_base}" }
-            p { class: "tool-desc", "{entry.description}" }
+            p { class: "help ident", "{entry.scope_base}" }
+            p { class: "tool-desc", {tool_text::tool_summary(&entry.description)} }
+            if tool_text::has_details(&entry.description) {
+                details { class: "tool-details",
+                    summary { "Details" }
+                    p { class: "tool-desc-full", "{entry.description}" }
+                }
+            }
         }
     }
 }
@@ -6234,21 +6492,33 @@ fn LatticePanel() -> Element {
     let ws = use_context::<Sender>();
     let lattice = use_context::<Signal<GraphKnowledgeState>>();
 
+    let settings = use_context::<Signal<SettingsState>>();
+
     use_future(move || async move {
         ws.send(knowledge_graph_query());
+        ws.send(memory_profile_config_query());
     });
 
     let g = lattice();
+    let smart_memory = memory_is_smart(&settings());
     rsx! {
         div { class: "lattice",
             div { class: "panel-head",
                 h3 { "Knowledge Graph" }
                 span { class: "label-tech", "{g.entities.len()} entities · {g.edges.len()} relations" }
             }
-            if g.entities.is_empty() {
+            if g.entities.is_empty() && !smart_memory {
+                SetupHint {
+                    title: "The graph is off",
+                    what: "The graph shows the people, projects and things your assistant knows about, and how they connect.",
+                    action: Some(("Open Settings", View::Settings)),
+                    guide_id: "memory",
+                    MemoryProfileSteps {}
+                }
+            } else if g.entities.is_empty() {
                 div { class: "glass-card empty",
                     p { class: "help",
-                        "No graph yet. Set [memory] profile = \"smart\" (or [graph] enabled = true) and the agent extracts typed relations — (subject)-[predicate]->(object) — from its memory."
+                        "No graph yet. Your assistant adds people, projects and how they connect as it learns them from your conversations."
                     }
                 }
             } else {
@@ -7759,8 +8029,10 @@ fn OnboardingPanel(view: Signal<View>) -> Element {
                     "record — the model only drafts. Profile and access apply after a daemon restart."
                 }
                 if let Some(line) = model_line {
-                    p { class: "muted", style: "font-size:12px;",
-                        "{line} — set the provider/model with `aivyx-pa init` or in your config."
+                    p { class: "help",
+                        "{line}. Change the provider or model with "
+                        code { "aivyx-pa init" }
+                        " or in your config."
                     }
                 }
                 div { class: "step-rail",
