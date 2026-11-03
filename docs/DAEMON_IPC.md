@@ -235,7 +235,7 @@ demultiplexed.
 
 | Variant | Returns | Notes |
 |---|---|---|
-| `ListSessions` | `Vec<SessionSummary>` from in-memory `DaemonState.sessions` | One entry per active connection. |
+| `ListSessions` | `Vec<SessionSummary>` from in-memory `DaemonState.sessions` | One entry per session started on a live connection: id, channel, trust tier, created / last-active (ms) and `frontend` (the client's `FrontendType`, `None` from older daemons). A connection's sessions are removed however it ends, `Disconnect` included. |
 | `ListMissions` | `Vec<MissionSummary>` from `KeyDomain::Missions` | Walks the redb scan; cheap at typical operator scales. |
 | `GetMission { mission_id }` | `Option<MissionDetail>` | `None` is not an error — it means the id is absent. |
 | `ListAuditEntries { from_seq, limit }` | `(Vec<AuditEntrySummary>, total_len)` | Server caps `limit` at 500 (Phase 47 Q3). `total_len` lets the frontend show "showing N..M of T." |

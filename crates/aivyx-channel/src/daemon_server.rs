@@ -1014,6 +1014,11 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         // schedule fires through `TeamMissionService::start_from_goal_for_schedule`
         // instead of an LLM tool-call in the loop.
         let sched_team_missions = team_missions.clone();
+        // UX audit S3 — routines wait for the model's first answer after
+        // start (see `StartupHold`); the same provider + model the turns use.
+        let model_probe = seed_draft_llm.as_ref().map(|llm| {
+            crate::daemon_scheduler::llm_probe(Arc::clone(&llm.provider), llm.model.clone())
+        });
         tokio::spawn(async move {
             crate::daemon_scheduler::run_scheduler(
                 sched_dispatch,
@@ -1021,6 +1026,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 sched_shutdown,
                 report_ctx,
                 sched_team_missions,
+                model_probe,
             )
             .await;
         })
@@ -2322,6 +2328,9 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
 
     let mut session_id: Option<String> = None;
     let mut channel: Option<Arc<dyn ChannelContext + Send + Sync>> = None;
+    // Sessions screen — every session this connection starts is listed
+    // until the connection ends (see `SessionRegistration`).
+    let mut registration = SessionRegistration::new(Arc::clone(&daemon_state));
 
     // Chat approvals — frames are decoded by a reader task, so a running
     // turn can still see `CancelTurn` / `ResolveApproval` (`drive_turn`);
@@ -2399,18 +2408,19 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // trust tier are free here (the ChannelContext
                             // was just constructed above); created/
                             // last_active start identical.
-                            if let Ok(mut st) = daemon_state.lock() {
+                            {
                                 let now_ms = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map(|d| d.as_millis() as u64)
                                     .unwrap_or(0);
                                 let ch = channel.as_ref().expect("just constructed above");
-                                st.sessions.push(SessionRecord {
+                                registration.register(SessionRecord {
                                     session_id: sid.clone(),
                                     channel: ch.platform(),
                                     trust_tier: ch.trust_tier(),
                                     created_at_ms: now_ms,
                                     last_active_at_ms: now_ms,
+                                    frontend: Some(ft),
                                 });
                             }
 
@@ -4076,13 +4086,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
     }
     reader_task.abort();
 
-    // Deregister session from daemon state on disconnect.
-    if let Some(ref sid) = session_id {
-        if let Ok(mut st) = daemon_state.lock() {
-            st.sessions.retain(|s| &s.session_id != sid);
-        }
-    }
-
+    // The session(s) this connection registered are removed when
+    // `registration` drops, on this path and on every early return.
     Ok(())
 }
 
@@ -4520,6 +4525,43 @@ pub struct SessionRecord {
     pub trust_tier: aivyx_capability::TrustTier,
     pub created_at_ms: u64,
     pub last_active_at_ms: u64,
+    /// The client that sent `StartSession` (Studio, terminal, a chat-app
+    /// adapter). `None` in a `daemon.state` written before the field.
+    #[serde(default)]
+    pub frontend: Option<FrontendType>,
+}
+
+/// Removes every session a connection registered when that connection
+/// ends, however it ends: EOF, a `Disconnect` (which the Studio's bridge
+/// always sends, and which used to return before the cleanup ran, so every
+/// closed Studio tab stayed listed), `Shutdown`, or an I/O error.
+struct SessionRegistration {
+    state: Arc<std::sync::Mutex<DaemonState>>,
+    session_ids: Vec<String>,
+}
+
+impl SessionRegistration {
+    fn new(state: Arc<std::sync::Mutex<DaemonState>>) -> Self {
+        Self { state, session_ids: Vec::new() }
+    }
+
+    fn register(&mut self, record: SessionRecord) {
+        self.session_ids.push(record.session_id.clone());
+        if let Ok(mut st) = self.state.lock() {
+            st.sessions.push(record);
+        }
+    }
+}
+
+impl Drop for SessionRegistration {
+    fn drop(&mut self) {
+        if self.session_ids.is_empty() {
+            return;
+        }
+        if let Ok(mut st) = self.state.lock() {
+            st.sessions.retain(|s| !self.session_ids.contains(&s.session_id));
+        }
+    }
 }
 
 /// Maps the real `aivyx_core::ChannelPlatform` onto `aivyx-ipc`'s
@@ -4744,6 +4786,7 @@ async fn handle_query(
                         trust_tier: s.trust_tier,
                         created_at_ms: s.created_at_ms,
                         last_active_at_ms: s.last_active_at_ms,
+                        frontend: s.frontend,
                     })
                     .collect();
                 QueryResponsePayload::ListSessions { sessions }
@@ -9431,6 +9474,7 @@ system_prompt = "You are a custom role."
                     trust_tier: aivyx_capability::TrustTier::Trusted,
                     created_at_ms: 1713700000000,
                     last_active_at_ms: 1713700000000,
+                    frontend: None,
                 },
                 SessionRecord {
                     session_id: "ses-def".into(),
@@ -9438,6 +9482,7 @@ system_prompt = "You are a custom role."
                     trust_tier: aivyx_capability::TrustTier::SemiTrusted,
                     created_at_ms: 1713700001000,
                     last_active_at_ms: 1713700005000,
+                    frontend: None,
                 },
             ],
             in_flight_turns: vec!["ses-abc:turn".into()],
@@ -9473,6 +9518,7 @@ system_prompt = "You are a custom role."
                     trust_tier: aivyx_capability::TrustTier::Trusted,
                     created_at_ms: 0,
                     last_active_at_ms: 0,
+                    frontend: None,
                 },
             ],
             in_flight_turns: vec!["ses-old:turn".into()],
@@ -9526,6 +9572,7 @@ system_prompt = "You are a custom role."
             trust_tier: aivyx_capability::TrustTier::Trusted,
             created_at_ms: 0,
             last_active_at_ms: 0,
+            frontend: None,
         };
         shared.lock().unwrap().sessions.push(rec.clone());
         assert_eq!(shared.lock().unwrap().sessions, vec![rec]);

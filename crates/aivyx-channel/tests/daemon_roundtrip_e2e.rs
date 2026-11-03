@@ -2656,6 +2656,125 @@ async fn list_sessions_query_round_trips_over_ipc() {
     let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
 }
 
+/// Connects, reads `DaemonReady`, and returns the halves plus the buffer.
+async fn connect_ready(
+    socket_path: &std::path::Path,
+) -> (tokio::net::unix::OwnedReadHalf, tokio::net::unix::OwnedWriteHalf, Vec<u8>) {
+    let stream = UnixStream::connect(socket_path).await.expect("connect");
+    let (mut reader, writer) = stream.into_split();
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+            other => panic!("expected DaemonReady, got {other:?}"),
+        }
+    }
+    (reader, writer, buf)
+}
+
+/// One `ListSessions` round trip on an open connection.
+async fn list_sessions(
+    reader: &mut tokio::net::unix::OwnedReadHalf,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    buf: &mut Vec<u8>,
+) -> Vec<aivyx_channel::daemon_ipc::SessionSummary> {
+    let query = FrontendMessage::Query { id: "q-list".into(), payload: QueryPayload::ListSessions };
+    writer.write_all(&encode_frame(&query).unwrap()).await.unwrap();
+    loop {
+        match decode_frame::<DaemonEnvelope>(buf) {
+            Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
+                buf.drain(..consumed);
+                match payload {
+                    QueryResponsePayload::ListSessions { sessions } => return sessions,
+                    other => panic!("expected ListSessions, got {other:?}"),
+                }
+            }
+            Ok((_, consumed)) => {
+                buf.drain(..consumed);
+            }
+            Err(FrameError::IncompleteBuf) => read_more(reader, buf).await,
+            Err(e) => panic!("decode error: {e:?}"),
+        }
+    }
+}
+
+// UX audit S5 — a client that ends with `Disconnect` (the Studio's bridge
+// always does) must leave the Sessions list; it used to return before the
+// deregistration ran, so every closed Studio tab stayed "connected". The
+// session also records which client opened it.
+#[tokio::test]
+async fn a_disconnected_session_leaves_the_sessions_list() {
+    let scratch = ScratchDir::new();
+    let socket_path = scratch.socket_path();
+
+    let agent: Arc<dyn Agent> = Arc::new(FakeStreamingAgent {
+        id: AgentId::new(),
+        caps: CapabilitySet::empty(),
+    });
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let shutdown = CancellationToken::new();
+
+    let daemon_socket = socket_path.clone();
+    let daemon_shutdown = shutdown.clone();
+    let daemon_handle = tokio::spawn(async move {
+        run_daemon_compat(&daemon_socket, agent, channel, daemon_shutdown)
+            .await
+            .expect("daemon must complete successfully");
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // A "Studio tab": starts a web session.
+    let (mut tab_reader, mut tab_writer, mut tab_buf) = connect_ready(&socket_path).await;
+    let start = FrontendMessage::StartSession { role: None, frontend_type: Some(FrontendType::Web) };
+    tab_writer.write_all(&encode_frame(&start).unwrap()).await.unwrap();
+    let tab_session = loop {
+        match decode_frame::<DaemonEnvelope>(&tab_buf) {
+            Ok((DaemonEnvelope::SessionStarted { session_id }, consumed)) => {
+                tab_buf.drain(..consumed);
+                break session_id;
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut tab_reader, &mut tab_buf).await,
+            other => panic!("expected SessionStarted, got {other:?}"),
+        }
+    };
+
+    // An observer connection (no session of its own) sees it, with its client.
+    let (mut obs_reader, mut obs_writer, mut obs_buf) = connect_ready(&socket_path).await;
+    let listed = list_sessions(&mut obs_reader, &mut obs_writer, &mut obs_buf).await;
+    assert_eq!(listed.len(), 1, "the tab's session must be listed: {listed:?}");
+    assert_eq!(listed[0].session_id, tab_session);
+    assert_eq!(listed[0].frontend, Some(FrontendType::Web), "the session must record its client");
+
+    // The tab closes the way the Studio's bridge does: `Disconnect`, while
+    // the socket itself is still open.
+    tab_writer
+        .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
+        .await
+        .unwrap();
+
+    let mut remaining = listed;
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        remaining = list_sessions(&mut obs_reader, &mut obs_writer, &mut obs_buf).await;
+        if remaining.is_empty() {
+            break;
+        }
+    }
+    assert!(remaining.is_empty(), "a disconnected session must leave the list: {remaining:?}");
+    drop(tab_writer);
+    drop(tab_reader);
+
+    let _ = obs_writer
+        .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
+        .await;
+    shutdown.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(5), daemon_handle).await;
+}
+
 // ---------------------------------------------------------------------------
 // Phase 47 Task 3 — Mission queries (ListMissions, GetMission)
 // ---------------------------------------------------------------------------

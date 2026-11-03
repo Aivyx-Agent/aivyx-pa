@@ -9,7 +9,10 @@
 //! next-fire-time across all enabled schedules (capped at 60 s so new
 //! schedules created mid-run are picked up promptly).
 
-use std::time::Duration;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 
@@ -20,6 +23,104 @@ use crate::schedule::{self, ScheduleRecord};
 use crate::trigger::{TriggerDispatch, TriggerSource};
 
 const MAX_TICK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How long after the daemon starts a routine waits for the model to answer
+/// before it runs anyway (and a failure is reported as usual).
+pub const MODEL_WAIT_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// How often a held routine asks again whether the model answers.
+const MODEL_WAIT_RETRY: Duration = Duration::from_secs(15);
+
+/// Asks the model for a one-token reply; `true` once it answers. Used only
+/// while routines are held at start-up (see [`StartupHold`]).
+pub type ModelProbe = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+
+/// UX audit S3 — at daemon start a local model is often still loading, so a
+/// routine that is due straight away (a missed run caught up, or a cron that
+/// matches the start minute) used to fail and greet the user as "Needs you".
+/// Routines that need the model are held until it has answered once. The
+/// hold ends for good at the first answer, or [`MODEL_WAIT_WINDOW`] after
+/// start, whichever comes first: a model that is still down after that is a
+/// real problem and the run fails and shows as before. The probe runs only
+/// when a routine is actually due inside the window, so a daemon with
+/// nothing due at start never makes the extra call.
+pub struct StartupHold {
+    probe: Option<ModelProbe>,
+    started: Instant,
+    window: Duration,
+    ready: bool,
+    /// Whether the "holding" line has been logged (once per start).
+    announced: bool,
+}
+
+impl StartupHold {
+    pub fn new(probe: Option<ModelProbe>, window: Duration) -> Self {
+        Self { probe, started: Instant::now(), window, ready: false, announced: false }
+    }
+
+    /// Whether routines that need the model may run now. Asks the model
+    /// (once per call) only while the hold is still on.
+    pub async fn model_ready(&mut self, now: Instant) -> bool {
+        if self.ready {
+            return true;
+        }
+        let Some(probe) = self.probe.as_ref() else {
+            self.ready = true;
+            return true;
+        };
+        if now.saturating_duration_since(self.started) >= self.window {
+            eprintln!("aivyx-pa scheduler: the model hasn't answered since start; running routines anyway");
+            self.ready = true;
+            return true;
+        }
+        if probe().await {
+            eprintln!("aivyx-pa scheduler: the model answered; routines run from now on");
+            self.ready = true;
+        } else if !self.announced {
+            eprintln!("aivyx-pa scheduler: the model isn't answering yet; holding due routines until it does");
+            self.announced = true;
+        }
+        self.ready
+    }
+}
+
+/// A [`ModelProbe`] over the agent's own provider: a tiny request that
+/// counts as an answer once the provider returns a reply. Any error (a
+/// refused connection, "Loading model", a 503) or a 60 s stall is "not yet".
+pub fn llm_probe(provider: Arc<dyn aivyx_llm::LlmProvider>, model: String) -> ModelProbe {
+    Arc::new(move || {
+        let provider = Arc::clone(&provider);
+        let model = model.clone();
+        Box::pin(async move {
+            let ask = async {
+                let messages = vec![aivyx_llm::LlmMessage::user_text("Reply with OK.")];
+                let request = aivyx_llm::LlmRequest {
+                    model: &model,
+                    system: None,
+                    messages: &messages,
+                    tools: &[],
+                    max_tokens: 8,
+                    temperature: None,
+                    id_slot: None,
+                    slot_hint: None,
+                    route: None,
+                };
+                let cancel = CancellationToken::new();
+                let Ok(mut stream) = provider.chat_stream(request, &cancel).await else {
+                    return false;
+                };
+                while let Ok(Some(_)) = stream.next_event().await {}
+                stream.finish().await.is_ok()
+            };
+            tokio::time::timeout(Duration::from_secs(60), ask).await.unwrap_or(false)
+        })
+    })
+}
+
+/// Whether a routine's run goes through the model. A deterministic digest
+/// (with its builder wired) doesn't.
+fn needs_model(sched: &ScheduleRecord, has_report_ctx: bool) -> bool {
+    !(sched.team_mission.is_none() && sched.report_kind.as_deref() == Some("digest") && has_report_ctx)
+}
 
 /// Merge TOML `[[schedule]]` entries into the schedule store. Entries
 /// whose `name` already exists in storage are skipped (storage is
@@ -106,7 +207,9 @@ pub async fn run_scheduler(
     shutdown: CancellationToken,
     report_ctx: Option<ReportContext>,
     team_missions: Option<crate::team_mission_driver::TeamMissionService>,
+    model_probe: Option<ModelProbe>,
 ) {
+    let mut hold = StartupHold::new(model_probe, MODEL_WAIT_WINDOW);
     loop {
         if shutdown.is_cancelled() {
             return;
@@ -117,6 +220,7 @@ pub async fn run_scheduler(
             &store,
             report_ctx.as_ref(),
             team_missions.as_ref(),
+            &mut hold,
         )
         .await
         {
@@ -141,6 +245,7 @@ async fn tick(
     store: &DomainHandle,
     report_ctx: Option<&ReportContext>,
     team_missions: Option<&crate::team_mission_driver::TeamMissionService>,
+    hold: &mut StartupHold,
 ) -> Result<Duration, String> {
     let schedules = schedule::list_schedules(store)
         .await
@@ -148,6 +253,9 @@ async fn tick(
 
     let now = Utc::now();
     let mut earliest_next: Option<Duration> = None;
+    // Asked at most once per tick, and only when a routine is due.
+    let mut model_ready: Option<bool> = None;
+    let mut held = false;
 
     for sched in &schedules {
         if !sched.enabled {
@@ -162,6 +270,21 @@ async fn tick(
 
         if next_fire <= now {
             if !already_fired_in_window(sched, next_fire) {
+                if needs_model(sched, report_ctx.is_some()) {
+                    let ready = match model_ready {
+                        Some(r) => r,
+                        None => {
+                            let r = hold.model_ready(Instant::now()).await;
+                            model_ready = Some(r);
+                            r
+                        }
+                    };
+                    if !ready {
+                        // Not stamped as fired: the next tick tries again.
+                        held = true;
+                        continue;
+                    }
+                }
                 fire_schedule(dispatch, store, sched, report_ctx, team_missions).await;
             }
             // Recompute next fire after this one.
@@ -173,7 +296,8 @@ async fn tick(
         }
     }
 
-    Ok(earliest_next.unwrap_or(MAX_TICK_INTERVAL).min(MAX_TICK_INTERVAL))
+    let sleep = earliest_next.unwrap_or(MAX_TICK_INTERVAL).min(MAX_TICK_INTERVAL);
+    Ok(if held { sleep.min(MODEL_WAIT_RETRY) } else { sleep })
 }
 
 /// Compute the anchor for next-fire-time: if the schedule has fired
@@ -489,6 +613,66 @@ mod tests {
             .with_timezone(&Utc);
         let s = make_schedule("0 0 9 * * * *", None);
         assert!(!already_fired_in_window(&s, fire_time));
+    }
+
+    fn probe_answering(answers: Arc<std::sync::atomic::AtomicBool>, calls: Arc<std::sync::atomic::AtomicUsize>) -> ModelProbe {
+        Arc::new(move || {
+            let answers = Arc::clone(&answers);
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                answers.load(std::sync::atomic::Ordering::SeqCst)
+            })
+        })
+    }
+
+    #[tokio::test]
+    async fn routines_wait_until_the_model_answers_once() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let answers = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut hold = StartupHold::new(
+            Some(probe_answering(Arc::clone(&answers), Arc::clone(&calls))),
+            Duration::from_secs(600),
+        );
+        let start = Instant::now();
+        // Model still loading: held.
+        assert!(!hold.model_ready(start).await);
+        assert!(!hold.model_ready(start + Duration::from_secs(15)).await);
+        // It answers: routines run, and the hold never asks again.
+        answers.store(true, Ordering::SeqCst);
+        assert!(hold.model_ready(start + Duration::from_secs(30)).await);
+        answers.store(false, Ordering::SeqCst);
+        assert!(hold.model_ready(start + Duration::from_secs(45)).await);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn routines_run_anyway_once_the_start_up_window_has_passed() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut hold = StartupHold::new(
+            Some(probe_answering(Arc::new(AtomicBool::new(false)), Arc::clone(&calls))),
+            Duration::from_secs(600),
+        );
+        let later = Instant::now() + Duration::from_secs(601);
+        assert!(hold.model_ready(later).await, "a model still down after the window is a real failure");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn without_a_probe_nothing_is_held() {
+        let mut hold = StartupHold::new(None, Duration::from_secs(600));
+        assert!(hold.model_ready(Instant::now()).await);
+    }
+
+    #[test]
+    fn only_a_wired_digest_runs_without_the_model() {
+        let mut digest = make_schedule("0 0 7 * * * *", None);
+        digest.report_kind = Some("digest".into());
+        assert!(!needs_model(&digest, true));
+        assert!(needs_model(&digest, false), "without a builder the digest falls back to the model");
+        assert!(needs_model(&make_schedule("0 0 7 * * * *", None), true));
     }
 
     #[test]

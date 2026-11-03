@@ -122,6 +122,12 @@ in your local time. `notify_when` decides whether you hear about it:
 `always`, `on_failed`, or `on_completed_non_empty` (only when there's
 something to say).
 
+Right after the assistant starts, a local model often takes a minute to
+load. A routine that is due then waits until the model first answers, and
+runs as soon as it does, so it doesn't fail and greet you as something that
+needs you. If the model still hasn't answered ten minutes after start, the
+routine runs anyway and a failure shows as usual.
+
 ### Webhooks and file watches
 
 Two more ways to trigger a prompt, configured in the file (the assistant

@@ -2039,6 +2039,10 @@ pub struct SessionSummary {
     pub trust_tier: aivyx_capability::TrustTier,
     pub created_at_ms: u64,
     pub last_active_at_ms: u64,
+    /// Which client opened the session (the Studio, the terminal, a chat
+    /// app's adapter). `None` from a daemon that predates the field.
+    #[serde(default)]
+    pub frontend: Option<FrontendType>,
 }
 
 /// Compact mission view for the dashboard list pane. Mirrors the
@@ -3902,6 +3906,7 @@ mod tests {
                             trust_tier: aivyx_capability::TrustTier::Trusted,
                             created_at_ms: 0,
                             last_active_at_ms: 0,
+                            frontend: Some(FrontendType::Local),
                         },
                         SessionSummary {
                             session_id: "s-2".into(),
@@ -3909,6 +3914,7 @@ mod tests {
                             trust_tier: aivyx_capability::TrustTier::SemiTrusted,
                             created_at_ms: 0,
                             last_active_at_ms: 0,
+                            frontend: None,
                         },
                     ],
                 },
@@ -4419,6 +4425,14 @@ mod tests {
     // ---- DaemonEnvelope must decode QueryResponse from a DaemonMessage frame ----
 
     #[test]
+    fn a_session_summary_without_its_client_still_decodes() {
+        // A daemon from before the `frontend` field.
+        let json = r#"{"session_id":"s","channel":"Local","trust_tier":"Trusted","created_at_ms":1,"last_active_at_ms":2}"#;
+        let s: SessionSummary = serde_json::from_str(json).unwrap();
+        assert_eq!(s.frontend, None);
+    }
+
+    #[test]
     fn daemon_envelope_decodes_query_response() {
         let msg = DaemonMessage::QueryResponse {
             id: "q-1".into(),
@@ -4429,6 +4443,7 @@ mod tests {
                     trust_tier: aivyx_capability::TrustTier::Trusted,
                     created_at_ms: 0,
                     last_active_at_ms: 0,
+                    frontend: Some(FrontendType::Web),
                 }],
             },
         };
