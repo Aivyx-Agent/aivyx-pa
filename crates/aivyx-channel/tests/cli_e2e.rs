@@ -905,3 +905,28 @@ async fn in_process_repl_prints_routing_line_once_while_unchanged() {
     );
     assert!(output.contains("routing → small@default ("), "{output:?}");
 }
+
+/// UX5: `/help` answers locally, an unknown `/word` is named and never
+/// reaches the model, and `/quit` ends the session before later lines run.
+#[tokio::test]
+async fn repl_commands_answer_locally_and_quit_ends_the_session() {
+    let provider = ScriptedProvider::new(Vec::new());
+    let audit_log = HmacChainLog::new([42u8; 32].to_vec());
+    let audit_bridge = Arc::new(AuditBridge::new(audit_log));
+    let audit_hook: Arc<dyn AuditHook> = audit_bridge.clone();
+    let reader = Cursor::new(&b"/help\n/hepl\n/quit\nhello after quit\n"[..]);
+    let channel = LocalChannel::<Vec<u8>>::new("cli-e2e", Vec::new());
+    let sink = channel.writer_handle();
+    let scratch_store = ScratchStoreDir::new();
+    let storage = open_scratch_storage(&scratch_store).await;
+    let config = empty_session_config(storage);
+
+    let report = run_session(provider, audit_hook, None, None, config, channel, reader)
+        .await
+        .expect("run_session completes on /quit");
+
+    assert_eq!(report.turns_run, 0);
+    let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
+    assert!(output.contains("/quit, /exit"), "{output:?}");
+    assert!(output.contains("Unknown command /hepl. /help lists them."), "{output:?}");
+}

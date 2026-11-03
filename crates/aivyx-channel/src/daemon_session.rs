@@ -64,7 +64,7 @@ where
         }
     };
 
-    run_daemon_session_inner(session, config.prompt, config.banner, config.cancel_flag, reader, writer).await
+    run_daemon_session_inner(session, config.socket_path, config.prompt, config.banner, config.cancel_flag, reader, writer).await
 }
 
 /// Run a daemon-backed REPL with an already-connected session.
@@ -78,11 +78,12 @@ where
     R: BufRead,
     W: Write,
 {
-    run_daemon_session_inner(session, config.prompt, config.banner, config.cancel_flag, reader, writer).await
+    run_daemon_session_inner(session, config.socket_path, config.prompt, config.banner, config.cancel_flag, reader, writer).await
 }
 
 async fn run_daemon_session_inner<R, W>(
     mut session: DaemonSession,
+    socket_path: std::path::PathBuf,
     prompt: String,
     banner: Option<String>,
     cancel_flag: Option<Arc<AtomicBool>>,
@@ -134,6 +135,26 @@ where
             continue;
         }
 
+        // The REPL's own commands never reach the daemon or the model.
+        match crate::repl_commands::parse(input) {
+            Some(crate::repl_commands::ReplCommand::Quit) => break,
+            Some(crate::repl_commands::ReplCommand::Help) => {
+                let state = crate::studio_token::read_status(&socket_path);
+                let studio = crate::repl_commands::studio_help_line(Some(&state));
+                writeln!(writer, "{}", crate::repl_commands::help_text(&studio))
+                    .map_err(|e| format!("help write: {e}"))?;
+                writer.flush().map_err(|e| format!("help flush: {e}"))?;
+                continue;
+            }
+            Some(crate::repl_commands::ReplCommand::Unknown(word)) => {
+                writeln!(writer, "{}", crate::repl_commands::unknown_reply(&word))
+                    .map_err(|e| format!("reply write: {e}"))?;
+                writer.flush().map_err(|e| format!("reply flush: {e}"))?;
+                continue;
+            }
+            None => {}
+        }
+
         if let Some(ref flag) = cancel_flag {
             flag.store(false, Ordering::Relaxed);
         }
@@ -173,7 +194,9 @@ where
         // was already captured here (used below for the session
         // report) but never written to the terminal.
         let displayed = concat_text_events(&events);
-        if let Some(note) = turn_outcome_correction(&displayed, &outcome) {
+        if let Some(note) = turn_outcome_correction(&displayed, &outcome)
+            .map(|note| timed_out_note(&outcome).unwrap_or(note))
+        {
             if mid_line {
                 writeln!(writer).map_err(|e| format!("outcome-correction write: {e}"))?;
             }
@@ -189,7 +212,7 @@ where
                 ..
             } = event
             {
-                write!(writer, "  Approve? [y/N]: ")
+                write!(writer, "  Approve? [y] allow  [n] deny (default): ")
                     .map_err(|e| format!("gate prompt write: {e}"))?;
                 writer.flush().map_err(|e| format!("gate prompt flush: {e}"))?;
                 let mut gate_line = String::new();
@@ -246,7 +269,7 @@ fn outcome_str_to_turn_outcome(s: &str) -> aivyx_core::TurnOutcome {
         aivyx_core::TurnOutcome::Cancelled {
             tool_calls_made: 0,
         }
-    } else if s == "timed out" {
+    } else if s == "timed out" || s.starts_with("timed out after ") {
         aivyx_core::TurnOutcome::TimedOut {
             tool_calls_made: 0,
             elapsed: Duration::ZERO,
@@ -266,5 +289,29 @@ fn outcome_str_to_turn_outcome(s: &str) -> aivyx_core::TurnOutcome {
             tool_calls_made: 0,
             duration: Duration::ZERO,
         }
+    }
+}
+
+/// The REPL's sentence for a turn the daemon reports as `timed out after Ns`
+/// (a bare `timed out` from an older daemon has no limit to name).
+fn timed_out_note(outcome: &str) -> Option<String> {
+    let secs = outcome
+        .strip_prefix("timed out after ")?
+        .strip_suffix('s')?
+        .parse::<u64>()
+        .ok()?;
+    Some(crate::render::timeout_message(secs))
+}
+
+#[cfg(test)]
+mod timeout_note_tests {
+    use super::timed_out_note;
+
+    #[test]
+    fn only_the_daemons_timeout_outcome_becomes_the_sentence() {
+        let note = timed_out_note("timed out after 120s").unwrap();
+        assert!(note.contains("after 120 seconds") && note.contains("turn_timeout_secs"));
+        assert_eq!(timed_out_note("timed out"), None);
+        assert_eq!(timed_out_note("completed: timed out after 5s"), None);
     }
 }

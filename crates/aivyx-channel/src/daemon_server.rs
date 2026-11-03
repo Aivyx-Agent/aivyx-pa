@@ -4455,7 +4455,7 @@ fn format_outcome(outcome: &TurnOutcome) -> String {
         }
         TurnOutcome::Failed(e) => format!("failed: {e}"),
         TurnOutcome::Cancelled { .. } => "cancelled".into(),
-        TurnOutcome::TimedOut { .. } => "timed out".into(),
+        TurnOutcome::TimedOut { elapsed, .. } => format!("timed out after {}s", elapsed.as_secs()),
         TurnOutcome::MaxStepsExceeded { max_steps, .. } => {
             format!("aborted: planner exceeded {max_steps} steps")
         }

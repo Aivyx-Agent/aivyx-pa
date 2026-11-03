@@ -144,8 +144,21 @@ fn render_finalize_human(w: &mut dyn Write, outcome: &TurnOutcome) -> io::Result
     match outcome {
         TurnOutcome::Escalated { reason, .. } => writeln!(w, "\n[turn {marker}: {reason}]"),
         TurnOutcome::Failed(error) => writeln!(w, "\n[turn {marker}: {error}]"),
+        TurnOutcome::TimedOut { elapsed, .. } => {
+            writeln!(w, "\n{}", timeout_message(elapsed.as_secs()))
+        }
         _ => writeln!(w, "\n[turn {marker}]"),
     }
+}
+
+/// What a turn that hit its time limit says: the limit, what is kept, and
+/// what to do. `secs` is how long the turn ran (the limit, to the second).
+pub fn timeout_message(secs: u64) -> String {
+    format!(
+        "[turn timed out after {secs} seconds, the limit for one turn. Tool results so far are \
+         kept. Try a faster or smaller model, or raise `turn_timeout_secs` under `[agent]` in \
+         the config.]"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +355,19 @@ mod tests {
     }
 
     #[test]
+    fn timeout_message_names_the_limit_what_is_kept_and_the_setting() {
+        let m = timeout_message(120);
+        for want in [
+            "after 120 seconds",
+            "Tool results so far are kept",
+            "faster or smaller model",
+            "`turn_timeout_secs` under `[agent]`",
+        ] {
+            assert!(m.contains(want), "{want}: {m}");
+        }
+    }
+
+    #[test]
     fn finalize_renders_all_outcome_kinds_distinctly() {
         let completed = render_final(&TurnOutcome::Completed {
             final_message: String::new(),
@@ -382,7 +408,7 @@ mod tests {
         assert!(escalated.contains("[turn escalated: needs kernel]"), "{escalated}");
         assert!(failed.contains("[turn failed: "), "{failed}");
         assert!(failed.contains("boom"), "{failed}");
-        assert!(timed_out.contains("[turn timed out]"));
+        assert!(timed_out.contains("[turn timed out after 0 seconds"), "{timed_out}");
         assert!(cancelled.contains("[turn cancelled]"));
         assert!(looping.contains("[turn stopped: repeated tool call]"));
         assert!(max_steps.contains("[turn max steps exceeded]"));

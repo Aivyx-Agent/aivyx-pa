@@ -11699,7 +11699,7 @@ async fn run_async(
 
                 if let Ok(session) = session {
                     let banner = format!(
-                        "aivyx-pa {} (daemon) — type a message, ctrl-C to cancel, \
+                        "aivyx-pa {} (daemon) — type a message, /help for commands, ctrl-C to cancel, \
                          ctrl-D to exit.\n\
                          daemon: {}\n\
                          fs sandbox: {}\n\
@@ -11818,7 +11818,7 @@ async fn run_async(
                 storage,
                 prompt: PROMPT.to_string(),
                 banner: Some(format!(
-                    "aivyx-pa {} — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
+                    "aivyx-pa {} — type a message, /help for commands, ctrl-C to cancel, ctrl-D to exit.\n\
                      fs sandbox: {}\n\
                      memory: live (recall persists across restarts)\n\
                      audit: persistent ({} events verified from disk)\n\

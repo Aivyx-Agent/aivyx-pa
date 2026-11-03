@@ -228,7 +228,7 @@ pub struct BannerFacts {
 /// The banner of a REPL connected to a daemon it didn't open the store for.
 pub fn connected_banner(socket_path: &std::path::Path, role: &str, facts: &BannerFacts) -> String {
     let mut banner = format!(
-        "aivyx-pa {} (daemon) — type a message, ctrl-C to cancel, ctrl-D to exit.\n\
+        "aivyx-pa {} (daemon) — type a message, /help for commands, ctrl-C to cancel, ctrl-D to exit.\n\
          daemon: {}\n\
          fs sandbox: {}\n\
          memory: live (recall persists across restarts)\n\

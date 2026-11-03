@@ -600,6 +600,34 @@ where
             continue;
         }
 
+        // The REPL's own commands (`/help`, `/quit`, unknown `/word`)
+        // never reach the model, nor count as a turn.
+        match crate::repl_commands::parse(input) {
+            Some(crate::repl_commands::ReplCommand::Quit) => {
+                return Ok(SessionReport {
+                    turns_run,
+                    last_outcome,
+                });
+            }
+            Some(cmd) => {
+                let reply = match cmd {
+                    crate::repl_commands::ReplCommand::Unknown(word) => {
+                        crate::repl_commands::unknown_reply(&word)
+                    }
+                    _ => crate::repl_commands::help_text(
+                        &crate::repl_commands::studio_help_line(None),
+                    ),
+                };
+                let writer = channel.writer_handle();
+                if let Ok(mut guard) = writer.lock() {
+                    let _ = writeln!(&mut *guard, "{reply}");
+                    let _ = guard.flush();
+                }
+                continue;
+            }
+            None => {}
+        }
+
         // First-run coherence A1 (F14) — in-process there is no daemon to
         // hold escalation consent, so a whole-message `/allow-cloud` gets a
         // local reply and is never sent to the model (nor counted as a turn).

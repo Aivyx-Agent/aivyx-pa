@@ -6,6 +6,11 @@ use std::io::{BufRead, Write};
 /// Characters of one argument value shown before the rest is hidden.
 const PER_VALUE: usize = 1000;
 
+/// The keys, worded as `aivyx-coder`'s prompt words them. There is no lasting
+/// "always allow" in the terminal approval, so no `A`. Enter denies.
+const CHOICES: &str = "[y] allow  [n] deny (default)";
+const CHOICES_LONG: &str = "[y] allow  [n] deny (default)  [a] show all";
+
 /// The block shown before asking. Every argument is listed (short ones
 /// first, so recipients never sit behind a long body); a value longer than
 /// [`PER_VALUE`] characters says how much is hidden and the prompt offers
@@ -13,7 +18,7 @@ const PER_VALUE: usize = 1000;
 pub fn render(summary: &str, reason: &str, input: &serde_json::Value) -> String {
     use aivyx_capability::display::{describe_args, neutralise};
     let args = describe_args(input, Some(PER_VALUE));
-    let choices = if args.hidden > 0 { "[y/N/a=show all]" } else { "[y/N]" };
+    let choices = if args.hidden > 0 { CHOICES_LONG } else { CHOICES };
     format!(
         "\n⚑ Approval needed — {}\n  why: {}\n  args:\n{}\n  Approve? {choices} (10 min) ",
         neutralise(summary),
@@ -73,7 +78,7 @@ pub fn ask_for(summary: &str, reason: &str, input: &serde_json::Value) -> Option
             }
         }
         if is_show_all(&line) {
-            text = format!("{}  Approve? [y/N] (10 min) ", render_full(input));
+            text = format!("{}  Approve? {CHOICES} (10 min) ", render_full(input));
             continue;
         }
         return Some(is_yes(&line));
@@ -106,7 +111,7 @@ mod tests {
         assert!(text.contains("⚑ Approval needed — fs.write notes.txt"));
         assert!(text.contains("why: overwriting can't be undone"));
         assert!(text.contains("…"));
-        assert!(text.trim_end().ends_with("(10 min)") && text.contains("Approve? [y/N/a=show all]"));
+        assert!(text.trim_end().ends_with("(10 min)") && text.contains("Approve? [y] allow  [n] deny (default)  [a] show all"));
     }
 
     /// Audit P4: the terminal prompt shows the middle of a long command, and
@@ -134,7 +139,7 @@ mod tests {
             assert!(text.contains(r), "{text}");
         }
         assert!(text.contains("4,000 more characters hidden"), "{text}");
-        assert!(text.contains("a=show all"));
+        assert!(text.contains("[a] show all"));
         assert!(render_full(&input).contains(&"x".repeat(5000)));
     }
 
@@ -142,6 +147,13 @@ mod tests {
     fn disguising_characters_are_escaped_in_the_prompt() {
         let input = serde_json::json!({"path": "evil\u{202e}txt.exe"});
         assert!(render("fs.write", "r", &input).contains("\\u{202e}"));
+    }
+
+    #[test]
+    fn a_short_prompt_has_no_show_all_and_no_always_allow() {
+        let text = render("fs.write", "r", &serde_json::json!({"path": "p"}));
+        assert!(text.contains("Approve? [y] allow  [n] deny (default) (10 min)"), "{text}");
+        assert!(!text.contains("show all") && !text.contains("[A]"), "{text}");
     }
 
     #[test]
