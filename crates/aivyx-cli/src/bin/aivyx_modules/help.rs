@@ -30,6 +30,7 @@ pub enum Group {
     Agent,
     Tools,
     Inspection,
+    Developer,
 }
 
 /// One top-level subcommand's help-table entry.
@@ -192,7 +193,7 @@ pub const COMMANDS: &[CommandHelp] = &[
     CommandHelp {
         name: "team",
         group: Group::Agent,
-        summary: "Run and manage multi-agent (Nonagon) team missions",
+        summary: "Run and manage multi-agent team missions",
         usage: &[
             "aivyx-pa team roster [--config <path>]",
             "aivyx-pa team init [--pack <default|path>] [--out <path>] [--force]",
@@ -361,7 +362,7 @@ pub const COMMANDS: &[CommandHelp] = &[
     },
     CommandHelp {
         name: "tool-relevance",
-        group: Group::Inspection,
+        group: Group::Developer,
         summary: "Dump tool-relevance keyword scoring",
         usage: &["aivyx-pa tool-relevance dump [--keyword-key <key>]"],
     },
@@ -469,6 +470,10 @@ pub fn render_top_level_help() -> String {
     out.push_str(&group_lines(Group::Inspection));
     out.push('\n');
 
+    out.push_str("Developer:\n");
+    out.push_str(&group_lines(Group::Developer));
+    out.push('\n');
+
     out.push_str("Global flags:\n");
     out.push_str("  --instance <name>      Use a named instance (multi-instance support).\n");
     out.push_str("  --verify-only          Forensic: verify the audit chain and exit.\n");
@@ -506,6 +511,19 @@ pub fn with_help_hint(err: String, args: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn top_level_help_groups_developer_commands_and_avoids_jargon() {
+        let help = render_top_level_help();
+        let dev = help.find("Developer:\n").expect("a Developer group");
+        let tr = help.find("tool-relevance").expect("still listed");
+        let flags = help.find("Global flags:").unwrap();
+        assert!(dev < tr && tr < flags, "{help}");
+        let inspection = help.find("Inspection:\n").unwrap();
+        assert!(!help[inspection..dev].contains("tool-relevance"), "{help}");
+        assert!(!help.contains("Nonagon"), "{help}");
+        assert!(help.contains("multi-agent team missions"), "{help}");
+    }
+
     use super::*;
 
     #[test]

@@ -746,6 +746,55 @@ fn current_exe_path() -> Result<String, String> {
         .map(|p| p.display().to_string())
 }
 
+/// What `init` tells the operator before asking to install the service:
+/// the name, what it starts, where its log is and how to remove it. Pure
+/// over its inputs; every name and command is the one `install` really uses.
+pub fn describe_service_for(
+    platform: Platform,
+    bin: &str,
+    paths: &aivyx_instance::InstancePaths,
+) -> String {
+    let instance_flag = if paths.name().is_default() {
+        String::new()
+    } else {
+        format!(" --instance {}", paths.name().as_str())
+    };
+    let remove = format!("aivyx-pa{instance_flag} daemon uninstall");
+    match platform {
+        Platform::Linux => {
+            let unit = systemd_unit_for(paths);
+            let stem = unit.trim_end_matches(".service");
+            format!(
+                "This installs a background service, so the agent keeps running after you \
+                 log out or reboot:\n  \
+                 Service:  {stem} (a systemd user service; no root needed)\n  \
+                 Starts:   {bin} daemon run{instance_flag}\n  \
+                 Also:     turns on login-less running for your user (loginctl enable-linger)\n  \
+                 Log:      journalctl --user -u {stem}\n  \
+                 Remove:   {remove}"
+            )
+        }
+        Platform::MacOs => {
+            let label = launchd_label_for(paths);
+            format!(
+                "This installs a background service, so the agent keeps running after you \
+                 log out or reboot:\n  \
+                 Service:  {label} (a launchd agent, in ~/Library/LaunchAgents)\n  \
+                 Starts:   {bin} daemon run{instance_flag}\n  \
+                 Log:      log show --predicate 'process == \"aivyx-pa\"'\n  \
+                 Remove:   {remove}"
+            )
+        }
+        Platform::Unsupported => String::new(),
+    }
+}
+
+/// [`describe_service_for`] for this host, binary and selected instance.
+pub fn describe_service() -> String {
+    let bin = current_exe_path().unwrap_or_else(|_| "aivyx-pa".to_string());
+    describe_service_for(Platform::detect(), &bin, &selected_instance())
+}
+
 /// `$XDG_CONFIG_HOME` or `$HOME/.config`.
 fn user_config_dir() -> Result<PathBuf, String> {
     if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
@@ -813,6 +862,43 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    fn named(n: &str) -> aivyx_instance::InstancePaths {
+        aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::parse(n).unwrap(),
+            aivyx_instance::BaseDirs {
+                home: None,
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: None,
+            },
+        )
+    }
+
+    #[test]
+    fn describe_service_names_the_real_unit_log_and_removal() {
+        let default = aivyx_instance::InstancePaths::new(
+            aivyx_instance::InstanceName::default_instance(),
+            aivyx_instance::BaseDirs {
+                home: None,
+                xdg_config_home: None,
+                xdg_data_home: None,
+                xdg_runtime_dir: None,
+            },
+        );
+        let linux = describe_service_for(Platform::Linux, "/opt/aivyx-pa", &default);
+        assert!(linux.contains("aivyx-pa-daemon (a systemd user service"), "{linux}");
+        assert!(linux.contains("/opt/aivyx-pa daemon run\n"), "{linux}");
+        assert!(linux.contains("journalctl --user -u aivyx-pa-daemon"), "{linux}");
+        assert!(linux.contains("Remove:   aivyx-pa daemon uninstall"), "{linux}");
+        let mac = describe_service_for(Platform::MacOs, "/opt/aivyx-pa", &default);
+        assert!(mac.contains("com.aivyx-pa.daemon (a launchd agent"), "{mac}");
+        assert!(mac.contains("log show"), "{mac}");
+        let work = describe_service_for(Platform::Linux, "/opt/aivyx-pa", &named("work"));
+        assert!(work.contains("daemon run --instance work"), "{work}");
+        assert!(work.contains("aivyx-pa --instance work daemon uninstall"), "{work}");
+        assert!(describe_service_for(Platform::Unsupported, "x", &default).is_empty());
+    }
+
     use super::*;
 
     #[test]

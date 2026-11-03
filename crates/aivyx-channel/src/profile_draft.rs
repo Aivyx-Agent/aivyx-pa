@@ -43,6 +43,15 @@ pub struct IdentityAnswers {
     pub never_do: String,
 }
 
+impl IdentityAnswers {
+    /// True when every answer is blank, so there is nothing to draft from.
+    pub fn is_empty(&self) -> bool {
+        [&self.intent, &self.role, &self.tone, &self.never_do]
+            .iter()
+            .all(|a| a.trim().is_empty())
+    }
+}
+
 /// A drafted P13 Profile — the six fields the wizard collects.
 /// Every field is best-effort; the review step lets the operator
 /// fix anything.

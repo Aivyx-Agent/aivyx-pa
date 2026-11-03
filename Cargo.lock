@@ -292,6 +292,7 @@ dependencies = [
  "cron",
  "directories",
  "futures-util",
+ "libc",
  "notify",
  "reqwest 0.12.28",
  "rpassword",

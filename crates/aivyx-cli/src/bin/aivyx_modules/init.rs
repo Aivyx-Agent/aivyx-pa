@@ -700,6 +700,12 @@ fn offer_service_install(
     writer: &mut dyn IoWrite,
     run_install: impl FnOnce(bool, bool) -> Result<(), String>,
 ) -> Result<(), String> {
+    if !already_installed {
+        let text = crate::daemon_service::describe_service();
+        if !text.is_empty() {
+            writeln!(writer, "{text}\n").map_err(|e| format!("write error: {e}"))?;
+        }
+    }
     match decide_service_install(already_installed, active, reader, writer)? {
         ServiceInstallDecision::AlreadyInstalled { active } => {
             let status = match active {
@@ -1937,6 +1943,86 @@ fn split_list(s: &str) -> Vec<String> {
     items
 }
 
+/// How the optional identity draft ended.
+enum DraftOutcome {
+    Drafted(DraftedProfile),
+    /// The model could not be reached or returned nothing usable.
+    Failed,
+    /// The operator pressed Ctrl-C.
+    Skipped,
+}
+
+/// The profile used when the operator gave no answers: only what the
+/// template itself defines, nothing invented.
+fn neutral_identity(defaults: &TemplateDefaults) -> IdentityFields {
+    IdentityFields {
+        assistant_name: defaults.assistant_name.clone(),
+        operator_profile: None,
+        communication_style: defaults.communication_style.clone(),
+        primary_use_cases: defaults.primary_use_case.clone().into_iter().collect(),
+        behavioral_preferences: Vec::new(),
+        behavioral_constraints: Vec::new(),
+    }
+}
+
+/// Run the draft call, printing the elapsed seconds once a second, and
+/// give up early if `skip` completes. Dropping the draft future drops its
+/// request, so skipping leaves nothing running.
+async fn draft_with_progress(
+    provider: &Arc<dyn LlmProvider>,
+    model: &str,
+    answers: &IdentityAnswers,
+    writer: &mut dyn IoWrite,
+    skip: impl std::future::Future<Output = ()>,
+) -> DraftOutcome {
+    let draft = draft_identity(provider, model, answers);
+    tokio::pin!(draft);
+    tokio::pin!(skip);
+    let started = std::time::Instant::now();
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    tick.tick().await; // the first tick is immediate
+    let mut shown = false;
+    let outcome = loop {
+        tokio::select! {
+            result = &mut draft => {
+                break match result {
+                    Some(d) => DraftOutcome::Drafted(d),
+                    None => DraftOutcome::Failed,
+                };
+            }
+            () = &mut skip => break DraftOutcome::Skipped,
+            _ = tick.tick() => {
+                let _ = write!(writer, "\r  Working… {}s", started.elapsed().as_secs());
+                let _ = writer.flush();
+                shown = true;
+            }
+        }
+    };
+    if shown {
+        let _ = writeln!(writer);
+    }
+    outcome
+}
+
+/// Resolves when the operator presses Ctrl-C. Never resolves if the signal
+/// cannot be listened to.
+async fn skip_on_ctrl_c() {
+    if tokio::signal::ctrl_c().await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Listening for Ctrl-C replaces its default action for the rest of the
+/// process; give it back so a later Ctrl-C at a prompt still ends `init`.
+fn restore_default_ctrl_c() {
+    #[cfg(unix)]
+    // SAFETY: resetting SIGINT to its default disposition is async-signal safe
+    // and touches no Rust-managed state.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
+}
+
 /// Run the guided identity builder. Offers an LLM-assisted draft
 /// (only when a `provider` is available + the operator opts in);
 /// otherwise — or on any LLM error — collects the six fields with
@@ -1990,9 +2076,34 @@ async fn run_identity_builder(
             )?,
             never_do: prompt_line("Is there anything it should never do?\n> ", reader, writer)?,
         };
-        w(writer, "\nDrafting your assistant's identity…")?;
-        match draft_identity(provider.unwrap(), model, &answers).await {
-            Some(draft) => {
+        // Nothing said: don't invent a persona from nothing. A neutral
+        // profile (the template's own defaults) is used; the preview below
+        // still lets the operator edit it, and Studio can shape it later.
+        if answers.is_empty() {
+            w(
+                writer,
+                "\nYou didn't say anything, so there is nothing to draft. A neutral \
+                 default profile will be used. You can shape it later in Studio \
+                 (Create your agent).",
+            )?;
+            return Ok(neutral_identity(defaults));
+        }
+        w(
+            writer,
+            "\nDrafting your assistant's identity. A local model can take a minute \
+             or two. Press Ctrl-C to skip the draft and answer the questions yourself.",
+        )?;
+        let outcome = draft_with_progress(
+            provider.unwrap(),
+            model,
+            &answers,
+            writer,
+            skip_on_ctrl_c(),
+        )
+        .await;
+        restore_default_ctrl_c();
+        match outcome {
+            DraftOutcome::Drafted(draft) => {
                 w(
                     writer,
                     "\nHere's a draft — press Enter to keep each \
@@ -2000,7 +2111,10 @@ async fn run_identity_builder(
                 )?;
                 return review_draft(reader, writer, draft);
             }
-            None => {
+            DraftOutcome::Skipped => {
+                w(writer, "\nSkipped the draft. Let's do it together instead.")?;
+            }
+            DraftOutcome::Failed => {
                 w(
                     writer,
                     "\n(I couldn't reach the model for a draft — \
@@ -3418,6 +3532,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn identity_builder_empty_answers_use_a_neutral_default_without_drafting() {
+        // The provider would invent "Sage" if it were asked; it must not be.
+        let provider = fake_provider(Some("ASSISTANT_NAME: Sage\nOPERATOR_PROFILE: x"));
+        // offer=yes, then four empty answers; no further input is needed.
+        let mut reader = std::io::Cursor::new(b"\n\n\n\n\n".to_vec());
+        let mut writer: Vec<u8> = Vec::new();
+        let fields = run_identity_builder(
+            &mut reader,
+            &mut writer,
+            Some(&provider),
+            "m",
+            &TemplateDefaults::empty(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fields.assistant_name, None);
+        assert_eq!(fields.operator_profile, None);
+        assert!(fields.primary_use_cases.is_empty());
+        let out = String::from_utf8(writer).unwrap();
+        assert!(out.contains("neutral default profile"), "{out}");
+        assert!(out.contains("Create your agent"), "{out}");
+        assert!(!out.contains("Drafting"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn draft_can_be_skipped_without_abandoning_init() {
+        /// Never answers.
+        struct HangingProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for HangingProvider {
+            async fn chat_stream(
+                &self,
+                _request: aivyx_llm::LlmRequest<'_>,
+                _cancel: &aivyx_core::CancellationToken,
+            ) -> Result<Box<dyn aivyx_llm::LlmStream>, aivyx_llm::LlmError> {
+                std::future::pending().await
+            }
+        }
+        let provider: Arc<dyn LlmProvider> = Arc::new(HangingProvider);
+        let mut reader =
+            std::io::Cursor::new(b"\nintent\nrole\ntone\nnope\nMe\na dev\nplain\ncoding\n\n\n".to_vec());
+        let mut writer: Vec<u8> = Vec::new();
+        // Ctrl-C arrives at once.
+        let outcome = draft_with_progress(
+            &provider,
+            "m",
+            &IdentityAnswers {
+                intent: "x".into(),
+                ..Default::default()
+            },
+            &mut writer,
+            std::future::ready(()),
+        )
+        .await;
+        assert!(matches!(outcome, DraftOutcome::Skipped));
+        // And the manual questions still work afterwards.
+        let fields = manual_identity(&mut reader, &mut writer, &TemplateDefaults::empty());
+        assert!(fields.is_ok());
+    }
+
+    #[tokio::test]
     async fn identity_builder_llm_error_degrades_to_manual() {
         // Provider present + operator accepts, but the draft call
         // errors → graceful fallback to the manual prompts.
@@ -3747,6 +3922,21 @@ mod tests {
         let mut output = Vec::new();
         let result = prompt_yes_no("Continue?", false, &mut input, &mut output).unwrap();
         assert!(result);
+    }
+
+    #[test]
+    fn the_service_offer_says_what_it_installs_before_asking() {
+        let mut input = std::io::Cursor::new(b"n\n".to_vec());
+        let mut output: Vec<u8> = Vec::new();
+        offer_service_install(false, None, false, &mut input, &mut output, |_, _| {
+            panic!("declined")
+        })
+        .unwrap();
+        let out = String::from_utf8(output).unwrap();
+        let said = out.find("daemon uninstall").expect(&out);
+        let asked = out.find("Install as a background service").expect(&out);
+        assert!(said < asked, "{out}");
+        assert!(out.contains("daemon run"), "{out}");
     }
 
     #[test]
