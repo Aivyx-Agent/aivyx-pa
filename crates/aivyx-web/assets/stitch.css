@@ -64,6 +64,9 @@
   --color-outline: #8a95a1;
   --color-outline-variant: #3d4550;
 
+  /* Scrollbar thumb — a palette colour, not a new one. */
+  --scrollbar-thumb: #5c6570;
+
   /* Semantic — independent of brass/rust */
   --color-success: #4d8b6a;
   --color-success-dim: #3a7050;
@@ -154,6 +157,7 @@
 
   --color-outline: #6b6055;
   --color-outline-variant: #c9bfa8;
+  --scrollbar-thumb: #9aa3a8;
 
   --color-success: #2f7a52;
   --color-success-dim: #245e40;
@@ -188,15 +192,46 @@ h4, h5, h6 { font-family: var(--font-body); font-weight: 600; letter-spacing: -0
 a { color: var(--color-primary); text-decoration: none; }
 ::selection { background: var(--color-secondary-dim); color: var(--color-text-primary); }
 
-/* mono terminal label */
+/* mono terminal label — for SHORT labels and tags only (a field name, a
+   count, a section header). Running text (help, empty states, prompts) is
+   .help below. Colour is text-secondary so a label clears WCAG AA (4.5:1)
+   on every surface; text-disabled is for disabled controls only. */
 .label-tech {
   font-family: var(--font-mono);
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--color-text-disabled);
+  color: var(--color-text-secondary);
 }
+
+/* Help and running text: sentence case, body font, readable size, AA
+   contrast. Use for anything longer than a few words. */
+.help, p.muted {
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.55;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+/* Code, file names and config keys keep their real case everywhere —
+   never inherit an uppercase transform from a label around them. */
+code, kbd, samp, pre, .model-id, .ident { text-transform: none; letter-spacing: normal; }
+
+/* Theme-matched scrollbars (the default track is a bright bar on dark). */
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb); border-radius: 6px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--color-tertiary); }
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* ghost separators replace <hr> */
 .separator-vector { height: 1px; border: 0;
@@ -296,15 +331,30 @@ a { color: var(--color-primary); text-decoration: none; }
 .statusbar .seg.live .dot { background: var(--color-success); border-color: var(--color-primary); }
 
 /* ── Components ────────────────────────────────────────────────────────────── */
-.btn {
+/* A bare .btn (and .btn-ghost / .btn.ghost / .btn-secondary) is a neutral,
+   bordered button — never the browser default grey. */
+.btn, .btn-ghost {
   font: inherit; font-weight: 600; cursor: pointer;
-  border-radius: 0.375rem; padding: 8px 16px; border: 0;
+  border-radius: 0.375rem; padding: 8px 16px;
+  background: var(--color-bg-elevated); color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
   transition: all 0.15s var(--ease-smooth);
 }
-.btn:disabled { opacity: 0.4; cursor: default; }
+.btn-ghost, .btn.ghost { background: transparent; }
+.btn-ghost:not(:disabled):hover, .btn.ghost:not(:disabled):hover, .btn-secondary:not(:disabled):hover {
+  border-color: var(--color-secondary);
+}
+.btn:disabled, .btn-ghost:disabled { opacity: 0.4; cursor: default; }
+/* Neutral buttons stay legible when disabled: muted, not faded out
+   (Audit's Older/Newer). The primary keeps its faded brass. */
+.btn-ghost:disabled, .btn.ghost:disabled, .btn-glass:disabled, .btn-secondary:disabled {
+  opacity: 1; background: transparent;
+  color: var(--color-text-secondary); border-style: dashed;
+}
 .btn-primary {
   background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dim));
   color: var(--color-text-inverse);
+  border-color: transparent;
 }
 .btn-primary:not(:disabled):hover { box-shadow: var(--shadow-glow); }
 .btn-glass {
@@ -312,7 +362,7 @@ a { color: var(--color-primary); text-decoration: none; }
   border: 1px solid var(--color-border-subtle); color: var(--color-text-primary);
 }
 .btn-glass:hover { border-color: var(--color-secondary); }
-.btn-success { background: var(--color-success); color: #0a0d13; }
+.btn-success { background: var(--color-success); color: #0a0d13; border-color: transparent; }
 .btn-ghost-danger { background: transparent; border: 1px solid var(--color-error); color: var(--color-error); }
 
 .card {
@@ -357,6 +407,8 @@ a { color: var(--color-primary); text-decoration: none; }
 .chip.warning { background: rgba(217,123,41,0.15); color: var(--color-warning); }
 .chip.success { background: rgba(77,139,106,0.15); color: var(--color-success); }
 .chip.error { background: rgba(214,69,69,0.15); color: var(--color-error); }
+/* A chip holding a name (a scope, a tool) keeps its real case. */
+.chip.ident { text-transform: none; letter-spacing: 0.02em; }
 
 .dial-glyph {
   display: inline-block; width: 8px; height: 8px; border-radius: 50%;
@@ -429,7 +481,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .audit-row:last-child { border-bottom: 0; }
 .audit-row .ev { flex: 1; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-text-primary); }
 .audit-row .when { white-space: nowrap; }
-.audit-row .seq { white-space: nowrap; color: var(--color-text-disabled); }
+.audit-row .seq { white-space: nowrap; color: var(--color-tertiary); }
 
 /* ── Memory view ───────────────────────────────────────────────────────────── */
 .mem { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: start; }
@@ -465,7 +517,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .mem-entry { display: flex; flex-direction: column; gap: 8px; }
 .mem-entry-head { display: flex; align-items: center; gap: 10px; }
 .mem-entry-head .when { margin-left: auto; }
-.mem-entry-head .seq { color: var(--color-text-disabled); }
+.mem-entry-head .seq { color: var(--color-tertiary); }
 .mem-body { margin: 0; color: var(--color-text-primary); font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 /* Chapter Codex — knowledge-wiki backlink chips. */
 .wiki-backlinks { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -550,7 +602,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .line.op { color: var(--color-text-primary); }
 .line.op::before { content: "› "; color: var(--color-secondary); }
 .line.asst { color: var(--color-text-primary); background: var(--color-msg-assistant); padding: 8px 10px; border-radius: 0.375rem; }
-.line.sys { color: var(--color-text-disabled); }
+.line.sys { color: var(--color-text-secondary); }
 .line.err { color: var(--color-error); }
 .line.streaming::after { content: "▌"; color: var(--color-primary); animation: streaming-cursor 1s steps(1) infinite; }
 .composer { display: flex; gap: 10px; padding-top: 12px; }
@@ -560,7 +612,7 @@ a { color: var(--color-primary); text-decoration: none; }
 .settings { display: flex; flex-direction: column; gap: 16px; max-width: 640px; }
 .settings-section { display: flex; flex-direction: column; gap: 12px; }
 .settings-section p { margin: 0; }
-.settings-section .label-tech.sub { color: var(--color-text-disabled); word-break: break-word; }
+.settings-section .help.sub { word-break: break-word; }
 .field-row { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 12px; }
 .field-row label { color: var(--color-text-secondary); }
 .field-row .input { width: 100%; }
@@ -673,15 +725,17 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 
 /* ── Teams — the Nonagon roster (Chapter Y). ── */
 .teams { display: flex; flex-direction: column; gap: 16px; max-width: 860px; }
-.roster-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;
-}
+/* One member per row: scopes, tools and soul get the full card width
+   instead of two-line boxes in a narrow grid column. */
+.roster-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.member-card textarea.input { min-height: 4.8em; }
+.member-card textarea.soul-input { min-height: 9em; }
+.member-card textarea.input:focus { min-height: 14em; }
 .member-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; }
 .member-card.lead { border-left: 3px solid var(--color-primary); }
 .member-card h4 { font-size: 14px; font-family: var(--font-mono); }
 .member-role { margin: 0; font-size: 13px; color: var(--color-text-secondary); }
 .member-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; }
-.member-meta .label-tech { color: var(--color-text-disabled); }
 .chip.muted { background: var(--color-border-subtle); color: var(--color-text-secondary); }
 .btn-xs { align-self: flex-start; padding: 3px 8px; font-size: 11px; }
 @media (max-width: 860px) {
@@ -703,7 +757,7 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; font-family: var(--font-mono); font-size: 12px; }
 .crumb {
   border: 0; background: transparent; cursor: pointer; font: inherit;
-  color: var(--color-secondary); padding: 2px 4px; border-radius: 4px;
+  color: var(--color-text-secondary); padding: 2px 4px; border-radius: 4px;
 }
 .crumb:hover { background: var(--color-bg-raised); color: var(--color-primary); }
 .crumb-sep { color: var(--color-text-disabled); }
@@ -722,7 +776,7 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .doc-row:hover .doc-actions { opacity: 1; }
 .doc-ico { flex: none; width: 18px; text-align: center; }
 .doc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
-.doc-size { flex: none; color: var(--color-text-disabled); }
+.doc-size { flex: none; color: var(--color-tertiary); }
 .doc-edit {
   width: 100%; min-height: 50vh; resize: vertical;
   padding: 12px 14px; border-radius: 0.375rem;
@@ -828,8 +882,8 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .step-dot {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 10px; border-radius: 999px;
-  background: var(--color-bg-surface); border: 1px solid var(--color-secondary-dim);
-  color: var(--color-text-disabled); font-size: 12px;
+  background: var(--color-bg-surface); border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary); font-size: 12px;
 }
 .step-dot.active { border-color: var(--color-primary); color: var(--color-primary); }
 .step-dot.done { border-color: var(--color-success); color: var(--color-success); }
@@ -1082,7 +1136,7 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .routine-row { display: flex; flex-direction: column; gap: 6px; }
 .routine-row .row1 { display: flex; align-items: center; gap: 6px; }
 .routine-row .row1 .name { font-weight: 600; color: var(--color-text-primary); }
-.routine-row .row1 .cron { margin-left: auto; font-family: var(--font-mono); font-size: 0.6rem; opacity: 0.7; }
+.routine-row .row1 .cron { margin-left: auto; font-family: var(--font-mono); font-size: 0.7rem; }
 .routine-row .row2 { display: flex; gap: 18px; }
 .routine-row .row2 .v { color: var(--color-text-primary); }
 

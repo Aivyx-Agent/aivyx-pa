@@ -257,19 +257,64 @@ impl StatusModel {
         }
     }
 
-    /// The segment's tooltip.
+    /// The segment's tooltip: for a routed call, the full model id and why.
     pub fn tooltip(&self) -> String {
         match self {
-            StatusModel::Routed { reason, .. } => plain_reason(reason),
+            StatusModel::Routed { model, reason } => format!("{model} — {}", plain_reason(reason)),
             StatusModel::NoneYet => "No routed call in this conversation yet.".to_string(),
             StatusModel::Off => "Model routing is off — every turn uses the configured model.".to_string(),
         }
     }
 }
 
+/// Model-file extensions dropped from a short name. Only these: a dot in a
+/// hosted model's id (`gpt-4.1`, `claude-3.5`) is part of its name.
+const MODEL_FILE_EXTENSIONS: &[&str] = &["gguf", "ggml", "bin", "safetensors", "onnx", "pt", "pth", "llamafile"];
+
+/// A model id as a person reads it: the file stem of a path-like id
+/// (`/models/Qwen3-4B-Q4_K_M.gguf` → `Qwen3-4B-Q4_K_M`, `Qwen/Qwen3-8B` →
+/// `Qwen3-8B`), keeping a router `@backend` suffix. Show the full id
+/// alongside it (a tooltip) — the short name can be ambiguous.
+pub fn short_model_name(id: &str) -> String {
+    let id = id.trim();
+    // A router candidate is `model@backend`; the backend never holds a path.
+    let (base, backend) = match id.rfind('@') {
+        Some(at) if !id[at..].contains('/') => (&id[..at], Some(&id[at..])),
+        _ => (id, None),
+    };
+    let file = base.trim_end_matches(['/', '\\']);
+    let file = file.rsplit(['/', '\\']).next().unwrap_or(file);
+    let stem = match file.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && MODEL_FILE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()) => stem,
+        _ => file,
+    };
+    if stem.is_empty() {
+        return id.to_string();
+    }
+    format!("{stem}{}", backend.unwrap_or(""))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_path_shortens_to_its_file_stem() {
+        assert_eq!(short_model_name("/models/Qwen3-4B-Q4_K_M.gguf"), "Qwen3-4B-Q4_K_M");
+        assert_eq!(short_model_name("C:\\models\\llama.GGUF"), "llama");
+        assert_eq!(short_model_name("Qwen/Qwen3-8B"), "Qwen3-8B");
+        assert_eq!(short_model_name("/models/Qwen3-4B.gguf@local"), "Qwen3-4B@local");
+    }
+
+    #[test]
+    fn a_plain_model_id_is_kept_whole() {
+        assert_eq!(short_model_name("gpt-4.1"), "gpt-4.1");
+        assert_eq!(short_model_name("qwen3:8b"), "qwen3:8b");
+        assert_eq!(short_model_name("big@gpu"), "big@gpu");
+        assert_eq!(short_model_name("claude-3.5-sonnet"), "claude-3.5-sonnet");
+        assert_eq!(short_model_name(""), "");
+        assert_eq!(short_model_name("/"), "/");
+    }
     use aivyx_ipc::protocol::{RoutingCandidateView, RoutingSessionView};
 
     fn s(v: &[&str]) -> Vec<String> {
@@ -497,7 +542,7 @@ mod tests {
         let routed = ("big@gpu".to_string(), "needs tools".to_string());
         let m = StatusModel::from_state(Some(&routed), Some(true));
         assert_eq!(m, StatusModel::Routed { model: "big@gpu".into(), reason: "needs tools".into() });
-        assert_eq!(m.tooltip(), "needs tools");
+        assert_eq!(m.tooltip(), "big@gpu — needs tools");
     }
 
     #[test]

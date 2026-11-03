@@ -218,15 +218,16 @@ fn InstrumentStrip(
     briefing: Option<Briefing>,
     view: Signal<View>,
 ) -> Element {
-    let model = match &dashboard.settings {
+    // The model reads as its short name (file stem); the full id is the tooltip.
+    let (model, ctx, model_title) = match &dashboard.settings {
         Some(s) => {
             let ctx = s
                 .num_ctx
                 .map(|n| format!("{}k ctx", n / 1024))
                 .unwrap_or_else(|| "default ctx".into());
-            format!("{} · {ctx}", s.model)
+            (crate::routing::short_model_name(&s.model), format!(" · {ctx}"), s.model.clone())
         }
-        None => "model —".to_string(),
+        None => ("model —".to_string(), String::new(), String::new()),
     };
     let per_day = dashboard.settings.as_ref().and_then(|s| s.budget.per_day_usd);
     let spend_untracked = briefing.as_ref().is_some_and(|b| b.spend_untracked);
@@ -254,7 +255,10 @@ fn InstrumentStrip(
                 onclick: move |_| go(view, "sessions"),
                 if connected { "● daemon" } else { "● offline" }
             }
-            button { class: "cc-reading", onclick: move |_| go(view, "models"), "{model}" }
+            button { class: "cc-reading", title: "{model_title}", onclick: move |_| go(view, "models"),
+                span { class: "model-id", "{model}" }
+                "{ctx}"
+            }
             button {
                 class: if spend_warn { "cc-reading warn" } else { "cc-reading" },
                 title: "{spend_title}",

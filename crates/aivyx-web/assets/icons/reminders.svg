@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Reminders</title>
+  <!-- A checklist: one item done, two to go -->
+  <path d="M4 6.5 5.5 8 8 5"/>
+  <path d="M11 6.5h9"/>
+  <circle cx="6" cy="12.5" r="1.4"/>
+  <path d="M11 12.5h9"/>
+  <circle cx="6" cy="18.5" r="1.4"/>
+  <path d="M11 18.5h9"/>
+</svg>

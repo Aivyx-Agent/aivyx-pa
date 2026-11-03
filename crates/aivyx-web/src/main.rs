@@ -90,7 +90,11 @@ const ICON_GUIDE: Asset = asset!("/assets/icons/guide.svg");
 const ICON_PLUGINS: Asset = asset!("/assets/icons/plugins.svg");
 const ICON_CREATE: Asset = asset!("/assets/icons/candle-flame.svg");
 const ICON_SCHEDULES: Asset = asset!("/assets/icons/schedules.svg");
-const ICON_LOOP: Asset = asset!("/assets/icons/schedules.svg");
+const ICON_LOOP: Asset = asset!("/assets/icons/loop.svg");
+const ICON_MISSION_CONTROL: Asset = asset!("/assets/icons/mission-control.svg");
+const ICON_REMINDERS: Asset = asset!("/assets/icons/reminders.svg");
+const ICON_AUDIT: Asset = asset!("/assets/icons/security.svg");
+const ICON_SESSIONS: Asset = asset!("/assets/icons/channels.svg");
 const ICON_NOTIFICATIONS: Asset = asset!("/assets/icons/notifications.svg");
 const ICON_TOOLS: Asset = asset!("/assets/icons/tools.svg");
 const ICON_GALLERY: Asset = asset!("/assets/icons/gallery.svg");
@@ -1325,7 +1329,7 @@ fn App() -> Element {
 
     let title = match view() {
         View::Command => "Command Center",
-        View::Missions => "Mission Orchestration",
+        View::Missions => "Missions",
         View::MissionControl => "Mission Control",
         View::Schedules => "Schedules",
         View::Notifications => "Notifications",
@@ -1581,7 +1585,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             vec![
                 (ICON_CHAT, "Chat", View::Chat),
                 (ICON_MISSIONS, "Missions", View::Missions),
-                (ICON_MISSIONS, "Mission Control", View::MissionControl),
+                (ICON_MISSION_CONTROL, "Mission Control", View::MissionControl),
                 (ICON_SCHEDULES, "Schedules", View::Schedules),
             ],
         ),
@@ -1598,12 +1602,12 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
             "System",
             vec![
                 (ICON_DOCUMENTS, "Documents", View::Documents),
-                (ICON_DOCUMENTS, "Audit", View::Audit),
-                (ICON_TEAMS, "Sessions", View::Sessions),
+                (ICON_AUDIT, "Audit", View::Audit),
+                (ICON_SESSIONS, "Sessions", View::Sessions),
                 (ICON_GALLERY, "Gallery", View::Gallery),
                 (ICON_NOTIFICATIONS, "Notifications", View::Notifications),
                 (ICON_LOOP, "Loop", View::Loop),
-                (ICON_NOTIFICATIONS, "Reminders", View::Reminders),
+                (ICON_REMINDERS, "Reminders", View::Reminders),
                 (ICON_PLUGINS, "MCP", View::Mcp),
                 (ICON_TOOLS, "Tools", View::Tools),
                 (ICON_MODELS, "Models", View::Models),
@@ -1822,7 +1826,7 @@ fn StatusBar(connected: bool, agent_name: String, model: routing::StatusModel) -
                 match &model {
                     routing::StatusModel::Routed { model: id, .. } => rsx! {
                         "MODEL · "
-                        span { class: "model-id", "{id}" }
+                        span { class: "model-id", {routing::short_model_name(id)} }
                     },
                     routing::StatusModel::NoneYet => rsx! { "MODEL · —" },
                     routing::StatusModel::Off => rsx! { "ROUTING OFF" },
@@ -2102,7 +2106,7 @@ fn SchedulesPanel() -> Element {
                 } else {
                     "border-left: 3px solid var(--danger, #b91c1c); margin-bottom: 12px; padding: 8px 12px;"
                 },
-                p { class: "label-tech", "{text}" }
+                p { class: "help", "{text}" }
             }
         }
         div { class: "dash-grid",
@@ -2120,7 +2124,7 @@ fn SchedulesPanel() -> Element {
                     }
                     if rows.is_empty() {
                         div { class: "glass-card empty",
-                            p { class: "label-tech", "No schedules yet — create one below, or ask the agent to schedule something." }
+                            p { class: "help", "No schedules yet — create one below, or ask the agent to schedule something." }
                         }
                     } else {
                         div { class: "feed",
@@ -2139,7 +2143,7 @@ fn SchedulesPanel() -> Element {
                             "Add reflection schedule"
                         }
                     }
-                    p { class: "label-tech",
+                    p { class: "help",
                         "Distinct from regular schedules above — each entry fires a canonical \
                          reflection turn (outcome-summary input, persistent proposal store) on \
                          its own cron. role_override/skip_when_idle/min_audit_entries_to_fire \
@@ -2157,7 +2161,7 @@ fn SchedulesPanel() -> Element {
                             },
                         }
                     } else if dashboard().reflection_schedules.is_empty() {
-                        div { class: "glass-card empty", p { class: "label-tech", "No `[[reflection_schedule]]` entries configured yet." } }
+                        div { class: "glass-card empty", p { class: "help", "No `[[reflection_schedule]]` entries configured yet." } }
                     } else {
                         div { class: "feed",
                             for r in dashboard().reflection_schedules.iter() {
@@ -2169,7 +2173,7 @@ fn SchedulesPanel() -> Element {
                                             div { class: "row1",
                                                 span { class: "dot live" }
                                                 span { class: "name", "{r.name}" }
-                                                span { class: "label-tech", style: "opacity:0.7;", title: "{r.cron}", {cron_text::describe_cron(&r.cron).unwrap_or_else(|| r.cron.clone())} }
+                                                span { class: "label-tech", title: "{r.cron}", {cron_text::describe_cron(&r.cron).unwrap_or_else(|| r.cron.clone())} }
                                                 span { class: if r.enabled { "chip success" } else { "chip" }, if r.enabled { "enabled" } else { "disabled" } }
                                             }
                                             div { style: "display:flex; gap:8px; margin-top:8px;",
@@ -2250,7 +2254,7 @@ fn SchedulesPanel() -> Element {
                             }
                         }
                         if freq() == "custom" {
-                            label { class: "label-tech", "Cron (sec min hour dom month dow year — local time)" }
+                            label { class: "field-label", "Cron (sec min hour dom month dow year — local time)" }
                             input {
                                 class: "input",
                                 placeholder: "0 0 9 * * * *",
@@ -2258,10 +2262,10 @@ fn SchedulesPanel() -> Element {
                                 oninput: move |e| cron.set(e.value()),
                             }
                         }
-                        p { class: "label-tech", style: "opacity:0.7; margin:4px 0;",
+                        p { class: "help", style: "margin:4px 0;",
                             "{built().1} · cron: {built().0}"
                         }
-                        label { class: "label-tech", "Prompt (what the agent should do when it fires)" }
+                        label { class: "field-label", "Prompt (what the agent should do when it fires)" }
                         textarea {
                             class: "input",
                             rows: "4",
@@ -2324,14 +2328,14 @@ fn ScheduleAdminRow(schedule: ScheduleView) -> Element {
             div { class: "row1",
                 span { class: if schedule.enabled { "dot live" } else { "dot off" } }
                 span { class: "name", "{schedule.name}" }
-                span { class: "label-tech", style: "opacity:0.7;", "[{schedule.created_by}]" }
+                span { class: "label-tech", "[{schedule.created_by}]" }
                 if awaiting {
                     span { class: "label-tech", style: "color: var(--warn, #d97706);", "awaiting approval" }
                 }
                 span { class: "label-tech cron", title: "{schedule.cron}", {cron_text::describe_cron(&schedule.cron).unwrap_or_else(|| schedule.cron.clone())} }
             }
             if !schedule.prompt.is_empty() {
-                div { class: "row2 label-tech", style: "opacity:0.8;",
+                div { class: "row2 help routine-prompt",
                     "{schedule.prompt}"
                 }
             }
@@ -2444,7 +2448,7 @@ fn AuditFeed(entries: Vec<AuditEntrySummary>) -> Element {
     rsx! {
         div { class: "audit-feed",
             if entries.is_empty() {
-                p { class: "label-tech empty", "No audit events yet." }
+                p { class: "help empty", "No audit events yet." }
             } else {
                 // entries arrive oldest→newest; show newest first.
                 for e in entries.iter().rev() {
@@ -2498,7 +2502,7 @@ fn NotificationsPanel() -> Element {
                     }
                     if state.history.is_empty() {
                         div { class: "glass-card empty",
-                            p { class: "label-tech",
+                            p { class: "help",
                                 if state.targets.is_empty() {
                                     "No notify targets configured yet — add a [[notify_target]] to aivyx-pa.toml, or the Studio's own target arms automatically once one is running."
                                 } else {
@@ -2546,7 +2550,7 @@ fn NotificationsPanel() -> Element {
                             },
                         }
                     } else if state.configs.is_empty() {
-                        div { class: "glass-card empty", p { class: "label-tech", "No `[[notify_target]]` entries configured yet." } }
+                        div { class: "glass-card empty", p { class: "help", "No `[[notify_target]]` entries configured yet." } }
                     } else {
                         div { class: "feed",
                             for cfg in state.configs.iter() {
@@ -2558,7 +2562,7 @@ fn NotificationsPanel() -> Element {
                                             div { class: "row1",
                                                 span { class: "dot live" }
                                                 span { class: "name", "{cfg.name}" }
-                                                span { class: "label-tech", style: "opacity:0.7;", "[{cfg.kind}]" }
+                                                span { class: "label-tech", "[{cfg.kind}]" }
                                                 if cfg.is_default {
                                                     span { class: "label-tech", style: "color: var(--ok, #16a34a);", "default" }
                                                 }
@@ -2582,7 +2586,7 @@ fn NotificationsPanel() -> Element {
                     div { class: "panel-head", h3 { "Targets" } }
                     if state.targets.is_empty() {
                         div { class: "glass-card empty",
-                            p { class: "label-tech", "None configured." }
+                            p { class: "help", "None configured." }
                         }
                     } else {
                         div { class: "feed",
@@ -2591,7 +2595,7 @@ fn NotificationsPanel() -> Element {
                                     div { class: "row1",
                                         span { class: "dot live" }
                                         span { class: "name", "{t.name}" }
-                                        span { class: "label-tech", style: "opacity:0.7;", "[{t.kind}]" }
+                                        span { class: "label-tech", "[{t.kind}]" }
                                         if t.is_default {
                                             span { class: "label-tech", style: "color: var(--ok, #16a34a);", "default" }
                                         }
@@ -2604,7 +2608,7 @@ fn NotificationsPanel() -> Element {
                 section { class: "panel",
                     div { class: "panel-head", h3 { "About" } }
                     div { class: "glass-card",
-                        p { class: "label-tech",
+                        p { class: "help",
                             "Add or edit targets in the \"Configure targets\" section. Changes take effect on the next daemon restart. Any mission or schedule with no explicit notify target falls back to whichever target above is marked default."
                         }
                     }
@@ -2929,10 +2933,10 @@ fn ReflectionScheduleForm(
                 }
             }
             if freq() == "custom" {
-                label { class: "label-tech", "Cron (sec min hour dom month dow year — local time)" }
+                label { class: "field-label", "Cron (sec min hour dom month dow year — local time)" }
                 input { class: "input", placeholder: "0 0 9 * * * *", value: "{cron}", oninput: move |e| cron.set(e.value()) }
             }
-            p { class: "label-tech", style: "opacity:0.7; margin:4px 0;", "cron: {built()}" }
+            p { class: "help", style: "margin:4px 0;", "cron: {built()}" }
             div { class: "field-row",
                 label { "Lookback (hours)" }
                 input {
@@ -3057,7 +3061,7 @@ fn EmailAdapterCard(email: EmailConfigView) -> Element {
                 label { "From" }
                 input { class: "input", value: "{from}", oninput: move |e| from.set(e.value()) }
             }
-            p { class: "label-tech",
+            p { class: "help",
                 {if email.password.configured { "Password: configured" } else { "Password: not set" }}
             }
             input { class: "input", placeholder: "New password (leave blank to keep current)",
@@ -3123,7 +3127,7 @@ fn MemoryProfileCard(config: MemoryProfileConfigView) -> Element {
     rsx! {
         div { class: "glass-card settings-section",
             div { class: "panel-head", h3 { "Memory profile" } span { class: "chip", "{config.profile}" } }
-            p { class: "label-tech",
+            p { class: "help",
                 "How your assistant recalls what it knows. Off: no automatic recall. Lite: \
                  finds related memories by their words — no extra model needed. Smart: also \
                  by meaning, and builds knowledge pages and a graph (needs an embedding model \
@@ -3162,7 +3166,7 @@ fn EmbeddingConfigCard(config: EmbeddingConfigView) -> Element {
     rsx! {
         div { class: "glass-card settings-section",
             div { class: "panel-head", h3 { "Embedding" } }
-            p { class: "label-tech",
+            p { class: "help",
                 "Configures the OpenAI-compatible embedding backend that powers semantic memory \
                  search. Point base_url at a local server to keep memory content on this box. \
                  Takes effect on the next daemon restart."
@@ -3175,7 +3179,7 @@ fn EmbeddingConfigCard(config: EmbeddingConfigView) -> Element {
                 label { "Model" }
                 input { class: "input", placeholder: "text-embedding-3-small", value: "{model}", oninput: move |e| model.set(e.value()) }
             }
-            p { class: "label-tech",
+            p { class: "help",
                 {if config.api_key.configured { "API key: configured" } else { "API key: not set" }}
             }
             input { class: "input", placeholder: "New API key (leave blank to keep current)",
@@ -3228,7 +3232,7 @@ fn ProactiveConfigCard(config: ProactiveConfigView, targets: Vec<NotifyTargetCon
     rsx! {
         div { class: "glass-card settings-section",
             div { class: "panel-head", h3 { "Proactive surfacing" } span { class: "chip", if config.enabled { "on" } else { "off" } } }
-            p { class: "label-tech",
+            p { class: "help",
                 "The assistant reaching out unprompted (e.g. a due reminder). Off unless enabled \
                  and a target is picked. Hard-capped by max sends per window. Takes effect on \
                  the next daemon restart."
@@ -3327,7 +3331,7 @@ fn ChannelAdaptersSection(state: NotificationsState) -> Element {
             if let Some(tg) = &state.telegram {
                 div { class: "glass-card",
                     h4 { "Telegram" }
-                    p { class: "label-tech",
+                    p { class: "help",
                         {if tg.token.configured { "Token: configured" } else { "Token: not set" }}
                     }
                     input { class: "input", placeholder: "New bot token (leave blank to keep current)",
@@ -3350,7 +3354,7 @@ fn ChannelAdaptersSection(state: NotificationsState) -> Element {
             if let Some(d) = &state.discord {
                 div { class: "glass-card",
                     h4 { "Discord" }
-                    p { class: "label-tech",
+                    p { class: "help",
                         {if d.token.configured { "Token: configured" } else { "Token: not set" }}
                     }
                     input { class: "input", placeholder: "New bot token (leave blank to keep current)",
@@ -3373,13 +3377,13 @@ fn ChannelAdaptersSection(state: NotificationsState) -> Element {
             if let Some(s) = &state.slack {
                 div { class: "glass-card",
                     h4 { "Slack" }
-                    p { class: "label-tech",
+                    p { class: "help",
                         {if s.bot_token.configured { "Bot token: configured" } else { "Bot token: not set" }}
                     }
                     input { class: "input", placeholder: "New bot token (leave blank to keep current)",
                         r#type: "password", value: "{slack_bot_token}",
                         oninput: move |e| slack_bot_token.set(e.value()) }
-                    p { class: "label-tech",
+                    p { class: "help",
                         {if s.app_token.configured { "App token: configured" } else { "App token: not set" }}
                     }
                     input { class: "input", placeholder: "New app token (leave blank to keep current)",
@@ -3421,13 +3425,13 @@ fn NotificationHistoryRow(entry: NotificationHistoryEntry) -> Element {
             div { class: "row1",
                 span { class: if tone == "live" { "dot live" } else { "dot off" } }
                 span { class: "name", "{entry.target_name}" }
-                span { class: "label-tech", style: "opacity:0.7;", "[{entry.trigger_kind} · {entry.trigger_id}]" }
+                span { class: "label-tech ident", "[{entry.trigger_kind} · {entry.trigger_id}]" }
                 span { class: "label-tech", "{entry.outcome_kind}" }
             }
-            div { class: "row2 label-tech",
+            div { class: "row2 help",
                 span { "{rel_time(entry.dispatched_at_unix_ms)}" }
                 if !entry.outcome_detail.is_empty() {
-                    span { style: "opacity:0.8;", "{entry.outcome_detail}" }
+                    span { "{entry.outcome_detail}" }
                 }
             }
         }
@@ -3446,11 +3450,11 @@ fn SessionRow(entry: SessionSummary) -> Element {
             div { class: "row1",
                 span { class: "dot live" }
                 span { class: "name", "{entry.session_id}" }
-                span { class: "label-tech", style: "opacity:0.7;", "[{entry.channel:?} · {entry.trust_tier:?}]" }
+                span { class: "label-tech", "[{entry.channel:?} · {entry.trust_tier:?}]" }
             }
             div { class: "row2 label-tech",
                 span { "created {rel_time(entry.created_at_ms)}" }
-                span { style: "opacity:0.8;", "active {rel_time(entry.last_active_at_ms)}" }
+                span { "active {rel_time(entry.last_active_at_ms)}" }
             }
         }
     }
@@ -3483,7 +3487,7 @@ fn SessionsPanel() -> Element {
                     }
                     if rows.is_empty() {
                         div { class: "glass-card empty",
-                            p { class: "label-tech", "No active sessions." }
+                            p { class: "help", "No active sessions." }
                         }
                     } else {
                         div { class: "feed",
@@ -3557,7 +3561,7 @@ fn AuditPanel() -> Element {
                         span { class: "label-tech", "{state.total_len} total events" }
                     }
                     div { class: "glass-card", style: "margin-bottom:12px;",
-                        button {
+                        button { class: "btn btn-glass btn-xs",
                             onclick: move |_| ws.send(FrontendMessage::Query {
                                 id: "mc-verify".to_string(),
                                 payload: QueryPayload::VerifyAuditChain,
@@ -3625,7 +3629,7 @@ fn AuditPanel() -> Element {
                 section { class: "panel",
                     div { class: "panel-head", h3 { "About" } }
                     div { class: "glass-card",
-                        p { class: "label-tech",
+                        p { class: "help",
                             "Every allowed or denied action, HMAC-chained and offline-verifiable. This screen shows {AUDIT_PAGE_SIZE} events at a time — use Older/Newer to page through the chain."
                         }
                     }
@@ -3665,7 +3669,7 @@ fn MissionsPanel(missions: Vec<TeamMissionView>) -> Element {
             if missions.is_empty() {
                 div { class: "empty card",
                     p { "No team missions yet." }
-                    p { class: "label-tech", "Start one above to dispatch the Nonagon." }
+                    p { class: "help", "Start one above and your team takes it on." }
                 }
             } else {
                 for m in missions.iter() {
@@ -3720,7 +3724,7 @@ fn MissionRow(mission: TeamMissionView) -> Element {
             div { class: "row1",
                 span { class: "chip {phase_class(mission.phase)}", "{phase_label(mission.phase)}" }
                 span { class: "goal", "{mission.goal}" }
-                span { class: "lead label-tech", "{mission.lead}" }
+                span { class: "lead label-tech ident", "{mission.lead}" }
             }
             // POLISH_WAVES.md sub-project 5, item A — the operator
             // previously saw REJECTED/HALTED with no explanation;
@@ -3732,7 +3736,7 @@ fn MissionRow(mission: TeamMissionView) -> Element {
             div { class: "progress", div { class: "fill", style: "width: {pct}%;" } }
             div { class: "steps",
                 for step in mission.steps.iter() {
-                    span { class: "step label-tech", "{step.label}" }
+                    span { class: "step label-tech ident", "{step.label}" }
                 }
             }
             if awaiting {
@@ -3810,7 +3814,7 @@ fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<
                 if watchable.is_empty() {
                     div { class: "empty card",
                         p { "No mission is currently executing, paused, or awaiting approval." }
-                        p { class: "label-tech", "Start one from the Missions screen." }
+                        p { class: "help", "Start one from the Missions screen." }
                     }
                 } else {
                     div { class: "mission-picker",
@@ -3827,7 +3831,7 @@ fn MissionControlPanel(missions: Vec<TeamMissionView>, selected_mission: Signal<
                                 },
                                 span { class: "chip {phase_class(m.phase)}", "{phase_label(m.phase)}" }
                                 span { class: "goal", "{m.goal}" }
-                                span { class: "lead label-tech", "{m.lead}" }
+                                span { class: "lead label-tech ident", "{m.lead}" }
                             }
                         }
                     }
@@ -4102,25 +4106,25 @@ fn SpecialistDrillIn(node: MissionGraphNode, roster: TeamConfig, mission: TeamMi
                 if node.is_lead { span { class: "chip", "LEAD" } }
             }
             if let Some(step) = current_step_detail {
-                p { class: "label-tech", "currently running: {step.label}" }
+                p { class: "help", "currently running: {step.label}" }
             } else {
-                p { class: "label-tech", "idle — no step currently running" }
+                p { class: "help", "idle — no step currently running" }
             }
             if !declared.is_empty() {
                 div { class: "scopes",
-                    p { class: "label-tech", "declared capability scopes:" }
+                    p { class: "help", "declared capability scopes:" }
                     for s in declared.iter() {
-                        span { class: "chip", "{s}" }
+                        span { class: "chip ident", "{s}" }
                     }
                 }
             }
             if !inert.is_empty() {
-                p { class: "label-tech inert-hint",
+                p { class: "help inert-hint",
                     "Lead lacks {inert.join(\", \")} — inert until the lead holds them (attenuated at spawn)."
                 }
             }
             if !node.on_roster {
-                p { class: "label-tech roster-hint",
+                p { class: "help roster-hint",
                     "Not on the daemon's current default roster — this mission's own team config pinned a different roster."
                 }
             }
@@ -4284,7 +4288,7 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
                 }
             }
             if !info.can_allow_here {
-                p { class: "label-tech",
+                p { class: "help",
                     "Cloud use can only be allowed by the operator — from the terminal \
                      (/allow-cloud) or the Studio."
                 }
@@ -4568,7 +4572,7 @@ fn MemoryPanel() -> Element {
                 if graph_view() {
                     if m.graph_nodes.is_empty() {
                         div { class: "glass-card empty",
-                            p { class: "label-tech", "No topics to graph yet." }
+                            p { class: "help", "No topics to graph yet." }
                         }
                     } else {
                         MemoryGraph {
@@ -4585,7 +4589,7 @@ fn MemoryPanel() -> Element {
                     SkeletonList { rows: 4 }
                 } else if m.entries.is_empty() {
                     div { class: "glass-card empty",
-                        p { class: "label-tech", "No memory here yet — the agent writes memories as it learns what matters to you." }
+                        p { class: "help", "No memory here yet — the agent writes memories as it learns what matters to you." }
                     }
                 } else {
                     div { class: "mem-entries",
@@ -4615,19 +4619,19 @@ fn LearningSection(learning: Option<aivyx_ipc::insights::LearningDigest>) -> Ele
             match &learning {
                 None => rsx! {
                     div { class: "glass-card empty",
-                        p { class: "label-tech", "Loading…" }
+                        p { class: "help", "Loading…" }
                     }
                 },
                 Some(d) if d.recalls_total == 0 => rsx! {
                     div { class: "glass-card empty",
-                        p { class: "label-tech", "Nothing learned yet — no recalls in the lookback window." }
+                        p { class: "help", "Nothing learned yet — no recalls in the lookback window." }
                     }
                 },
                 Some(d) => rsx! {
                     div { class: "glass-card",
-                        p { class: "label-tech", "{d.recalls_scored}/{d.recalls_total} recalls scored · {d.promoted} promoted · {d.proposals_in_window} proposals this window" }
+                        p { class: "help", "{d.recalls_scored}/{d.recalls_total} recalls scored · {d.promoted} promoted · {d.proposals_in_window} proposals this window" }
                         if !d.top_helpful.is_empty() {
-                            p { class: "label-tech", style: "margin-top:6px;",
+                            p { class: "help", style: "margin-top:6px;",
                                 "Most helpful: "
                                 for (topic, score) in d.top_helpful.iter().take(3) {
                                     span { style: "margin-right:8px;", "{topic} ({score:.2})" }
@@ -4670,8 +4674,8 @@ fn ConflictsPanel(topic: String, conflicts: Vec<aivyx_ipc::conflict::MemoryConfl
                     rsx! {
                         div { class: "glass-card conflict", key: "{conflict_id}",
                             p { class: "notice err", "{c.reason}" }
-                            div { class: "conflict-side", span { class: "label-tech", "{a.topic} #{a.seq}" } p { "{a.body}" } }
-                            div { class: "conflict-side", span { class: "label-tech", "{b.topic} #{b.seq}" } p { "{b.body}" } }
+                            div { class: "conflict-side", span { class: "label-tech ident", "{a.topic} #{a.seq}" } p { "{a.body}" } }
+                            div { class: "conflict-side", span { class: "label-tech ident", "{b.topic} #{b.seq}" } p { "{b.body}" } }
                             div { class: "conflict-actions",
                                 button {
                                     class: "btn btn-success btn-xs",
@@ -4784,7 +4788,7 @@ fn WikiPanel() -> Element {
             aside { class: "mem-rail",
                 div { class: "panel-head", h3 { "Pages" } span { class: "label-tech", "{w.pages.len()}" } }
                 if w.pages.is_empty() {
-                    p { class: "label-tech", style: "padding:8px",
+                    p { class: "help", style: "padding:8px",
                         "No pages yet. Set [memory] profile = \"smart\" (or [wiki] enabled = true) and the agent consolidates each memory topic into a page."
                     }
                 }
@@ -4808,7 +4812,7 @@ fn WikiPanel() -> Element {
                     Some(page) => rsx! { WikiPageView { page } },
                     None => rsx! {
                         div { class: "glass-card empty",
-                            p { class: "label-tech",
+                            p { class: "help",
                                 "Select a page. Each is the agent's consolidated summary of one memory topic — what it knows, not just what it logged."
                             }
                         }
@@ -4848,7 +4852,7 @@ fn WikiPageView(page: WikiPage) -> Element {
                     }
                 }
             }
-            div { class: "when label-tech", style: "margin-top:8px",
+            div { class: "help", style: "margin-top:8px",
                 "consolidated from {page.source_seqs.len()} memory entr",
                 if page.source_seqs.len() == 1 { "y" } else { "ies" }
             }
@@ -4998,7 +5002,7 @@ fn SkillsPanel() -> Element {
                     } else {
                         "border-left: 3px solid var(--danger, #b91c1c); margin-bottom: 12px; padding: 8px 12px;"
                     },
-                    p { class: "label-tech", "{text}" }
+                    p { class: "help", "{text}" }
                 }
             }
             if teach_open() {
@@ -5010,14 +5014,14 @@ fn SkillsPanel() -> Element {
                         value: "{teach_name}",
                         oninput: move |e| teach_name.set(e.value()),
                     }
-                    label { class: "label-tech", "Trigger (when should the agent use this?)" }
+                    label { class: "field-label", "Trigger (when should the agent use this?)" }
                     input {
                         class: "input",
                         placeholder: "When the operator asks for a summary of a document or file.",
                         value: "{teach_trigger}",
                         oninput: move |e| teach_trigger.set(e.value()),
                     }
-                    label { class: "label-tech", "Procedure (what should the agent do?)" }
+                    label { class: "field-label", "Procedure (what should the agent do?)" }
                     textarea {
                         class: "input",
                         rows: "4",
@@ -5047,7 +5051,7 @@ fn SkillsPanel() -> Element {
                 SkeletonCards { cards: 4 }
             } else if s.skills.is_empty() {
                 div { class: "glass-card empty",
-                    p { class: "label-tech",
+                    p { class: "help",
                         "No skills yet. Teach one in chat (\"learn this skill…\"), or enable [skill_authoring] so the agent writes specialized skills from what it knows."
                     }
                 }
@@ -5087,7 +5091,7 @@ fn SkillCard(view: SkillView) -> Element {
             }
             p { class: "skill-trigger", "{sk.trigger}" }
             if let Some(from) = sk.refined_from.as_ref() {
-                p { class: "label-tech", "refined from {from}" }
+                p { class: "help", "refined from {from}" }
             }
             div { class: "skill-eff",
                 span { class: "chip {eff_class}", "{eff_label}" }
@@ -5246,7 +5250,7 @@ fn McpPanel() -> Element {
                 SkeletonCards { cards: 3 }
             } else if m.servers.is_empty() {
                 div { class: "glass-card empty",
-                    p { class: "label-tech",
+                    p { class: "help",
                         "No MCP servers reported at the last daemon start. Add one below, then restart the daemon."
                     }
                 }
@@ -5289,7 +5293,7 @@ fn McpPanel() -> Element {
                     },
                 }
             } else if m.configs.is_empty() {
-                div { class: "glass-card empty", p { class: "label-tech", "No `[[mcp_server]]` entries configured yet." } }
+                div { class: "glass-card empty", p { class: "help", "No `[[mcp_server]]` entries configured yet." } }
             } else {
                 div { class: "mcp-grid",
                     for cfg in m.configs.iter() {
@@ -5348,7 +5352,7 @@ fn LoopPanel() -> Element {
                 SkeletonCards { cards: 1 }
             } else if !l.armed {
                 div { class: "glass-card empty",
-                    p { class: "label-tech", "No [loop] section configured -- nothing to start." }
+                    p { class: "help", "No [loop] section configured -- nothing to start." }
                 }
             } else {
                 div { class: "glass-card",
@@ -5364,7 +5368,7 @@ fn LoopPanel() -> Element {
                             }
                         }
                     }
-                    p { class: "label-tech",
+                    p { class: "help",
                         "Spend: ${(l.state.spent_cents as f64 / 100.0):.2} -- {l.state.tokens_used / 1000}k tokens -- backlog: {l.remaining} remaining"
                     }
                     div { style: "display:flex; gap:10px; margin-top:12px;",
@@ -5424,7 +5428,7 @@ fn RemindersPanel() -> Element {
                 SkeletonCards { cards: 2 }
             } else if r.reminders.is_empty() {
                 div { class: "glass-card empty",
-                    p { class: "label-tech", "No pending reminders." }
+                    p { class: "help", "No pending reminders." }
                 }
             } else {
                 {
@@ -5497,7 +5501,7 @@ fn McpServerCard(view: McpServerStatusView, call_stats: Option<McpServerCallStat
                 span { class: health_class, title: "last 24h", "{health_label}" }
             }
             if view.connected {
-                p { class: "label-tech", "{view.tool_count} tool(s) registered" }
+                p { class: "help", "{view.tool_count} tool(s) registered" }
             } else {
                 if let Some(err) = view.error.as_ref() {
                     p { class: "mcp-error", "{err}" }
@@ -5845,13 +5849,13 @@ fn GalleryPanel() -> Element {
                 SkeletonCards { cards: 6 }
             } else if !g.available {
                 div { class: "glass-card empty",
-                    p { class: "label-tech",
+                    p { class: "help",
                         "No `comfyui` MCP server is configured. Add a `[[mcp_server]]` block named \"comfyui\" in aivyx-pa.toml pointing at a running ComfyUI instance, then restart the daemon."
                     }
                 }
             } else if g.images.is_empty() {
                 div { class: "glass-card empty",
-                    p { class: "label-tech", "No images generated yet." }
+                    p { class: "help", "No images generated yet." }
                 }
             } else {
                 div { class: "gallery-grid",
@@ -5947,7 +5951,7 @@ fn ModelsPanel() -> Element {
                         code { "[[routing.models]]" }
                         " entries, and restart the daemon."
                     }
-                    p { class: "label-tech sub",
+                    p { class: "help sub",
                         "See the example config's [routing] section for every option."
                     }
                 }
@@ -5978,7 +5982,7 @@ fn ModelsPanel() -> Element {
             div { class: "glass-card settings-section",
                 h3 { "Candidates" }
                 if st.candidates.is_empty() {
-                    p { class: "label-tech", "No candidate models." }
+                    p { class: "help", "No candidate models." }
                 } else {
                     div { class: "models-table-wrap",
                         table { class: "models-table",
@@ -6046,9 +6050,9 @@ fn ModelsPanel() -> Element {
                     p { span { class: "label-tech", "Why · " } {routing::plain_reason(&reason)} }
                 }
                 if let Some(taint) = conv.as_ref().and_then(|c| c.tainted.clone()) {
-                    p { class: "label-tech sub", "Never escalates to the cloud: {taint}" }
+                    p { class: "help sub", "Never escalates to the cloud: {taint}" }
                 } else if conv.as_ref().is_some_and(|c| c.cloud_allowed) {
-                    p { class: "label-tech sub",
+                    p { class: "help sub",
                         "Cloud use allowed for this conversation until the page reloads or the daemon restarts."
                     }
                 }
@@ -6077,7 +6081,7 @@ fn ModelsPanel() -> Element {
                 if let Some((ok, text)) = r.pin_notice.clone() {
                     div { class: if ok { "notice ok" } else { "notice err" }, "{text}" }
                 }
-                p { class: "label-tech sub",
+                p { class: "help sub",
                     "The pin applies to this Studio chat conversation only. Reloading the page, a \
                      reconnect, or a daemon restart starts a new conversation without it."
                 }
@@ -6179,11 +6183,11 @@ fn ToolsPanel() -> Element {
                 SkeletonCards { cards: 4 }
             } else if t.tools.is_empty() {
                 div { class: "glass-card empty",
-                    p { class: "label-tech", "No tools reported by the daemon." }
+                    p { class: "help", "No tools reported by the daemon." }
                 }
             } else if groups.is_empty() {
                 div { class: "glass-card empty",
-                    p { class: "label-tech", "No tools match \"{query}\"." }
+                    p { class: "help", "No tools match \"{query}\"." }
                 }
             } else {
                 for (domain, rows) in groups.iter() {
@@ -6212,7 +6216,7 @@ fn ToolCard(entry: ToolCatalogEntry) -> Element {
                 span { class: "tool-name", "{entry.name}" }
                 span { class: tier_chip_class(entry.min_tier), "{tier_label(entry.min_tier)}" }
             }
-            p { class: "label-tech", "{entry.scope_base}" }
+            p { class: "help", "{entry.scope_base}" }
             p { class: "tool-desc", "{entry.description}" }
         }
     }
@@ -6243,7 +6247,7 @@ fn LatticePanel() -> Element {
             }
             if g.entities.is_empty() {
                 div { class: "glass-card empty",
-                    p { class: "label-tech",
+                    p { class: "help",
                         "No graph yet. Set [memory] profile = \"smart\" (or [graph] enabled = true) and the agent extracts typed relations — (subject)-[predicate]->(object) — from its memory."
                     }
                 }
@@ -6621,7 +6625,7 @@ fn MemoryGraph(
     rsx! {
         div { class: "glass-card mem-graph-card",
             if edges.is_empty() {
-                p { class: "label-tech sub", "No co-occurrence links yet — topics appear as a cloud until the agent recalls them together." }
+                p { class: "help sub", "No co-occurrence links yet — topics appear as a cloud until the agent recalls them together." }
             }
             svg {
                 class: "mem-graph",
@@ -6816,7 +6820,7 @@ fn SettingsPanel() -> Element {
             return rsx! {
                 div { class: "settings",
                     div { class: "glass-card empty",
-                        p { class: "label-tech", "Loading settings…" }
+                        p { class: "help", "Loading settings…" }
                     }
                 }
             }
@@ -6836,7 +6840,7 @@ fn SettingsPanel() -> Element {
             if st.restart_required {
                 div { class: "glass-card restart-banner",
                     strong { "Saved — restart the daemon to apply." }
-                    p { class: "label-tech",
+                    p { class: "help",
                         "Settings are read once at startup. Run  "
                         code { "aivyx-pa daemon stop && aivyx-pa daemon run" }
                     }
@@ -6853,7 +6857,7 @@ fn SettingsPanel() -> Element {
                     h3 { "Access level" }
                     span { class: level_chip_class(&snap.access_level), "{snap.access_level}" }
                 }
-                p { class: "label-tech",
+                p { class: "help",
                     "How far the agent can reach on disk. Expanding beyond the sandbox is confirmed first."
                 }
                 div { class: "field-row",
@@ -6880,7 +6884,7 @@ fn SettingsPanel() -> Element {
                         }
                     }
                 }
-                p { class: "label-tech sub", "Current reach: {snap.fs_root}" }
+                p { class: "help sub", "Current reach: {snap.fs_root}" }
                 div { class: "actions",
                     button {
                         class: "btn btn-primary",
@@ -6902,7 +6906,7 @@ fn SettingsPanel() -> Element {
                     h3 { "Autonomy" }
                     span { class: level_chip_class(&snap.autonomy_level), "{snap.autonomy_level}" }
                 }
-                p { class: "label-tech",
+                p { class: "help",
                     "How autonomous the agent is. One dial that composes the safety \
                      knobs; supervised and above arm the autonomous loop. Granting \
                      unattended autonomy is confirmed first."
@@ -6920,7 +6924,7 @@ fn SettingsPanel() -> Element {
                         option { value: "unleashed", "unleashed — deletes and overwrites run without asking; emails and other outbound actions still ask (isolated machines only)" }
                     }
                 }
-                p { class: "label-tech sub",
+                p { class: "help sub",
                     if snap.autonomy_overrides.is_empty() {
                         "Per-area overrides: none. "
                     } else {
@@ -6954,7 +6958,7 @@ fn SettingsPanel() -> Element {
             // ── Budget (editable) ──
             div { class: "glass-card settings-section",
                 div { class: "panel-head", h3 { "Budget" } }
-                p { class: "label-tech", "Dollar caps on spend. Leave a cap blank for unlimited." }
+                p { class: "help", "Dollar caps on spend. Leave a cap blank for unlimited." }
                 div { class: "field-row",
                     label { class: "label-tech", "Per run ($)" }
                     input {
@@ -7002,7 +7006,7 @@ fn SettingsPanel() -> Element {
             // ── Agent loop safety (editable) ──
             div { class: "glass-card settings-section",
                 div { class: "panel-head", h3 { "Agent" } }
-                p { class: "label-tech",
+                p { class: "help",
                     "Loop protection. Stops the agent if it falls into a repeating cycle \
                      of the same actions (e.g. A→B→A→B) instead of making progress."
                 }
@@ -7017,7 +7021,7 @@ fn SettingsPanel() -> Element {
                         }
                     }
                 }
-                p { class: "label-tech sub",
+                p { class: "help sub",
                     "Off by default for the interactive agent; autonomous team agents always \
                      have it on. Takes effect on the next restart."
                 }
@@ -7038,7 +7042,7 @@ fn SettingsPanel() -> Element {
                         div { {if snap.embeddings_available { "available" } else { "off" }} }
                     }
                 }
-                p { class: "label-tech sub", "Change the provider, model, or keys with  " code { "aivyx-pa init" } }
+                p { class: "help sub", "Change the provider, model, or keys with  " code { "aivyx-pa init" } }
             }
 
             if let Some(cfg) = settings().memory_profile.clone() {
@@ -7268,7 +7272,7 @@ fn VoicePanel() -> Element {
         None => {
             return rsx! {
                 div { class: "settings voice",
-                    div { class: "glass-card empty", p { class: "label-tech", "Loading voice config…" } }
+                    div { class: "glass-card empty", p { class: "help", "Loading voice config…" } }
                 }
             }
         }
@@ -7280,7 +7284,7 @@ fn VoicePanel() -> Element {
             if st.restart_required {
                 div { class: "glass-card restart-banner",
                     strong { "Saved — restart voice to apply." }
-                    p { class: "label-tech",
+                    p { class: "help",
                         "[voice] is read when the voice channel starts. Stop and re-run  "
                         code { "aivyx-pa --channel voice" }
                     }
@@ -7293,7 +7297,7 @@ fn VoicePanel() -> Element {
             // ── Readiness ──
             div { class: "glass-card settings-section",
                 div { class: "panel-head", h3 { "Readiness" } }
-                p { class: "label-tech",
+                p { class: "help",
                     "Voice runs on the host (microphone + speakers). These files must exist before you launch."
                 }
                 div { class: "kv-grid",
@@ -7373,9 +7377,9 @@ fn VoicePanel() -> Element {
             // ── Launch ──
             div { class: "glass-card settings-section",
                 div { class: "panel-head", h3 { "Launch" } }
-                p { class: "label-tech", "Start voice as its own foreground process on this machine:" }
+                p { class: "help", "Start voice as its own foreground process on this machine:" }
                 pre { class: "launch-cmd", "aivyx-pa --channel voice" }
-                p { class: "label-tech sub", "The audio loop (mic → Whisper → agent → Kokoro → speakers) runs on the host, not in the browser." }
+                p { class: "help sub", "The audio loop (mic → Whisper → agent → Kokoro → speakers) runs on the host, not in the browser." }
             }
 
             div { class: "actions sticky-save",
@@ -7548,7 +7552,7 @@ fn AgentsPanel() -> Element {
             return rsx! {
                 div { class: "settings agents",
                     div { class: "glass-card empty",
-                        p { class: "label-tech", "Loading profile…" }
+                        p { class: "help", "Loading profile…" }
                     }
                 }
             }
@@ -7573,7 +7577,7 @@ fn AgentsPanel() -> Element {
             if st.restart_required {
                 div { class: "glass-card restart-banner",
                     strong { "Saved — restart the daemon to apply." }
-                    p { class: "label-tech",
+                    p { class: "help",
                         "The Profile shapes every turn's system prompt at startup. Run  "
                         code { "aivyx-pa daemon stop && aivyx-pa daemon run" }
                     }
@@ -7592,7 +7596,7 @@ fn AgentsPanel() -> Element {
                         {if profile.injection_enabled { "shaping prompts" } else { "passthrough" }}
                     }
                 }
-                p { class: "label-tech",
+                p { class: "help",
                     "What you declare about your assistant and yourself. The agent reads this at startup; leave a field blank to clear it."
                 }
                 div { class: "field-row",
@@ -7654,7 +7658,7 @@ fn AgentsPanel() -> Element {
 
             // ── Self-learned persona (governance — never hand-edited) ──
             div { class: "section-divider label-tech", "Self-learned persona" }
-            p { class: "label-tech persona-blurb",
+            p { class: "help persona-blurb",
                 "The agent proposes these from reflection; you approve or revert. \
                  Changes apply on the next turn — no restart needed."
             }
@@ -7672,7 +7676,7 @@ fn AgentsPanel() -> Element {
                     }
                 }
                 if st.proposals.is_empty() {
-                    p { class: "label-tech sub", "Nothing awaiting review." }
+                    p { class: "help sub", "Nothing awaiting review." }
                 } else {
                     div { class: "proposal-list",
                         for p in st.proposals.clone() {
@@ -7697,7 +7701,7 @@ fn AgentsPanel() -> Element {
                         }
                     },
                     _ => rsx! {
-                        p { class: "label-tech sub", "The agent hasn't learned anything yet." }
+                        p { class: "help sub", "The agent hasn't learned anything yet." }
                     },
                 }
             }
@@ -7706,7 +7710,7 @@ fn AgentsPanel() -> Element {
             div { class: "glass-card settings-section",
                 div { class: "panel-head", h3 { "Change history" } span { class: "chip", "{st.deltas.len()}" } }
                 if st.deltas.is_empty() {
-                    p { class: "label-tech sub", "No approved changes yet." }
+                    p { class: "help sub", "No approved changes yet." }
                 } else {
                     div { class: "delta-list",
                         for d in st.deltas.clone() {
@@ -7929,20 +7933,20 @@ fn OnboardingTeamStep(step: Signal<u8>, view: Signal<View>) -> Element {
         div { class: "glass-card settings-section",
             div { class: "panel-head", h3 { "3 · Team — who works for you" } }
             p { class: "muted",
-                "Your assistant leads a team of specialists. Keep the default Nonagon, or shape "
+                "Your assistant leads a team of specialists. Keep the default team, or shape "
                 "the lead, specialists, and their reach in the Teams editor (you can always change it later)."
             }
             {match roster {
                 Some(t) => rsx! {
                     div { class: "kv-grid",
-                        div { span { class: "label-tech", "Team" } div { "{t.name}" } }
+                        div { span { class: "label-tech", "Team" } div { "{team_display_name(&t.name)}" } }
                         div { span { class: "label-tech", "Lead" } div { "{t.lead}" } }
                         div { span { class: "label-tech", "Members" } div { "{t.members.len()}" } }
                     }
                     button { class: "btn btn-glass", onclick: move |_| view.set(View::Teams),
                         "Customize team →" }
                 },
-                None => rsx! { p { class: "label-tech", "Loading team…" } },
+                None => rsx! { p { class: "help", "Loading team…" } },
             }}
             div { class: "wizard-nav",
                 button { class: "btn ghost", onclick: move |_| { let mut s = step; s.set(1); }, "Back" }
@@ -8042,7 +8046,7 @@ fn SeedOnboardingCard() -> Element {
                 h3 { "Seed your assistant" }
                 span { class: "chip success", "fresh" }
             }
-            p { class: "label-tech",
+            p { class: "help",
                 "This agent hasn't learned a personality yet. Give it a head start — \
                  it keeps growing from use. Describe it, optionally let the model draft \
                  a set, edit, then plant."
@@ -8164,7 +8168,7 @@ fn ProposalCard(p: PersonaProposalSummary) -> Element {
             }
             p { class: "op-desc", "{op_desc}" }
             if let Some(reason) = p.proposed_reason.clone() {
-                p { class: "label-tech reason", "“{reason}”" }
+                p { class: "help reason", "“{reason}”" }
             }
 
             match mode() {
@@ -8310,9 +8314,9 @@ fn ListEditor(title: String, hint: String, items: Signal<Vec<String>>) -> Elemen
                 h3 { "{title}" }
                 span { class: "chip", "{items().len()}" }
             }
-            p { class: "label-tech", "{hint}" }
+            p { class: "help", "{hint}" }
             if items().is_empty() {
-                p { class: "label-tech sub", "None declared." }
+                p { class: "help sub", "None declared." }
             } else {
                 div { class: "list-editor",
                     for (i, entry) in items().into_iter().enumerate() {
@@ -9446,7 +9450,7 @@ fn TeamsPanel() -> Element {
             if st.restart_required {
                 div { class: "glass-card restart-banner",
                     strong { "Saved — restart the daemon to run the new team." }
-                    p { class: "label-tech",
+                    p { class: "help",
                         "The team is assembled at startup. Run  "
                         code { "aivyx-pa daemon stop && aivyx-pa daemon run" }
                     }
@@ -9466,13 +9470,13 @@ fn TeamsPanel() -> Element {
             div { class: "glass-card settings-section",
                 div { class: "panel-head",
                     h3 { "Draft a team for my role" }
-                    span { class: "label-tech",
-                        "generates all 8 specialists from your Profile role + use cases"
+                    span { class: "help",
+                        "Builds all eight specialists from your profile's role and use cases."
                     }
                 }
                 if show_draft_box() {
                     div { class: "field-row",
-                        label { class: "label-tech", "Extra context (optional)" }
+                        label { class: "field-label", "Extra context (optional)" }
                         textarea {
                             class: "input",
                             rows: "3",
@@ -9517,8 +9521,8 @@ fn TeamsPanel() -> Element {
                 }
                 div { class: "field-row",
                     label { class: "label-tech", "Name" }
-                    input { class: "input", value: "{team.name}",
-                        oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.name = e.value(); } } }
+                    input { class: "input", value: "{team_display_name(&team.name)}",
+                        oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.name = team_name_from_display(&e.value()); } } }
                 }
                 div { class: "field-row",
                     label { class: "label-tech", "Description" }
@@ -9585,23 +9589,23 @@ fn TeamsPanel() -> Element {
                             }
                             div { class: "field-row",
                                 label { class: "label-tech", "Scopes" }
-                                textarea { class: "input", rows: "2", placeholder: "fs.read\nmemory.write",
+                                textarea { class: "input", rows: "{textarea_rows(&scopes_text, 3, 10)}", placeholder: "fs.read\nmemory.write",
                                     value: "{scopes_text}",
                                     oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.members[i].capability_scopes = parse_token_list(&e.value()); } } }
                             }
                             div { class: "field-row",
                                 label { class: "label-tech", "Tools" }
-                                textarea { class: "input", rows: "2", placeholder: "fs.read\nteam.message",
+                                textarea { class: "input", rows: "{textarea_rows(&tools_text, 3, 10)}", placeholder: "fs.read\nteam.message",
                                     value: "{tools_text}",
                                     oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.members[i].tool_allowlist = parse_token_list(&e.value()); } } }
                             }
                             div { class: "field-row",
                                 label { class: "label-tech", "Soul" }
-                                textarea { class: "input", rows: "3", value: "{m.soul}",
+                                textarea { class: "input soul-input", rows: "8", value: "{m.soul}",
                                     oninput: move |e| { if let Some(t) = draft.write().as_mut() { t.members[i].soul = e.value(); } } }
                             }
                             if !widened_text.is_empty() {
-                                p { class: "label-tech sub",
+                                p { class: "help sub",
                                     "Lead lacks {widened_text} — inert until the lead holds them (attenuated at spawn)." }
                             }
                         }
@@ -9629,7 +9633,7 @@ fn TeamsPanel() -> Element {
                             });
                         }
                     },
-                    {if can_add { "Add specialist" } else { "Nonagon full (9 members)" }}
+                    {if can_add { "Add specialist" } else { "Team full (9 members)" }}
                 }
                 button { class: "btn btn-primary", disabled: !dirty || !connected(),
                     onclick: move |_| { if let Some(t) = draft() { ws.send(set_team_roster_query(&t)); } },
@@ -9666,6 +9670,65 @@ fn draft_team_template_query(description: String) -> FrontendMessage {
     FrontendMessage::DraftTeamTemplate {
         id: "mc-teams-draft".to_string(),
         description,
+    }
+}
+
+/// The built-in default team's identifier (`aivyx_team::default_roster`).
+/// It is a config key, not a name a person should have to read.
+const DEFAULT_TEAM_ID: &str = "default-nonagon";
+/// What the Studio calls the built-in default team.
+const DEFAULT_TEAM_LABEL: &str = "Default team";
+
+/// The team name as shown in the Studio: the built-in default team reads
+/// "Default team"; any other name is shown as written.
+fn team_display_name(name: &str) -> String {
+    if name == DEFAULT_TEAM_ID {
+        DEFAULT_TEAM_LABEL.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Inverse of [`team_display_name`] for the Teams editor's name field, so an
+/// untouched (or re-typed) "Default team" keeps the default team's id.
+fn team_name_from_display(input: &str) -> String {
+    if input.trim() == DEFAULT_TEAM_LABEL {
+        DEFAULT_TEAM_ID.to_string()
+    } else {
+        input.to_string()
+    }
+}
+
+/// Rows for a member editor textarea: one per line of content, at least
+/// `min`, at most `max`, so a member's scopes or soul are readable without
+/// scrolling a two-line box.
+fn textarea_rows(text: &str, min: usize, max: usize) -> usize {
+    (text.lines().count() + 1).clamp(min, max)
+}
+
+#[cfg(test)]
+mod team_name_tests {
+    use super::*;
+
+    #[test]
+    fn the_default_team_reads_as_default_team() {
+        assert_eq!(team_display_name("default-nonagon"), "Default team");
+        assert_eq!(team_display_name("kitchen-brigade"), "kitchen-brigade");
+    }
+
+    #[test]
+    fn an_untouched_default_team_name_keeps_its_id() {
+        assert_eq!(team_name_from_display("Default team"), "default-nonagon");
+        assert_eq!(team_name_from_display(" Default team "), "default-nonagon");
+        assert_eq!(team_name_from_display("My crew"), "My crew");
+        assert_eq!(team_name_from_display(&team_display_name("ops")), "ops");
+    }
+
+    #[test]
+    fn member_textareas_grow_with_their_content() {
+        assert_eq!(textarea_rows("", 3, 10), 3);
+        assert_eq!(textarea_rows("a\nb\nc\nd", 3, 10), 5);
+        assert_eq!(textarea_rows(&"x\n".repeat(40), 3, 10), 10);
     }
 }
 
@@ -9824,7 +9887,7 @@ fn DocumentsPanel() -> Element {
             } else {
                 div { class: "glass-card doc-listing",
                     if d.entries.is_empty() {
-                        p { class: "label-tech sub", "Empty directory." }
+                        p { class: "help sub", "Empty directory." }
                     } else {
                         for e in d.entries.clone() {
                             {
@@ -10061,7 +10124,7 @@ fn FileViewer(file: DocFile, root: String) -> Element {
                 match &file.content {
                     Some(text) => rsx! { pre { class: "doc-text", "{text}" } },
                     None => rsx! {
-                        p { class: "label-tech sub",
+                        p { class: "help sub",
                             {if file.binary {
                                 format!("Binary file — {} not shown.", fmt_size(file.size_bytes))
                             } else {

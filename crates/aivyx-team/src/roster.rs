@@ -136,7 +136,7 @@ pub fn default_nonagon() -> TeamConfig {
 
     TeamConfig {
         name: "default-nonagon".to_string(),
-        description: "The default general-purpose 9-role Nonagon.".to_string(),
+        description: "The default general-purpose team: a coordinator lead and eight specialists.".to_string(),
         lead: "coordinator".to_string(),
         members,
         dialogue: DialogueConfig::default(),
