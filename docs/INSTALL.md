@@ -1759,7 +1759,12 @@ own daemon and a delegated
 at the same GPU — each picks a physical KV-cache slot independently, with zero
 awareness of the other. `llama-server` itself defers rather than corrupts state
 on a same-slot collision, but the result is silent head-of-line blocking and
-cache-locality thrash.
+cache-locality thrash. Measured 2026-11-08 against one two-slot `llama-server`:
+`aivyx-pa` (`provider = "llamacpp"`) and `aivyx-coder` (`kind = "llama_server"`)
+both sent `id_slot` 0, so the second request waited about a minute behind the
+first while slot 1 stayed idle; with the broker in front and both products in
+broker mode they ran together on slots 0 and 1. **If `aivyx-pa` and
+`aivyx-coder` share a `llama-server`, run `aivyx-broker`.**
 
 [`aivyx-broker`](https://github.com/Aivyx-Agent/aivyx-broker) is a standalone
 local daemon that sits between every client and the real `llama-server`: it
