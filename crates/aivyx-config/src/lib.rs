@@ -99,6 +99,7 @@ use aivyx_storage::{KeyDomain, Storage};
 // `[access]` / `[budget]` rewriter used by both `aivyx-pa access set` and the
 // daemon's Settings IPC handlers).
 pub mod config_write;
+mod unknown_keys;
 pub use config_write::{
     write_access_section, write_agent_cycle_detection, write_autonomy_section,
     write_budget_section, write_profile_section, write_toml_0600, write_voice_section,
@@ -6435,7 +6436,7 @@ impl AivyxConfig {
     /// missing required fields become errors only at
     /// [`AivyxConfig::validate`] time.
     pub fn load_from_env_and_toml(opts: &LoadOptions) -> Result<Self, ConfigError> {
-        let toml = load_toml(opts.toml_path.as_deref())?;
+        let (toml, unknown) = load_toml(opts.toml_path.as_deref())?;
 
         // --- anthropic_api_key --------------------------------------
         // Secret; stays None if neither env nor TOML supplied one.
@@ -7606,6 +7607,11 @@ impl AivyxConfig {
                     .to_string(),
             );
         }
+
+        // A key no section type reads is dropped; say so, once per key,
+        // with the nearest known key (R8). The legacy `[aivyx]` table is
+        // captured by a field, so it is not reported here twice.
+        warnings.extend(unknown.iter().map(ToString::to_string));
 
         let mut roles: BTreeMap<String, Role> = BTreeMap::new();
 
@@ -11008,22 +11014,25 @@ fn per_category_any_set(raw: &RawPersonaAutoPropose) -> bool {
 /// - `Some(path)` with no file → return default; not an error.
 /// - `Some(path)` with unreadable file → [`ConfigError::TomlIo`].
 /// - `Some(path)` with parse failure → [`ConfigError::TomlParse`].
-fn load_toml(path: Option<&Path>) -> Result<RawToml, ConfigError> {
+fn load_toml(
+    path: Option<&Path>,
+) -> Result<(RawToml, Vec<unknown_keys::UnknownKey>), ConfigError> {
     let Some(path) = path else {
-        return Ok(RawToml::default());
+        return Ok((RawToml::default(), Vec::new()));
     };
     if !path.exists() {
-        return Ok(RawToml::default());
+        return Ok((RawToml::default(), Vec::new()));
     }
     let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::TomlIo {
         path: path.to_path_buf(),
         reason: e.to_string(),
     })?;
-    let parsed: RawToml = toml::from_str(&contents).map_err(|e| ConfigError::TomlParse {
+    // Parsed through `serde_ignored` so every key the types skip is reported
+    // (R8); the parsed value is exactly what `toml::from_str` would give.
+    unknown_keys::parse_reporting::<RawToml>(&contents).map_err(|e| ConfigError::TomlParse {
         path: path.to_path_buf(),
         reason: e.to_string(),
-    })?;
-    Ok(parsed)
+    })
 }
 
 #[cfg(test)]

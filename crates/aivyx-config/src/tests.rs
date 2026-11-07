@@ -1912,6 +1912,38 @@ passphrase = "old-section-passphrase-never-read"
     drop(env);
 }
 
+/// R8 — a key the config types do not read lands in `cfg.warnings`, once,
+/// with its path and a suggestion, and the rest of the file loads as before.
+#[test]
+fn unknown_config_key_is_reported_in_loader_warnings() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("unknown-config-key");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    std::fs::write(
+        &toml_path,
+        "[sandbox]\nallow_leaving_process_group = true\n[agent]\nmodel = \"m\"\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("unknown keys do not fail the load");
+    assert_eq!(
+        cfg.warnings,
+        vec![
+            "unknown config key `sandbox.allow_leaving_process_group` (ignored): \
+             did you mean `confine.allow_leaving_process_group`?"
+                .to_string()
+        ]
+    );
+    drop(env);
+}
+
 /// The `[aivyx_pa]` section (the current, correct name) must never
 /// trip the legacy-section warning on its own.
 #[test]

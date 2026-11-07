@@ -740,7 +740,10 @@ The first that exists wins:
 Every section is optional; a missing section means its defaults. Where a
 setting also has an environment variable, the variable wins — see
 [Environment variables](05-environment-variables.md).
-`aivyx-pa doctor` checks the config and tells you what to fix.
+`aivyx-pa doctor` checks the config and tells you what to fix. A key this
+version does not know is reported at startup under "config warnings", once
+per key, with the nearest known key if there is one; the file still loads and
+the key is ignored.
 
 ## Reading the tables
 

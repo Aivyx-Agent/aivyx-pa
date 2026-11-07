@@ -29,6 +29,7 @@ secrecy = { workspace = true }
 
 # Serde derive for the TOML schema (`RawConfigFile` mirror struct).
 serde = { workspace = true }
+serde_ignored = "0.1.14"
 
 # TOML parser. Pinned here because this is the only crate in the
 # workspace that parses TOML — `toml = "0.8"` is the de-facto Rust

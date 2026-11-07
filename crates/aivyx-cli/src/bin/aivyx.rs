@@ -1726,6 +1726,10 @@ fn run() -> Result<(), String> {
         // middle of an interactive chat (First-run D5).
         if config_banner_wanted(&mode, channel_kind, io::stdin().is_terminal()) {
             print_config_banner(&config);
+        } else {
+            // The banner is skipped for an interactive chat, but a warning
+            // (an unknown config key, say) must not be.
+            print_config_warnings(&config);
         }
 
         run_async(
@@ -2022,6 +2026,12 @@ fn print_config_banner(config: &AivyxConfig) {
             format!(", +{extra_declared} operator-declared field(s)")
         },
     );
+    print_config_warnings(config);
+}
+
+/// The load-time warnings (unknown config keys, a legacy section, ...), one
+/// per line, on stderr. Nothing when there are none.
+fn print_config_warnings(config: &AivyxConfig) {
     if !config.warnings.is_empty() {
         eprintln!();
         eprintln!("config warnings:");
