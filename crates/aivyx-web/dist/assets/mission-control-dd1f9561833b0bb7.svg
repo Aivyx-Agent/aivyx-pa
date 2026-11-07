@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Mission Control</title>
+  <!-- Dial: a lead at the centre, its team around it -->
+  <circle cx="12" cy="12" r="9"/>
+  <circle cx="12" cy="12" r="2.2"/>
+  <circle cx="12" cy="4.8" r="1"/>
+  <circle cx="18.2" cy="15.6" r="1"/>
+  <circle cx="5.8" cy="15.6" r="1"/>
+  <path d="M12 9.8V6"/>
+  <path d="M13.9 13.1 17.3 15"/>
+  <path d="M10.1 13.1 6.7 15"/>
+</svg>

@@ -5,6 +5,57 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-11-05
+
+### Changed
+
+- **The Studio sidebar is grouped.** Mission Control sits under Missions,
+  Wiki and Graph under Memory, and Gallery, Voice, Sessions, MCP and Tools
+  under a collapsible "More"; Guide and Settings stay pinned at the bottom.
+  Which groups are open is remembered per browser.
+- **Readable Studio text.** Help text, empty screens, routine prompts and the
+  Audit notes are set in normal sentence case at readable contrast; file and
+  config names keep their real case. Screens say "Missions" and "Default
+  team", and the status bar shows the model's short name (full name on hover).
+- **Empty screens say how to start.** Memory, Wiki, Graph, Models, Loop,
+  Gallery and Notifications explain what the feature does and offer a
+  button or the exact steps with a link to the guide, instead of raw config.
+- **Routines wait for the model at start.** A routine due right after the
+  daemon starts no longer fails while the model is still loading, so a new
+  install no longer opens on "The routine … failed".
+- **Sessions and Tools are plainer.** Sessions shows the channel and client
+  and drops closed Studio tabs; Tools shows a short description per tool with
+  the full text under "Details".
+- **The terminal chat has `/help`, `/quit` and `/exit`.** An unknown `/word`
+  gets "unknown command" instead of going to the model. The approval prompt
+  reads `[y] allow  [n] deny (default)  [a] show all`, the same words as
+  aivyx-coder.
+- **A timed-out turn says why and what to do:** the limit, that tool results
+  so far are kept, and the `turn_timeout_secs` setting under `[agent]`. Chat
+  apps get the same wording.
+- **`init` no longer invents an identity from empty answers**, shows the
+  drafting time and lets Ctrl-C skip the draft, and says what the background
+  service installs (its name, what it runs, its log and how to remove it)
+  before asking. The top-level help lists developer commands separately.
+
+### Fixed
+
+- **The Studio link is only printed when the Studio is running, at its real
+  port.** If its port is taken (for example by another pa instance), the
+  REPL, `aivyx-pa studio` and `doctor` say so and name the setting to change,
+  instead of printing a link to the other instance.
+- **A daemon that fails to start shows the reason** from its log in the
+  message, and names the log once. The Studio's bind error says "port".
+- The daemon names `aivyx-pa studio` for the sign-in link.
+
+### Security
+
+- **Spreadsheet reading:** calamine 0.38 (RUSTSEC-2026-0436), so a malformed
+  `.xls` file can no longer crash or exhaust memory while being read.
+- Dependency updates: async-executor 1.14.1 (1.14.0 was yanked); the zip
+  extract advisory RUSTSEC-2026-0429 is accepted with its reason (the
+  affected function is never called).
+
 ## [0.19.4] — 2026-11-01
 
 ### Changed
