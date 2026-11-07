@@ -598,7 +598,10 @@ mod tests {
             format!("ipc.protocol_version = {}", aivyx_ipc::protocol::PROTOCOL_VERSION),
             format!("tool.protocol_version = {}", aivyx_tool::wire::TOOL_PROTOCOL_VERSION),
             // aivyx-pack exposes no constant: probe its manifest dispatcher for the
-            // `format` values it does not refuse as `UnsupportedFormat`.
+            // `format` values it does not refuse as `UnsupportedFormat`. Covers
+            // 0..=16 and relies on `Manifest::parse` checking the format (and
+            // rejecting unknown ones with `UnsupportedFormat`) before anything
+            // else; a higher format number would need the range widened.
             format!(
                 "pack.formats = {}",
                 (0u32..=16)

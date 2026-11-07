@@ -357,6 +357,7 @@ slack.team_run_channel: bool
 slack.team_trigger_rate_limit: u32?
 storage.path: str?
 team.config_path: str?
+telegram.chat_filter: alias of telegram.chat_id
 telegram.chat_id: i64?
 telegram.team_command_allowed_senders: [i64]
 telegram.team_run_channel: bool

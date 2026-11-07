@@ -13014,12 +13014,15 @@ fn stable_config_keys() {
     }
     /// Key paths (under `prefix`) of one struct type.
     ///
-    /// `aliases` names `#[serde(alias = ..)]` spellings of the struct's own
+    /// `aliases` are `(alias, field)` pairs for `#[serde(alias = ..)]` spellings of the struct's own
     /// fields. serde lists an alias beside its field in `FIELDS`, and
     /// serde-reflection pairs names with values by position, so every alias
     /// shifts the types after it by one (and leaves the last field's type
     /// unresolved). The aliases are dropped and the types re-paired here.
-    fn trace<T: serde::de::DeserializeOwned>(prefix: &str, aliases: &[&str]) -> Vec<String> {
+    fn trace<T: serde::de::DeserializeOwned>(
+        prefix: &str,
+        aliases: &[(&str, &str)],
+    ) -> Vec<String> {
         let mut tracer = Tracer::new(TracerConfig::default());
         let (format, _) = tracer
             .trace_simple_type::<T>()
@@ -13032,8 +13035,15 @@ fn stable_config_keys() {
                 panic!("{prefix} is not a struct")
             };
             let names: Vec<String> =
-                fs.iter().map(|f| f.name.clone()).filter(|n| !aliases.contains(&n.as_str())).collect();
-            assert_eq!(fs.len(), names.len() + aliases.len(), "{prefix}: alias not found");
+                fs.iter().map(|f| f.name.clone()).filter(|n| !aliases.iter().any(|(a, _)| a == n)).collect();
+            assert!(
+                fs.len() == names.len() + aliases.len(),
+                "docs/stable/config.txt: an alias listed for {prefix} is no longer accepted by \
+                 RawToml (or never was): removing an alias breaks existing configs \
+                 (docs/COMPATIBILITY.md). If intended, update the alias list in this test and run \
+                 UPDATE_STABLE_SURFACE=1 cargo test -p aivyx-config stable_config_keys, then \
+                 commit docs/stable/"
+            );
             // The values are shifted left by the aliases: the tail is unresolved.
             let mut values: Vec<Format> = fs.iter().map(|f| f.value.clone()).collect();
             for _ in aliases {
@@ -13043,6 +13053,10 @@ fn stable_config_keys() {
             *fs = names.into_iter().zip(values).map(|(name, value)| Named { name, value }).collect();
         }
         fields(prefix, &name, &registry, &mut out);
+        // Accepted alias spellings are part of the surface too.
+        out.extend(
+            aliases.iter().map(|(a, f)| format!("{prefix}.{a}: alias of {prefix}.{f}")),
+        );
         out
     }
     /// Records `RawToml`'s field names (as TOML spells them) and stops.
@@ -13081,7 +13095,7 @@ fn stable_config_keys() {
     fn aliased<T: serde::de::DeserializeOwned>(
         prefix: &str,
         _: &T,
-        aliases: &[&str],
+        aliases: &[(&str, &str)],
     ) -> Vec<String> {
         trace::<T>(prefix, aliases)
     }
@@ -13181,7 +13195,7 @@ fn stable_config_keys() {
         ("kvcache", plain("kvcache", &kvcache)),
         ("memory", plain("memory", &memory)),
         // `chat_id` carries `#[serde(alias = "chat_filter")]`.
-        ("telegram", aliased("telegram", &telegram, &["chat_filter"])),
+        ("telegram", aliased("telegram", &telegram, &[("chat_filter", "chat_id")])),
         ("discord", plain("discord", &discord)),
         ("matrix", plain("matrix", &matrix)),
         ("proton", plain("proton", &proton)),
