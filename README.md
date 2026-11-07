@@ -324,6 +324,8 @@ OAuth substrate.
 - [`docs/ONBOARDING.md`](docs/ONBOARDING.md) — creating your agent:
   the guided Profile → Persona → access flow, shared by `aivyx-pa init`
   and the Studio's **Create** screen.
+- [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) — the 1.0 stability
+  promise: what stays stable, what does not, and how changes are made.
 - [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what Aivyx PA
   defends against, what it doesn't. Read this before deploying.
 - [`examples/`](examples/) — worked TOML configs for Ollama,
