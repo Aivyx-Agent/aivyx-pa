@@ -4,25 +4,23 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
 
 ## Stable
 
-- **Config keys and their defaults.** Every key path the config accepts,
-  with its type, and the aliases it accepts. Snapshot: `docs/stable/config.txt`.
+- **Config keys and their defaults** (the snapshot checks keys and types;
+  see How this is checked). Every key path the config accepts, with its
+  type, and the aliases it accepts. Snapshot: `docs/stable/config.txt`.
 - **The CLI commands and flags.** Each command and its usage lines.
   Snapshot: `docs/stable/cli.txt`.
+- **The instance layout on disk.** Not versioned yet. It gets a version,
+  and an entry in `docs/stable/formats.txt`, before 1.0 is released.
 - **The data stores.** Any 1.x reads data written by 1.0. The snapshot
-  records the store versions that exist today: the redb table versions
-  (memory, secrets, sessions, audit, missions, schedules and the rest),
-  the key-derivation salt, and the schema versions of the toolkit stores
-  and the Google token file. Snapshot: `docs/stable/formats.txt`.
+  records the store versions that exist today: the table versions, the
+  key-derivation salt, and the schema versions of the toolkit stores and
+  the Google token file. See `docs/stable/formats.txt` for the list.
+  The audit chain format and the redb record shapes are not versioned
+  yet. They are stable in 1.0 and get versions before it is released.
 - **The pack formats.** Formats 1 (tool packs) and 2 (config-only packs).
   Snapshot: `docs/stable/formats.txt`.
 - **Webhook payloads.** The field paths of the notify payload and of the
   trigger reply. Snapshot: `docs/stable/formats.txt`.
-- **The protocols.** The daemon IPC and tool protocol versions recorded in
-  `docs/stable/formats.txt`.
-
-Three stores have no version yet: the instance layout on disk, the audit
-chain format and the redb record shapes. They get versions before 1.0, and
-the readiness audit decides how. Until then they are not promised.
 
 ## Not stable
 
@@ -33,6 +31,9 @@ the readiness audit decides how. Until then they are not promised.
 - **Internal crates.** The crates in this repository are not a public API.
 - **The Studio's HTTP API.** It belongs to the bundled Studio and changes
   with it.
+- **The daemon IPC and tool protocols.** They run between pa's own
+  processes. Their versions are recorded in `docs/stable/formats.txt`, so
+  a change is visible.
 - **The tools the model sees.** Their names, arguments and descriptions
   change as models change.
 
@@ -63,6 +64,8 @@ The check has limits:
 - The CLI snapshot freezes each command and its usage lines as written in
   the help table. It does not test behaviour.
 - The format snapshot lists the versions and field paths. It does not test
-  that old data still reads. That rests on the migration tests and on
-  review.
-- The stores without a version are not in the snapshot at all.
+  that old data still reads. Each store checks its schema version when
+  it opens and refuses one it does not know. Reading older data is covered
+  by those checks and by review, not by a cross-version test.
+- The instance layout, the audit chain format and the redb record shapes
+  are not in the snapshot until they get versions.
