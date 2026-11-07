@@ -48,7 +48,7 @@ use tokio::fs;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Error)]
 pub enum TaskStoreError {

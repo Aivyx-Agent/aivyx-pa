@@ -1,0 +1,44 @@
+google_oauth.token_file.schema_version = 1
+identity_export.schema_version = 1
+ipc.protocol_version = 0.1
+pack.formats = 1,2
+storage.hkdf_salt = aivyx-v1-storage
+storage.table.audit = aivyx_audit_v1
+storage.table.channel-state = aivyx_channel_state_v1
+storage.table.conflict-dismissals = aivyx_conflict_dismissals_v1
+storage.table.cooccurrence-ledger = aivyx_cooccurrence_ledger_v1
+storage.table.correction-ledger = aivyx_correction_ledger_v1
+storage.table.file-watches = aivyx_file_watches_v1
+storage.table.helpfulness-ledger = aivyx_helpfulness_ledger_v1
+storage.table.knowledge-graph = aivyx_knowledge_graph_v1
+storage.table.knowledge-wiki = aivyx_knowledge_wiki_v1
+storage.table.loop-backlog = aivyx_loop_backlog_v1
+storage.table.loop-state = aivyx_loop_state_v1
+storage.table.memory = aivyx_memory_v1
+storage.table.memory-vectors = aivyx_memory_vectors_v1
+storage.table.missions = aivyx_missions_v1
+storage.table.parked-steps = aivyx_parked_steps_v1
+storage.table.persona = aivyx_persona_v1
+storage.table.persona-proposals = aivyx_persona_proposals_v1
+storage.table.proactive-log = aivyx_proactive_log_v1
+storage.table.recall-events = aivyx_recall_events_v1
+storage.table.reminders = aivyx_reminders_v1
+storage.table.routing-taint = aivyx_routing_taint_v1
+storage.table.schedules = aivyx_schedules_v1
+storage.table.secrets = aivyx_secrets_v1
+storage.table.sessions = aivyx_sessions_v1
+storage.table.skill-helpfulness-ledger = aivyx_skill_helpfulness_ledger_v1
+storage.table.team-missions = aivyx_team_missions_v1
+storage.table.tool-relevance-ledger = aivyx_tool_relevance_ledger_v1
+storage.table.webhooks = aivyx_webhooks_v1
+tool.protocol_version = 0.1
+toolkit.budget_store.schema_version = 1
+toolkit.health_store.schema_version = 1
+toolkit.task_store.schema_version = 1
+webhook.notify.message
+webhook.notify.source
+webhook.notify.subject
+webhook.notify.target
+webhook.notify.timestamp
+webhook.trigger.response.error
+webhook.trigger.response.status

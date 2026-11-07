@@ -526,6 +526,109 @@ mod tests {
 
     use super::*;
 
+    /// The command line and on-disk/wire format versions pa's 1.0 promises
+    /// (docs/COMPATIBILITY.md): every `COMMANDS` entry with its usage lines,
+    /// and the version constants pa writes. A change fails until
+    /// `UPDATE_STABLE_SURFACE=1 cargo test -p aivyx-cli stable_` rewrites
+    /// `docs/stable/` on purpose.
+    fn stable_surface() -> [(&'static str, String); 2] {
+        let mut commands: Vec<&CommandHelp> = COMMANDS.iter().collect();
+        commands.sort_by_key(|c| c.name);
+        let mut cli = Vec::new();
+        for c in commands {
+            cli.push(c.name.to_string());
+            cli.extend(c.usage.iter().map(|u| format!("  {u}")));
+        }
+
+        // Webhook payloads as JSON key paths. Outgoing: the `notify_target`
+        // webhook body. Inbound: `POST /trigger/<id>` reads no body; its
+        // replies are the fixed JSON objects in `webhook_listener.rs`.
+        fn walk(prefix: &str, v: &serde_json::Value, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Object(map) if !map.is_empty() => {
+                    for (k, v) in map {
+                        walk(&format!("{prefix}.{k}"), v, out);
+                    }
+                }
+                _ => out.push(prefix.to_string()),
+            }
+        }
+        let mut webhook = Vec::new();
+        let sample = aivyx_channel::notify_webhook::NotifyWebhookBackend::render_payload(
+            "t",
+            "m",
+            Some("s"),
+        );
+        walk("webhook.notify", &serde_json::to_value(sample).unwrap(), &mut webhook);
+        webhook.extend(
+            ["webhook.trigger.response.status", "webhook.trigger.response.error"]
+                .map(String::from),
+        );
+        webhook.sort();
+
+        let mut formats = vec![
+            format!(
+                "identity_export.schema_version = {}",
+                aivyx_channel::identity_export::IDENTITY_EXPORT_SCHEMA_VERSION
+            ),
+            format!(
+                "google_oauth.token_file.schema_version = {}",
+                aivyx_google_oauth::storage::CURRENT_SCHEMA_VERSION
+            ),
+            format!(
+                "toolkit.budget_store.schema_version = {}",
+                aivyx_toolkit::budget_store::CURRENT_SCHEMA_VERSION
+            ),
+            format!(
+                "toolkit.health_store.schema_version = {}",
+                aivyx_toolkit::health_store::CURRENT_SCHEMA_VERSION
+            ),
+            format!(
+                "toolkit.task_store.schema_version = {}",
+                aivyx_toolkit::task_store::CURRENT_SCHEMA_VERSION
+            ),
+            format!("ipc.protocol_version = {}", aivyx_ipc::protocol::PROTOCOL_VERSION),
+            format!("tool.protocol_version = {}", aivyx_tool::wire::TOOL_PROTOCOL_VERSION),
+            // The aivyx-pack crate has no constant: formats 1 (tool pack) and 2
+            // (config-only pack) are the ones it reads.
+            "pack.formats = 1,2".to_string(),
+            // The encrypted store is versioned by its HKDF salt and by the `_vN`
+            // suffix of each redb table name.
+            format!("storage.hkdf_salt = {}", String::from_utf8_lossy(aivyx_crypto::HKDF_SALT)),
+        ];
+        for d in aivyx_storage::KeyDomain::ALL {
+            formats.push(format!(
+                "storage.table.{} = {}",
+                String::from_utf8_lossy(d.as_bytes()),
+                d.table_name()
+            ));
+        }
+        formats.extend(webhook);
+        formats.sort();
+        [("cli.txt", cli.join("\n") + "\n"), ("formats.txt", formats.join("\n") + "\n")]
+    }
+
+    #[test]
+    fn stable_surface_matches_the_snapshot() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/stable");
+        let update = std::env::var_os("UPDATE_STABLE_SURFACE").is_some();
+        for (name, text) in stable_surface() {
+            let path = dir.join(name);
+            if update {
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(&path, &text).unwrap();
+                continue;
+            }
+            let saved = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(
+                saved == text,
+                "docs/stable/{name} differs from the code: a change to pa's stable surface \
+                 (docs/COMPATIBILITY.md). If it is intended, run \
+                 UPDATE_STABLE_SURFACE=1 cargo test -p aivyx-cli stable_ and commit docs/stable/"
+            );
+        }
+    }
+
     #[test]
     fn every_command_has_a_cli_reference_heading() {
         let manual = include_str!("../../../../../docs/manual/reference/01-cli.md");

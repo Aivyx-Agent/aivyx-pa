@@ -47,7 +47,7 @@ struct StoredTokens {
     tokens: TokenSet,
 }
 
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Error)]
 pub enum StorageError {

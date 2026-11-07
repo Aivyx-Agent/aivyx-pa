@@ -171,3 +171,8 @@ tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"
 serde_json = { workspace = true }
 # routing.rs tests parse `[routing]` snippets into aivyx-route's own type.
 toml = "0.8"
+# The 1.0 stable-surface snapshot (`help.rs`, `docs/stable/formats.txt`) reads
+# the version constants these crates write to disk and the wire.
+aivyx-ipc = { path = "../aivyx-ipc" }
+aivyx-toolkit = { path = "../aivyx-toolkit" }
+aivyx-google-oauth = { path = "../aivyx-google-oauth" }

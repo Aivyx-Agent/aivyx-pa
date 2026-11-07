@@ -65,7 +65,7 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::sync::Mutex;
 
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 /// Maximum number of state transitions kept in the ring
 /// buffer. Older entries roll off as new ones land.

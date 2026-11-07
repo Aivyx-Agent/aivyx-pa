@@ -1,0 +1,136 @@
+--headless
+  aivyx-pa --headless "<task>"
+  aivyx-pa --headless          (stdin session mode, piped input)
+access
+  aivyx-pa access show
+  aivyx-pa access set <sandbox|workspace|home|full|custom>
+      [--root <dir>] [--yes]
+audit
+  aivyx-pa audit export [--from <seq>] [--limit <N>]
+      [--event-type <Variant>]
+      (Variant: ToolCall, ScopeDenied, TurnStarted, TurnEnded,
+       MemoryAccess, AutoNotifyDispatched, SkillAutoProposal,
+       SkillInvocation)
+autonomy
+  aivyx-pa autonomy show
+  aivyx-pa autonomy set <manual|assisted|supervised|autonomous|unleashed>
+      [--yes]
+connect
+  aivyx-pa connect
+  aivyx-pa connect <service>
+cost
+  aivyx-pa cost [--today]
+daemon
+  aivyx-pa daemon run [--web-ui] [--web-ui-port <N>]
+  aivyx-pa daemon status
+  aivyx-pa daemon stop
+  aivyx-pa daemon install [--web-ui] [--no-start]
+  aivyx-pa daemon uninstall
+doctor
+  aivyx-pa doctor
+federation
+  aivyx-pa federation yubikey-init <instance-id> <key-binding-path>
+      [--card <serial>] [--overwrite-existing-key]
+identity
+  aivyx-pa identity export <path>
+  aivyx-pa identity import <path> [--force]
+init
+  aivyx-pa init [--template <name>] [--list-templates]
+instances
+  aivyx-pa instances list
+  aivyx-pa instances create <name>
+  aivyx-pa instances remove <name>
+keyring
+  aivyx-pa keyring set|clear|status
+learning
+  aivyx-pa learning [--window <secs>]
+loop
+  aivyx-pa loop add <title> [<body>] [--body <text>] [--priority <N>]
+  aivyx-pa loop list
+  aivyx-pa loop start [--max-iterations <N>]
+  aivyx-pa loop status
+  aivyx-pa loop stop
+  aivyx-pa loop skip <story-id>
+  aivyx-pa loop log [--limit <N>]
+matrix
+  aivyx-pa matrix verify
+mcp
+  aivyx-pa mcp status
+  aivyx-pa mcp recipes [name]
+mcp-server
+  aivyx-pa mcp-server web-search
+memory
+  aivyx-pa memory list
+  aivyx-pa memory show <topic> [--limit <N>]
+  aivyx-pa memory search <query> [--semantic] [--limit <N>]
+  aivyx-pa memory evict <topic> [--yes]
+  aivyx-pa memory wiki [topic]
+  aivyx-pa memory graph [entity]
+  aivyx-pa memory conflicts
+  aivyx-pa memory resolve <topic> --archive <seq>
+  aivyx-pa memory dismiss <id>
+notify
+  aivyx-pa notify history [--target <name>] [--limit <N>]
+pack
+  aivyx-pa pack keygen <keyfile>
+  aivyx-pa pack build <staging-dir> --key <keyfile> --out <file>
+  aivyx-pa pack inspect <bundle-file> [--allow-untrusted]
+  aivyx-pa pack check <pack-dir>
+  aivyx-pa [--instance <name>] pack install <bundle-file>
+persona
+  aivyx-pa persona show
+  aivyx-pa persona list [--auto-only | --manual-only]
+  aivyx-pa persona revert <delta-id>
+  aivyx-pa persona proposals list
+      [--status <pending|approved|rejected|superseded|all>]
+  aivyx-pa persona proposals show <proposal-id>
+  aivyx-pa persona proposals approve <proposal-id>
+  aivyx-pa persona proposals reject <proposal-id> [--reason <text>]
+  aivyx-pa persona conflicts
+  aivyx-pa persona resolve <id> --remove <a|b>
+  aivyx-pa persona dismiss <id>
+profile
+  aivyx-pa profile show
+  aivyx-pa profile edit
+  aivyx-pa profile apply-hint <proposal-id> [--yes]
+review
+  aivyx-pa review [list]
+  aivyx-pa review approve <id> [--yes]
+  aivyx-pa review deny <id>
+role
+  aivyx-pa role import <proposal-id> [--yes] [--force]
+routing
+  aivyx-pa routing status
+  aivyx-pa routing explain [--limit <N>]
+  aivyx-pa routing allow-cloud <session-id>
+signal
+  aivyx-pa signal verify
+skills
+  aivyx-pa skills teach <name> <trigger> <procedure>
+  aivyx-pa skills update <name> [--trigger <t>] [--procedure <p>]
+  aivyx-pa skills forget <name>
+studio
+  aivyx-pa studio
+  aivyx-pa studio --token
+team
+  aivyx-pa team roster [--config <path>]
+  aivyx-pa team init [--pack <default|path>] [--out <path>] [--force]
+  aivyx-pa team run "<mission>" [--config <path>]
+  aivyx-pa team start "<goal>" [--config <path>]
+  aivyx-pa team start --plan <file.json> [--config <path>]
+  aivyx-pa team list
+  aivyx-pa team status [<mission-id>]
+  aivyx-pa team approve|reject <mission-id> <step>
+  aivyx-pa team abort|pause|resume <mission-id>
+tool
+  aivyx-pa tool init <path> [--force]
+tool-relevance
+  aivyx-pa tool-relevance dump [--keyword-key <key>]
+tools
+  aivyx-pa tools [--window <secs>]
+tui
+  aivyx-pa tui [--role <name>]
+workspace
+  aivyx-pa workspace path
+  aivyx-pa workspace ls [path]
+  aivyx-pa workspace cat <path>

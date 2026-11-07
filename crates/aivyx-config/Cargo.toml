@@ -89,3 +89,7 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 # shim in `src/tests.rs` to match the workspace convention (see
 # `aivyx-storage/Cargo.toml` dev-deps comment — no `tempfile` crate).
 aivyx-crypto = { path = "../aivyx-crypto" }
+
+# 1.0 stable-surface snapshot (`docs/stable/config.txt`): traces
+# `RawToml`'s Deserialize impl to list every key the loader accepts.
+serde-reflection = "0.6"

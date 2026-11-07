@@ -12953,3 +12953,212 @@ api_key = "SECRET-EMBEDDING"
     // every key above was really read (not silently ignored as unknown)
     assert!(shown.matches("<redacted>").count() >= 9, "{shown}");
 }
+
+/// The config keys pa's 1.0 promises to keep accepting (docs/COMPATIBILITY.md).
+/// The `RawToml` sections are traced with serde-reflection and every key path
+/// is listed with its type, so adding, removing or renaming a key fails this
+/// test until `docs/stable/config.txt` is regenerated on purpose.
+///
+/// serde-reflection cannot trace `#[serde(flatten)]`, so `RawToml` as a whole
+/// is not traceable (`[routing]` flattens the shared `RoutingConfig`). Instead
+/// each section's type is traced on its own, and `[routing]` is assembled from
+/// its three parts; `RawToml`'s own field list is read with a recording
+/// deserializer and checked against the table, so a new top-level section
+/// cannot be forgotten.
+#[test]
+fn stable_config_keys() {
+    #[allow(clippy::wildcard_imports)]
+    use crate::*;
+    use serde_reflection::{ContainerFormat, Format, Named, Registry, Tracer, TracerConfig};
+
+    fn short(f: &Format) -> String {
+        match f {
+            Format::TypeName(t) => t.clone(),
+            Format::Option(inner) => format!("{}?", short(inner)),
+            Format::Seq(inner) => format!("[{}]", short(inner)),
+            Format::Map { key, value } => format!("{{{}: {}}}", short(key), short(value)),
+            Format::Tuple(items) => {
+                format!("({})", items.iter().map(short).collect::<Vec<_>>().join(", "))
+            }
+            other => format!("{other:?}").to_lowercase(),
+        }
+    }
+    fn is_struct(reg: &Registry, f: &Format) -> bool {
+        matches!(f, Format::TypeName(t) if matches!(reg.get(t), Some(ContainerFormat::Struct(_))))
+    }
+    fn fields(prefix: &str, name: &str, reg: &Registry, out: &mut Vec<String>) {
+        let Some(ContainerFormat::Struct(fs)) = reg.get(name) else { return };
+        for Named { name: f, value } in fs {
+            let mut path = format!("{prefix}.{f}");
+            // Look through Option, and into arrays of tables / tables of tables.
+            let mut v = value;
+            loop {
+                match v {
+                    Format::Option(inner) => v = inner,
+                    Format::Seq(inner) if is_struct(reg, inner) => {
+                        path.push_str("[]");
+                        v = inner;
+                    }
+                    Format::Map { value: inner, .. } if is_struct(reg, inner) => {
+                        path.push_str(".*");
+                        v = inner;
+                    }
+                    _ => break,
+                }
+            }
+            match v {
+                Format::TypeName(t) if is_struct(reg, v) => fields(&path, t, reg, out),
+                _ => out.push(format!("{path}: {}", short(value))),
+            }
+        }
+    }
+    /// Key paths (under `prefix`) of one struct type.
+    fn trace<T: serde::de::DeserializeOwned>(prefix: &str) -> Vec<String> {
+        let mut tracer = Tracer::new(TracerConfig::default());
+        let (format, _) = tracer
+            .trace_simple_type::<T>()
+            .unwrap_or_else(|e| panic!("cannot trace {prefix}: {e:?}"));
+        let registry = tracer.registry_unchecked();
+        let mut out = Vec::new();
+        let Format::TypeName(name) = format else { panic!("{prefix} is not a struct") };
+        fields(prefix, &name, &registry, &mut out);
+        out
+    }
+    /// Records `RawToml`'s field names (as TOML spells them) and stops.
+    struct Names(std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>);
+    impl<'de> serde::Deserializer<'de> for Names {
+        type Error = serde::de::value::Error;
+        fn deserialize_struct<V: serde::de::Visitor<'de>>(
+            self,
+            _: &'static str,
+            fields: &'static [&'static str],
+            _: V,
+        ) -> Result<V::Value, Self::Error> {
+            self.0.borrow_mut().extend(fields);
+            Err(serde::de::Error::custom("recorded"))
+        }
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes
+            byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map
+            enum identifier ignored_any
+        }
+        fn deserialize_any<V: serde::de::Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+            Err(serde::de::Error::custom("not a struct"))
+        }
+    }
+
+    let sections: Vec<(&str, Vec<String>)> = vec![
+        ("anthropic", trace::<RawAnthropic>("anthropic")),
+        ("openai", trace::<RawOpenAi>("openai")),
+        ("agent", trace::<RawAgent>("agent")),
+        ("fs", trace::<RawFs>("fs")),
+        ("access", trace::<RawAccess>("access")),
+        ("autonomy", trace::<RawAutonomy>("autonomy")),
+        ("workspace", trace::<RawWorkspace>("workspace")),
+        ("storage", trace::<RawStorage>("storage")),
+        ("kvcache", trace::<RawKvcache>("kvcache")),
+        ("memory", trace::<RawMemory>("memory")),
+        ("telegram", trace::<RawTelegram>("telegram")),
+        ("discord", trace::<RawDiscord>("discord")),
+        ("matrix", trace::<RawMatrix>("matrix")),
+        ("proton", trace::<RawProton>("proton")),
+        ("signal", trace::<RawSignal>("signal")),
+        ("slack", trace::<RawSlack>("slack")),
+        ("git", trace::<RawGit>("git")),
+        ("confine", trace::<RawConfine>("confine")),
+        ("team", trace::<RawTeam>("team")),
+        ("pack", trace::<RawPack>("pack")),
+        ("email", trace::<RawEmail>("email")),
+        ("embedding", trace::<RawEmbedding>("embedding")),
+        ("proactive", trace::<RawProactive>("proactive")),
+        ("persona_lifecycle", trace::<RawPersonaLifecycle>("persona_lifecycle")),
+        ("persona_seed", trace::<RawPersonaSeed>("persona_seed")),
+        ("recall_cluster", trace::<RawRecallCluster>("recall_cluster")),
+        ("wiki", trace::<RawWiki>("wiki")),
+        ("graph", trace::<RawGraph>("graph")),
+        ("skill_refinement", trace::<RawSkillRefinement>("skill_refinement")),
+        ("skill_authoring", trace::<RawSkillAuthoring>("skill_authoring")),
+        ("skill_defaults", trace::<RawSkillDefaults>("skill_defaults")),
+        ("persona_consolidation", trace::<RawPersonaConsolidation>("persona_consolidation")),
+        ("correction_consolidation", trace::<RawCorrectionConsolidation>("correction_consolidation")),
+        ("loop", trace::<RawLoop>("loop")),
+        ("recall_judgment", trace::<RawRecallJudgment>("recall_judgment")),
+        ("correction_judgment", trace::<RawCorrectionJudgment>("correction_judgment")),
+        ("correction_signal", trace::<RawCorrectionSignal>("correction_signal")),
+        ("reminders", trace::<RawReminders>("reminders")),
+        ("recall_feedback", trace::<RawRecallFeedback>("recall_feedback")),
+        ("skills", trace::<RawSkills>("skills")),
+        ("persona", trace::<RawPersona>("persona")),
+        ("tool_relevance", trace::<RawToolRelevance>("tool_relevance")),
+        ("providers", trace::<RawProviders>("providers")),
+        ("ollama", trace::<RawOllama>("ollama")),
+        ("pricing", trace::<aivyx_cost::ModelRate>("pricing.*")),
+        ("budget", trace::<aivyx_cost::BudgetConfig>("budget")),
+        ("rate_limit", trace::<aivyx_cost::RateLimitConfig>("rate_limit")),
+        ("mistralrs", trace::<MistralRsOptions>("mistralrs")),
+        ("broker", trace::<RawBroker>("broker")),
+        ("voice", trace::<VoiceOptions>("voice")),
+        ("aivyx_pa", trace::<RawAivyxPa>("aivyx_pa")),
+        ("role", trace::<RawRole>("role[]")),
+        ("mcp_server", trace::<RawMcpServer>("mcp_server[]")),
+        ("tool_process", trace::<RawToolProcess>("tool_process[]")),
+        ("applications", trace::<RawApplications>("applications")),
+        ("sandbox", trace::<RawSandboxDefaults>("sandbox")),
+        ("schedule", trace::<RawSchedule>("schedule[]")),
+        ("webhook", trace::<RawWebhook>("webhook[]")),
+        ("file_watch", trace::<RawFileWatch>("file_watch[]")),
+        ("notify_target", trace::<RawNotifyTarget>("notify_target[]")),
+        ("reflection_schedule", trace::<RawReflectionSchedule>("reflection_schedule[]")),
+        ("daemon", trace::<RawDaemon>("daemon")),
+        ("profile", trace::<RawProfile>("profile")),
+        // `[routing]` flattens the shared `RoutingConfig` (untraceable as part of
+        // `RawToml`); its three pa-owned sub-tables sit beside it.
+        ("routing", trace::<aivyx_route::RoutingConfig>("routing")),
+        ("routing", trace::<EscalationConfig>("routing.escalation")),
+        ("routing", trace::<SensitiveConfig>("routing.sensitive")),
+        ("routing", trace::<ClassifierConfig>("routing.classifier")),
+    ];
+    // The legacy pre-rename `[aivyx]` table is accepted (and only warned about):
+    // a free-form value, so it has no keys of its own.
+    let mut out = vec!["aivyx: legacy-table-ignored".to_string()];
+    let mut covered: Vec<&str> = vec!["aivyx"];
+    for (name, lines) in sections {
+        covered.push(name);
+        out.extend(lines);
+    }
+    let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let _ = <crate::RawToml as serde::Deserialize>::deserialize(Names(recorded.clone()));
+    let mut expected = recorded.borrow().clone();
+    expected.sort_unstable();
+    covered.sort_unstable();
+    covered.dedup();
+    assert_eq!(
+        expected, covered,
+        "RawToml has a top-level section this test does not trace: add it to `sections`"
+    );
+    // serde-reflection leaves this one `Vec<i64>` unresolved (it saw only an
+    // empty sequence); the type is spelled out here.
+    for line in &mut out {
+        if line.starts_with("telegram.team_command_allowed_senders:") {
+            *line = "telegram.team_command_allowed_senders: [i64]".to_string();
+        }
+    }
+    assert!(
+        !out.iter().any(|l| l.contains("variable")),
+        "a key's type was not resolved by serde-reflection: {out:#?}"
+    );
+    out.sort();
+    let text = out.join("\n") + "\n";
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/stable/config.txt");
+    if std::env::var_os("UPDATE_STABLE_SURFACE").is_some() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &text).unwrap();
+        return;
+    }
+    assert!(
+        std::fs::read_to_string(&path).unwrap_or_default() == text,
+        "docs/stable/config.txt differs from RawToml: a change to pa's stable surface \
+         (docs/COMPATIBILITY.md). If it is intended, run \
+         UPDATE_STABLE_SURFACE=1 cargo test -p aivyx-config stable_config_keys and commit docs/stable/"
+    );
+}
