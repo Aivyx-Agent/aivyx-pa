@@ -560,10 +560,18 @@ mod tests {
             Some("s"),
         );
         walk("webhook.notify", &serde_json::to_value(sample).unwrap(), &mut webhook);
-        webhook.extend(
-            ["webhook.trigger.response.status", "webhook.trigger.response.error"]
-                .map(String::from),
-        );
+        use aivyx_channel::webhook_listener::TriggerReply;
+        let replies = [
+            TriggerReply::Status { status: "s" },
+            TriggerReply::Error { error: "e" },
+        ];
+        for r in &replies {
+            // Exhaustive: a new reply shape must be added to `replies` above.
+            match r {
+                TriggerReply::Status { .. } | TriggerReply::Error { .. } => {}
+            }
+            walk("webhook.trigger.response", &serde_json::to_value(r).unwrap(), &mut webhook);
+        }
         webhook.sort();
 
         let mut formats = vec![
@@ -589,9 +597,21 @@ mod tests {
             ),
             format!("ipc.protocol_version = {}", aivyx_ipc::protocol::PROTOCOL_VERSION),
             format!("tool.protocol_version = {}", aivyx_tool::wire::TOOL_PROTOCOL_VERSION),
-            // The aivyx-pack crate has no constant: formats 1 (tool pack) and 2
-            // (config-only pack) are the ones it reads.
-            "pack.formats = 1,2".to_string(),
+            // aivyx-pack exposes no constant: probe its manifest dispatcher for the
+            // `format` values it does not refuse as `UnsupportedFormat`.
+            format!(
+                "pack.formats = {}",
+                (0u32..=16)
+                    .filter(|n| {
+                        !matches!(
+                            aivyx_pack::Manifest::parse(&format!("format = {n}\n")),
+                            Err(aivyx_pack::PackError::UnsupportedFormat { .. })
+                        )
+                    })
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
             // The encrypted store is versioned by its HKDF salt and by the `_vN`
             // suffix of each redb table name.
             format!("storage.hkdf_salt = {}", String::from_utf8_lossy(aivyx_crypto::HKDF_SALT)),

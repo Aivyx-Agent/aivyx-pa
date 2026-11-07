@@ -13013,14 +13013,35 @@ fn stable_config_keys() {
         }
     }
     /// Key paths (under `prefix`) of one struct type.
-    fn trace<T: serde::de::DeserializeOwned>(prefix: &str) -> Vec<String> {
+    ///
+    /// `aliases` names `#[serde(alias = ..)]` spellings of the struct's own
+    /// fields. serde lists an alias beside its field in `FIELDS`, and
+    /// serde-reflection pairs names with values by position, so every alias
+    /// shifts the types after it by one (and leaves the last field's type
+    /// unresolved). The aliases are dropped and the types re-paired here.
+    fn trace<T: serde::de::DeserializeOwned>(prefix: &str, aliases: &[&str]) -> Vec<String> {
         let mut tracer = Tracer::new(TracerConfig::default());
         let (format, _) = tracer
             .trace_simple_type::<T>()
             .unwrap_or_else(|e| panic!("cannot trace {prefix}: {e:?}"));
-        let registry = tracer.registry_unchecked();
+        let mut registry = tracer.registry_unchecked();
         let mut out = Vec::new();
         let Format::TypeName(name) = format else { panic!("{prefix} is not a struct") };
+        if !aliases.is_empty() {
+            let Some(ContainerFormat::Struct(fs)) = registry.get_mut(&name) else {
+                panic!("{prefix} is not a struct")
+            };
+            let names: Vec<String> =
+                fs.iter().map(|f| f.name.clone()).filter(|n| !aliases.contains(&n.as_str())).collect();
+            assert_eq!(fs.len(), names.len() + aliases.len(), "{prefix}: alias not found");
+            // The values are shifted left by the aliases: the tail is unresolved.
+            let mut values: Vec<Format> = fs.iter().map(|f| f.value.clone()).collect();
+            for _ in aliases {
+                let tail = values.pop().unwrap();
+                assert!(matches!(tail, Format::Variable(_)), "{prefix}: expected an unresolved tail");
+            }
+            *fs = names.into_iter().zip(values).map(|(name, value)| Named { name, value }).collect();
+        }
         fields(prefix, &name, &registry, &mut out);
         out
     }
@@ -13047,79 +13068,180 @@ fn stable_config_keys() {
         }
     }
 
+    // Each section is traced with the type `RawToml` really holds for it: the
+    // helpers take the field itself (`&raw.x`) and infer the type from it, and
+    // `RawToml { .. }` below is destructured exhaustively, so a swapped field
+    // type follows automatically and a new field is a compile error here. The
+    // quoted names are the TOML spellings (renames included); `Names` checks
+    // them against `RawToml`'s own field list.
+    let raw: RawToml = toml::from_str("[routing]").expect("minimal config");
+    fn plain<T: serde::de::DeserializeOwned>(prefix: &str, _: &T) -> Vec<String> {
+        trace::<T>(prefix, &[])
+    }
+    fn aliased<T: serde::de::DeserializeOwned>(
+        prefix: &str,
+        _: &T,
+        aliases: &[&str],
+    ) -> Vec<String> {
+        trace::<T>(prefix, aliases)
+    }
+    fn opt<T: serde::de::DeserializeOwned>(prefix: &str, _: &Option<T>) -> Vec<String> {
+        trace::<T>(prefix, &[])
+    }
+    fn array<T: serde::de::DeserializeOwned>(prefix: &str, _: &Option<Vec<T>>) -> Vec<String> {
+        trace::<T>(prefix, &[])
+    }
+    fn map<T: serde::de::DeserializeOwned>(
+        prefix: &str,
+        _: &std::collections::BTreeMap<String, T>,
+    ) -> Vec<String> {
+        trace::<T>(&format!("{prefix}.*"), &[])
+    }
+    let RawToml {
+        anthropic,
+        openai,
+        agent,
+        fs,
+        access,
+        autonomy,
+        workspace,
+        storage,
+        kvcache,
+        memory,
+        telegram,
+        discord,
+        matrix,
+        proton,
+        signal,
+        slack,
+        git,
+        confine,
+        team,
+        pack,
+        email,
+        embedding,
+        proactive,
+        persona_lifecycle,
+        persona_seed,
+        recall_cluster,
+        wiki,
+        graph,
+        skill_refinement,
+        skill_authoring,
+        skill_defaults,
+        persona_consolidation,
+        correction_consolidation,
+        loop_section,
+        recall_judgment,
+        correction_judgment,
+        correction_signal,
+        reminders,
+        recall_feedback,
+        skills,
+        persona,
+        tool_relevance,
+        providers,
+        ollama,
+        pricing,
+        budget,
+        rate_limit,
+        mistralrs,
+        broker,
+        voice,
+        aivyx_pa,
+        legacy_aivyx_section,
+        roles,
+        mcp_servers,
+        tool_processes,
+        applications,
+        sandbox,
+        schedules,
+        webhooks,
+        file_watches,
+        notify_targets,
+        reflection_schedules,
+        daemon,
+        profile,
+        routing,
+    } = raw;
+    // `[routing]` flattens the shared `RoutingConfig`, which serde-reflection
+    // cannot trace as part of `RawRouting`; its parts are traced one by one.
+    // The exhaustive destructure makes a new pa-owned sub-table a compile error.
+    let RawRouting { shared, escalation, sensitive, classifier } =
+        routing.expect("[routing] parsed");
     let sections: Vec<(&str, Vec<String>)> = vec![
-        ("anthropic", trace::<RawAnthropic>("anthropic")),
-        ("openai", trace::<RawOpenAi>("openai")),
-        ("agent", trace::<RawAgent>("agent")),
-        ("fs", trace::<RawFs>("fs")),
-        ("access", trace::<RawAccess>("access")),
-        ("autonomy", trace::<RawAutonomy>("autonomy")),
-        ("workspace", trace::<RawWorkspace>("workspace")),
-        ("storage", trace::<RawStorage>("storage")),
-        ("kvcache", trace::<RawKvcache>("kvcache")),
-        ("memory", trace::<RawMemory>("memory")),
-        ("telegram", trace::<RawTelegram>("telegram")),
-        ("discord", trace::<RawDiscord>("discord")),
-        ("matrix", trace::<RawMatrix>("matrix")),
-        ("proton", trace::<RawProton>("proton")),
-        ("signal", trace::<RawSignal>("signal")),
-        ("slack", trace::<RawSlack>("slack")),
-        ("git", trace::<RawGit>("git")),
-        ("confine", trace::<RawConfine>("confine")),
-        ("team", trace::<RawTeam>("team")),
-        ("pack", trace::<RawPack>("pack")),
-        ("email", trace::<RawEmail>("email")),
-        ("embedding", trace::<RawEmbedding>("embedding")),
-        ("proactive", trace::<RawProactive>("proactive")),
-        ("persona_lifecycle", trace::<RawPersonaLifecycle>("persona_lifecycle")),
-        ("persona_seed", trace::<RawPersonaSeed>("persona_seed")),
-        ("recall_cluster", trace::<RawRecallCluster>("recall_cluster")),
-        ("wiki", trace::<RawWiki>("wiki")),
-        ("graph", trace::<RawGraph>("graph")),
-        ("skill_refinement", trace::<RawSkillRefinement>("skill_refinement")),
-        ("skill_authoring", trace::<RawSkillAuthoring>("skill_authoring")),
-        ("skill_defaults", trace::<RawSkillDefaults>("skill_defaults")),
-        ("persona_consolidation", trace::<RawPersonaConsolidation>("persona_consolidation")),
-        ("correction_consolidation", trace::<RawCorrectionConsolidation>("correction_consolidation")),
-        ("loop", trace::<RawLoop>("loop")),
-        ("recall_judgment", trace::<RawRecallJudgment>("recall_judgment")),
-        ("correction_judgment", trace::<RawCorrectionJudgment>("correction_judgment")),
-        ("correction_signal", trace::<RawCorrectionSignal>("correction_signal")),
-        ("reminders", trace::<RawReminders>("reminders")),
-        ("recall_feedback", trace::<RawRecallFeedback>("recall_feedback")),
-        ("skills", trace::<RawSkills>("skills")),
-        ("persona", trace::<RawPersona>("persona")),
-        ("tool_relevance", trace::<RawToolRelevance>("tool_relevance")),
-        ("providers", trace::<RawProviders>("providers")),
-        ("ollama", trace::<RawOllama>("ollama")),
-        ("pricing", trace::<aivyx_cost::ModelRate>("pricing.*")),
-        ("budget", trace::<aivyx_cost::BudgetConfig>("budget")),
-        ("rate_limit", trace::<aivyx_cost::RateLimitConfig>("rate_limit")),
-        ("mistralrs", trace::<MistralRsOptions>("mistralrs")),
-        ("broker", trace::<RawBroker>("broker")),
-        ("voice", trace::<VoiceOptions>("voice")),
-        ("aivyx_pa", trace::<RawAivyxPa>("aivyx_pa")),
-        ("role", trace::<RawRole>("role[]")),
-        ("mcp_server", trace::<RawMcpServer>("mcp_server[]")),
-        ("tool_process", trace::<RawToolProcess>("tool_process[]")),
-        ("applications", trace::<RawApplications>("applications")),
-        ("sandbox", trace::<RawSandboxDefaults>("sandbox")),
-        ("schedule", trace::<RawSchedule>("schedule[]")),
-        ("webhook", trace::<RawWebhook>("webhook[]")),
-        ("file_watch", trace::<RawFileWatch>("file_watch[]")),
-        ("notify_target", trace::<RawNotifyTarget>("notify_target[]")),
-        ("reflection_schedule", trace::<RawReflectionSchedule>("reflection_schedule[]")),
-        ("daemon", trace::<RawDaemon>("daemon")),
-        ("profile", trace::<RawProfile>("profile")),
-        // `[routing]` flattens the shared `RoutingConfig` (untraceable as part of
-        // `RawToml`); its three pa-owned sub-tables sit beside it.
-        ("routing", trace::<aivyx_route::RoutingConfig>("routing")),
-        ("routing", trace::<EscalationConfig>("routing.escalation")),
-        ("routing", trace::<SensitiveConfig>("routing.sensitive")),
-        ("routing", trace::<ClassifierConfig>("routing.classifier")),
+        ("anthropic", plain("anthropic", &anthropic)),
+        ("openai", plain("openai", &openai)),
+        ("agent", plain("agent", &agent)),
+        ("fs", plain("fs", &fs)),
+        ("access", plain("access", &access)),
+        ("autonomy", plain("autonomy", &autonomy)),
+        ("workspace", plain("workspace", &workspace)),
+        ("storage", plain("storage", &storage)),
+        ("kvcache", plain("kvcache", &kvcache)),
+        ("memory", plain("memory", &memory)),
+        // `chat_id` carries `#[serde(alias = "chat_filter")]`.
+        ("telegram", aliased("telegram", &telegram, &["chat_filter"])),
+        ("discord", plain("discord", &discord)),
+        ("matrix", plain("matrix", &matrix)),
+        ("proton", plain("proton", &proton)),
+        ("signal", plain("signal", &signal)),
+        ("slack", plain("slack", &slack)),
+        ("git", plain("git", &git)),
+        ("confine", plain("confine", &confine)),
+        ("team", plain("team", &team)),
+        ("pack", plain("pack", &pack)),
+        ("email", plain("email", &email)),
+        ("embedding", plain("embedding", &embedding)),
+        ("proactive", plain("proactive", &proactive)),
+        ("persona_lifecycle", plain("persona_lifecycle", &persona_lifecycle)),
+        ("persona_seed", plain("persona_seed", &persona_seed)),
+        ("recall_cluster", plain("recall_cluster", &recall_cluster)),
+        ("wiki", plain("wiki", &wiki)),
+        ("graph", plain("graph", &graph)),
+        ("skill_refinement", plain("skill_refinement", &skill_refinement)),
+        ("skill_authoring", plain("skill_authoring", &skill_authoring)),
+        ("skill_defaults", plain("skill_defaults", &skill_defaults)),
+        ("persona_consolidation", plain("persona_consolidation", &persona_consolidation)),
+        ("correction_consolidation", plain("correction_consolidation", &correction_consolidation)),
+        ("loop", plain("loop", &loop_section)),
+        ("recall_judgment", plain("recall_judgment", &recall_judgment)),
+        ("correction_judgment", plain("correction_judgment", &correction_judgment)),
+        ("correction_signal", plain("correction_signal", &correction_signal)),
+        ("reminders", plain("reminders", &reminders)),
+        ("recall_feedback", plain("recall_feedback", &recall_feedback)),
+        ("skills", plain("skills", &skills)),
+        ("persona", plain("persona", &persona)),
+        ("tool_relevance", plain("tool_relevance", &tool_relevance)),
+        ("providers", plain("providers", &providers)),
+        ("ollama", plain("ollama", &ollama)),
+        ("pricing", map("pricing", &pricing)),
+        ("budget", plain("budget", &budget)),
+        ("rate_limit", plain("rate_limit", &rate_limit)),
+        ("mistralrs", plain("mistralrs", &mistralrs)),
+        ("broker", plain("broker", &broker)),
+        ("voice", plain("voice", &voice)),
+        ("aivyx_pa", plain("aivyx_pa", &aivyx_pa)),
+        ("role", array("role[]", &roles)),
+        ("mcp_server", array("mcp_server[]", &mcp_servers)),
+        ("tool_process", array("tool_process[]", &tool_processes)),
+        ("applications", opt("applications", &applications)),
+        ("sandbox", plain("sandbox", &sandbox)),
+        ("schedule", array("schedule[]", &schedules)),
+        ("webhook", array("webhook[]", &webhooks)),
+        ("file_watch", array("file_watch[]", &file_watches)),
+        ("notify_target", array("notify_target[]", &notify_targets)),
+        ("reflection_schedule", array("reflection_schedule[]", &reflection_schedules)),
+        ("daemon", plain("daemon", &daemon)),
+        ("profile", plain("profile", &profile)),
+        ("routing", plain("routing", &shared)),
+        ("routing", plain("routing.escalation", &escalation)),
+        ("routing", plain("routing.sensitive", &sensitive)),
+        ("routing", plain("routing.classifier", &classifier)),
     ];
-    // The legacy pre-rename `[aivyx]` table is accepted (and only warned about):
-    // a free-form value, so it has no keys of its own.
+    // The legacy pre-rename `[aivyx]` table (`legacy_aivyx_section`, a free-form
+    // `toml::Value`) is accepted and only warned about, so it has no keys.
+    let _ = legacy_aivyx_section;
     let mut out = vec!["aivyx: legacy-table-ignored".to_string()];
     let mut covered: Vec<&str> = vec!["aivyx"];
     for (name, lines) in sections {
@@ -13136,13 +13258,6 @@ fn stable_config_keys() {
         expected, covered,
         "RawToml has a top-level section this test does not trace: add it to `sections`"
     );
-    // serde-reflection leaves this one `Vec<i64>` unresolved (it saw only an
-    // empty sequence); the type is spelled out here.
-    for line in &mut out {
-        if line.starts_with("telegram.team_command_allowed_senders:") {
-            *line = "telegram.team_command_allowed_senders: [i64]".to_string();
-        }
-    }
     assert!(
         !out.iter().any(|l| l.contains("variable")),
         "a key's type was not resolved by serde-reflection: {out:#?}"

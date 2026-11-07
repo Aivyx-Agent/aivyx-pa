@@ -120,7 +120,7 @@ impl InFlight {
 /// The one answer for an unknown id and a wrong or missing secret, so a
 /// caller can't tell which webhook ids exist.
 fn unauthorized() -> Response<Full<Bytes>> {
-    json_response(StatusCode::UNAUTHORIZED, r#"{"error":"unauthorized"}"#)
+    reply(StatusCode::UNAUTHORIZED, TriggerReply::Error { error: "unauthorized" })
 }
 
 async fn handle_request<B>(
@@ -135,17 +135,11 @@ async fn handle_request<B>(
     // Route: POST /trigger/<webhook_id>
     if let Some(webhook_id) = path.strip_prefix("/trigger/") {
         if webhook_id.is_empty() {
-            return Ok(json_response(
-                StatusCode::BAD_REQUEST,
-                r#"{"error":"missing webhook id"}"#,
-            ));
+            return Ok(reply(StatusCode::BAD_REQUEST, TriggerReply::Error { error: "missing webhook id" }));
         }
 
         if method != hyper::Method::POST {
-            return Ok(json_response(
-                StatusCode::METHOD_NOT_ALLOWED,
-                r#"{"error":"use POST"}"#,
-            ));
+            return Ok(reply(StatusCode::METHOD_NOT_ALLOWED, TriggerReply::Error { error: "use POST" }));
         }
 
         // Task 1 (2026-09-16 audit) — look up the record *before* firing
@@ -157,10 +151,7 @@ async fn handle_request<B>(
             Ok(None) => return Ok(unauthorized()),
             Err(e) => {
                 eprintln!("aivyx-pa webhook: storage error looking up {webhook_id:?}: {e}");
-                return Ok(json_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    r#"{"error":"internal error"}"#,
-                ));
+                return Ok(reply(StatusCode::INTERNAL_SERVER_ERROR, TriggerReply::Error { error: "internal error" }));
             }
         };
 
@@ -173,13 +164,10 @@ async fn handle_request<B>(
 
     // Health check endpoint
     if path == "/health" && method == hyper::Method::GET {
-        return Ok(json_response(StatusCode::OK, r#"{"status":"ok"}"#));
+        return Ok(reply(StatusCode::OK, TriggerReply::Status { status: "ok" }));
     }
 
-    Ok(json_response(
-        StatusCode::NOT_FOUND,
-        r#"{"error":"not found"}"#,
-    ))
+    Ok(reply(StatusCode::NOT_FOUND, TriggerReply::Error { error: "not found" }))
 }
 
 /// True when `req` carries a valid `Authorization: Bearer <secret>` header
@@ -214,16 +202,10 @@ async fn fire_webhook_record(
     in_flight: &InFlight,
 ) -> Response<Full<Bytes>> {
     if !record.enabled {
-        return json_response(
-            StatusCode::CONFLICT,
-            r#"{"error":"webhook is disabled"}"#,
-        );
+        return reply(StatusCode::CONFLICT, TriggerReply::Error { error: "webhook is disabled" });
     }
     if !in_flight.start(&record.webhook_id) {
-        return json_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            r#"{"error":"this webhook's last run hasn't finished"}"#,
-        );
+        return reply(StatusCode::TOO_MANY_REQUESTS, TriggerReply::Error { error: "this webhook's last run hasn't finished" });
     }
     // Released when the spawned run ends, however it ends.
     struct Running(InFlight, String);
@@ -267,7 +249,22 @@ async fn fire_webhook_record(
         }
     });
 
-    json_response(StatusCode::ACCEPTED, r#"{"status":"accepted"}"#)
+    reply(StatusCode::ACCEPTED, TriggerReply::Status { status: "accepted" })
+}
+
+/// Every JSON body the listener answers with. The one definition of the
+/// reply shape: the 1.0 stable-surface snapshot serializes it, so a new or
+/// renamed key shows up in `docs/stable/formats.txt`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(untagged)]
+pub enum TriggerReply {
+    Status { status: &'static str },
+    Error { error: &'static str },
+}
+
+fn reply(status: StatusCode, body: TriggerReply) -> Response<Full<Bytes>> {
+    let body = serde_json::to_string(&body).expect("a TriggerReply serializes");
+    json_response(status, &body)
 }
 
 fn json_response(status: StatusCode, body: &str) -> Response<Full<Bytes>> {
