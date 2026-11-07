@@ -5,6 +5,23 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.20.1] — 2026-11-08
+
+v0.20.0's binaries were never published: GitHub had retired the macOS 14
+build machine its release used. This release ships everything in v0.20.0
+(below) plus:
+
+### Security
+
+- **Matrix encryption library updated** (vodozemac 0.11.2,
+  RUSTSEC-2026-0445 and RUSTSEC-2026-0451: encryption key material was not
+  always wiped from memory).
+
+### Fixed
+
+- **Release builds** for Apple Silicon and the macOS desktop app use the
+  macOS 15 build machine.
+
 ## [0.20.0] — 2026-11-05
 
 ### Changed

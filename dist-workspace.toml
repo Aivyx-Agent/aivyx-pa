@@ -61,3 +61,8 @@ allow-dirty = ["ci"]
 # the quality gate on every PR, so a PR-time release run would just
 # duplicate it. The release pipeline runs on version tags only.
 pr-run-mode = "skip"
+
+# GitHub retired the macos-14 image on 2026-11-02, and dist 0.31 still
+# picks it for aarch64-apple-darwin (v0.20.0's first run was refused).
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"

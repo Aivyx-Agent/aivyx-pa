@@ -161,6 +161,11 @@ ignore = [
     # matrix-sdk 0.19.1 is the latest release. Not vulnerable.
     { id = "RUSTSEC-2026-0319", reason = "anymap2 unmaintained, not vulnerable; transitive under matrix-sdk 0.19.1 (aivyx-matrix), the latest release; revisit when matrix-sdk drops it" },
 
+    # pin-utils — RUSTSEC-2026-0441 (unmaintained). Pulled via
+    #   pin-utils → async-imap 0.11.3 → aivyx-proton (Proton Bridge preview).
+    # No fixed version; async-imap 0.12 is an API change. Not vulnerable.
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils unmaintained, not vulnerable; transitive under async-imap 0.11.3 (aivyx-proton); revisit with async-imap 0.12" },
+
     # zbus 4.4.0 stack — RUSTSEC-2026-0370 (zvariant), 0371 (zbus_names),
     # 0372 (zvariant_derive), all unmaintained. Pulled via
     #   zbus 4.4.0 → keyring 3.6.3 / secret-service 4.0.0 → aivyx-channel
