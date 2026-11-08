@@ -496,7 +496,7 @@ Propose Persona updates from topics you keep correcting. Advanced: not covered b
 
 ### `[skills]`
 
-Have the agent propose new skills from turns that went well. Proposals wait for your approval. See [Skills and persona](../../guide/06-skills-and-persona.md). `[skills.auto_propose]` is advanced: not covered by the 1.x compatibility promise, except `enabled`.
+In aivyx-coder, `[skills]` is the shared `SKILL.md` library, which is `[skill_defaults]` here. Have the agent propose new skills from turns that went well. Proposals wait for your approval. See [Skills and persona](../../guide/06-skills-and-persona.md). `[skills.auto_propose]` is advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -525,7 +525,7 @@ Have the agent propose new skills from turns that went well. Proposals wait for 
 
 ### `[persona]`
 
-Have the agent propose Persona and Profile updates, per category. Proposals wait for your approval. `[persona.auto_propose]` is advanced: not covered by the 1.x compatibility promise, except the `enabled` switches.
+In aivyx-coder, `[persona]` only lets the model propose additions to `AGENTS.md`; here it governs the learned Persona. Have the agent propose Persona and Profile updates, per category. Proposals wait for your approval. `[persona.auto_propose]` is advanced: not covered by the 1.x compatibility promise, except the `enabled` switches.
 
 
 #### `[persona.auto_propose]`
@@ -590,7 +590,7 @@ Propose new skills from well-developed wiki topics. Advanced: not covered by the
 
 ### `[skill_defaults]`
 
-Extra directories of `SKILL.md` capability packages, alongside the bundled defaults.
+Extra directories of `SKILL.md` capability packages, alongside the bundled defaults. aivyx-coder spells this section `[skills]`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
