@@ -125,9 +125,9 @@ pub const NOT_STABLE: &[NotStable] = &[
     entry(Cli, "--channel matrix", PREVIEW),
     entry(Cli, "--channel proton", PREVIEW),
     entry(Cli, "--channel signal", PREVIEW),
-    // R26: the help's Developer group, and a debugging flag.
-    // `--verify-only` (forensics) stays stable.
-    entry(Cli, "aivyx-pa tool-relevance", Tag::Developer),
+    // R26: a debugging flag. `--verify-only` (forensics) stays stable. The
+    // commands in the help's Developer group are tagged (developer) by the
+    // cli.txt generator from the group itself, so they need no entry here.
     entry(Cli, "--print-role", Tag::Developer),
     // R1 (b): format 1 pack bundles are stable, the tool protocol their tools
     // speak is not (yet): a 1.x minor stabilises it once a real tool pack

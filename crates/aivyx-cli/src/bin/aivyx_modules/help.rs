@@ -617,9 +617,12 @@ mod tests {
             // A usage line is tagged by its own text (`not_stable`); a
             // continuation line (indented) carries its usage line's tag, and
             // the command's name line is tagged when all its usage lines are.
+            // R26: every command in the Developer group is (developer).
+            let developer = c.group == Group::Developer;
             let mut tags: Vec<&str> = Vec::new();
             for u in c.usage {
                 let tag = match tags.last() {
+                    _ if developer => aivyx_config::not_stable::Tag::Developer.suffix(),
                     Some(last) if u.starts_with(' ') => last,
                     _ => suffix(u),
                 };
@@ -760,6 +763,24 @@ mod tests {
             assert!(stale.is_empty(), "NOT_STABLE entries that tag no {snapshot:?} line: {stale:?}");
         }
         [("cli.txt", cli.join("\n") + "\n"), ("formats.txt", formats.join("\n") + "\n")]
+    }
+
+    /// R26: the Developer group's commands are tagged from the group, so a
+    /// new one is tagged without a NOT_STABLE entry.
+    #[test]
+    fn developer_group_commands_are_tagged() {
+        let [(_, cli), _] = stable_surface();
+        let mut expected = vec!["  --print-role <name> (developer)".to_string()];
+        for c in COMMANDS.iter().filter(|c| c.group == Group::Developer) {
+            expected.push(format!("{} (developer)", c.name));
+            expected.extend(c.usage.iter().map(|u| format!("  {u} (developer)")));
+        }
+        assert!(expected.len() > 1, "premise: a Developer group exists");
+        let mut tagged: Vec<String> =
+            cli.lines().filter(|l| l.ends_with(" (developer)")).map(String::from).collect();
+        tagged.sort();
+        expected.sort();
+        assert_eq!(tagged, expected);
     }
 
     #[test]
