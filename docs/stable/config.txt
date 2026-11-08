@@ -117,14 +117,14 @@ loop.progress_inject_count: u32?
 loop.resume_on_boot: bool?
 loop.verify_completion: bool?
 loop.working_dir: str?
-matrix.allowed_senders: [str]
-matrix.homeserver: str?
-matrix.room_filter: deprecated alias of matrix.room_id
-matrix.room_id: str?
-matrix.team_command_allowed_senders: [str]
-matrix.team_run_channel: bool
-matrix.team_trigger_rate_limit: u32?
-matrix.user_id: str?
+matrix.allowed_senders: [str] (preview)
+matrix.homeserver: str? (preview)
+matrix.room_filter: deprecated alias of matrix.room_id (preview)
+matrix.room_id: str? (preview)
+matrix.team_command_allowed_senders: [str] (preview)
+matrix.team_run_channel: bool (preview)
+matrix.team_trigger_rate_limit: u32? (preview)
+matrix.user_id: str? (preview)
 mcp_server[].args: [str]?
 mcp_server[].bundled: bool
 mcp_server[].command: str?
@@ -253,15 +253,15 @@ profile.behavioral_preferences: [str]?
 profile.communication_style: str?
 profile.operator_profile: str?
 profile.primary_use_cases: [str]?
-proton.allowed_external_senders: [str]
-proton.channel_address: str?
-proton.folder: str?
-proton.imap_addr: str?
-proton.own_addresses: [str]
-proton.smtp_addr: str?
-proton.team_command_allowed_senders: [str]
-proton.team_run_channel: bool
-proton.team_trigger_rate_limit: u32?
+proton.allowed_external_senders: [str] (preview)
+proton.channel_address: str? (preview)
+proton.folder: str? (preview)
+proton.imap_addr: str? (preview)
+proton.own_addresses: [str] (preview)
+proton.smtp_addr: str? (preview)
+proton.team_command_allowed_senders: [str] (preview)
+proton.team_run_channel: bool (preview)
+proton.team_trigger_rate_limit: u32? (preview)
 providers.tool_name_auto_correct_threshold: f32? (advanced)
 rate_limit.default_per_turn_per_tool: u32?
 rate_limit.on_exceeded: RateAction (one of: alert | deny)
@@ -332,12 +332,12 @@ schedule[].role: str
 schedule[].team_mission.goal: str
 schedule[].team_mission.pack_config: str?
 schedule[].wrap_mission: bool
-signal.account: str?
-signal.allowed_senders: [str]
-signal.send_to: [str]
-signal.team_command_allowed_senders: [str]
-signal.team_run_channel: bool
-signal.team_trigger_rate_limit: u32?
+signal.account: str? (preview)
+signal.allowed_senders: [str] (preview)
+signal.send_to: [str] (preview)
+signal.team_command_allowed_senders: [str] (preview)
+signal.team_run_channel: bool (preview)
+signal.team_trigger_rate_limit: u32? (preview)
 skill_authoring.enabled: bool?
 skill_authoring.max_per_cycle: u64? (advanced)
 skill_authoring.min_edges: u64? (advanced)

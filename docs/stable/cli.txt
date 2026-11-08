@@ -49,8 +49,8 @@ loop
   aivyx-pa loop stop
   aivyx-pa loop skip <story-id>
   aivyx-pa loop log [--limit <N>]
-matrix
-  aivyx-pa matrix verify
+matrix (preview)
+  aivyx-pa matrix verify (preview)
 mcp
   aivyx-pa mcp status
   aivyx-pa mcp recipes [name]
@@ -100,8 +100,8 @@ routing
   aivyx-pa routing status
   aivyx-pa routing explain [--limit <N>]
   aivyx-pa routing allow-cloud <session-id>
-signal
-  aivyx-pa signal verify
+signal (preview)
+  aivyx-pa signal verify (preview)
 skills
   aivyx-pa skills teach <name> <trigger> <procedure>
   aivyx-pa skills update <name> [--trigger <t>] [--procedure <p>]
@@ -136,6 +136,9 @@ workspace
   --verify-only
   --channel <kind>
   --channel voice (build-time feature)
+  --channel matrix (preview)
+  --channel proton (preview)
+  --channel signal (preview)
   --role <name>
   --print-role <name>
   --no-daemon

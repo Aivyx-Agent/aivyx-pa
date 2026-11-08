@@ -57,9 +57,11 @@ one list of tagged entries is `NOT_STABLE` in
   `aivyx-pa federation yubikey-init` (`yubikey`). The last is not in
   `cli.txt` at all, because the help shows it only in a build with the
   feature.
-- **Previews.** Today these are the Matrix, Proton Mail and Signal channels
-  (updated by the Channel Activation Milestone). A preview can change or
-  be removed in any release.
+- **Previews**, tagged `(preview)`. Today these are the Matrix, Proton
+  Mail and Signal channels: their config sections, `aivyx-pa matrix
+  verify`, `aivyx-pa signal verify` and their `--channel` values. A
+  preview can change or be removed in any release. A channel's tag comes
+  off when it has been tested with a real client.
 - **The terminal chat's look**, and keys beyond the documented ones.
 - **Internal crates.** The crates in this repository are not a public API.
 - **The Studio's HTTP API.** It belongs to the bundled Studio and changes

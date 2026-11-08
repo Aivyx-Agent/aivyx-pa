@@ -665,7 +665,7 @@ The Slack bot channel (Socket Mode). See [Chat apps and accounts](../../guide/13
 
 ### `[matrix]`
 
-The Matrix channel: an end-to-end-encrypted room with your assistant. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
+The Matrix channel: an end-to-end-encrypted room with your assistant. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md). Preview: not covered by the 1.x compatibility promise yet.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -679,7 +679,7 @@ The Matrix channel: an end-to-end-encrypted room with your assistant. See [Chat 
 
 ### `[proton]`
 
-Proton Mail through Proton Mail Bridge: the email channel and the `proton.*` tools. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
+Proton Mail through Proton Mail Bridge: the email channel and the `proton.*` tools. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md). Preview: not covered by the 1.x compatibility promise yet.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -695,7 +695,7 @@ Proton Mail through Proton Mail Bridge: the email channel and the `proton.*` too
 
 ### `[signal]`
 
-Signal through your own signal-cli daemon: the channel and `signal.send`. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md).
+Signal through your own signal-cli daemon: the channel and `signal.send`. See [Chat apps and accounts](../../guide/13-chat-apps-and-accounts.md). Preview: not covered by the 1.x compatibility promise yet.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|

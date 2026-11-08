@@ -72,6 +72,7 @@ use Snapshot::Cli;
 use Snapshot::Config as C;
 use Tag::Advanced as ADV;
 use Tag::BuildTimeFeature as BUILD;
+use Tag::Preview as PREVIEW;
 
 /// Every not-stable snapshot entry (see the module docs).
 pub const NOT_STABLE: &[NotStable] = &[
@@ -105,6 +106,17 @@ pub const NOT_STABLE: &[NotStable] = &[
     entry(C, "voice.", BUILD),
     entry(Cli, "--channel voice", BUILD),
     entry(Cli, "--provider mistralrs", BUILD),
+    // R11: the preview channels. A channel's entries come off when it passes
+    // its activation session with a real client (Launch chapter, Tasks
+    // 14-16: Matrix, Proton Mail, Signal).
+    entry(C, "matrix.", PREVIEW),
+    entry(C, "proton.", PREVIEW),
+    entry(C, "signal.", PREVIEW),
+    entry(Cli, "aivyx-pa matrix verify", PREVIEW),
+    entry(Cli, "aivyx-pa signal verify", PREVIEW),
+    entry(Cli, "--channel matrix", PREVIEW),
+    entry(Cli, "--channel proton", PREVIEW),
+    entry(Cli, "--channel signal", PREVIEW),
 ];
 
 /// The tag of the snapshot line whose key (see [`Snapshot`]) is `key`.

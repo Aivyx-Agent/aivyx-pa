@@ -287,7 +287,10 @@ mod tests {
         assert!(!tagged.is_empty(), "premise: the snapshot has tagged lines");
         let known = known_paths();
         for line in tagged {
-            let Some((path, _)) = line.split_once(": ") else { continue };
+            let Some((path, ty)) = line.split_once(": ") else { continue };
+            if ty.starts_with("deprecated alias of ") || ty.contains(" (deprecated)") {
+                continue; // never suggested, tagged or not
+            }
             assert!(known.contains(path), "{line:?} lost its key");
         }
         assert!(known.iter().all(|k| !k.contains(' ') && !k.contains('(')), "{known:?}");
