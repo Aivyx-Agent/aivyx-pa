@@ -14,7 +14,7 @@ layout is used on Linux, macOS and WSL.
 | What | Where | Change it with |
 |---|---|---|
 | Config file | `~/.config/aivyx-pa/aivyx-pa.toml` (a `./aivyx-pa.toml` in the current directory is not read) | `AIVYX_PA_CONFIG_PATH` |
-| Team config (optional) | `team.toml` beside the config file | `[team] config_path` |
+| Team config (optional) | `team.toml` beside the config file | `[team] roster_path` |
 | Encrypted store — memory, Persona, skills, audit log, secrets | `~/.local/share/aivyx-pa/store.redb`, plus its salt, `store.redb.salt` | `[storage] path`, `AIVYX_PA_STORAGE_PATH` |
 | Studio sign-in token | `studio-token`, next to the store | — (`aivyx-pa studio` prints a sign-in link) |
 | Saved passphrase, when there's no OS keyring | `~/.config/aivyx-pa/daemon.env` (mode `0600`) | delete it to be asked each time |

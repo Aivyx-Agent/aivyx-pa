@@ -1452,7 +1452,7 @@ pub struct AivyxConfig {
     /// unauthenticated control plane when the Studio is exposed off-host
     /// (`web_ui_host = "0.0.0.0"`); strongly recommended in that case.
     pub web_ui_auth_token: Option<aivyx_capability::display::SecretString>,
-    /// Chapter Roster — the operator's team-config file. `[team] config_path`
+    /// Chapter Roster — the operator's team-config file. `[team] roster_path`
     /// points at a `[team]`-rooted TOML document (the same shape packs like
     /// `kitchen-boh.toml` use, loaded via `aivyx_team::TeamConfig::load`). When
     /// `None` *and* no conventional `team.toml` sits beside `aivyx-pa.toml`, the
@@ -4387,7 +4387,12 @@ struct RawDaemon {
 /// team-config file (absent → the built-in `default_nonagon()`).
 #[derive(Debug, Default, Deserialize)]
 struct RawTeam {
-    config_path: Option<String>,
+    /// The team file to run instead of the built-in Nonagon. Unset means
+    /// the built-in team.
+    ///
+    /// Was `config_path` (a deprecated alias since R22; aivyx-coder says
+    /// `roster_path` too).
+    roster_path: Option<String>,
 }
 
 /// `[pack]` section. Chapter Freight — base64 Ed25519 verifying keys the
@@ -4947,6 +4952,7 @@ struct RawAgent {
     /// Chapter Thread — conversation-history replay depth in messages
     /// (user and assistant lines each count as one).
     /// Unset → [`DEFAULT_CONVERSATION_HISTORY_TURNS`]; `0` disables.
+    ///
     /// Was `conversation_history_turns` (a deprecated alias since R19).
     #[serde(default)]
     conversation_history_messages: Option<usize>,
@@ -5137,9 +5143,10 @@ struct RawDiscord {
     #[serde(default)]
     application_id: Option<u64>,
     /// The one Discord channel (its snowflake id) the bot treats as yours.
-    /// Unset = no channel allowlisted: every sender is untrusted. Was
-    /// `channel_filter` (a deprecated alias since R18, like Telegram's
-    /// `chat_id`). Feeds `DiscordConfig::channel_filter`.
+    /// Unset = no channel allowlisted: every sender is untrusted.
+    ///
+    /// Was `channel_filter` (a deprecated alias since R18, now named like
+    /// Telegram's `chat_id`). Feeds `DiscordConfig::channel_filter`.
     #[serde(default)]
     channel_id: Option<u64>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
@@ -5204,8 +5211,10 @@ struct RawMatrix {
     #[serde(default)]
     user_id: Option<String>,
     /// The one room the assistant answers in (its room ID, `!…:server`).
-    /// Must be end-to-end encrypted. Was `room_filter` (a deprecated alias
-    /// since R18). Feeds `MatrixConfig::room_filter`.
+    /// Must be end-to-end encrypted.
+    ///
+    /// Was `room_filter` (a deprecated alias since R18). Feeds
+    /// `MatrixConfig::room_filter`.
     #[serde(default)]
     room_id: Option<String>,
     #[serde(default)]
@@ -5311,8 +5320,10 @@ struct RawSlack {
     team_id: Option<String>,
     /// The one Slack channel (its channel id) the bot treats as yours, at
     /// a finer grain than `team_id`. Unset = no channel allowlisted: every
-    /// sender is untrusted. Was `channel_filter` (a deprecated alias since
-    /// R18, like Telegram's `chat_id`). Feeds `SlackConfig::channel_filter`.
+    /// sender is untrusted.
+    ///
+    /// Was `channel_filter` (a deprecated alias since R18, now named like
+    /// Telegram's `chat_id`). Feeds `SlackConfig::channel_filter`.
     #[serde(default)]
     channel_id: Option<String>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
@@ -8831,7 +8842,7 @@ impl AivyxConfig {
             // Chapter Roster — the operator's team-config file pointer. Stored
             // as-given (relative paths are resolved against the loaded
             // `aivyx-pa.toml`'s directory at the daemon's team build site).
-            team_config_path: toml.team.config_path.map(PathBuf::from),
+            team_config_path: toml.team.roster_path.map(PathBuf::from),
             pack_trusted_publishers: {
                 let entries = toml.pack.trusted_publishers.unwrap_or_default();
                 for e in &entries {

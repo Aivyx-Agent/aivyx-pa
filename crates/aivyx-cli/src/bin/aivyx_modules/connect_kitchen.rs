@@ -8,7 +8,7 @@
 //! `tool_process_present`, `find_aivyx_toml`, `write_file_at_0600`, the
 //! prompts) but
 //! writing the `[kitchen_db]` config (Brigade BG.1), planting the bundled BOH
-//! pack + `[team] config_path` (Roster), and **probing KitchenDB reachability**
+//! pack + `[team] roster_path` (Roster), and **probing KitchenDB reachability**
 //! in place of the OAuth handshake. Every step is idempotent + no-clobber.
 
 use std::io::{BufRead, Write};
@@ -90,15 +90,17 @@ pub fn write_kitchen_config(
     Ok(path)
 }
 
-/// Set `[team] config_path = <pack>` **only if absent** (never clobber an
-/// operator's existing team config). Returns whether it was set.
+/// Set `[team] roster_path = <pack>` **only if absent** (never clobber an
+/// operator's existing team config, under either spelling: `config_path` is
+/// the deprecated alias, R22). Returns whether it was set.
 pub fn set_team_config_path_if_absent(doc: &mut toml_edit::DocumentMut, pack: &str) -> bool {
-    let existing = doc
-        .get("team")
-        .and_then(|t| t.get("config_path"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let existing = ["roster_path", "config_path"].iter().find_map(|key| {
+        doc.get("team")
+            .and_then(|t| t.get(key))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    });
     if existing.is_some() {
         return false;
     }
@@ -108,7 +110,7 @@ pub fn set_team_config_path_if_absent(doc: &mut toml_edit::DocumentMut, pack: &s
     if doc.get("team").is_none() {
         doc["team"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
-    doc["team"]["config_path"] = toml_edit::value(pack);
+    doc["team"]["roster_path"] = toml_edit::value(pack);
     true
 }
 
@@ -171,14 +173,14 @@ pub async fn run_connect_kitchen(
     let cfg = write_kitchen_config(home, &base_url, &api_key, &organization_id)?;
     writeln!(writer, "Wrote {} (0600).", cfg.display()).map_err(werr)?;
 
-    // 2-3. tool_process + pack + team config_path into aivyx-pa.toml.
+    // 2-3. tool_process + pack + team roster_path into aivyx-pa.toml.
     if let Some(toml_path) = find_aivyx_toml() {
         wire_aivyx_toml(&toml_path, home, writer)?;
     } else {
         writeln!(
             writer,
             "\nNo aivyx-pa.toml found. Add this, then `aivyx-pa team init --pack {PACK_FILENAME}`:\n\n\
-             [[tool_process]]\nname = \"kitchen\"\ncommand = \"{KITCHEN_BINARY}\"\n\n[team]\nconfig_path = \"{PACK_FILENAME}\""
+             [[tool_process]]\nname = \"kitchen\"\ncommand = \"{KITCHEN_BINARY}\"\n\n[team]\nroster_path = \"{PACK_FILENAME}\""
         )
         .map_err(werr)?;
     }
@@ -196,7 +198,7 @@ pub async fn run_connect_kitchen(
     }
 }
 
-/// Plant the pack + wire `[[tool_process]]` + `[team] config_path` into the
+/// Plant the pack + wire `[[tool_process]]` + `[team] roster_path` into the
 /// found `aivyx-pa.toml`, idempotently. The pack is written beside it.
 fn wire_aivyx_toml(toml_path: &Path, home: &Path, writer: &mut dyn Write) -> Result<(), String> {
     // Plant the bundled BOH pack beside aivyx-pa.toml (no-clobber).
@@ -297,13 +299,13 @@ mod tests {
         let mut doc: toml_edit::DocumentMut = "".parse().unwrap();
         assert!(set_team_config_path_if_absent(&mut doc, "kitchen-boh.toml"));
         assert_eq!(
-            doc["team"]["config_path"].as_str(),
+            doc["team"]["roster_path"].as_str(),
             Some("kitchen-boh.toml")
         );
         // No-clobber: a second call (now present) leaves it.
         assert!(!set_team_config_path_if_absent(&mut doc, "other.toml"));
         assert_eq!(
-            doc["team"]["config_path"].as_str(),
+            doc["team"]["roster_path"].as_str(),
             Some("kitchen-boh.toml")
         );
     }
@@ -317,6 +319,12 @@ mod tests {
             "kitchen-boh.toml"
         ));
         assert_eq!(doc["team"]["config_path"].as_str(), Some("mine.toml"));
+        // Nor under the new spelling, and the old one is never added.
+        assert!(doc["team"].get("roster_path").is_none());
+        let mut doc: toml_edit::DocumentMut =
+            "[team]\nroster_path = \"mine.toml\"\n".parse().unwrap();
+        assert!(!set_team_config_path_if_absent(&mut doc, "kitchen-boh.toml"));
+        assert_eq!(doc["team"]["roster_path"].as_str(), Some("mine.toml"));
     }
 
     #[test]

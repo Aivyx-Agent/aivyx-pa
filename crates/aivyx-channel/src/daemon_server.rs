@@ -529,7 +529,7 @@ pub struct DaemonConfig {
     /// field is not itself a resolution mechanism, only a carried value.
     pub role_override: Option<String>,
     /// Chapter Roster (RO.2) — the resolved team-config write target: the
-    /// operator's `[team] config_path` (or the conventional `team.toml` beside
+    /// operator's `[team] roster_path` (or the conventional `team.toml` beside
     /// `aivyx-pa.toml`), pre-resolved by the binary. `None` ⇒ env-only launch (no
     /// config file); the `SetTeamRoster` handler then refuses, like the other
     /// write handlers. Writes here are load-time — adopted on the next start.
@@ -7005,7 +7005,7 @@ async fn handle_query(
         }
         QueryPayload::SetTeamRoster { roster } => {
             // Chapter Roster (RO.2) — persist the operator-authored team. The
-            // target is pre-resolved by the binary (`[team] config_path` or the
+            // target is pre-resolved by the binary (`[team] roster_path` or the
             // conventional `team.toml`); an env-only launch has none → refuse.
             let path = match team_config_write_path {
                 Some(p) => p,

@@ -12858,7 +12858,7 @@ fn workspace_env_beats_toml_path() {
     drop(env);
 }
 
-// --- Chapter Roster (RO.1): `[team] config_path` -------------------------
+// --- Chapter Roster (RO.1): `[team] roster_path` -------------------------
 
 #[test]
 fn team_config_path_absent_section_is_none() {
@@ -12874,10 +12874,30 @@ fn team_config_path_absent_section_is_none() {
 fn team_config_path_is_parsed_from_the_team_section() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[team]\nconfig_path = \"teams/boh.toml\"\n",
+        "\n[team]\nroster_path = \"teams/boh.toml\"\n",
         "team-present",
     );
     assert_eq!(cfg.team_config_path, Some(PathBuf::from("teams/boh.toml")));
+    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+    drop(env);
+}
+
+/// R22: `[team] config_path` is a deprecated alias of `roster_path`.
+#[test]
+fn team_config_path_is_a_deprecated_alias_of_roster_path() {
+    let env = EnvScope::new();
+    let old = load_with_toml("\n[team]\nconfig_path = \"old.toml\"\n", "team-old-key");
+    assert_eq!(old.team_config_path, Some(PathBuf::from("old.toml")));
+    assert_eq!(
+        old.warnings,
+        vec!["`team.config_path` is deprecated; use `team.roster_path`".to_string()]
+    );
+    let both = load_with_toml(
+        "\n[team]\nconfig_path = \"old.toml\"\nroster_path = \"new.toml\"\n",
+        "team-both-keys",
+    );
+    assert_eq!(both.team_config_path, Some(PathBuf::from("new.toml")));
+    assert!(both.warnings[0].contains("`team.roster_path` wins"), "{:?}", both.warnings);
     drop(env);
 }
 

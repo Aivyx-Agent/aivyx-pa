@@ -2197,7 +2197,7 @@ parent_role = "researcher"
 # By default the daemon runs the built-in 9-role Nonagon
 # (`aivyx-pa team roster` prints it). To run a customised team —
 # a different lead, tighter specialists, or a vertical pack like
-# the Kitchen BOH team — point `config_path` at a `[team]`-rooted
+# the Kitchen BOH team — point `roster_path` at a `[team]`-rooted
 # TOML file (the same shape `aivyx-pa team run --config <file>` loads,
 # e.g. `crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`).
 #
@@ -2209,7 +2209,7 @@ parent_role = "researcher"
 # with `aivyx-pa team init [--pack <default|path.toml>] [--out team.toml]`.
 #
 # [team]
-# config_path = "team.toml"
+# roster_path = "team.toml"   # was `config_path` before 1.0 (still read, warns)
 
 # ----------------------------------------------------------------
 # Skills Auto-Creation — Phase 110 (Reflection Staging)

@@ -462,7 +462,7 @@ in `docs/TOOLS.md` (a drift-guard test checks the catalog against
 - **Tool process** — `[[tool_process]]` in `aivyx-pa.toml` (`name`, `command`
   → the built binary) so the daemon spawns it and its tools reach the team
   via the `tool_list → TeamAssembly::base_tools` path.
-- **Team config** — point `[team] config_path` at your roster TOML (or ship
+- **Team config** — point `[team] roster_path` at your roster TOML (or ship
   it as a template).
 - **Onboarding** — a `aivyx-pa connect <pack>` branch that writes the pack's
   config and probes reachability (the non-OAuth vertical pattern, Chapter

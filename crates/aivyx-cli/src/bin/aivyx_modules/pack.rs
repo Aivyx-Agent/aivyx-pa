@@ -323,7 +323,11 @@ pub fn prepare_config_install(
             text.parse().map_err(|e| format!("the template isn't valid TOML: {e}"))?;
         set_key(&mut doc, "pack", "source", &format!("{}@{}", manifest.name, manifest.version));
         if let Some(rel) = &pa.team_config {
-            set_key(&mut doc, "team", "config_path", &pack_dir.join(rel).display().to_string());
+            set_key(&mut doc, "team", "roster_path", &pack_dir.join(rel).display().to_string());
+            // The deprecated spelling (R22) would only draw a warning.
+            if let Some(team) = doc.get_mut("team").and_then(|t| t.as_table_like_mut()) {
+                team.remove("config_path");
+            }
         }
         if let Some(rel) = &pa.skills {
             set_key(
@@ -699,7 +703,8 @@ mod tests {
         assert!(c.pack_dir.join("pa/skills/example/SKILL.md").is_file());
         let doc: toml_edit::DocumentMut = c.template.toml_content.parse().unwrap();
         assert_eq!(doc["pack"]["source"].as_str(), Some("business-manager@0.1.0"));
-        assert!(doc["team"]["config_path"].as_str().unwrap().ends_with("0.1.0/pa/team.toml"));
+        assert!(doc["team"]["roster_path"].as_str().unwrap().ends_with("0.1.0/pa/team.toml"));
+        assert!(doc["team"].get("config_path").is_none());
         assert!(doc["skill_defaults"]["project_dir"].as_str().unwrap().ends_with("0.1.0/pa/skills"));
         assert_eq!(doc["profile"]["assistant_name"].as_str(), Some("Manager"), "the rest is kept");
         assert_eq!(c.template.source, TemplateSource::Pack);

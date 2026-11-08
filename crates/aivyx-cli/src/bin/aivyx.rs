@@ -2573,7 +2573,7 @@ enum KeyringSubcommand {
 /// Chapter J — `aivyx-pa team <subcommand>` variants. The optional
 /// `--config <path.toml>` loads a **vertical pack's** customised `TeamConfig`
 /// (e.g. the kitchen BOH Nonagon); omitted, the installed team runs — the
-/// daemon's (`[team] config_path`, else `team.toml` beside `aivyx-pa.toml`,
+/// daemon's (`[team] roster_path`, else `team.toml` beside `aivyx-pa.toml`,
 /// else the default 9-role Nonagon).
 #[derive(Debug, PartialEq, Eq, Clone)]
 enum TeamSubcommand {
@@ -6875,7 +6875,7 @@ fn shell_confine_deny_paths(
 
 /// The files pa reads as its own config, whether or not they exist yet: the
 /// resolved config path (`$AIVYX_PA_CONFIG_PATH`, else the instance's standard
-/// file), the env override itself and the `[team] config_path` target. The
+/// file), the env override itself and the `[team] roster_path` target. The
 /// next start obeys what is in them, so the agent must not write them.
 fn own_config_files(team_config_path: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
     own_config_files_for(
@@ -6887,7 +6887,7 @@ fn own_config_files(team_config_path: Option<&std::path::Path>) -> Vec<std::path
 }
 
 /// [`own_config_files`] over explicit inputs. The team file is resolved the
-/// way the loader does it: a relative `[team] config_path` is joined to the
+/// way the loader does it: a relative `[team] roster_path` is joined to the
 /// directory of the loaded config, not to the working directory.
 fn own_config_files_for(
     config_path: std::path::PathBuf,
@@ -7389,7 +7389,7 @@ async fn run_async(
         // ChannelKind::Voice dispatch arm reads the operator's
         // ASR + TTS paths.
         voice_options: config_voice_options,
-        // Chapter Roster (RO.1) — `[team] config_path`. Resolved at the
+        // Chapter Roster (RO.1) — `[team] roster_path`. Resolved at the
         // team-mission build site below: a configured/conventional file
         // loads via TeamConfig::load, else the built-in default_nonagon().
         team_config_path: config_team_config_path,
@@ -11030,7 +11030,7 @@ async fn run_async(
                 step_parker: step_parker.clone(),
             };
             // Chapter Roster (RO.1) — the daemon's startup team is now the
-            // operator's `[team] config_path` (or the conventional `team.toml`
+            // operator's `[team] roster_path` (or the conventional `team.toml`
             // beside `aivyx-pa.toml`), falling back to the built-in Nonagon when
             // neither is present. `base_dir` is the loaded `aivyx-pa.toml`'s
             // directory (cwd for the default relative path).
@@ -11483,7 +11483,7 @@ async fn run_async(
             // and doesn't otherwise have that value in scope.
             role_override: role_override.clone(),
             // Chapter Roster (RO.2) — the resolved team-config write target for
-            // the `SetTeamRoster` handler: the operator's `[team] config_path`
+            // the `SetTeamRoster` handler: the operator's `[team] roster_path`
             // (relative → joined to the `aivyx-pa.toml` dir) or the conventional
             // `team.toml` beside it. Gated on the config file existing — an
             // env-only launch leaves it `None` and the handler refuses, exactly
@@ -17115,7 +17115,7 @@ mod tests {
         );
         assert!(files.contains(&PathBuf::from("/etc/pa/roster.toml")), "{files:?}");
         assert!(!files.contains(&PathBuf::from("/home/me/roster.toml")), "{files:?}");
-        // No [team] config_path: the conventional team.toml beside the config.
+        // No [team] roster_path: the conventional team.toml beside the config.
         let files = own_config_files_for(PathBuf::from("/c/aivyx-pa.toml"), None, None, None);
         assert!(files.contains(&PathBuf::from("/c/team.toml")), "{files:?}");
         // A relative env path is relative to the cwd.

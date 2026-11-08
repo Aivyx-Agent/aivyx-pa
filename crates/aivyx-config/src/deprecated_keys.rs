@@ -58,6 +58,8 @@ pub(crate) const DEPRECATED_KEYS: &[(&str, Change)] = &[
         "agent.conversation_history_turns",
         Change::Renamed("agent.conversation_history_messages"),
     ),
+    // R22: the team file is a Nonagon roster, as aivyx-coder names it.
+    ("team.config_path", Change::Renamed("team.roster_path")),
 ];
 
 fn segments(path: &str) -> impl Iterator<Item = (&str, bool)> + Clone {

@@ -163,12 +163,12 @@ command = "aivyx-kitchen-toolkit"
 ```
 
 **3. Run the BOH brigade on it** — point the team at the bundled pack (Chapter
-Roster's `[team] config_path`, or `aivyx-pa team init --pack
+Roster's `[team] roster_path`, or `aivyx-pa team init --pack
 crates/verticals/aivyx-kitchen/assets/kitchen-boh.toml`):
 
 ```toml
 [team]
-config_path = "kitchen-boh.toml"
+roster_path = "kitchen-boh.toml"
 ```
 
 Now each specialist receives exactly the `kitchen.*` tools its `tool_allowlist`

@@ -1141,7 +1141,7 @@ fn kitchen_config_path(home: &Path) -> Option<PathBuf> {
 /// Chapter Mise — the kitchen vertical health section. Returns `true` when the
 /// vertical is **not installed** (skipped silently) or when every check passes;
 /// `false` if installed-but-broken. Checks: config parses → `[[tool_process]]`
-/// wired → `[team] config_path` points at a loadable pack → KitchenDB reachable.
+/// wired → `[team] roster_path` points at a loadable pack → KitchenDB reachable.
 async fn check_kitchen(home: &Path) -> bool {
     let Some(cfg_path) = kitchen_config_path(home) else {
         return true; // vertical not installed — nothing to report.
@@ -1162,7 +1162,7 @@ async fn check_kitchen(home: &Path) -> bool {
 
     let mut ok = true;
 
-    // 2. [[tool_process]] kitchen wired + 3. [team] config_path → a loadable pack.
+    // 2. [[tool_process]] kitchen wired + 3. [team] roster_path → a loadable pack.
     match crate::connect::find_aivyx_toml() {
         Some(toml_path) => match std::fs::read_to_string(&toml_path)
             .ok()
@@ -1210,18 +1210,20 @@ async fn check_kitchen(home: &Path) -> bool {
     ok
 }
 
-/// Check `[team] config_path` is set to a pack file that loads as a valid
-/// `TeamConfig` (resolved against the `aivyx-pa.toml` directory).
+/// Check `[team] roster_path` (or its deprecated alias `config_path`, R22)
+/// is set to a pack file that loads as a valid `TeamConfig` (resolved
+/// against the `aivyx-pa.toml` directory). The new spelling wins, as in the
+/// loader.
 fn check_team_pack(doc: &toml_edit::DocumentMut, toml_path: &Path) -> bool {
-    let Some(rel) = doc
-        .get("team")
-        .and_then(|t| t.get("config_path"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
+    let Some(rel) = ["roster_path", "config_path"].iter().find_map(|key| {
+        doc.get("team")
+            .and_then(|t| t.get(key))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }) else {
         fail(
-            "no [team] config_path — the kitchen brigade won't auto-load",
+            "no [team] roster_path — the kitchen brigade won't auto-load",
             "Run `aivyx-pa connect kitchen` (it plants kitchen-boh.toml and sets the pointer).",
         );
         return false;

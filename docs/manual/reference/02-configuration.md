@@ -344,7 +344,7 @@ A custom team for multi-agent missions. See [Teams](../../guide/07-teams.md).
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `config_path` | string | `"team.toml"` | Path to a team-config TOML file. Unset means the built-in team. |
+| `roster_path` | string | `"team.toml"` | The team file to run instead of the built-in Nonagon. Unset means the built-in team. |
 
 ### `[pack]`
 
@@ -995,6 +995,7 @@ These older spellings still load through 1.x, with one warning each at startup (
 | `discord.channel_filter` | `discord.channel_id` |
 | `matrix.room_filter` | `matrix.room_id` |
 | `slack.channel_filter` | `slack.channel_id` |
+| `team.config_path` | `team.roster_path` |
 | `telegram.chat_filter` | `telegram.chat_id` |
 | `file_watch[].notify_target` | still read; see its row above |
 | `schedule[].notify_target` | still read; see its row above |

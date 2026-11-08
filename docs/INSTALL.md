@@ -3369,7 +3369,7 @@ ship the same way.
 aivyx-pa pack inspect kitchen-0.8.0-x86_64-unknown-linux-gnu.aivyxpack
 
 # 3. Install: verifies again, unpacks to ~/.aivyx-pa/packs/<name>/<ver>/,
-#    wires the [[tool_process]] entries, and sets [team] config_path
+#    wires the [[tool_process]] entries, and sets [team] roster_path
 #    ONLY if you don't already have one (never clobbers your roster).
 aivyx-pa pack install kitchen-0.8.0-x86_64-unknown-linux-gnu.aivyxpack
 
