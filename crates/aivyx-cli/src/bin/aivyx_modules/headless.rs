@@ -25,7 +25,10 @@
 use std::path::Path;
 
 use aivyx_channel::daemon_client::{DaemonSession, daemon_is_running};
-use aivyx_channel::daemon_ipc::{FrontendType, StreamEventPayload, default_socket_path};
+use aivyx_channel::daemon_ipc::{
+    FrontendType, StreamEventPayload, concat_text_events, default_socket_path,
+    turn_outcome_correction,
+};
 
 /// Shown after a one-shot run stops for cloud consent: the stop's own text
 /// says to send /allow-cloud and resend, which a one-shot run (a fresh
@@ -46,6 +49,26 @@ fn turn_exit_code(outcome: &str, events: &[StreamEventPayload]) -> i32 {
     } else {
         headless_exit_code(outcome)
     }
+}
+
+/// What stdout gets after a completed turn's streamed text: the part of
+/// the turn's outcome the stream didn't show — a turn note such as the
+/// truncation note or a Candor note, or the whole reply when nothing
+/// streamed — computed exactly as the daemon REPL does
+/// ([`turn_outcome_correction`]), on a line of its own. Only for a
+/// completed turn that is not a cloud-consent stop: any other outcome (and
+/// the consent request) is already printed to stderr, and stdout stays the
+/// agent's answer. Empty when there is nothing to add.
+fn stdout_tail(events: &[StreamEventPayload], outcome: &str) -> String {
+    if !outcome.starts_with("completed: ") || turn_exit_code(outcome, events) != 0 {
+        return String::new();
+    }
+    let shown: String = events.iter().map(StreamEventPayload::render_for_cli).collect();
+    let Some(note) = turn_outcome_correction(&concat_text_events(events), outcome) else {
+        return String::new();
+    };
+    let lead = if !shown.is_empty() && !shown.ends_with('\n') { "\n" } else { "" };
+    format!("{lead}{note}\n")
 }
 
 /// Entry point for `aivyx-pa --headless "<task>"`.
@@ -80,6 +103,7 @@ pub async fn run_headless(task: &str) -> Result<(), String> {
     for event in &events {
         print!("{}", event.render_for_cli());
     }
+    print!("{}", stdout_tail(&events, &outcome));
 
     let code = turn_exit_code(&outcome, &events);
     if code == 3 && outcome.starts_with("completed:") {
@@ -150,6 +174,7 @@ pub async fn run_headless_stdin() -> Result<(), String> {
         for event in &events {
             print!("{}", event.render_for_cli());
         }
+        print!("{}", stdout_tail(&events, &outcome));
         eprintln!("aivyx-pa --headless: {outcome}");
         let code = turn_exit_code(&outcome, &events);
         if code != 0 {
@@ -193,8 +218,31 @@ fn headless_exit_code(outcome: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{headless_exit_code, turn_exit_code};
+    use super::{headless_exit_code, stdout_tail, turn_exit_code};
     use aivyx_channel::daemon_ipc::StreamEventPayload;
+
+    fn text(t: &str) -> StreamEventPayload {
+        StreamEventPayload::Text { text: t.into() }
+    }
+
+    /// Review fix (5f): a turn note on a completed turn — the truncation
+    /// note, a Candor note — reaches stdout after the streamed text, on its
+    /// own line, as in the daemon REPL. A finished reply adds nothing, and
+    /// a non-completed outcome stays on stderr only.
+    #[test]
+    fn stdout_gets_the_turn_note_the_stream_did_not_show() {
+        let note = "\u{26a0} The reply was cut off by the model server's output limit.";
+        let outcome = format!("completed: The steps are: first\n\n{note}");
+        assert_eq!(
+            stdout_tail(&[text("The steps are: first")], &outcome),
+            format!("\n{note}\n")
+        );
+        let ended_line = format!("completed: done\n\n{note}");
+        assert_eq!(stdout_tail(&[text("done\n")], &ended_line), format!("{note}\n"));
+        assert_eq!(stdout_tail(&[text("done")], "completed: done"), "");
+        assert_eq!(stdout_tail(&[], "completed: 4"), "4\n", "nothing streamed: the reply");
+        assert_eq!(stdout_tail(&[text("x")], "failed: provider error"), "");
+    }
 
     #[test]
     fn a_cloud_consent_stop_is_the_refusal_code_not_success() {
