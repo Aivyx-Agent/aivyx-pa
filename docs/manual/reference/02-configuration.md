@@ -72,7 +72,7 @@ OpenAI, or any OpenAI-compatible server (llama.cpp, LM Studio, vLLM, Jan, Lemona
 
 ### `[ollama]`
 
-Generation options passed to Ollama when it is the provider. Unset keys keep Ollama's own defaults.
+Generation options passed to Ollama when it is the provider. Unset keys keep Ollama's own defaults. `prompt_strategies` is advanced: not covered by the 1.x compatibility promise.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -85,7 +85,7 @@ Generation options passed to Ollama when it is the provider. Unset keys keep Oll
 | `repeat_penalty` | number |  | Penalty for repeating tokens. |
 | `repeat_last_n` | integer |  | How many recent tokens the repeat penalty looks at. |
 | `seed` | integer |  | Random seed, for repeatable output. |
-| `prompt_strategies` | table of string |  | `[ollama.prompt_strategies]` operator-facing per-family override map. Keys are family strings matching `detect_model_family`'s output (`"qwen3"`, `"gemma4"`, `"llama3"`, …); values are wire-form strategy labels parsed by `OllamaFamilyStrategy::parse`. |
+| `prompt_strategies` | table of string |  | Per model family (`qwen3`, `gemma4`, `llama3`, …), how tool use is explained to the model: `none`, `structured_injection` or `few_shot_examples`. Unset families use the built-in choice for that family. |
 
 ### `[mistralrs]`
 
@@ -117,7 +117,7 @@ Where saved KV-cache slots live when a local llama.cpp server is the backend.
 
 ### `[providers]`
 
-Provider-independent model settings.
+Provider-independent model settings. Advanced: not covered by the 1.x compatibility promise.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -187,7 +187,7 @@ Per-call model routing: send each task to the best-suited model you have, escala
 
 ### `[embedding]`
 
-Semantic memory search: the embeddings server, and how recall picks memories for each turn.
+Semantic memory search: the embeddings server, and how recall picks memories for each turn. The `rag_*`, `recall_*` and `ann_*` keys are advanced: not covered by the 1.x compatibility promise. `[memory] profile` sets them for you.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -195,20 +195,20 @@ Semantic memory search: the embeddings server, and how recall picks memories for
 | `model` | string | `"text-embedding-3-small"` | Embedding model id. Default `"text-embedding-3-small"`. |
 | `api_key` | string | `"sk-..."` | API key for the embeddings server. Not needed for a local one. |
 | `dimensions` | integer | `1536` | Expected vector dimensionality. Default `1536` (text-embedding-3-small). |
-| `rag_top_k` | integer | `5` | Automatic-recall fan-out: how many of the top semantic hits the per-turn recall hook may inject. Default `5`. |
-| `rag_min_similarity` | number | `0.20` | Automatic-recall relevance floor: a hit whose cosine similarity is below this is dropped even when `rag_top_k` is not filled. This is what stops naive RAG from injecting weak/irrelevant memories on every unrelated prompt. |
-| `recall_window_turns` | integer | `1` | Conversational-window relevance: the number of recent turns (current user message included) that auto-recall and adaptive-Persona selection embed together as their relevance query. Default `1`. |
-| `recall_gate_min_chars` | integer | `0` | Heuristic recall gate: when the trimmed user message is **shorter than this many Unicode characters**, both auto-recall and adaptive Persona selection short-circuit before any embed call (they return Unset, which the planner already honours as the existing best-effort fallback). |
-| `ann_index` | bool | `false` | Opt-in ANN index. Unset → `false` (brute-force only). |
-| `ann_rebuild_threshold` | integer | `100` | Write-count threshold before the ANN index is rebuilt. Unset → 100. |
-| `recall_token_budget` | integer | `0` | Token-cost hard cap on recall + Persona injection. Unset → 0 (disabled. |
-| `recall_hybrid` | bool | `false` | Hybrid keyword+semantic recall fusion opt-in. Unset → `false` (semantic-only. |
-| `recall_lexical_weight` | number | `1.0` | Weight of keyword matching in hybrid recall. Default 1.0. |
-| `recall_graph_hops` | integer | `0` | Number of hops for the co-occurrence **graph-walk** fusion source. `0` (default) disables the graph source — recall fuses semantic + lexical only. |
-| `recall_graph_decay` | number | `0.5` | Per-hop affinity decay for the graph-walk source. `0.5` (default) halves a path's strength each hop; `1.0` disables decay. |
-| `recall_graph_weight` | number | `1.0` | Weight of the graph-walk ranker in the hybrid RRF fusion. `1.0` (default) weights it equally with the semantic + lexical rankers; lower it to make associative recall a gentler nudge. |
-| `recall_wiki_weight` | number | `0.0` | Weight of the knowledge-wiki **page** ranker in the hybrid RRF fusion. `0.0` (default) ⇒ off: a topic's consolidated page summary does not compete in recall. |
-| `recall_graph_typed_weight` | number | `1.0` | Weight of the **typed knowledge-graph** ranker in the hybrid RRF fusion. `0.0` (default) ⇒ off. |
+| `rag_top_k` | integer | `5` | Most memories recall may add to a turn. Default 5. |
+| `rag_min_similarity` | number | `0.20` | Recall leaves out a memory less similar than this (0–1) to what you asked, so unrelated memories don't crowd in. |
+| `recall_window_turns` | integer | `1` | How many recent turns (yours included) recall looks at to find relevant memories. Default 1. |
+| `recall_gate_min_chars` | integer | `0` | Skip recall for a message shorter than this many characters ("ok", "thanks"). Default 0 (never skip). |
+| `ann_index` | bool | `false` | Use an approximate index to search memory faster when it is large. Off by default. |
+| `ann_rebuild_threshold` | integer | `100` | How many new memories are written before the index is rebuilt. Default 100. |
+| `recall_token_budget` | integer | `0` | Most tokens recalled memories and Persona facets may add to a turn. Default 0 (no cap beyond `rag_top_k`). |
+| `recall_hybrid` | bool | `false` | Find memories by matching words as well as by meaning, and merge the two lists. Off by default; `memory.profile` `lite` and `smart` turn it on. |
+| `recall_lexical_weight` | number | `1.0` | How much word matching counts in hybrid recall, against meaning. Default 1.0 (equal). |
+| `recall_graph_hops` | integer | `0` | Also recall memories that usually come up with the ones found, this many links away. Default 0 (off); 1 with `memory.profile` `lite` or `smart`. |
+| `recall_graph_decay` | number | `0.5` | How much weaker each further link counts (0–1). Default 0.5 (half per link). |
+| `recall_graph_weight` | number | `1.0` | How much those linked memories count in recall. Default 1.0. |
+| `recall_wiki_weight` | number | `0.0` | How much knowledge-wiki pages count in recall. Default 0.0 (off); 1.0 with `memory.profile = "smart"`. |
+| `recall_graph_typed_weight` | number | `1.0` | How much the knowledge graph (topics linked by relations such as depends-on) counts in recall. Default 0.0 (off); 1.0 with `memory.profile = "smart"`. |
 
 ## Reach and safety
 
@@ -391,17 +391,17 @@ The agent's own workspace — a directory for its notes, plans and journal, sepa
 
 ### `[recall_cluster]`
 
-Recall memories that usually come up together. Off by default.
+Recall memories that usually come up together. Off by default. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch. Default `false`; even with the section present and a populated ledger, recall is unchanged until this is `true`. |
-| `max_siblings` | integer | `3` | Hard per-turn cap on injected sibling memories. They share the existing `rag_top_k` budget (displacing the weakest primary hits), so this also bounds how much of the budget cluster expansion may claim. |
-| `min_affinity` | number | `1.0` | A sibling's decayed co-occurrence score must be at least this for the pair to be eligible — the bar that keeps weak/noisy affinities out of recall context. |
+| `max_siblings` | integer | `3` | Most related memories added per turn. They come out of the `rag_top_k` allowance. |
+| `min_affinity` | number | `1.0` | How often two memories must have come up together for one to bring in the other. Default 1.0. |
 
 ### `[wiki]`
 
-Background synthesis of a knowledge wiki from memory. Off by default.
+Background synthesis of a knowledge wiki from memory. Off by default. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -411,7 +411,7 @@ Background synthesis of a knowledge wiki from memory. Off by default.
 
 ### `[graph]`
 
-Background extraction of a typed knowledge graph from memory. Off by default.
+Background extraction of a typed knowledge graph from memory. Off by default. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -422,16 +422,16 @@ Background extraction of a typed knowledge graph from memory. Off by default.
 
 ### `[recall_judgment]`
 
-Let a model judge, during reflection, whether each recalled memory actually helped. Off by default; costs model calls.
+Let a model judge, during reflection, whether each recalled memory actually helped. Off by default; costs model calls. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch. Default `false`. |
-| `max_recalls_per_cycle` | integer | `30` | Hard upper bound on how many recall events the batched LLM call may judge in one cron tick. Past this cap, the oldest unjudged recalls in the window are skipped for the cycle (recorded on the stat surface but never fail the cron). |
+| `max_recalls_per_cycle` | integer | `30` | Most recalled memories judged per reflection pass. The rest wait for a later pass. Default 30. |
 
 ### `[recall_feedback]`
 
-Use the model's judgments (above) instead of the built-in heuristic when scoring recall.
+Use the model's judgments (above) instead of the built-in heuristic when scoring recall. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -439,24 +439,24 @@ Use the model's judgments (above) instead of the built-in heuristic when scoring
 
 ### `[correction_judgment]`
 
-Let a model classify your corrections during reflection. Off by default; costs model calls.
+Let a model classify your corrections during reflection. Off by default; costs model calls. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `enabled` | bool |  | Master switch. Default `false`. |
-| `max_corrections_per_cycle` | integer |  | Hard upper bound on how many corrections the batched LLM call may judge in one cron tick. Past this cap, the remaining corrections fall back to the structural signal for the cycle (counted, never dropped). |
+| `max_corrections_per_cycle` | integer |  | Most corrections classified per reflection pass. The rest are counted the simpler way for that pass. |
 
 ### `[correction_signal]`
 
-Also attribute your corrections to the tools the corrected turn used.
+Also attribute your corrections to the tools the corrected turn used. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `attribute_tools` | bool |  | Also attribute corrections to the corrected turn's **tools** (keyed `tool:<scope_base>`), via the outcome-driven detector. Broadens the signal to no-recall turns the recall-driven detector misses. |
+| `attribute_tools` | bool |  | Count a correction against the tools the corrected turn used, too, not only the memories it recalled. |
 
 ### `[persona_lifecycle]`
 
-Merge near-duplicate Persona facets and retire unhelpful ones over time.
+Merge near-duplicate Persona facets and retire unhelpful ones over time. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -464,39 +464,39 @@ Merge near-duplicate Persona facets and retire unhelpful ones over time.
 | `consolidation_similarity` | number | `0.92` | Cosine threshold above which two facets in the same soft list are treated as near-duplicates and a merge is proposed. In `(0.0, 1.0]`; high by design. |
 | `decay_max_age_secs` | integer | `7776000` | A soft-list facet whose originating delta is older than this many seconds, with no later reinforcing delta in its category, is proposed for decay. |
 | `min_soft_facets` | integer | `6` | Never act on a soft list with fewer than this many facets — a small Soul has nothing worth pruning. |
-| `decay_unhelpful_threshold` | number | `-2.0` | A recall-feedback-derived facet whose associated topic's durable decayed helpfulness is **at or below** this (negative) value is treated as "sustained low": it may be proposed for decay before the age horizon, and a strongly-positive topic (>= the magnitude of this value) instead *protects* an age-old facet from age-decay. |
-| `decay_min_samples` | integer | `3` | Confidence floor: a topic's helpfulness is only consulted once it has at least this many ledger samples. Identity is never decayed (or protected) on thin evidence. |
-| `decay_pair_below_affinity` | number | `1.0` | A `consolidate-pair:` facet whose pair's decayed affinity is **below** this floor is treated as "relationship no longer durable": the facet may be proposed for decay before the age horizon, and symmetrically, a pair whose affinity is **at or above** this floor *protects* its facet from age-decay. |
+| `decay_unhelpful_threshold` | number | `-2.0` | A facet whose topic's helpfulness score is at or below this (a negative number) may be retired before it is old; a topic scoring at least as high the other way keeps its old facet. |
+| `decay_min_samples` | integer | `3` | Use a topic's helpfulness only after this many observations. Default 3. |
+| `decay_pair_below_affinity` | number | `1.0` | A facet made from two topics that no longer come up together this often may be retired early; a pair that still does keeps its facet. |
 | `signal_consolidate` | bool | `true` | Merge near-duplicate Persona facets. |
 | `signal_decay` | bool | `true` | Retire Persona facets that keep proving unhelpful. |
 
 ### `[persona_consolidation]`
 
-Propose Persona updates from patterns in what you recall together.
+Propose Persona updates from patterns in what you recall together. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch. Default `false`; even with the section present and ledgers populated, no consolidation proposals are filed until this is `true`. |
-| `min_affinity` | number | `1.0` | The decayed pair-affinity floor a candidate must clear — the same idea (and same default) as the `recall_cluster.min_affinity`, applied to the proposal-side of the symmetric arc. |
-| `min_samples` | integer | `3` | Minimum observation count on the pair before it is proposal-eligible. Mirrors `decay_min_samples`: identity is never proposed on thin evidence. |
-| `min_topic_helpfulness` | number | `0.0` | Both endpoints' helpfulness-ledger scores must be at least this value. Default `0.0` enforces "non-negative" — a pattern made of topics that individually hurt is never proposed; raise it to require *positive* helpfulness on both sides. |
-| `max_proposals_per_cycle` | integer | `3` | Hard cap on filings per reflection cycle. Mirrors the `max_per_cycle` precedent — actuators on the reflection cadence never flood the operator's queue. |
-| `enable_supersession` | bool | `true` | When `true`, the consolidation pass also detects **supersession**: an existing applied `consolidate-pair:{A}+{B}` facet whose pair has decayed plus a new candidate pair `(A, C)` sharing one endpoint that strengthens past the construction floor → file two linked proposals (`RemoveList` for the old facet, `AppendList` for the new one) sharing a `supersedes_proposal_id` so the operator-facing surface presents them as a single supersession decision. |
+| `min_affinity` | number | `1.0` | How often two topics must come up together before a Persona update is proposed from them. Default 1.0, as `recall_cluster.min_affinity`. |
+| `min_samples` | integer | `3` | Observations of the pair needed before a proposal. Default 3. |
+| `min_topic_helpfulness` | number | `0.0` | Both topics' helpfulness scores must be at least this. Default 0.0 (neither topic unhelpful). |
+| `max_proposals_per_cycle` | integer | `3` | Most proposals filed per reflection pass. Default 3. |
+| `enable_supersession` | bool | `true` | When a pair of topics has faded and one of them now comes up with a new topic, propose replacing the old facet with a new one, as one decision. |
 
 ### `[correction_consolidation]`
 
-Propose Persona updates from topics you keep correcting.
+Propose Persona updates from topics you keep correcting. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `enabled` | bool |  | Master switch. Default `false`; even with the section present and the ledger populated, no correction proposals are filed until this is `true`. |
-| `min_corrections` | number |  | The decayed correction count a topic must clear before it is proposal-eligible. Default `3.0` — three reworks is the "this is a pattern, not a one-off" bar, mirroring the reflection loop's recurs-in-at-least-3-turns discipline. |
-| `min_samples` | integer |  | Minimum number of reflection windows that folded into the topic before it is proposal-eligible. Identity is never proposed on a single noisy window. |
-| `max_proposals_per_cycle` | integer |  | Hard cap on filings per reflection cycle. Same value and reasoning as the cap — a passive actuator on the reflection cadence never floods the review queue. |
+| `min_corrections` | number |  | How many recent corrections a topic needs before a Persona update is proposed for it. Default 3.0. |
+| `min_samples` | integer |  | Reflection passes that saw the topic before a proposal. A single pass is never enough. |
+| `max_proposals_per_cycle` | integer |  | Most proposals filed per reflection pass. |
 
 ### `[skills]`
 
-Have the agent propose new skills from turns that went well. Proposals wait for your approval. See [Skills and persona](../../guide/06-skills-and-persona.md).
+Have the agent propose new skills from turns that went well. Proposals wait for your approval. See [Skills and persona](../../guide/06-skills-and-persona.md). `[skills.auto_propose]` is advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -525,7 +525,7 @@ Have the agent propose new skills from turns that went well. Proposals wait for 
 
 ### `[persona]`
 
-Have the agent propose Persona and Profile updates, per category. Proposals wait for your approval.
+Have the agent propose Persona and Profile updates, per category. Proposals wait for your approval. `[persona.auto_propose]` is advanced: not covered by the 1.x compatibility promise, except the `enabled` switches.
 
 
 #### `[persona.auto_propose]`
@@ -568,25 +568,25 @@ One sub-table per category: `assistant_name`, `operator_profile`, `communication
 
 ### `[skill_refinement]`
 
-Propose improvements to skills that keep underperforming.
+Propose improvements to skills that keep underperforming. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch. Default `false`. |
-| `floor` | number | `0.0` | Decayed-EWMA floor below which a skill is an underperformer. |
-| `min_samples` | integer | `4` | Minimum folded windows before a skill is refinement-eligible. |
-| `max_per_cycle` | integer | `2` | Hard cap on refinement proposals filed per reflection cycle. |
+| `floor` | number | `0.0` | A skill whose recent helpfulness score is below this is a candidate for improvement. Default 0.0. |
+| `min_samples` | integer | `4` | Reflection passes that scored the skill before it is a candidate. Default 4. |
+| `max_per_cycle` | integer | `2` | Most improvement proposals filed per reflection pass. Default 2. |
 
 ### `[skill_authoring]`
 
-Propose new skills from well-developed wiki topics.
+Propose new skills from well-developed wiki topics. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch. Default `false`. |
-| `min_summary_chars` | integer | `200` | Wiki-summary length floor (chars) for a topic to be a candidate. |
-| `min_edges` | integer | `2` | Minimum typed-graph edges around the topic. |
-| `max_per_cycle` | integer | `1` | Hard cap on authored skills per reflection cycle. |
+| `min_summary_chars` | integer | `200` | A wiki topic's summary must be at least this many characters to become a skill. Default 200. |
+| `min_edges` | integer | `2` | The topic must have at least this many knowledge-graph links. Default 2. |
+| `max_per_cycle` | integer | `1` | Most new skills proposed per reflection pass. Default 1. |
 
 ### `[skill_defaults]`
 
@@ -599,14 +599,14 @@ Extra directories of `SKILL.md` capability packages, alongside the bundled defau
 
 ### `[tool_relevance]`
 
-Track which tools and skills help for which kinds of request, and tell the model each turn.
+Track which tools and skills help for which kinds of request, and tell the model each turn. Advanced: not covered by the 1.x compatibility promise, except `enabled`.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `enabled` | bool |  | Master switch. Default `false`. |
-| `max_keywords` | integer |  | Top-K keywords extracted from the user input for the ledger key. Default `5`. |
-| `min_outcomes_to_show` | integer |  | Minimum total outcomes (`success + failure`) for a row to appear in the rendered relevance section. Default `2` — don't show a tool tried just once; one data point isn't a pattern. |
-| `top_k_per_section` | integer |  | Maximum rows per subsection (Tools / Skills) in the rendered relevance section. Default `5` — keeps the prompt section bounded. |
+| `max_keywords` | integer |  | How many words of your message are used to look up which tools helped before. Default 5. |
+| `min_outcomes_to_show` | integer |  | Show a tool only after it has been tried this many times for such requests. Default 2. |
+| `top_k_per_section` | integer |  | Most tools (and skills) shown to the model each turn. Default 5. |
 
 ### `[[reflection_schedule]]`
 

@@ -30,6 +30,24 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
 
 ## Not stable
 
+Some lines of the snapshots in `docs/stable/` end with a tag in
+parentheses. A tagged line is listed so that a change to it is still
+deliberate, but it is not part of the promise. The tags are below; the
+one list of tagged entries is `NOT_STABLE` in
+`crates/aivyx-config/src/not_stable.rs`.
+
+- **Advanced learning and recall settings**, tagged `(advanced)`. The
+  tuning keys of the learning system, which keep changing as it does:
+  `[persona.auto_propose]`, `[skills.auto_propose]`,
+  `[persona_lifecycle]`, `[persona_consolidation]`,
+  `[correction_consolidation]`, `[correction_judgment]`,
+  `[correction_signal]`, `[recall_judgment]`, `[recall_feedback]`,
+  `[recall_cluster]`, `[skill_refinement]`, `[skill_authoring]`,
+  `[tool_relevance]`, `[providers]`, `[wiki]`, `[graph]`, the
+  `[embedding]` keys `recall_*`, `rag_*` and `ann_*`, and
+  `[ollama] prompt_strategies`. Each section's `enabled` switches stay
+  stable, and so does `[memory] profile`, the setting that turns the
+  learning features on as a set.
 - **Previews.** Today these are the Matrix, Proton Mail and Signal channels
   (updated by the Channel Activation Milestone). A preview can change or
   be removed in any release.

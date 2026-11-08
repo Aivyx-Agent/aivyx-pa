@@ -13542,6 +13542,16 @@ fn stable_config_keys() {
             }
         }
     }
+    // Lines outside the 1.x promise end with their tag (`not_stable`).
+    use crate::not_stable::{Snapshot, stale_entries, tag_for};
+    for line in &mut out {
+        let key = line.split_once(": ").map_or(line.as_str(), |(k, _)| k);
+        if let Some(tag) = tag_for(Snapshot::Config, key) {
+            line.push_str(tag.suffix());
+        }
+    }
+    let stale = stale_entries(Snapshot::Config, out.iter().map(String::as_str));
+    assert!(stale.is_empty(), "not_stable::NOT_STABLE entries that tag no config line: {stale:?}");
     out.sort();
     let text = out.join("\n") + "\n";
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/stable/config.txt");

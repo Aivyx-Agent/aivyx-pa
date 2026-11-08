@@ -42,7 +42,7 @@ fn known_paths() -> BTreeSet<String> {
         let Some((path, ty)) = line.split_once(": ") else { continue };
         // A deprecated spelling is never suggested: neither a renamed one
         // (its new one is) nor a warn-only one (`schedule[].notify_target`).
-        if ty.starts_with("deprecated alias of ") || ty.ends_with(" (deprecated)") {
+        if ty.starts_with("deprecated alias of ") || ty.contains(" (deprecated)") {
             continue;
         }
         let mut prefix = String::new();
@@ -274,6 +274,26 @@ mod tests {
         let keys = unknown("[[schedule]]\nname = \"a\"\ncron = \"c\"\nnotify_targt = \"x\"\n");
         assert_eq!(keys.len(), 1, "{keys:?}");
         assert_eq!(keys[0].suggestion.as_deref(), Some("schedule.notify_targets"));
+    }
+
+    #[test]
+    fn tagged_snapshot_lines_still_name_their_key() {
+        // `graph.interval_secs: u64? (advanced)` and the other not-stable
+        // tags (`not_stable`): the key before ": " is still known, and a
+        // typo of one gets it as the suggestion.
+        let tags = [" (advanced)", " (build-time feature)", " (preview)"];
+        let tagged: Vec<&str> =
+            KNOWN_SNAPSHOT.lines().filter(|l| tags.iter().any(|t| l.contains(t))).collect();
+        assert!(!tagged.is_empty(), "premise: the snapshot has tagged lines");
+        let known = known_paths();
+        for line in tagged {
+            let Some((path, _)) = line.split_once(": ") else { continue };
+            assert!(known.contains(path), "{line:?} lost its key");
+        }
+        assert!(known.iter().all(|k| !k.contains(' ') && !k.contains('(')), "{known:?}");
+        let keys = unknown("[graph]\nenabled = true\ninterval_sec = 60\n");
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert_eq!(keys[0].suggestion.as_deref(), Some("graph.interval_secs"));
     }
 
     #[test]

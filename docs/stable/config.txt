@@ -38,12 +38,12 @@ confine.allow_unix_sockets: deprecated alias of sandbox.allow_unix_sockets
 confine.require_enforcement: deprecated alias of sandbox.require_enforcement
 confine.share_system_tmp: deprecated alias of sandbox.share_system_tmp
 correction_consolidation.enabled: bool?
-correction_consolidation.max_proposals_per_cycle: u32?
-correction_consolidation.min_corrections: f32?
-correction_consolidation.min_samples: u32?
+correction_consolidation.max_proposals_per_cycle: u32? (advanced)
+correction_consolidation.min_corrections: f32? (advanced)
+correction_consolidation.min_samples: u32? (advanced)
 correction_judgment.enabled: bool?
-correction_judgment.max_corrections_per_cycle: u32?
-correction_signal.attribute_tools: bool?
+correction_judgment.max_corrections_per_cycle: u32? (advanced)
+correction_signal.attribute_tools: bool? (advanced)
 daemon.web_ui: deprecated alias of studio.enabled
 daemon.web_ui_allowed_origins: deprecated alias of studio.allowed_origins
 daemon.web_ui_auth_token: deprecated alias of studio.auth_token
@@ -64,24 +64,24 @@ email.password: str?
 email.port: u16?
 email.tls_mode: str?
 email.username: str?
-embedding.ann_index: bool?
-embedding.ann_rebuild_threshold: u32?
+embedding.ann_index: bool? (advanced)
+embedding.ann_rebuild_threshold: u32? (advanced)
 embedding.api_key: str?
 embedding.base_url: str?
 embedding.dimensions: u64?
 embedding.model: str?
-embedding.rag_min_similarity: f32?
-embedding.rag_top_k: u64?
-embedding.recall_gate_min_chars: u64?
-embedding.recall_graph_decay: f32?
-embedding.recall_graph_hops: u32?
-embedding.recall_graph_typed_weight: f32?
-embedding.recall_graph_weight: f32?
-embedding.recall_hybrid: bool?
-embedding.recall_lexical_weight: f32?
-embedding.recall_token_budget: u32?
-embedding.recall_wiki_weight: f32?
-embedding.recall_window_turns: u64?
+embedding.rag_min_similarity: f32? (advanced)
+embedding.rag_top_k: u64? (advanced)
+embedding.recall_gate_min_chars: u64? (advanced)
+embedding.recall_graph_decay: f32? (advanced)
+embedding.recall_graph_hops: u32? (advanced)
+embedding.recall_graph_typed_weight: f32? (advanced)
+embedding.recall_graph_weight: f32? (advanced)
+embedding.recall_hybrid: bool? (advanced)
+embedding.recall_lexical_weight: f32? (advanced)
+embedding.recall_token_budget: u32? (advanced)
+embedding.recall_wiki_weight: f32? (advanced)
+embedding.recall_window_turns: u64? (advanced)
 file_watch[].debounce_ms: u64?
 file_watch[].enabled: bool
 file_watch[].name: str
@@ -95,9 +95,9 @@ file_watch[].wrap_mission: bool
 fs.root: str?
 git.repos: [str]
 graph.enabled: bool?
-graph.interval_secs: u64?
-graph.max_topics_per_sweep: u64?
-graph.vocabulary: {str: [str]}
+graph.interval_secs: u64? (advanced)
+graph.max_topics_per_sweep: u64? (advanced)
+graph.vocabulary: {str: [str]} (advanced)
 kvcache.store_path: str?
 loop.default_priority: u32?
 loop.delegate_above: u32?
@@ -160,7 +160,7 @@ ollama.mirostat: u8?
 ollama.num_ctx: u32?
 ollama.num_predict: u32?
 ollama.num_thread: u32?
-ollama.prompt_strategies: {str: str}
+ollama.prompt_strategies: {str: str} (advanced)
 ollama.repeat_last_n: i32?
 ollama.repeat_penalty: f32?
 ollama.seed: i64?
@@ -171,61 +171,61 @@ openai.base_url: str?
 openai.constrain_tool_calls: bool?
 pack.source: str?
 pack.trusted_publishers: [str]?
-persona.auto_propose.assistant_name.auto_accept_confidence_threshold: f32?
+persona.auto_propose.assistant_name.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.assistant_name.enabled: bool?
-persona.auto_propose.behavioral_constraints.auto_accept_confidence_threshold: f32?
+persona.auto_propose.behavioral_constraints.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.behavioral_constraints.enabled: bool?
-persona.auto_propose.behavioral_preferences.auto_accept_confidence_threshold: f32?
+persona.auto_propose.behavioral_preferences.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.behavioral_preferences.enabled: bool?
-persona.auto_propose.character_traits.auto_accept_confidence_threshold: f32?
+persona.auto_propose.character_traits.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.character_traits.enabled: bool?
-persona.auto_propose.communication_adaptations.auto_accept_confidence_threshold: f32?
+persona.auto_propose.communication_adaptations.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.communication_adaptations.enabled: bool?
-persona.auto_propose.communication_style.auto_accept_confidence_threshold: f32?
+persona.auto_propose.communication_style.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.communication_style.enabled: bool?
 persona.auto_propose.enabled: bool?
-persona.auto_propose.failure_outcomes.cancelled: bool?
-persona.auto_propose.failure_outcomes.escalated: bool?
-persona.auto_propose.failure_outcomes.failed: bool?
-persona.auto_propose.failure_outcomes.timed_out: bool?
-persona.auto_propose.from_failed_turns: bool?
-persona.auto_propose.fuzzy_match_threshold: f32?
-persona.auto_propose.heuristic.distinct_tool_id_min: u32?
-persona.auto_propose.heuristic.duration_ms_min: u64?
-persona.auto_propose.heuristic.mode: str?
-persona.auto_propose.heuristic.require_gate_resolve: bool?
-persona.auto_propose.heuristic.tool_call_count_min: u32?
-persona.auto_propose.judge_max_tokens: u32?
-persona.auto_propose.judge_model: str?
-persona.auto_propose.learned_context.auto_accept_confidence_threshold: f32?
+persona.auto_propose.failure_outcomes.cancelled: bool? (advanced)
+persona.auto_propose.failure_outcomes.escalated: bool? (advanced)
+persona.auto_propose.failure_outcomes.failed: bool? (advanced)
+persona.auto_propose.failure_outcomes.timed_out: bool? (advanced)
+persona.auto_propose.from_failed_turns: bool? (advanced)
+persona.auto_propose.fuzzy_match_threshold: f32? (advanced)
+persona.auto_propose.heuristic.distinct_tool_id_min: u32? (advanced)
+persona.auto_propose.heuristic.duration_ms_min: u64? (advanced)
+persona.auto_propose.heuristic.mode: str? (advanced)
+persona.auto_propose.heuristic.require_gate_resolve: bool? (advanced)
+persona.auto_propose.heuristic.tool_call_count_min: u32? (advanced)
+persona.auto_propose.judge_max_tokens: u32? (advanced)
+persona.auto_propose.judge_model: str? (advanced)
+persona.auto_propose.learned_context.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.learned_context.enabled: bool?
-persona.auto_propose.learned_skill.auto_accept_confidence_threshold: f32?
+persona.auto_propose.learned_skill.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.learned_skill.enabled: bool?
-persona.auto_propose.operator_profile.auto_accept_confidence_threshold: f32?
+persona.auto_propose.operator_profile.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.operator_profile.enabled: bool?
-persona.auto_propose.primary_use_cases.auto_accept_confidence_threshold: f32?
+persona.auto_propose.primary_use_cases.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.primary_use_cases.enabled: bool?
-persona.auto_propose.profile_hint.auto_accept_confidence_threshold: f32?
+persona.auto_propose.profile_hint.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.profile_hint.enabled: bool?
-persona.auto_propose.relationship_milestones.auto_accept_confidence_threshold: f32?
+persona.auto_propose.relationship_milestones.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.relationship_milestones.enabled: bool?
-persona.auto_propose.role_definition_suggestion.auto_accept_confidence_threshold: f32?
+persona.auto_propose.role_definition_suggestion.auto_accept_confidence_threshold: f32? (advanced)
 persona.auto_propose.role_definition_suggestion.enabled: bool?
-persona_consolidation.enable_supersession: bool?
+persona_consolidation.enable_supersession: bool? (advanced)
 persona_consolidation.enabled: bool?
-persona_consolidation.max_proposals_per_cycle: u32?
-persona_consolidation.min_affinity: f32?
-persona_consolidation.min_samples: u32?
-persona_consolidation.min_topic_helpfulness: f32?
-persona_lifecycle.consolidation_similarity: f32?
-persona_lifecycle.decay_max_age_secs: u64?
-persona_lifecycle.decay_min_samples: u32?
-persona_lifecycle.decay_pair_below_affinity: f32?
-persona_lifecycle.decay_unhelpful_threshold: f32?
+persona_consolidation.max_proposals_per_cycle: u32? (advanced)
+persona_consolidation.min_affinity: f32? (advanced)
+persona_consolidation.min_samples: u32? (advanced)
+persona_consolidation.min_topic_helpfulness: f32? (advanced)
+persona_lifecycle.consolidation_similarity: f32? (advanced)
+persona_lifecycle.decay_max_age_secs: u64? (advanced)
+persona_lifecycle.decay_min_samples: u32? (advanced)
+persona_lifecycle.decay_pair_below_affinity: f32? (advanced)
+persona_lifecycle.decay_unhelpful_threshold: f32? (advanced)
 persona_lifecycle.enabled: bool?
-persona_lifecycle.min_soft_facets: u32?
-persona_lifecycle.signal_consolidate: bool?
-persona_lifecycle.signal_decay: bool?
+persona_lifecycle.min_soft_facets: u32? (advanced)
+persona_lifecycle.signal_consolidate: bool? (advanced)
+persona_lifecycle.signal_decay: bool? (advanced)
 persona_seed.character_traits: [str]
 persona_seed.communication_adaptations: [str]
 persona_seed.learned_context: [str]
@@ -259,7 +259,7 @@ proton.smtp_addr: str?
 proton.team_command_allowed_senders: [str]
 proton.team_run_channel: bool
 proton.team_trigger_rate_limit: u32?
-providers.tool_name_auto_correct_threshold: f32?
+providers.tool_name_auto_correct_threshold: f32? (advanced)
 rate_limit.default_per_turn_per_tool: u32?
 rate_limit.on_exceeded: RateAction
 rate_limit.per_turn_total: u32?
@@ -267,11 +267,11 @@ rate_limit.tools.*.per_turn: u32?
 rate_limit.tools.*.per_window: u32?
 rate_limit.tools.*.window_secs: u64?
 recall_cluster.enabled: bool?
-recall_cluster.max_siblings: u32?
-recall_cluster.min_affinity: f32?
-recall_feedback.use_judgment_signal: bool?
+recall_cluster.max_siblings: u32? (advanced)
+recall_cluster.min_affinity: f32? (advanced)
+recall_feedback.use_judgment_signal: bool? (advanced)
 recall_judgment.enabled: bool?
-recall_judgment.max_recalls_per_cycle: u32?
+recall_judgment.max_recalls_per_cycle: u32? (advanced)
 reflection_schedule[].cron: str
 reflection_schedule[].enabled: bool
 reflection_schedule[].lookback_window_secs: u64
@@ -336,25 +336,25 @@ signal.team_command_allowed_senders: [str]
 signal.team_run_channel: bool
 signal.team_trigger_rate_limit: u32?
 skill_authoring.enabled: bool?
-skill_authoring.max_per_cycle: u64?
-skill_authoring.min_edges: u64?
-skill_authoring.min_summary_chars: u64?
+skill_authoring.max_per_cycle: u64? (advanced)
+skill_authoring.min_edges: u64? (advanced)
+skill_authoring.min_summary_chars: u64? (advanced)
 skill_defaults.project_dir: str?
 skill_defaults.user_dir: str?
 skill_refinement.enabled: bool?
-skill_refinement.floor: f32?
-skill_refinement.max_per_cycle: u64?
-skill_refinement.min_samples: u32?
-skills.auto_propose.auto_accept_confidence_threshold: f32?
+skill_refinement.floor: f32? (advanced)
+skill_refinement.max_per_cycle: u64? (advanced)
+skill_refinement.min_samples: u32? (advanced)
+skills.auto_propose.auto_accept_confidence_threshold: f32? (advanced)
 skills.auto_propose.enabled: bool?
-skills.auto_propose.fuzzy_match_threshold: f32?
-skills.auto_propose.heuristic.distinct_tool_id_min: u32?
-skills.auto_propose.heuristic.duration_ms_min: u64?
-skills.auto_propose.heuristic.mode: str?
-skills.auto_propose.heuristic.require_gate_resolve: bool?
-skills.auto_propose.heuristic.tool_call_count_min: u32?
-skills.auto_propose.judge_max_tokens: u32?
-skills.auto_propose.judge_model: str?
+skills.auto_propose.fuzzy_match_threshold: f32? (advanced)
+skills.auto_propose.heuristic.distinct_tool_id_min: u32? (advanced)
+skills.auto_propose.heuristic.duration_ms_min: u64? (advanced)
+skills.auto_propose.heuristic.mode: str? (advanced)
+skills.auto_propose.heuristic.require_gate_resolve: bool? (advanced)
+skills.auto_propose.heuristic.tool_call_count_min: u32? (advanced)
+skills.auto_propose.judge_max_tokens: u32? (advanced)
+skills.auto_propose.judge_model: str? (advanced)
 skills.starter: bool?
 skills.trigger_injection: bool?
 slack.app_token: str?
@@ -392,9 +392,9 @@ tool_process[].sandbox.args: [str]?
 tool_process[].sandbox.wrapper: str
 tool_process[].scope_overrides: {str: str}?
 tool_relevance.enabled: bool?
-tool_relevance.max_keywords: u32?
-tool_relevance.min_outcomes_to_show: u32?
-tool_relevance.top_k_per_section: u32?
+tool_relevance.max_keywords: u32? (advanced)
+tool_relevance.min_outcomes_to_show: u32? (advanced)
+tool_relevance.top_k_per_section: u32? (advanced)
 voice.asr_beam_size: u64?
 voice.asr_engine: str?
 voice.asr_language: str?
@@ -414,8 +414,8 @@ webhook[].prompt: str
 webhook[].role: str
 webhook[].wrap_mission: bool
 wiki.enabled: bool?
-wiki.interval_secs: u64?
-wiki.max_pages_per_sweep: u64?
+wiki.interval_secs: u64? (advanced)
+wiki.max_pages_per_sweep: u64? (advanced)
 workspace.enabled: bool?
 workspace.journaling.enabled: bool?
 workspace.journaling.interval_secs: u64?

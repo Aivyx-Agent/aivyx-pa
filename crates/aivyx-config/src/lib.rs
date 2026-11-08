@@ -100,6 +100,7 @@ use aivyx_storage::{KeyDomain, Storage};
 // daemon's Settings IPC handlers).
 pub mod config_write;
 mod deprecated_keys;
+pub mod not_stable;
 mod unknown_keys;
 pub use config_write::{
     write_access_section, write_agent_cycle_detection, write_autonomy_section,
