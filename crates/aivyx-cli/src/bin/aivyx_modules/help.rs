@@ -660,6 +660,7 @@ mod tests {
         // Webhook payloads as JSON key paths. Outgoing: the `notify_target`
         // webhook body. Inbound: `POST /trigger/<id>` reads no body; its
         // replies are the fixed JSON objects in `webhook_listener.rs`.
+        // A `version` field is listed with its value, so a bump shows.
         fn walk(prefix: &str, v: &serde_json::Value, out: &mut Vec<String>) {
             match v {
                 serde_json::Value::Object(map) if !map.is_empty() => {
@@ -667,6 +668,7 @@ mod tests {
                         walk(&format!("{prefix}.{k}"), v, out);
                     }
                 }
+                _ if prefix.ends_with(".version") => out.push(format!("{prefix} = {v}")),
                 _ => out.push(prefix.to_string()),
             }
         }

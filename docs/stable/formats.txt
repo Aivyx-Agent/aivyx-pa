@@ -40,5 +40,6 @@ webhook.notify.source
 webhook.notify.subject
 webhook.notify.target
 webhook.notify.timestamp
+webhook.notify.version = 1
 webhook.trigger.response.error
 webhook.trigger.response.status

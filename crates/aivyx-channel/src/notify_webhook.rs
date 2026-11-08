@@ -10,6 +10,7 @@
 //!
 //! ```json
 //! {
+//!   "version":   1,
 //!   "source":    "aivyx-pa",
 //!   "target":    "<target_name>",
 //!   "subject":   "<subject>" | null,
@@ -19,6 +20,10 @@
 //! ```
 //!
 //! Content-Type: `application/json`. Timeout: 5 seconds.
+//!
+//! `version` ([`NOTIFY_WEBHOOK_PAYLOAD_VERSION`]) changes only when a
+//! field is removed or changes meaning; new fields can appear without a
+//! bump, so a receiver ignores fields it does not know.
 //!
 //! ## Status code mapping
 //!
@@ -86,6 +91,7 @@ impl NotifyWebhookBackend {
         subject: Option<&str>,
     ) -> WebhookPayload {
         WebhookPayload {
+            version: NOTIFY_WEBHOOK_PAYLOAD_VERSION,
             source: "aivyx-pa",
             target: target_name.to_string(),
             subject: subject.map(|s| s.to_string()),
@@ -113,9 +119,13 @@ impl NotifyBackend for NotifyWebhookBackend {
     }
 }
 
-/// JSON payload shape per Q5(a) at Phase 62 sign-off.
+/// The notify webhook payload's version (R14; docs/stable/formats.txt).
+pub const NOTIFY_WEBHOOK_PAYLOAD_VERSION: u32 = 1;
+
+/// JSON payload shape per Q5(a) at Phase 62 sign-off, plus `version`.
 #[derive(Debug, Clone, Serialize)]
 pub struct WebhookPayload {
+    pub version: u32,
     pub source: &'static str,
     pub target: String,
     pub subject: Option<String>,
@@ -251,6 +261,7 @@ mod tests {
             "build failed",
             Some("CI"),
         );
+        assert_eq!(p.version, 1);
         assert_eq!(p.source, "aivyx-pa");
         assert_eq!(p.target, "ops-alerts");
         assert_eq!(p.subject.as_deref(), Some("CI"));

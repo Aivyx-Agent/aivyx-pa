@@ -18,6 +18,9 @@ All notable changes to Aivyx are recorded here. This project adheres to
   config made from them starts without `--role`. A schedule, webhook or
   file watch with no `role` now runs as this role. For a config made
   earlier, `aivyx-pa doctor` names the line to add.
+- **Notify webhooks carry a version.** The JSON a `kind = "webhook"`
+  notify target receives has `"version": 1`. Receivers that ignore
+  fields they don't know need no change.
 
 ### Changed
 
