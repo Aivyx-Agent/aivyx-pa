@@ -32,7 +32,7 @@ pub enum InProcessReason {
     /// The passphrase can only come from an interactive prompt, which a
     /// background daemon can't show.
     PassphraseNeedsPrompt,
-    /// `--provider`, `--mcp-server` or `--mcp-sse` was given: they configure
+    /// `--provider`, `--mcp` or `--mcp-sse` was given: they configure
     /// this session only, and a daemon runs on its own config.
     SessionOverrides,
 }
@@ -102,7 +102,7 @@ pub fn in_process_notice(reason: &InProcessReason) -> Option<String> {
              it for you."
         )),
         InProcessReason::SessionOverrides => Some(
-            "Running in-process: --provider, --mcp-server and --mcp-sse apply only to \
+            "Running in-process: --provider, --mcp and --mcp-sse apply only to \
              this session, and a daemon runs on its own config."
                 .to_string(),
         ),
@@ -336,7 +336,7 @@ mod tests {
             decide(true, false, false, false, false),
             InProcess { reason: PassphraseNeedsPrompt }
         );
-        // `--provider` / `--mcp-server` / `--mcp-sse` apply to this session
+        // `--provider` / `--mcp` / `--mcp-sse` apply to this session
         // only: never started or connected past, whatever else holds.
         for running in [false, true] {
             for non_interactive in [false, true] {

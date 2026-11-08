@@ -3123,7 +3123,26 @@ fn split_instance_flag(args: &[String]) -> Result<(Option<String>, Vec<String>),
 /// vs `--print-role`, `daemon run` vs all other modes.
 fn parse_cli_args() -> Result<CliArgs, String> {
     let args = cli_args();
-    parse_cli_args_from(&args)
+    let parsed = parse_cli_args_from(&args)?;
+    for warning in deprecated_flag_warnings(&args) {
+        eprintln!("aivyx-pa: {warning}");
+    }
+    Ok(parsed)
+}
+
+/// Old flag spellings that still work, and what replaces each (1.0
+/// readiness audit). `parse_cli_args_from` accepts both.
+const DEPRECATED_FLAGS: &[(&str, &str)] = &[("--mcp-server", "--mcp")];
+
+/// One warning per deprecated flag spelling in `args` (however often it is
+/// repeated), up to a `--`, after which nothing is a flag.
+fn deprecated_flag_warnings(args: &[String]) -> Vec<String> {
+    let used: Vec<&str> = args.iter().map(String::as_str).take_while(|a| *a != "--").collect();
+    DEPRECATED_FLAGS
+        .iter()
+        .filter(|(old, _)| used.contains(old))
+        .map(|(old, new)| format!("`{old}` is deprecated; use `{new}`"))
+        .collect()
 }
 
 /// Chapter Herald — decide whether to auto-provision a default
@@ -5855,16 +5874,19 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 });
                 i += 2;
             }
-            "--mcp-server" => {
+            // `--mcp-server` is the deprecated spelling (R20): in aivyx-coder
+            // it runs coder *as* an MCP server, the opposite of this.
+            flag @ ("--mcp" | "--mcp-server") => {
                 let value = args.get(i + 1).ok_or_else(|| {
-                    "`--mcp-server` requires a value in the format \
+                    format!(
+                        "`{flag}` requires a value in the format \
                          `name:command` or `name:command:arg1,arg2,...`"
-                        .to_string()
+                    )
                 })?;
                 let parts: Vec<&str> = value.splitn(3, ':').collect();
                 if parts.len() < 2 || parts[0].is_empty() || parts[1].is_empty() {
                     return Err(format!(
-                        "`--mcp-server` value `{value}` is malformed. \
+                        "`{flag}` value `{value}` is malformed. \
                          Expected `name:command` or `name:command:arg1,arg2,...`"
                     ));
                 }
@@ -14995,13 +15017,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 24 Task 5 — `--mcp-server` flag parser tests.
+    // Phase 24 Task 5 — `--mcp` flag parser tests.
     // -----------------------------------------------------------------
 
     #[test]
     fn mcp_server_flag_parses_name_and_command() {
-        let parsed = parse_cli_args_from(&argv(&["--mcp-server", "github:npx"]))
-            .expect("`--mcp-server github:npx` must parse");
+        let parsed = parse_cli_args_from(&argv(&["--mcp", "github:npx"]))
+            .expect("`--mcp github:npx` must parse");
         assert_eq!(parsed.mcp_servers.len(), 1);
         assert_eq!(parsed.mcp_servers[0].name, "github");
         assert_eq!(parsed.mcp_servers[0].command, "npx");
@@ -15011,10 +15033,10 @@ mod tests {
     #[test]
     fn mcp_server_flag_parses_with_args() {
         let parsed = parse_cli_args_from(&argv(&[
-            "--mcp-server",
+            "--mcp",
             "github:npx:-y,@modelcontextprotocol/server-github",
         ]))
-        .expect("--mcp-server with args must parse");
+        .expect("--mcp with args must parse");
         assert_eq!(parsed.mcp_servers[0].name, "github");
         assert_eq!(parsed.mcp_servers[0].command, "npx");
         assert_eq!(
@@ -15026,39 +15048,53 @@ mod tests {
     #[test]
     fn mcp_server_flag_repeatable() {
         let parsed = parse_cli_args_from(&argv(&[
-            "--mcp-server",
+            "--mcp",
             "a:cmd-a",
-            "--mcp-server",
+            "--mcp-server", // the deprecated spelling still works (R20)
             "b:cmd-b:arg1,arg2",
         ]))
-        .expect("repeated --mcp-server must parse");
+        .expect("repeated --mcp must parse");
         assert_eq!(parsed.mcp_servers.len(), 2);
         assert_eq!(parsed.mcp_servers[0].name, "a");
         assert_eq!(parsed.mcp_servers[1].name, "b");
         assert_eq!(parsed.mcp_servers[1].args, vec!["arg1", "arg2"]);
     }
 
+    /// R20: `--mcp-server` warns once however often it is given; `--mcp`
+    /// does not, and nothing after `--` counts.
+    #[test]
+    fn deprecated_mcp_server_flag_warns_once() {
+        assert_eq!(
+            deprecated_flag_warnings(&argv(&["--mcp-server", "a:x", "--mcp-server", "b:y"])),
+            vec!["`--mcp-server` is deprecated; use `--mcp`".to_string()]
+        );
+        assert!(deprecated_flag_warnings(&argv(&["--mcp", "a:x"])).is_empty());
+        assert!(deprecated_flag_warnings(&argv(&["--", "--mcp-server"])).is_empty());
+        let err = parse_cli_args_from(&argv(&["--mcp-server"])).expect_err("needs a value");
+        assert!(err.contains("`--mcp-server` requires a value"), "{err}");
+    }
+
     #[test]
     fn mcp_server_flag_missing_value_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["--mcp-server"]))
-            .expect_err("`--mcp-server` with no value must error");
+        let err = parse_cli_args_from(&argv(&["--mcp"]))
+            .expect_err("`--mcp` with no value must error");
         assert!(
-            err.contains("--mcp-server"),
+            err.contains("--mcp"),
             "error must mention flag: {err}"
         );
     }
 
     #[test]
     fn mcp_server_flag_malformed_value_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["--mcp-server", "nocolon"]))
-            .expect_err("`--mcp-server nocolon` must error");
+        let err = parse_cli_args_from(&argv(&["--mcp", "nocolon"]))
+            .expect_err("`--mcp nocolon` must error");
         assert!(err.contains("malformed"), "error must say malformed: {err}");
     }
 
     #[test]
     fn mcp_server_flag_empty_name_is_an_error() {
-        let err = parse_cli_args_from(&argv(&["--mcp-server", ":npx"]))
-            .expect_err("`--mcp-server :npx` must error");
+        let err = parse_cli_args_from(&argv(&["--mcp", ":npx"]))
+            .expect_err("`--mcp :npx` must error");
         assert!(err.contains("malformed"), "error must say malformed: {err}");
     }
 
@@ -15113,12 +15149,12 @@ mod tests {
     #[test]
     fn mcp_sse_and_stdio_flags_combine() {
         let parsed = parse_cli_args_from(&argv(&[
-            "--mcp-server",
+            "--mcp",
             "local:npx",
             "--mcp-sse",
             "remote:http://host/sse",
         ]))
-        .expect("combining --mcp-server and --mcp-sse must parse");
+        .expect("combining --mcp and --mcp-sse must parse");
         assert_eq!(parsed.mcp_servers.len(), 1);
         assert_eq!(parsed.mcp_sse_servers.len(), 1);
     }

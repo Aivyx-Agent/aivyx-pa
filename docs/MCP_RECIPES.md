@@ -550,7 +550,9 @@ args = [
 
 Delegate bounded coding tasks to a local `aivyx-coder` process (a
 separate, sibling Aivyx product — a terminal coding agent for local
-LLMs) running as `aivyx-coder --mcp-server`. Unlike every other
+LLMs) running as `aivyx-coder --mcp-server` (coder's flag: run coder *as* an
+MCP server; Aivyx PA's own flag for attaching one for a session is `--mcp`).
+Unlike every other
 recipe in this catalog, this is not third-party code: `aivyx-coder`
 ships its own Landlock+seccomp confinement and its own tiered
 access ceiling, so the sandbox block below is optional

@@ -38,7 +38,7 @@ It couldn't start the daemon in the background — usually because your
 passphrase is typed at a prompt rather than stored. Store it with
 `aivyx-pa keyring set` (or set `AIVYX_PA_PASSPHRASE`) and `aivyx-pa` will start
 the daemon next time, or start it yourself with `aivyx-pa daemon run`. It also
-runs without the daemon on purpose when you pass `--provider`, `--mcp-server`
+runs without the daemon on purpose when you pass `--provider`, `--mcp`
 or `--mcp-sse`, since those only apply to that one session.
 
 **"Connection refused" to the model.**

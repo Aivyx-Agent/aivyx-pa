@@ -20,7 +20,7 @@ These work with any command.
 | `--print-role <name>` | Print a role's full capability envelope and exit. |
 | `--no-daemon` | Chat in-process: don't connect to a running daemon or start one. |
 | `--provider <kind>` | Override the configured model provider for this run: `anthropic`, `openai`, `ollama`, `llamacpp`, `jan`, `mistralrs`, `broker` or `lemonade`. |
-| `--mcp-server <name:command[:arg1,arg2,…]>` | Attach a stdio MCP server for this session. |
+| `--mcp <name:command[:arg1,arg2,…]>` | Attach a stdio MCP server for this session. `--mcp-server` is the old spelling: it still works, with a warning (in aivyx-coder, `--mcp-server` means the opposite: run coder as a server). |
 | `--mcp-sse <name:url>` | Attach an SSE MCP server for this session. |
 | `--version`, `-V` | Print the version and exit. |
 | `--help`, `-h` | Print help (also `aivyx-pa help`, or `<command> --help`). |

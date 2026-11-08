@@ -16,7 +16,7 @@
 //! Never invent a flag here: every usage line below was read off the
 //! subcommand's own parsing in `aivyx.rs` (or, for `--verify-only` /
 //! `--channel` / `--role` / `--print-role` / `--no-daemon` / `--provider`
-//! / `--mcp-server` / `--mcp-sse`, the REPL flag loop at the end of
+//! / `--mcp` / `--mcp-sse`, the REPL flag loop at the end of
 //! `parse_cli_args_from`).
 
 /// Which grouped section of the top-level help a command's entry prints
@@ -485,8 +485,9 @@ pub fn render_top_level_help() -> String {
     out.push_str("                         daemon or start one.\n");
     out.push_str("  --provider <kind>      anthropic | openai | ollama | llamacpp | jan |\n");
     out.push_str("                         mistralrs | broker | lemonade.\n");
-    out.push_str("  --mcp-server <name:command[:arg1,arg2,...]>\n");
-    out.push_str("                         Attach a stdio MCP server for this session.\n");
+    out.push_str("  --mcp <name:command[:arg1,arg2,...]>\n");
+    out.push_str("                         Attach a stdio MCP server for this session\n");
+    out.push_str("                         (was --mcp-server, still accepted).\n");
     out.push_str("  --mcp-sse <name:url>   Attach an SSE MCP server for this session.\n");
     out.push_str("  --version, -V          Print the version and exit.\n\n");
 

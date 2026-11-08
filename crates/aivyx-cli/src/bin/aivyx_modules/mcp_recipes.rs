@@ -421,7 +421,8 @@ args = [
         name: "aivyx-coder",
         description: "Delegate bounded coding tasks to a local aivyx-coder process over MCP.",
         toml_snippet: r#"# aivyx-coder MCP server -- delegates bounded coding tasks to a
-# local `aivyx-coder --mcp-server` process. Unlike every other
+# local `aivyx-coder --mcp-server` process (coder's flag; aivyx-pa's
+# own `--mcp` attaches a server for one session). Unlike every other
 # recipe in this catalog, aivyx-coder is not third-party code: it
 # ships its own Landlock+seccomp confinement and its own tiered
 # access ceiling, so the sandbox block below is optional
