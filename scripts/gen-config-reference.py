@@ -155,7 +155,7 @@ INTROS = {
 MEANINGS = {
     "*.enabled": "Turn this on or off.",
     "*.name": "A unique name for this entry.",
-    "*.role": "The role the prompt runs as.",
+    "*.role": "The role the prompt runs as. Unset: the active role (`--role`, `AIVYX_PA_ROLE` or `[agent] role`, else `default`).",
     "*.prompt": "The prompt sent to the agent when this fires.",
     "*.wrap_mission": "Record each run as a mission (visible in missions and the Studio).",
     "*.auto_accept_confidence_threshold": "Apply a proposal without asking when the judge's confidence is at least this (0–1).",

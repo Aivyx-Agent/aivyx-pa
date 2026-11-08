@@ -13802,3 +13802,28 @@ fn max_reply_tokens_defaults_to_4096_and_takes_an_override() {
         Err(ConfigError::Invalid { field: "agent.max_reply_tokens", .. })
     ));
 }
+
+/// Task 5c re-review: a `[[schedule]]` / `[[webhook]]` / `[[file_watch]]`
+/// with no `role` runs as the active role, so a config whose only role
+/// isn't `default` loads without a `role` on each trigger; a named role is
+/// kept.
+#[test]
+fn a_trigger_without_a_role_runs_as_the_active_role() {
+    let env = EnvScope::new();
+    let body = "\n[agent]\nrole = \"coder\"\n\n[[role]]\nname = \"coder\"\n\n\
+                [[role]]\nname = \"writer\"\n\n\
+                [[schedule]]\nname = \"daily\"\ncron = \"0 9 * * *\"\nprompt = \"hi\"\n\n\
+                [[schedule]]\nname = \"named\"\ncron = \"0 9 * * *\"\nprompt = \"hi\"\n\
+                role = \"writer\"\n\n\
+                [[webhook]]\nname = \"hook\"\nprompt = \"hi\"\n\n\
+                [[file_watch]]\nname = \"inbox\"\npath = \"/tmp\"\nprompt = \"hi\"\n";
+    let cfg = load_with_toml(body, "trigger-role");
+    assert_eq!(cfg.schedules[0].role, "coder");
+    assert_eq!(cfg.schedules[1].role, "writer");
+    assert_eq!(cfg.webhooks[0].role, "coder");
+    assert_eq!(cfg.file_watches[0].role, "coder");
+
+    // `--role` / AIVYX_PA_ROLE pick the active role, so they pick it here too.
+    env.set("AIVYX_PA_ROLE", "writer");
+    assert_eq!(load_with_toml(body, "trigger-role-env").schedules[0].role, "writer");
+}

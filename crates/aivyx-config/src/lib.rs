@@ -4657,7 +4657,9 @@ fn default_stdio_transport() -> String {
 struct RawSchedule {
     name: String,
     cron: String,
-    #[serde(default = "default_role_name")]
+    /// Unset (or empty) → the active role (`--role`, `AIVYX_PA_ROLE`,
+    /// `[agent] role`, else `default`), resolved once that is known.
+    #[serde(default)]
     role: String,
     #[serde(default)]
     prompt: String,
@@ -4760,7 +4762,9 @@ struct RawMemoryRetention {
 #[derive(Debug, Default, Deserialize)]
 struct RawWebhook {
     name: String,
-    #[serde(default = "default_role_name")]
+    /// Unset (or empty) → the active role (`--role`, `AIVYX_PA_ROLE`,
+    /// `[agent] role`, else `default`), resolved once that is known.
+    #[serde(default)]
     role: String,
     prompt: String,
     #[serde(default = "default_true")]
@@ -4783,7 +4787,9 @@ struct RawWebhook {
 struct RawFileWatch {
     name: String,
     path: String,
-    #[serde(default = "default_role_name")]
+    /// Unset (or empty) → the active role (`--role`, `AIVYX_PA_ROLE`,
+    /// `[agent] role`, else `default`), resolved once that is known.
+    #[serde(default)]
     role: String,
     prompt: String,
     #[serde(default = "default_true")]
@@ -4877,8 +4883,12 @@ pub const MIN_RETRY_BACKOFF_MS_START: u64 = 100;
 /// `retry_count > 0` without setting an explicit start.
 pub const DEFAULT_RETRY_BACKOFF_MS_START: u64 = 500;
 
-fn default_role_name() -> String {
-    DEFAULT_ROLE_NAME.to_string()
+/// A `[[schedule]]` / `[[webhook]]` / `[[file_watch]]` role: the one it
+/// names, or the active role when it names none (Task 5c re-review: a
+/// config whose only role isn't `default` must not need a `role` on every
+/// trigger).
+fn trigger_role(named: String, active_role: &str) -> String {
+    if named.is_empty() { active_role.to_string() } else { named }
 }
 
 /// Phase 72 — reconcile a trigger's singular `notify_target` +
@@ -8246,7 +8256,7 @@ impl AivyxConfig {
             schedules.push(ScheduleConfig {
                 name: r.name,
                 cron: r.cron,
-                role: r.role,
+                role: trigger_role(r.role, &active_role.value),
                 prompt: r.prompt,
                 enabled: true,
                 wrap_mission: r.wrap_mission,
@@ -8274,7 +8284,7 @@ impl AivyxConfig {
                 )?;
             webhooks.push(WebhookConfig {
                 name: r.name,
-                role: r.role,
+                role: trigger_role(r.role, &active_role.value),
                 prompt: r.prompt,
                 enabled: true,
                 wrap_mission: r.wrap_mission,
@@ -8301,7 +8311,7 @@ impl AivyxConfig {
             file_watches.push(FileWatchConfig {
                 name: r.name,
                 path: r.path,
-                role: r.role,
+                role: trigger_role(r.role, &active_role.value),
                 prompt: r.prompt,
                 enabled: true,
                 debounce_ms: r.debounce_ms,

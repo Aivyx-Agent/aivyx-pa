@@ -802,7 +802,7 @@ Routines: run a prompt on a cron schedule. See [Autonomy and routines](../../gui
 |---|---|---|---|
 | `name` | string | `"morning-summary"` | A unique name for this entry. |
 | `cron` | string | `"0 0 9 * * * *"` | When it runs, as a cron pattern in your local time: 6 or 7 fields, seconds first (`0 0 9 * * *` = 09:00 daily). A 5-field pattern is rejected. |
-| `role` | string |  | The role the prompt runs as. |
+| `role` | string |  | Unset (or empty) → the active role (`--role`, `AIVYX_PA_ROLE`, `[agent] role`, else `default`), resolved once that is known. |
 | `prompt` | string |  | The prompt sent to the agent when this fires. |
 | `enabled` | bool |  | Turn this on or off. |
 | `wrap_mission` | bool | `false` | Record each run as a mission (visible in missions and the Studio). |
@@ -827,7 +827,7 @@ Run a prompt when a webhook is called.
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `name` | string |  | A unique name for this entry. |
-| `role` | string |  | The role the prompt runs as. |
+| `role` | string |  | Unset (or empty) → the active role (`--role`, `AIVYX_PA_ROLE`, `[agent] role`, else `default`), resolved once that is known. |
 | `prompt` | string |  | The prompt sent to the agent when this fires. |
 | `enabled` | bool |  | Turn this on or off. |
 | `wrap_mission` | bool |  | Record each run as a mission (visible in missions and the Studio). |
@@ -843,7 +843,7 @@ Run a prompt when a file or directory changes.
 |---|---|---|---|
 | `name` | string |  | A unique name for this entry. |
 | `path` | string |  | The file or directory to watch. |
-| `role` | string |  | The role the prompt runs as. |
+| `role` | string |  | Unset (or empty) → the active role (`--role`, `AIVYX_PA_ROLE`, `[agent] role`, else `default`), resolved once that is known. |
 | `prompt` | string |  | The prompt sent to the agent when this fires. |
 | `enabled` | bool |  | Turn this on or off. |
 | `debounce_ms` | integer |  | Wait this long, in milliseconds, for changes to settle before firing. |
