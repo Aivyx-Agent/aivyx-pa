@@ -5,6 +5,28 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`[agent] max_reply_tokens`**: the most tokens one reply may use.
+  Default 4096 (it was a fixed 1024). The model server's own limit still
+  applies. The larger value also raises the context size routing asks a
+  model for and the budget gate's worst-case cost estimate, so in routed
+  mode a model with a small context is passed over sooner.
+- **`[agent] role`**: the role to start in when neither `--role` nor
+  `AIVYX_PA_ROLE` picks one. `aivyx-pa init` writes it for templates that
+  have no `default` role (coder, researcher, personal, kitchen), so a
+  config made from them starts without `--role`. A schedule, webhook or
+  file watch with no `role` now runs as this role. For a config made
+  earlier, `aivyx-pa doctor` names the line to add.
+
+### Changed
+
+- **A reply the model server cut off says so.** It ends with "⚠ The reply
+  was cut off by the model server's output limit…" instead of passing for
+  a finished reply.
+- **`--headless` prints a turn's notes on stdout**, after the reply (the
+  cut-off note, for example), and prints a reply that wasn't streamed.
+
 ## [0.20.1] — 2026-11-08
 
 v0.20.0's binaries were never published: GitHub had retired the macOS 14
