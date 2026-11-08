@@ -4,10 +4,12 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
 
 ## Stable
 
-- **Config keys and their defaults** (the snapshot checks keys, types
-  and value sets; see How this is checked). Every key path the config
+- **Config keys and their defaults.** Every key path the config
   accepts, with its type, the values a key that takes one of a fixed set
-  accepts, and the aliases it accepts. Snapshot: `docs/stable/config.txt`.
+  accepts, and the aliases it accepts (snapshot: `docs/stable/config.txt`),
+  and the config an empty file resolves to (snapshot:
+  `docs/stable/defaults.txt`, with the defaults `[memory] profile`
+  changes listed for `lite` and `smart`).
 - **The CLI commands and flags.** Each command and its usage lines, the
   global flags (`--instance`, `--provider`, `--mcp`, ...) and the old flag
   spellings still accepted. Snapshot: `docs/stable/cli.txt`.
@@ -110,7 +112,7 @@ one list of tagged entries is `NOT_STABLE` in
 
 `docs/stable/` is generated from the code; a test fails when it changes.
 The tests are the `stable_config_keys` tests (`cargo test -p aivyx-config`;
-they write `config.txt` and `env.txt`) and the
+they write `config.txt`, `defaults.txt` and `env.txt`) and the
 `stable_` tests in `aivyx-cli`. A change to the snapshot has to be made on
 purpose.
 
@@ -118,8 +120,11 @@ The check has limits:
 
 - It freezes config key paths, their types, and the values a key that
   takes one of a fixed set accepts (for example, the access levels),
-  with their accepted alternative spellings. It does not freeze default
-  values; the rules above and review cover those.
+  with their accepted alternative spellings. `defaults.txt` freezes the
+  defaults as the loader resolves them, under its own field names
+  (`web_ui_port`, not `studio.port`). The defaults of a section that is
+  off unless set (such as `[embedding]`) are not in it; review covers
+  those.
 - The CLI snapshot freezes each command and its usage lines, and each
   global flag, as written in the help tables. It does not test behaviour.
 - The env snapshot lists the variable names the config loader reads; a
