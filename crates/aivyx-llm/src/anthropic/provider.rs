@@ -674,6 +674,11 @@ struct StreamState {
     pending_tool: Option<PendingTool>,
     completed_tools: Vec<CompletedTool>,
     stop_reason: Option<String>,
+    /// A `tool_use` block whose input JSON did not parse. The error waits
+    /// for the stop reason: under `max_tokens` the block was cut off and is
+    /// dropped (the step ends as a truncated `FinalMessage`); otherwise it
+    /// is the step's error, as before.
+    unparsed_tool_input: Option<String>,
 }
 
 struct PendingTool {
@@ -783,9 +788,14 @@ impl AnthropicStream {
                     let input: Value = if pending.input_json.is_empty() {
                         json!({})
                     } else {
-                        serde_json::from_str(&pending.input_json).map_err(|e| {
-                            LlmError::Parse(format!("tool input_json parse: {e}"))
-                        })?
+                        match serde_json::from_str(&pending.input_json) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                self.state.unparsed_tool_input =
+                                    Some(format!("tool input_json parse: {e}"));
+                                return Ok(None);
+                            }
+                        }
                     };
                     self.state.completed_tools.push(CompletedTool {
                         call_id: pending.call_id,
@@ -810,11 +820,7 @@ impl AnthropicStream {
                 // `max_tokens`: the request's output limit cut the reply
                 // off; `model_context_window_exceeded`: the context did.
                 let stop = self.state.stop_reason.as_deref();
-                Ok(crate::finish_event(
-                    "anthropic",
-                    stop,
-                    matches!(stop, Some("max_tokens" | "model_context_window_exceeded")),
-                ))
+                Ok(crate::finish_event("anthropic", stop, stop.is_some_and(is_truncation)))
             }
             "ping" | "error" => {
                 // `ping` is a heartbeat — ignore. `error` events in the
@@ -835,6 +841,21 @@ impl AnthropicStream {
     fn build_terminal(&mut self) -> Result<LlmStepEnd, LlmError> {
         let usage = self.state.usage;
         let stop = self.state.stop_reason.as_deref().unwrap_or("");
+        if is_truncation(stop) {
+            // Cut off by the output limit: any tool call it was writing is
+            // incomplete — drop it and end with the text, like the OpenAI
+            // path (the stream yields `Truncated`).
+            self.state.pending_tool = None;
+            self.state.unparsed_tool_input = None;
+            self.state.completed_tools.clear();
+            return Ok(LlmStepEnd::FinalMessage {
+                text: std::mem::take(&mut self.state.accumulated_text),
+                usage,
+            });
+        }
+        if let Some(err) = self.state.unparsed_tool_input.take() {
+            return Err(LlmError::Parse(err));
+        }
         if stop == "tool_use" {
             if self.state.completed_tools.is_empty() {
                 return Err(LlmError::Parse(
@@ -875,6 +896,12 @@ impl AnthropicStream {
             })
         }
     }
+}
+
+/// A stop reason meaning the reply was cut off: `max_tokens` (the
+/// request's output limit) or `model_context_window_exceeded`.
+fn is_truncation(stop: &str) -> bool {
+    matches!(stop, "max_tokens" | "model_context_window_exceeded")
 }
 
 fn parse_data<T: for<'de> Deserialize<'de>>(data: &str) -> Result<T, LlmError> {
@@ -1125,6 +1152,68 @@ mod tests {
             LlmStepEnd::FinalMessage { text, .. } => assert_eq!(text, "Hello, world"),
             other => panic!("expected FinalMessage, got {other:?}"),
         }
+    }
+
+    /// Review fix (5f): a reply cut off by `max_tokens` while writing a
+    /// tool call (its input JSON incomplete at `content_block_stop`) yields
+    /// `Truncated` and ends with the text, the incomplete call dropped. The
+    /// same broken JSON under `tool_use` is still a parse error.
+    #[tokio::test]
+    async fn a_tool_call_cut_off_by_max_tokens_ends_as_truncated_text() {
+        fn script(stop: &'static str) -> Vec<&'static str> {
+            vec![
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\n",
+                "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+                "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Reading it.\"}}\n\n",
+                "event: content_block_stop\ndata: {\"index\":0}\n\n",
+                "event: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_9\",\"name\":\"fs.read\",\"input\":{}}}\n\n",
+                "event: content_block_delta\ndata: {\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\": \\\"no\"}}\n\n",
+                "event: content_block_stop\ndata: {\"index\":1}\n\n",
+                stop,
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            ]
+        }
+        let max_tokens = "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":16}}\n\n";
+        let tool_use = "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":16}}\n\n";
+        let (messages, tools) = blank_request_args();
+        let req = || LlmRequest {
+            model: "claude-haiku-4-5-20251001",
+            system: None,
+            messages: &messages,
+            tools: &tools,
+            max_tokens: 16,
+            temperature: None,
+            id_slot: None,
+            slot_hint: None,
+            route: None,
+        };
+        let token = CancellationToken::new();
+
+        let (provider, _t) = provider_with(FakeTransport::ok(script(max_tokens)));
+        let mut stream = provider.chat_stream(req(), &token).await.unwrap();
+        let mut events = Vec::new();
+        while let Some(ev) = stream.next_event().await.unwrap() {
+            events.push(ev);
+        }
+        assert_eq!(events.last(), Some(&LlmStreamEvent::Truncated), "{events:?}");
+        match stream.finish().await.unwrap() {
+            LlmStepEnd::FinalMessage { text, .. } => assert_eq!(text, "Reading it."),
+            other => panic!("expected FinalMessage, got {other:?}"),
+        }
+
+        let (provider, _t) = provider_with(FakeTransport::ok(script(tool_use)));
+        let mut stream = provider.chat_stream(req(), &token).await.unwrap();
+        let err = loop {
+            match stream.next_event().await {
+                Ok(Some(_)) => continue,
+                Ok(None) => panic!("expected a parse error"),
+                Err(e) => break e,
+            }
+        };
+        assert!(
+            matches!(err, LlmError::Parse(ref m) if m.contains("tool input_json parse")),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]
