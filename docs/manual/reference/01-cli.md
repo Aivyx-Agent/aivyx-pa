@@ -14,7 +14,7 @@ These work with any command.
 | Flag | What it does |
 |---|---|
 | `--instance <name>` | Use a named instance — a separate agent with its own config, store and Studio. Same as setting `AIVYX_PA_INSTANCE`; the flag wins. Without it you get the `default` instance. See [Named instances](../../guide/16-named-instances.md). |
-| `--verify-only` | Verify the audit chain and exit (forensic check; no session). |
+| `--verify-only` | Verify the audit chain and exit (forensic check; no session). On a store from before this release it also records the store's schema versions; it does not write the instance layout file or the audit chain header. |
 | `--channel <kind>` | Run the session on a channel instead of the terminal: `local`, `telegram`, `discord`, `slack`, `matrix`, `proton`, `signal` or `voice`. `voice` needs a build with the `channel-voice` feature, which release binaries don't have. |
 | `--role <name>` | Use a named role (from `[[role]]` in your config) for this session. |
 | `--print-role <name>` | Print a role's full capability envelope and exit. A debugging aid, not covered by the 1.x compatibility promise. |
