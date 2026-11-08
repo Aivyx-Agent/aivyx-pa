@@ -811,8 +811,8 @@ Routines: run a prompt on a cron schedule. See [Autonomy and routines](../../gui
 | `prompt` | string |  | The prompt sent to the agent when this fires. |
 | `enabled` | bool |  | Turn this on or off. |
 | `wrap_mission` | bool | `false` | Record each run as a mission (visible in missions and the Studio). |
-| `notify_target` | string | `"phone"` | Singular alias. Kept for backwards compatibility; loader bridges into `notify_targets`. |
-| `notify_targets` | list of string | `["phone", "desktop"]` | Explicit list of notify target names for multi-target fan-out. Empty + a default-marked `[[notify_target]]` exists → loader resolves the default. |
+| `notify_target` | string |  | Deprecated (warns): the older, singular spelling of `notify_targets`; the loader bridges it into `notify_targets`. Declaring both `notify_target` and `notify_targets` on one trigger is rejected at load time (Q1(a)). |
+| `notify_targets` | list of string | `["phone"]` | Explicit list of notify target names for multi-target fan-out. Empty + a default-marked `[[notify_target]]` exists → loader resolves the default. |
 | `notify_when` | string | `"on_completed_non_empty"` | Conditional dispatch gate. Default `"always"`. |
 | `report_kind` | string |  | `report_kind = "digest"` → deterministic report. |
 
@@ -836,7 +836,7 @@ Run a prompt when a webhook is called.
 | `prompt` | string |  | The prompt sent to the agent when this fires. |
 | `enabled` | bool |  | Turn this on or off. |
 | `wrap_mission` | bool |  | Record each run as a mission (visible in missions and the Studio). |
-| `notify_target` | string |  | A single notify target (older spelling of `notify_targets`; don't set both). |
+| `notify_target` | string |  | Deprecated (warns): a single notify target, the older spelling of `notify_targets`. Don't set both. |
 | `notify_targets` | list of string |  | Names of `[[notify_target]]` entries to send the result to. |
 | `notify_when` | string |  | When to send it: `always` (default), `on_failed`, or `on_completed_non_empty`. |
 
@@ -853,7 +853,7 @@ Run a prompt when a file or directory changes.
 | `enabled` | bool |  | Turn this on or off. |
 | `debounce_ms` | integer |  | Wait this long, in milliseconds, for changes to settle before firing. |
 | `wrap_mission` | bool |  | Record each run as a mission (visible in missions and the Studio). |
-| `notify_target` | string |  | A single notify target (older spelling of `notify_targets`; don't set both). |
+| `notify_target` | string |  | Deprecated (warns): a single notify target, the older spelling of `notify_targets`. Don't set both. |
 | `notify_targets` | list of string |  | Names of `[[notify_target]]` entries to send the result to. |
 | `notify_when` | string |  | When to send it: `always` (default), `on_failed`, or `on_completed_non_empty`. |
 
@@ -991,3 +991,7 @@ These older spellings still load through 1.x, with one warning each at startup (
 | `confine.allow_unix_sockets` | `sandbox.allow_unix_sockets` |
 | `confine.require_enforcement` | `sandbox.require_enforcement` |
 | `confine.share_system_tmp` | `sandbox.share_system_tmp` |
+| `telegram.chat_filter` | `telegram.chat_id` |
+| `file_watch[].notify_target` | still read; see its row above |
+| `schedule[].notify_target` | still read; see its row above |
+| `webhook[].notify_target` | still read; see its row above |

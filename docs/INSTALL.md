@@ -4918,8 +4918,8 @@ notify-target backends in the next sections.
 "desktop"]` fires every named target concurrently when the
 trigger completes. One backend's transport failure doesn't
 block the others; each per-target outcome audits independently
-in the audit chain. The singular `notify_target = "phone"`
-stays valid as a one-element alias.
+in the audit chain. The older singular `notify_target = "phone"`
+still loads as a one-element list, but is deprecated and warns at startup.
 
 **Default-target sugar** — Mark ONE `[[notify_target]]` block
 with `default = true`. Triggers that omit `notify_targets`
@@ -5062,7 +5062,7 @@ setup, no bot tokens.
    banner asks "Enable desktop notifications" — click *Enable*
    and grant the browser's permission prompt. The agent's
    `notify.send` tool and any trigger with
-   `notify_target = "desktop"` will now reach you.
+   `notify_targets = ["desktop"]` will now reach you.
 
 **The browser tab must be open.** Desktop notifications are
 delivered over the existing WebSocket bridge; close the tab

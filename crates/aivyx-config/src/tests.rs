@@ -450,7 +450,87 @@ fn telegram_chat_id_and_chat_filter_alias_deserialize_to_the_same_value() {
         tg_chat_id.chat_filter.as_ref().unwrap().value,
         tg_chat_filter.chat_filter.as_ref().unwrap().value,
     );
+    // R17: the alias warns; the real key does not.
+    assert!(via_chat_id.warnings.is_empty(), "{:?}", via_chat_id.warnings);
+    assert_eq!(
+        via_chat_filter.warnings,
+        vec!["`telegram.chat_filter` is deprecated; use `telegram.chat_id`".to_string()]
+    );
 
+    drop(env);
+}
+
+/// R17: with both spellings set, `chat_id` wins (before R17 this was a
+/// "duplicate field" parse error).
+#[test]
+fn telegram_chat_id_wins_over_chat_filter() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[telegram]\ntoken = \"t\"\nchat_id = 1\nchat_filter = 2\n",
+        "telegram-both-spellings",
+    );
+    assert_eq!(cfg.telegram.unwrap().chat_filter.unwrap().value, 1);
+    assert_eq!(cfg.warnings.len(), 1, "{:?}", cfg.warnings);
+    assert!(cfg.warnings[0].contains("`telegram.chat_id` wins"), "{:?}", cfg.warnings);
+    drop(env);
+}
+
+/// R17: the singular `notify_target` still works on each trigger kind and
+/// warns once per kind, however many entries use it.
+#[test]
+fn singular_notify_target_warns_once_per_trigger_kind() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        r#"
+[[role]]
+name = "default"
+capability_scopes = ["notify.send"]
+trust_ceiling = "Trusted"
+
+[[notify_target]]
+name = "me"
+kind = "webhook"
+url = "https://example.com/hook"
+
+[[schedule]]
+name = "a"
+cron = "0 0 9 * * * *"
+prompt = "p"
+notify_target = "me"
+
+[[schedule]]
+name = "b"
+cron = "0 0 10 * * * *"
+prompt = "p"
+notify_target = "me"
+
+[[webhook]]
+name = "w"
+prompt = "p"
+notify_target = "me"
+
+[[file_watch]]
+name = "f"
+path = "/tmp"
+prompt = "p"
+notify_target = "me"
+"#,
+        "notify-target-singular",
+    );
+    assert_eq!(cfg.schedules[0].notify_targets, vec!["me".to_string()]);
+    assert_eq!(cfg.schedules[1].notify_targets, vec!["me".to_string()]);
+    let notify_warnings: Vec<&String> =
+        cfg.warnings.iter().filter(|w| w.contains("notify_target`")).collect();
+    assert_eq!(
+        notify_warnings,
+        vec![
+            "`schedule[].notify_target` is deprecated; use `notify_targets = [\"<name>\"]`",
+            "`webhook[].notify_target` is deprecated; use `notify_targets = [\"<name>\"]`",
+            "`file_watch[].notify_target` is deprecated; use `notify_targets = [\"<name>\"]`",
+        ],
+        "{:?}",
+        cfg.warnings
+    );
     drop(env);
 }
 
@@ -13177,13 +13257,6 @@ fn stable_config_keys() {
     fn plain<T: serde::de::DeserializeOwned>(prefix: &str, _: &T) -> Vec<String> {
         trace::<T>(prefix, &[])
     }
-    fn aliased<T: serde::de::DeserializeOwned>(
-        prefix: &str,
-        _: &T,
-        aliases: &[(&str, &str)],
-    ) -> Vec<String> {
-        trace::<T>(prefix, aliases)
-    }
     fn opt<T: serde::de::DeserializeOwned>(prefix: &str, _: &Option<T>) -> Vec<String> {
         trace::<T>(prefix, &[])
     }
@@ -13278,8 +13351,7 @@ fn stable_config_keys() {
         ("storage", plain("storage", &storage)),
         ("kvcache", plain("kvcache", &kvcache)),
         ("memory", plain("memory", &memory)),
-        // `chat_id` carries `#[serde(alias = "chat_filter")]`.
-        ("telegram", aliased("telegram", &telegram, &[("chat_filter", "chat_id")])),
+        ("telegram", plain("telegram", &telegram)),
         ("discord", plain("discord", &discord)),
         ("matrix", plain("matrix", &matrix)),
         ("proton", plain("proton", &proton)),

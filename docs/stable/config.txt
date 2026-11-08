@@ -81,7 +81,7 @@ embedding.recall_window_turns: u64?
 file_watch[].debounce_ms: u64?
 file_watch[].enabled: bool
 file_watch[].name: str
-file_watch[].notify_target: str?
+file_watch[].notify_target: str? (deprecated)
 file_watch[].notify_targets: [str]
 file_watch[].notify_when: str?
 file_watch[].path: str
@@ -315,7 +315,7 @@ sandbox.share_system_tmp: bool?
 schedule[].cron: str
 schedule[].enabled: bool
 schedule[].name: str
-schedule[].notify_target: str?
+schedule[].notify_target: str? (deprecated)
 schedule[].notify_targets: [str]
 schedule[].notify_when: str?
 schedule[].prompt: str
@@ -361,7 +361,7 @@ slack.team_run_channel: bool
 slack.team_trigger_rate_limit: u32?
 storage.path: str?
 team.config_path: str?
-telegram.chat_filter: alias of telegram.chat_id
+telegram.chat_filter: deprecated alias of telegram.chat_id
 telegram.chat_id: i64?
 telegram.team_command_allowed_senders: [i64]
 telegram.team_run_channel: bool
@@ -393,7 +393,7 @@ voice.tts_speed: f32?
 voice.tts_voice_name: str?
 webhook[].enabled: bool
 webhook[].name: str
-webhook[].notify_target: str?
+webhook[].notify_target: str? (deprecated)
 webhook[].notify_targets: [str]
 webhook[].notify_when: str?
 webhook[].prompt: str

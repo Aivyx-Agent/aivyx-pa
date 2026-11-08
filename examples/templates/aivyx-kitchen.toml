@@ -125,4 +125,4 @@ enabled = true
 # role = "boh"
 # prompt = "Run the nightly par-level reorder: check low stock, draft per-supplier purchase orders with kitchen.par.reorder, and present the drafts for my approval. Do NOT send any purchase order."
 # enabled = true
-# notify_target = "phone"   # optional — surface the drafts for morning approval
+# notify_targets = ["phone"]   # optional — surface the drafts for morning approval

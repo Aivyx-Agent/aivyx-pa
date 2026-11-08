@@ -4628,8 +4628,8 @@ struct RawSchedule {
     enabled: bool,
     #[serde(default)]
     wrap_mission: bool,
-    /// Phase 63 Task 2 — singular alias. Kept for backwards
-    /// compatibility; loader bridges into `notify_targets`.
+    /// Phase 63 Task 2 — deprecated (warns): the older, singular spelling
+    /// of `notify_targets`; the loader bridges it into `notify_targets`.
     /// Declaring both `notify_target` and `notify_targets` on
     /// one trigger is rejected at load time (Phase 72 Q1(a)).
     #[serde(default)]
@@ -5097,20 +5097,12 @@ struct RawTelegram {
     #[serde(default)]
     token: Option<aivyx_capability::display::SecretString>,
     /// Real TOML key is `chat_id` (see `docs/INSTALL.md`'s Telegram
-    /// example). `#[serde(alias = "chat_filter")]` is a backward-
-    /// compatibility safety net (Task 10 fix round 3, 2026-09-16):
-    /// an earlier version of `docs/INSTALL.md` incorrectly documented
-    /// this key as `chat_filter` (the internal Rust field name on
-    /// `TelegramConfig`, which this raw key deserializes into), and
-    /// `RawTelegram` has no `deny_unknown_fields`, so an operator who
-    /// copied that example — or just guessed the field name from the
-    /// internal `chat_filter` terminology used throughout this
-    /// codebase's comments — would have had their `chat_filter` key
-    /// silently discarded, leaving no allowlist configured at all.
-    /// Since Task 10 round 2, "no allowlist configured" means
-    /// `Untrusted` for every sender, so that silent typo now has a
-    /// real security consequence instead of just being inert.
-    #[serde(default, alias = "chat_filter")]
+    /// example). An earlier `docs/INSTALL.md` documented it as
+    /// `chat_filter` (Task 10 fix round 3, 2026-09-16), and a silently
+    /// dropped allowlist means `Untrusted` for every sender, so
+    /// `chat_filter` is still accepted: a deprecated alias that warns
+    /// (`deprecated_keys`, R17), with `chat_id` winning when both are set.
+    #[serde(default)]
     chat_id: Option<i64>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
     /// from this channel. Absent/false: the command is recognized but

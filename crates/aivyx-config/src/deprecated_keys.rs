@@ -19,7 +19,6 @@ pub(crate) enum Change {
     /// Read at this new path instead; the new path wins when both are set.
     Renamed(&'static str),
     /// Still read where it is; the text says what to use instead.
-    #[allow(dead_code)] // the first such key lands with R17
     Deprecated(&'static str),
 }
 
@@ -35,6 +34,21 @@ pub(crate) const DEPRECATED_KEYS: &[(&str, Change)] = &[
         Change::Renamed("sandbox.allow_leaving_process_group"),
     ),
     ("confine.share_system_tmp", Change::Renamed("sandbox.share_system_tmp")),
+    // R17: the singular is still read (setting both stays an error).
+    (
+        "schedule[].notify_target",
+        Change::Deprecated("use `notify_targets = [\"<name>\"]`"),
+    ),
+    (
+        "webhook[].notify_target",
+        Change::Deprecated("use `notify_targets = [\"<name>\"]`"),
+    ),
+    (
+        "file_watch[].notify_target",
+        Change::Deprecated("use `notify_targets = [\"<name>\"]`"),
+    ),
+    // R17: Telegram's key has been `chat_id` since 2026-09-16.
+    ("telegram.chat_filter", Change::Renamed("telegram.chat_id")),
 ];
 
 fn segments(path: &str) -> impl Iterator<Item = (&str, bool)> + Clone {

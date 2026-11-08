@@ -564,7 +564,7 @@ parent_role = "researcher"
 # ----------------------------------------------------------------
 #
 # `[[schedule]]`, `[[webhook]]`, and `[[file_watch]]` entries
-# each accept an optional `notify_target = "..."` field. When
+# each accept an optional `notify_targets = ["..."]` field. When
 # set, the daemon auto-dispatches the trigger-fired turn's final
 # response to the named target after the turn completes — no
 # agent involvement, no system-prompt instruction needed. The
@@ -599,7 +599,7 @@ parent_role = "researcher"
 # name = "morning-summary"
 # cron = "0 0 9 * * * *"   # 9:00 AM daily
 # prompt = "Summarize my day's calendar, unread mail, and open issues. Reply with the summary."
-# notify_target = "phone"
+# notify_targets = ["phone"]
 # wrap_mission = false
 
 # ----------------------------------------------------------------
@@ -611,9 +611,9 @@ parent_role = "researcher"
 # 1. `notify_targets = ["phone", "desktop"]` on a trigger fires
 #    every named target concurrently. One target's transport
 #    failure doesn't block the others; each per-target outcome
-#    audits independently. The singular `notify_target = "phone"`
-#    stays valid as a one-element alias for backwards
-#    compatibility. Declaring both forms on the same trigger
+#    audits independently. The older singular `notify_target = "phone"`
+#    still loads as a one-element list but is deprecated (it warns
+#    at startup). Declaring both forms on the same trigger
 #    rejects at config-load time.
 #
 # 2. `default = true` on ONE `[[notify_target]]` block marks it

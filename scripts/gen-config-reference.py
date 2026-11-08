@@ -252,7 +252,7 @@ MEANINGS = {
     "daemon.web_ui": "Serve the Studio. On by default; `false` wins over `web_ui_port`.",
     "daemon.web_ui_port": "The Studio's port. Default 7843; each named instance needs its own (`instances create` picks one from 7844).",
     "daemon.web_ui_insecure_no_auth": "Allow the Studio with no token at all — only for binding beyond loopback behind your own authenticating proxy.",
-    "*.notify_target": "A single notify target (older spelling of `notify_targets`; don't set both).",
+    "*.notify_target": "Deprecated (warns): a single notify target, the older spelling of `notify_targets`. Don't set both.",
     "embedding.recall_lexical_weight": "Weight of keyword matching in hybrid recall. Default 1.0.",
     "telegram.token": "The bot token from @BotFather. Prefer the encrypted store (`aivyx-pa connect`) over writing it here.",
     "tool_process.expected_scopes": "Per tool name, the widest scope that tool may declare for itself. Once set, it also acts as an allowlist of tool names for this process.",
