@@ -817,7 +817,7 @@ bounded by `CEILING_SEMITRUSTED`, but it is not zero. This is the
 trade for using third-party messaging platforms at all.
 
 **Matrix.** A message is a turn only from `allowed_senders`, in
-`room_filter`, from a device that `matrix-sdk` reports as `Verified`.
+`room_id`, from a device that `matrix-sdk` reports as `Verified`.
 That is cross-signing trust, two links long: `aivyx-pa connect matrix`
 creates the assistant's own cross-signing identity, and `aivyx-pa matrix
 verify` (an SAS emoji comparison) has the assistant sign the operator's
@@ -834,7 +834,7 @@ verification). An unverified device, or an
 undecryptable message, from the operator gets one explanation per room;
 anything else is ignored, not run as `Untrusted`. The assistant talks
 only in end-to-end-encrypted rooms and refuses to start if
-`room_filter` is not encrypted. Plain `http://` homeservers are accepted
+`room_id` is not encrypted. Plain `http://` homeservers are accepted
 only on loopback. Credentials are sealed under the master key
 (`session.enc`); the `matrix-sdk` store is encrypted with a master-key
 subkey. A stolen Matrix password or a malicious homeserver cannot

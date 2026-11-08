@@ -606,7 +606,7 @@ fn matrix_section_parses_and_absent_means_none() {
 [matrix]
 homeserver = "https://matrix.example"
 user_id = "@pa:example"
-room_filter = "!home:example"
+room_id = "!home:example"
 allowed_senders = ["@me:example"]
 team_command_allowed_senders = ["@me:example"]
 "#;
@@ -625,12 +625,44 @@ team_command_allowed_senders = ["@me:example"]
     drop(env);
 }
 
+/// R18: the old `*_filter` spellings load into the same fields and warn.
+#[test]
+fn chat_app_filter_keys_are_deprecated_aliases_of_the_id_keys() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[discord]\ntoken = \"t\"\nchannel_filter = 42\n\
+         [slack]\nbot_token = \"b\"\napp_token = \"a\"\nchannel_filter = \"C1\"\n\
+         [matrix]\nhomeserver = \"https://matrix.example\"\nuser_id = \"@pa:x\"\n\
+         room_filter = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n",
+        "chat-app-filter-aliases",
+    );
+    assert_eq!(cfg.discord.unwrap().channel_filter.unwrap().value, 42);
+    assert_eq!(cfg.slack.unwrap().channel_filter.unwrap().value, "C1");
+    assert_eq!(cfg.matrix.unwrap().room_filter, "!r:x");
+    assert_eq!(
+        cfg.warnings,
+        vec![
+            "`discord.channel_filter` is deprecated; use `discord.channel_id`".to_string(),
+            "`slack.channel_filter` is deprecated; use `slack.channel_id`".to_string(),
+            "`matrix.room_filter` is deprecated; use `matrix.room_id`".to_string(),
+        ]
+    );
+    // The new spelling wins when both are set.
+    let both = load_with_toml(
+        "\n[discord]\ntoken = \"t\"\nchannel_id = 1\nchannel_filter = 2\n",
+        "discord-both-spellings",
+    );
+    assert_eq!(both.discord.unwrap().channel_filter.unwrap().value, 1);
+    assert!(both.warnings[0].contains("`discord.channel_id` wins"), "{:?}", both.warnings);
+    drop(env);
+}
+
 /// A `[matrix]` section with the given fields. `senders` is the TOML
 /// array body, e.g. `"\"@me:x\""`.
 fn matrix_toml(homeserver: &str, user_id: &str, room: &str, senders: &str) -> String {
     format!(
         "[matrix]\nhomeserver = \"{homeserver}\"\n\
-         user_id = \"{user_id}\"\nroom_filter = \"{room}\"\n\
+         user_id = \"{user_id}\"\nroom_id = \"{room}\"\n\
          allowed_senders = [{senders}]\n"
     )
 }
@@ -647,7 +679,7 @@ fn matrix_invalid_field(body: &str, tag: &str) -> &'static str {
 fn matrix_rejects_bad_homeserver_and_ids() {
     let env = EnvScope::new();
     let me = "\"@me:x\"";
-    // (homeserver, user_id, room_filter, allowed_senders, expected field)
+    // (homeserver, user_id, room_id, allowed_senders, expected field)
     let cases: &[(&str, &str, &str, &str, &str)] = &[
         ("http://matrix.example", "@pa:x", "!r:x", me, "matrix.homeserver"),
         ("http://localhost.evil.com", "@pa:x", "!r:x", me, "matrix.homeserver"),
@@ -658,8 +690,8 @@ fn matrix_rejects_bad_homeserver_and_ids() {
         ("https://matrix.example", "pa", "!r:x", me, "matrix.user_id"),
         ("https://matrix.example", "@:x", "!r:x", me, "matrix.user_id"),
         ("https://matrix.example", "@pa:", "!r:x", me, "matrix.user_id"),
-        ("https://matrix.example", "@pa:x", "#alias:x", me, "matrix.room_filter"),
-        ("https://matrix.example", "@pa:x", "!:x", me, "matrix.room_filter"),
+        ("https://matrix.example", "@pa:x", "#alias:x", me, "matrix.room_id"),
+        ("https://matrix.example", "@pa:x", "!:x", me, "matrix.room_id"),
         ("https://matrix.example", "@pa:x", "!r:x", "", "matrix.allowed_senders"),
         ("https://matrix.example", "@pa:x", "!r:x", "\"me\"", "matrix.allowed_senders"),
         ("https://matrix.example", "@pa:x", "!r:x", "\"@:x\"", "matrix.allowed_senders"),
@@ -673,14 +705,14 @@ fn matrix_rejects_bad_homeserver_and_ids() {
 }
 
 #[test]
-fn matrix_rejects_missing_user_id_and_room_filter() {
+fn matrix_rejects_missing_user_id_and_room_id() {
     let env = EnvScope::new();
     let no_user = "[matrix]\nhomeserver = \"https://matrix.example\"\n\
-                   room_filter = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n";
+                   room_id = \"!r:x\"\nallowed_senders = [\"@me:x\"]\n";
     assert_eq!(matrix_invalid_field(no_user, "matrix-no-user"), "matrix.user_id");
     let no_room = "[matrix]\nhomeserver = \"https://matrix.example\"\n\
                    user_id = \"@pa:x\"\nallowed_senders = [\"@me:x\"]\n";
-    assert_eq!(matrix_invalid_field(no_room, "matrix-no-room"), "matrix.room_filter");
+    assert_eq!(matrix_invalid_field(no_room, "matrix-no-room"), "matrix.room_id");
     drop(env);
 }
 
@@ -688,7 +720,7 @@ fn matrix_rejects_missing_user_id_and_room_filter() {
 fn matrix_rejects_malformed_team_command_senders() {
     let env = EnvScope::new();
     let body = "[matrix]\nhomeserver = \"https://matrix.example\"\n\
-                user_id = \"@pa:x\"\nroom_filter = \"!r:x\"\n\
+                user_id = \"@pa:x\"\nroom_id = \"!r:x\"\n\
                 allowed_senders = [\"@me:x\"]\n\
                 team_command_allowed_senders = [\"me\"]\n";
     assert_eq!(
@@ -840,7 +872,7 @@ fn matrix_accepts_loopback_http_homeservers() {
 
 // ------------------------------------------------------------------
 // Security-audit fix (Task 10, 2026-09-16) — Discord/Slack
-// `channel_filter`, mirroring Telegram's `chat_filter`. Consumed by
+// `channel_id`, like Telegram's `chat_id`. Consumed by
 // `DiscordChannel`/`SlackChannel::trust_tier()` to distinguish an
 // allowlisted channel (SemiTrusted) from everything else
 // (Untrusted) — see THREAT_MODEL.md.
@@ -853,7 +885,7 @@ fn discord_channel_filter_round_trips_from_toml() {
         r#"
         [discord]
         token = "t"
-        channel_filter = 123456789
+        channel_id = 123456789
     "#,
         "discord-channel-filter-round-trip",
     );
@@ -872,7 +904,7 @@ fn discord_channel_filter_env_beats_toml() {
         r#"
         [discord]
         token = "t"
-        channel_filter = 123456789
+        channel_id = 123456789
     "#,
         "discord-channel-filter-env-wins",
     );
@@ -907,7 +939,7 @@ fn unparseable_discord_channel_id_is_typed_invalid_error() {
         .expect_err("should fail parsing");
     match err {
         ConfigError::Invalid { field, .. } => {
-            assert_eq!(field, "discord.channel_filter");
+            assert_eq!(field, "discord.channel_id");
         }
         other => panic!("expected Invalid, got {other:?}"),
     }
@@ -923,7 +955,7 @@ fn slack_channel_filter_round_trips_from_toml() {
         [slack]
         bot_token = "b"
         app_token = "a"
-        channel_filter = "C0123456789"
+        channel_id = "C0123456789"
     "#,
         "slack-channel-filter-round-trip",
     );
@@ -943,7 +975,7 @@ fn slack_channel_filter_env_beats_toml() {
         [slack]
         bot_token = "b"
         app_token = "a"
-        channel_filter = "C_TOML"
+        channel_id = "C_TOML"
     "#,
         "slack-channel-filter-env-wins",
     );

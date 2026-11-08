@@ -649,7 +649,7 @@ The Discord bot channel. See [Chat apps and accounts](../../guide/13-chat-apps-a
 |---|---|---|---|
 | `token` | string | `"your_bot_token_here"` | Bot token (Bot API token from the Discord developer portal; lands in the `Authorization: Bot <token>` header for REST and in the `Identify` payload for Gateway). |
 | `application_id` | integer |  | Optional application_id. Reserved for future slash-command registration. |
-| `channel_filter` | integer |  | Optional channel_id filter, mirroring Telegram's `chat_filter`. Unset = no channel allowlisted; `id` = only the Discord channel with this snowflake is allowlisted. |
+| `channel_id` | integer |  | The one Discord channel (its snowflake id) the bot treats as yours. Unset = no channel allowlisted: every sender is untrusted. |
 | `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` from this channel. Unset/false: the command is recognized but always replies with a capability-denial message, both client-side (fail-fast UX) and server-side (the real enforcement). |
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour from this channel (client-side enforced). Unset = unlimited. |
 | `team_command_allowed_senders` | list of integer |  | The Discord user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run), and to resolve a mission gate with a bare `/approve` or `/reject`, from this channel. |
@@ -663,7 +663,7 @@ The Slack bot channel (Socket Mode). See [Chat apps and accounts](../../guide/13
 | `bot_token` | string | `"xoxb-..."` | Bot token (`xoxb-...`) — Slack OAuth's bot-user access token. Used for REST `chat.postMessage` and any other Web API calls. |
 | `app_token` | string | `"xapp-..."` | App-level token (`xapp-...`) — the Socket Mode token that lets the bot open an outbound WebSocket to Slack instead of accepting inbound Events API webhooks. |
 | `team_id` | string |  | Optional `team_id` constraint (`T0123456789`). |
-| `channel_filter` | string |  | Optional channel_id filter, mirroring Telegram's `chat_filter` at Slack's own `channel_id` granularity (finer than `team_id`'s workspace-wide scope). Unset = no channel allowlisted. |
+| `channel_id` | string |  | The one Slack channel (its channel id) the bot treats as yours, at a finer grain than `team_id`. Unset = no channel allowlisted: every sender is untrusted. |
 | `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` from this channel. Unset/false: the command is recognized but always replies with a capability-denial message, both client-side (fail-fast UX) and server-side (the real enforcement). |
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour from this channel (client-side enforced). Unset = unlimited. |
 | `team_command_allowed_senders` | list of string |  | The Slack user ids allowed to issue any `/team...` command (status/approve/ reject/pause/resume/abort/run), and to resolve a mission gate with a bare `/approve` or `/reject`, from this channel. |
@@ -676,8 +676,8 @@ The Matrix channel: an end-to-end-encrypted room with your assistant. See [Chat 
 |---|---|---|---|
 | `homeserver` | string |  | Your homeserver's URL, e.g. `https://matrix.org`. |
 | `user_id` | string |  | The assistant's own Matrix ID, e.g. `@my-assistant:matrix.org`. |
-| `room_filter` | string |  | The one room the assistant answers in (its room ID, `!…:server`). Must be end-to-end encrypted. |
-| `allowed_senders` | list of string |  | Your Matrix IDs. Only these, from a device the assistant has verified, in `room_filter`, can talk to it; invites are accepted only from them. |
+| `room_id` | string |  | The one room the assistant answers in (its room ID, `!…:server`). Must be end-to-end encrypted. |
+| `allowed_senders` | list of string |  | Your Matrix IDs. Only these, from a device the assistant has verified, in `room_id`, can talk to it; invites are accepted only from them. |
 | `team_run_channel` | bool |  | Operator opt-in for `/team run <goal>` from this room. |
 | `team_trigger_rate_limit` | integer |  | Max `/team run` confirmations accepted per rolling hour. Unset = unlimited. |
 | `team_command_allowed_senders` | list of string |  | The Matrix IDs allowed to issue `/team...` commands. Empty: nobody. |
@@ -991,6 +991,9 @@ These older spellings still load through 1.x, with one warning each at startup (
 | `confine.allow_unix_sockets` | `sandbox.allow_unix_sockets` |
 | `confine.require_enforcement` | `sandbox.require_enforcement` |
 | `confine.share_system_tmp` | `sandbox.share_system_tmp` |
+| `discord.channel_filter` | `discord.channel_id` |
+| `matrix.room_filter` | `matrix.room_id` |
+| `slack.channel_filter` | `slack.channel_id` |
 | `telegram.chat_filter` | `telegram.chat_id` |
 | `file_watch[].notify_target` | still read; see its row above |
 | `schedule[].notify_target` | still read; see its row above |

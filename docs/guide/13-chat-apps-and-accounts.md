@@ -67,7 +67,7 @@ homeserver you choose (or run yourself).
    [matrix]
    homeserver = "https://matrix.org"
    user_id = "@my-assistant:matrix.org"
-   room_filter = "!abcdef:matrix.org"
+   room_id = "!abcdef:matrix.org"
    allowed_senders = ["@you:matrix.org"]
    ```
 
@@ -110,7 +110,7 @@ Good to know:
   the assistant's messages — including the "please verify" one — as
   "unable to decrypt"; cross-sign it from one of your other devices.
 - **Encrypted rooms only.** The assistant refuses to start if the
-  `room_filter` room isn't encrypted.
+  `room_id` room isn't encrypted.
 - **Homeserver address.** It must be `https://`. Plain `http://` is accepted
   only on this machine (`localhost`, `127.0.0.1`, `[::1]`).
 - **Running `connect matrix` again creates a new device.** The old device's
@@ -307,7 +307,7 @@ Both follow the same pattern with a few more steps on the chat app's side
 (Discord needs the *Message Content* intent turned on; Slack needs Socket Mode
 and two tokens). The
 [install guide](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md#running-aivyx-pa-on-discord-phase-107)
-walks through each click, and the allowlist setting is `channel_filter` instead
+walks through each click, and the allowlist setting is `channel_id` instead
 of `chat_id` — the same advice applies.
 
 ## Google accounts: Gmail, Calendar, Drive, Contacts

@@ -45,7 +45,7 @@ use std::time::Instant;
 
 /// Lightweight `ChannelContext` stub that reports `Discord` platform
 /// and a trust tier derived from whether the operator has an allowlist
-/// (`[discord] channel_filter`) configured at all. Used by the
+/// (`[discord] channel_id`) configured at all. Used by the
 /// daemon's `ChannelFactory` when a `FrontendType::Discord` connection
 /// arrives. The stub's `stream_event` and `finalize` are no-ops — the
 /// daemon-side `IpcChannelBridge` handles forwarding events over IPC;
@@ -65,7 +65,7 @@ pub struct DiscordDaemonChannel {
     /// [`cancel_inflight`]. See `TelegramDaemonChannel::token` —
     /// same C1+H1 audit fix.
     token: Mutex<CancellationToken>,
-    /// Whether the operator has `[discord] channel_filter` configured
+    /// Whether the operator has `[discord] channel_id` configured
     /// at all. See `TelegramDaemonChannel::allowlist_configured`.
     allowlist_configured: bool,
 }
@@ -143,7 +143,7 @@ struct ChannelRoute {
 }
 
 /// Routing-level drop-filter: `true` iff `channel_id` may be routed to
-/// a session. `filter: None` (no `[discord] channel_filter`
+/// a session. `filter: None` (no `[discord] channel_id`
 /// configured) accepts every channel. Mirrors
 /// `telegram_daemon_frontend::telegram_chat_is_allowed` exactly;
 /// extracted so it's directly unit-testable without a live

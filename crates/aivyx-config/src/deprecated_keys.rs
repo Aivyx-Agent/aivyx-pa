@@ -49,6 +49,10 @@ pub(crate) const DEPRECATED_KEYS: &[(&str, Change)] = &[
     ),
     // R17: Telegram's key has been `chat_id` since 2026-09-16.
     ("telegram.chat_filter", Change::Renamed("telegram.chat_id")),
+    // R18: every chat app names its allowlisted chat `*_id`, as Telegram does.
+    ("discord.channel_filter", Change::Renamed("discord.channel_id")),
+    ("slack.channel_filter", Change::Renamed("slack.channel_id")),
+    ("matrix.room_filter", Change::Renamed("matrix.room_id")),
 ];
 
 fn segments(path: &str) -> impl Iterator<Item = (&str, bool)> + Clone {

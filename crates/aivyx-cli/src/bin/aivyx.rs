@@ -12085,7 +12085,7 @@ async fn run_async(
                     // the daemon-routed path had no routing-level filter of
                     // any kind before this; without it, every Discord
                     // channel the bot could see reached a session
-                    // regardless of `[discord] channel_filter`.
+                    // regardless of `[discord] channel_id`.
                     channel_filter,
                     sp.clone(),
                     Some(active_role_name.clone()),
@@ -12512,7 +12512,7 @@ async fn run_async(
                             // the daemon-routed path had no routing-level filter of
                             // any kind before this; without it, every Slack channel
                             // the bot could see reached a session regardless of
-                            // `[slack] channel_filter`. Cloned: `channel_filter`
+                            // `[slack] channel_id`. Cloned: `channel_filter`
                             // (a `String`, not `Copy`) is still needed below by the
                             // in-process fallback if the daemon path fails.
                             channel_filter.clone(),

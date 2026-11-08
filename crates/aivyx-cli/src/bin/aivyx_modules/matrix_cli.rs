@@ -9,7 +9,7 @@ use aivyx_matrix::credentials::{self, MatrixKeys};
 
 fn matrix_config(config: &AivyxConfig) -> Result<&aivyx_config::MatrixConfig, String> {
     config.matrix.as_ref().ok_or_else(|| {
-        "no [matrix] section in your config. Add homeserver, user_id, room_filter \
+        "no [matrix] section in your config. Add homeserver, user_id, room_id \
          and allowed_senders first — see `docs/guide/13-chat-apps-and-accounts.md`."
             .to_string()
     })

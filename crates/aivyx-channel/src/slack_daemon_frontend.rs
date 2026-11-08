@@ -59,7 +59,7 @@ use std::time::Instant;
 
 /// Lightweight `ChannelContext` stub that reports `Slack` platform
 /// and a trust tier derived from whether the operator has an allowlist
-/// (`[slack] channel_filter`) configured at all. Used by the daemon's
+/// (`[slack] channel_id`) configured at all. Used by the daemon's
 /// `ChannelFactory` when a `FrontendType::Slack` connection arrives.
 /// Same shape as `TelegramDaemonChannel` and `DiscordDaemonChannel`;
 /// `stream_event` and `finalize` are no-ops because the daemon-side
@@ -77,7 +77,7 @@ pub struct SlackDaemonChannel {
     /// [`cancel_inflight`]. See `TelegramDaemonChannel::token` —
     /// same C1+H1 audit fix.
     token: Mutex<CancellationToken>,
-    /// Whether the operator has `[slack] channel_filter` configured at
+    /// Whether the operator has `[slack] channel_id` configured at
     /// all. See `TelegramDaemonChannel::allowlist_configured`.
     allowlist_configured: bool,
 }
@@ -155,7 +155,7 @@ struct PartitionRoute {
 }
 
 /// Routing-level drop-filter: `true` iff `channel_id` may be routed to
-/// a session. `filter: None` (no `[slack] channel_filter` configured)
+/// a session. `filter: None` (no `[slack] channel_id` configured)
 /// accepts every channel. Mirrors
 /// `telegram_daemon_frontend::telegram_chat_is_allowed`; extended in
 /// Task 10 fix round 3 (2026-09-16) to also check `team_id`, closing

@@ -46,7 +46,7 @@ is the operator. What an adapter brings is a **trust tier**, taken from the
 `fs.delete` and narrows file and network scopes. The tier caps what any
 role can do over that channel. An adapter for a remote platform should
 also allowlist who may talk to it, as the built-in ones do (`chat_id`,
-`channel_filter`).
+`channel_id`).
 
 ## Start from an example
 

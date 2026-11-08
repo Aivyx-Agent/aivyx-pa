@@ -1788,12 +1788,12 @@ pub struct DiscordConfig {
     /// operator sets it.
     pub application_id: Option<Sourced<u64>>,
     /// Security-audit fix (Task 10, 2026-09-16) — optional channel_id
-    /// filter, mirroring Telegram's `chat_filter`. `None` = no channel
+    /// filter (`[discord] channel_id`), like Telegram's `chat_id`. `None` = no channel
     /// allowlisted; `Some(id)` = only the Discord channel with this
     /// snowflake is allowlisted. This is what `trust_tier()` on
     /// `DiscordChannel` consults: a channel whose id doesn't match
     /// (including the `None` case) is `TrustTier::Untrusted`, not
-    /// `SemiTrusted`. Unlike `chat_filter`, this was not previously
+    /// `SemiTrusted`. Unlike Telegram's filter, this was not previously
     /// wired anywhere — Discord had no filter mechanism at all before
     /// this fix.
     pub channel_filter: Option<Sourced<u64>>,
@@ -1821,7 +1821,7 @@ pub struct MatrixConfig {
     pub user_id: String,
     /// The one room the assistant answers in (its room ID, `!…:server`). Must be end-to-end encrypted.
     pub room_filter: String,
-    /// Your Matrix IDs. Only these, from a device the assistant has verified, in `room_filter`, can talk to it; invites are accepted only from them.
+    /// Your Matrix IDs. Only these, from a device the assistant has verified, in `room_id`, can talk to it; invites are accepted only from them.
     pub allowed_senders: Vec<String>,
     /// Operator opt-in for `/team run <goal>` from this room.
     pub team_run_channel: bool,
@@ -1915,7 +1915,7 @@ pub struct SlackConfig {
     /// constraint.
     pub team_id: Option<Sourced<String>>,
     /// Security-audit fix (Task 10, 2026-09-16) — optional channel_id
-    /// filter, mirroring Telegram's `chat_filter` at Slack's own
+    /// filter (`[slack] channel_id`), like Telegram's `chat_id`, at Slack's own
     /// `channel_id` granularity (finer than `team_id`'s workspace-wide
     /// scope). `None` = no channel allowlisted. This is what
     /// `trust_tier()` on `SlackChannel` consults (together with
@@ -5134,10 +5134,12 @@ struct RawDiscord {
     token: Option<aivyx_capability::display::SecretString>,
     #[serde(default)]
     application_id: Option<u64>,
-    /// Security-audit fix (Task 10, 2026-09-16) — see
-    /// `DiscordConfig::channel_filter`.
+    /// The one Discord channel (its snowflake id) the bot treats as yours.
+    /// Unset = no channel allowlisted: every sender is untrusted. Was
+    /// `channel_filter` (a deprecated alias since R18, like Telegram's
+    /// `chat_id`). Feeds `DiscordConfig::channel_filter`.
     #[serde(default)]
-    channel_filter: Option<u64>,
+    channel_id: Option<u64>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
     /// from this channel. Absent/false: the command is recognized but
     /// always replies with a capability-denial message, both client-
@@ -5199,8 +5201,11 @@ struct RawMatrix {
     homeserver: Option<String>,
     #[serde(default)]
     user_id: Option<String>,
+    /// The one room the assistant answers in (its room ID, `!…:server`).
+    /// Must be end-to-end encrypted. Was `room_filter` (a deprecated alias
+    /// since R18). Feeds `MatrixConfig::room_filter`.
     #[serde(default)]
-    room_filter: Option<String>,
+    room_id: Option<String>,
     #[serde(default)]
     allowed_senders: Vec<String>,
     #[serde(default)]
@@ -5302,10 +5307,12 @@ struct RawSlack {
     app_token: Option<aivyx_capability::display::SecretString>,
     #[serde(default)]
     team_id: Option<String>,
-    /// Security-audit fix (Task 10, 2026-09-16) — see
-    /// `SlackConfig::channel_filter`.
+    /// The one Slack channel (its channel id) the bot treats as yours, at
+    /// a finer grain than `team_id`. Unset = no channel allowlisted: every
+    /// sender is untrusted. Was `channel_filter` (a deprecated alias since
+    /// R18, like Telegram's `chat_id`). Feeds `SlackConfig::channel_filter`.
     #[serde(default)]
-    channel_filter: Option<String>,
+    channel_id: Option<String>,
     /// Piece C (2026-08-23) — operator opt-in for `/team run <goal>`
     /// from this channel. Absent/false: the command is recognized but
     /// always replies with a capability-denial message, both client-
@@ -6997,11 +7004,11 @@ impl AivyxConfig {
 
         // Security-audit fix (Task 10, 2026-09-16) — mirrors
         // `telegram_chat_filter` above: env var wins, else fall back
-        // to the TOML `channel_filter` key.
+        // to the TOML `channel_id` key.
         let discord_channel_filter = match env_string(ENV_DISCORD_CHANNEL_ID) {
             Some(s) => {
                 let parsed = s.parse::<u64>().map_err(|e| ConfigError::Invalid {
-                    field: "discord.channel_filter",
+                    field: "discord.channel_id",
                     reason: format!(
                         "{ENV_DISCORD_CHANNEL_ID}={s:?} is not a valid u64: {e}"
                     ),
@@ -7010,7 +7017,7 @@ impl AivyxConfig {
             }
             None => toml
                 .discord
-                .channel_filter
+                .channel_id
                 .map(|n| Sourced::new(n, FieldSource::Toml)),
         };
 
@@ -7057,10 +7064,10 @@ impl AivyxConfig {
                         reason: "must look like @name:server".into(),
                     });
                 }
-                let room_filter = toml.matrix.room_filter.clone().unwrap_or_default();
+                let room_filter = toml.matrix.room_id.clone().unwrap_or_default();
                 if !is_id(&room_filter, '!') {
                     return Err(ConfigError::Invalid {
-                        field: "matrix.room_filter",
+                        field: "matrix.room_id",
                         reason: "must be a room ID like !abc:server (not an #alias)".into(),
                     });
                 }
@@ -7277,7 +7284,7 @@ impl AivyxConfig {
             Some(s) => Some(Sourced::new(s, FieldSource::Env)),
             None => toml
                 .slack
-                .channel_filter
+                .channel_id
                 .clone()
                 .map(|s| Sourced::new(s, FieldSource::Toml)),
         };

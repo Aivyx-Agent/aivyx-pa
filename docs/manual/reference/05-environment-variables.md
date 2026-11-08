@@ -49,11 +49,11 @@ Use these variables for scripts, containers and one-off overrides.
 | `AIVYX_PA_TELEGRAM_CHAT_ID` | `[telegram] chat_id` |
 | `AIVYX_PA_DISCORD_TOKEN` | `[discord] token` |
 | `AIVYX_PA_DISCORD_APPLICATION_ID` | `[discord] application_id` |
-| `AIVYX_PA_DISCORD_CHANNEL_ID` | `[discord] channel_filter` |
+| `AIVYX_PA_DISCORD_CHANNEL_ID` | `[discord] channel_id` |
 | `AIVYX_PA_SLACK_BOT_TOKEN` | `[slack] bot_token` |
 | `AIVYX_PA_SLACK_APP_TOKEN` | `[slack] app_token` |
 | `AIVYX_PA_SLACK_TEAM_ID` | `[slack] team_id` |
-| `AIVYX_PA_SLACK_CHANNEL_ID` | `[slack] channel_filter` |
+| `AIVYX_PA_SLACK_CHANNEL_ID` | `[slack] channel_id` |
 
 ## Integrations and tools
 

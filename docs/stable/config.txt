@@ -49,7 +49,8 @@ daemon.web_ui_insecure_no_auth: bool?
 daemon.web_ui_port: u16?
 daemon.webhook_port: u16?
 discord.application_id: u64?
-discord.channel_filter: u64?
+discord.channel_filter: deprecated alias of discord.channel_id
+discord.channel_id: u64?
 discord.team_command_allowed_senders: [u64]
 discord.team_run_channel: bool
 discord.team_trigger_rate_limit: u32?
@@ -112,7 +113,8 @@ loop.verify_completion: bool?
 loop.working_dir: str?
 matrix.allowed_senders: [str]
 matrix.homeserver: str?
-matrix.room_filter: str?
+matrix.room_filter: deprecated alias of matrix.room_id
+matrix.room_id: str?
 matrix.team_command_allowed_senders: [str]
 matrix.team_run_channel: bool
 matrix.team_trigger_rate_limit: u32?
@@ -354,7 +356,8 @@ skills.starter: bool?
 skills.trigger_injection: bool?
 slack.app_token: str?
 slack.bot_token: str?
-slack.channel_filter: str?
+slack.channel_filter: deprecated alias of slack.channel_id
+slack.channel_id: str?
 slack.team_command_allowed_senders: [str]
 slack.team_id: str?
 slack.team_run_channel: bool
