@@ -101,6 +101,26 @@ use aivyx_storage::{KeyDomain, Storage};
 pub mod config_write;
 mod deprecated_keys;
 pub mod not_stable;
+
+// R5: the values the string keys that take one of a fixed set accept. The
+// loader names them in its errors and docs/stable/config.txt freezes them
+// (the `stable_config_keys` test). Aliases are listed too: a dropped alias
+// breaks configs as a dropped name does.
+/// `[email] tls_mode` (`none` is refused: the login needs TLS).
+pub const EMAIL_TLS_MODES: &[&str] = &["starttls", "implicit"];
+/// `[sandbox] default_backend`.
+pub const SANDBOX_DEFAULT_BACKENDS: &[&str] = &["none", "auto", "bubblewrap", "bwrap", "firejail"];
+/// `[[mcp_server]] transport`.
+pub const MCP_TRANSPORTS: &[&str] = &["stdio", "sse", "http", "streamable-http"];
+/// `[[notify_target]] kind`.
+pub const NOTIFY_TARGET_KINDS: &[&str] = &["telegram", "webhook", "web-ui", "email"];
+/// `notify_when` on `[[schedule]]`, `[[webhook]]` and `[[file_watch]]`.
+pub const NOTIFY_WHEN_VALUES: &[&str] =
+    &["always", "on_failed", "on_completed_non_empty", "on_completed_grounded"];
+/// `heuristic.mode` under `[skills.auto_propose]` and `[persona.auto_propose]`.
+pub const HEURISTIC_MODES: &[&str] = &["any", "all"];
+/// `[[memory.retention]] retention` (otherwise `retention_days`).
+pub const MEMORY_RETENTION_VALUES: &[&str] = &["forever"];
 mod unknown_keys;
 pub use config_write::{
     write_access_section, write_agent_cycle_detection, write_autonomy_section,
@@ -3126,6 +3146,10 @@ pub enum MemoryProfile {
 }
 
 impl MemoryProfile {
+    /// The `[memory] profile` values that name a profile (R5: frozen in
+    /// docs/stable/config.txt). Anything else, or unset, is `Off`.
+    pub const NAMES: &'static [&'static str] = &["lite", "smart"];
+
     /// Parse the `[memory] profile` string. Unknown / absent → `Off`.
     pub fn from_arg(s: Option<&str>) -> Self {
         match s.map(|x| x.trim().to_lowercase()).as_deref() {
@@ -4939,9 +4963,8 @@ fn resolve_trigger_notify_fields(
                     field: "trigger.notify_when",
                     reason: format!(
                         "{trigger_kind} `{trigger_name}` notify_when = \
-                         `{other}` is not recognized. Supported: \
-                         `always` (default), `on_failed`, \
-                         `on_completed_non_empty`, `on_completed_grounded`."
+                         `{other}` is not recognized. Supported: {} (default `always`).",
+                        NOTIFY_WHEN_VALUES.join(", ")
                     ),
                 });
             }
@@ -7986,9 +8009,10 @@ impl AivyxConfig {
                     return Err(ConfigError::Invalid {
                         field: "mcp_server.transport",
                         reason: format!(
-                            "server {:?}: unknown transport {:?} \
-                             (expected \"stdio\", \"sse\", or \"http\")",
-                            r.name, other,
+                            "server {:?}: unknown transport {:?} (expected one of: {})",
+                            r.name,
+                            other,
+                            MCP_TRANSPORTS.join(", "),
                         ),
                     });
                 }
@@ -8192,8 +8216,8 @@ impl AivyxConfig {
                     return Err(ConfigError::Invalid {
                         field: "sandbox.default_backend",
                         reason: format!(
-                            "`sandbox.default_backend` must be one of \
-                             auto / bubblewrap / firejail / none, got {other:?}"
+                            "`sandbox.default_backend` must be one of {}, got {other:?}",
+                            SANDBOX_DEFAULT_BACKENDS.join(" / ")
                         ),
                     })
                 }
@@ -8435,9 +8459,10 @@ impl AivyxConfig {
                     return Err(ConfigError::Invalid {
                         field: "notify_target.kind",
                         reason: format!(
-                            "unknown notify_target kind `{}` \
-                             (target `{}`); supported: telegram, webhook, email, web-ui",
-                            other, raw.name
+                            "unknown notify_target kind `{}` (target `{}`); supported: {}",
+                            other,
+                            raw.name,
+                            NOTIFY_TARGET_KINDS.join(", ")
                         ),
                     });
                 }
@@ -9798,8 +9823,8 @@ fn build_email_config(raw: &RawEmail) -> Result<Option<EmailConfig>, ConfigError
             return Err(ConfigError::Invalid {
                 field: "email.tls_mode",
                 reason: format!(
-                    "unknown tls_mode `{other}` — supported: \
-                     \"starttls\" (default), \"implicit\""
+                    "unknown tls_mode `{other}` — supported: {} (default `starttls`)",
+                    EMAIL_TLS_MODES.join(", ")
                 ),
             });
         }
@@ -10829,7 +10854,7 @@ fn build_skill_auto_propose_config(
         Some(other) => {
             return Err(ConfigError::Invalid {
                 field: "skills.auto_propose.heuristic.mode",
-                reason: format!("expected \"any\" or \"all\", got \"{other}\""),
+                reason: format!("expected one of {}, got \"{other}\"", HEURISTIC_MODES.join(", ")),
             });
         }
     };
@@ -10954,7 +10979,7 @@ fn build_persona_auto_propose_config(
         Some(other) => {
             return Err(ConfigError::Invalid {
                 field: "persona.auto_propose.heuristic.mode",
-                reason: format!("expected \"any\" or \"all\", got \"{other}\""),
+                reason: format!("expected one of {}, got \"{other}\"", HEURISTIC_MODES.join(", ")),
             });
         }
     };

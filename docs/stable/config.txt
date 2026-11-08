@@ -3,7 +3,7 @@ access.allow_private_egress: bool?
 access.allow_sensitive_paths: [str]
 access.confirm_destructive: bool?
 access.guard_sensitive_paths: bool?
-access.level: AccessLevel?
+access.level: AccessLevel? (one of: sandbox | workspace | home | full | custom)
 access.root: str?
 agent.conversation_history_messages: u64?
 agent.conversation_history_turns: deprecated alias of agent.conversation_history_messages
@@ -12,7 +12,7 @@ agent.injection_scan_enabled: bool?
 agent.injection_scan_exempt: [str]
 agent.max_reply_tokens: u32?
 agent.model: str?
-agent.provider: ProviderKind?
+agent.provider: ProviderKind? (one of: anthropic | openai | ollama | llama-cpp | llama_cpp | llamacpp | jan | mistral-rs | mistral_rs | mistralrs | aivyx-broker | aivyx_broker | broker | lemonade)
 agent.role: str?
 agent.system_prompt: str?
 agent.turn_timeout_secs: u64?
@@ -22,13 +22,13 @@ anthropic.api_key: str?
 applications.binary_path: str?
 applications.enabled: bool?
 autonomy.auto_approve.scopes: [str]
-autonomy.level: AutonomyLevel?
+autonomy.level: AutonomyLevel? (one of: manual | assisted | supervised | autonomous | unleashed)
 autonomy.override[].domain: str?
-autonomy.override[].level: AutonomyLevel?
+autonomy.override[].level: AutonomyLevel? (one of: manual | assisted | supervised | autonomous | unleashed)
 autonomy.review_expiry_days: u32?
 broker.base_url: str?
 budget.alert_at: f64?
-budget.on_exceeded: BudgetAction
+budget.on_exceeded: BudgetAction (one of: alert | deny)
 budget.per_day_usd: f64?
 budget.per_mission_tokens: u64?
 budget.per_mission_usd: f64?
@@ -62,7 +62,7 @@ email.from: str?
 email.host: str?
 email.password: str?
 email.port: u16?
-email.tls_mode: str?
+email.tls_mode: str? (one of: starttls | implicit)
 email.username: str?
 embedding.ann_index: bool? (advanced)
 embedding.ann_rebuild_threshold: u32? (advanced)
@@ -87,7 +87,7 @@ file_watch[].enabled: bool
 file_watch[].name: str
 file_watch[].notify_target: str? (deprecated)
 file_watch[].notify_targets: [str]
-file_watch[].notify_when: str?
+file_watch[].notify_when: str? (one of: always | on_failed | on_completed_non_empty | on_completed_grounded)
 file_watch[].path: str
 file_watch[].prompt: str
 file_watch[].role: str
@@ -131,12 +131,12 @@ mcp_server[].headers: {str: str}?
 mcp_server[].name: str
 mcp_server[].sandbox.args: [str]?
 mcp_server[].sandbox.wrapper: str
-mcp_server[].transport: str
+mcp_server[].transport: str (one of: stdio | sse | http | streamable-http)
 mcp_server[].url: str?
 memory.canonicalize_topics: bool?
 memory.max_per_topic: u64?
-memory.profile: str?
-memory.retention[].retention: str?
+memory.profile: str? (one of: lite | smart)
+memory.retention[].retention: str? (one of: forever)
 memory.retention[].retention_days: u64?
 memory.retention[].topic_glob: str
 memory.ttl_secs: u64?
@@ -148,7 +148,7 @@ mistralrs.model_path: str?
 notify_target[].chat_id: str?
 notify_target[].default: bool
 notify_target[].enabled: bool
-notify_target[].kind: str
+notify_target[].kind: str (one of: telegram | webhook | web-ui | email)
 notify_target[].name: str
 notify_target[].rate_limit_max: u32?
 notify_target[].rate_limit_window_secs: u64?
@@ -192,7 +192,7 @@ persona.auto_propose.from_failed_turns: bool? (advanced)
 persona.auto_propose.fuzzy_match_threshold: f32? (advanced)
 persona.auto_propose.heuristic.distinct_tool_id_min: u32? (advanced)
 persona.auto_propose.heuristic.duration_ms_min: u64? (advanced)
-persona.auto_propose.heuristic.mode: str? (advanced)
+persona.auto_propose.heuristic.mode: str? (one of: any | all) (advanced)
 persona.auto_propose.heuristic.require_gate_resolve: bool? (advanced)
 persona.auto_propose.heuristic.tool_call_count_min: u32? (advanced)
 persona.auto_propose.judge_max_tokens: u32? (advanced)
@@ -261,7 +261,7 @@ proton.team_run_channel: bool
 proton.team_trigger_rate_limit: u32?
 providers.tool_name_auto_correct_threshold: f32? (advanced)
 rate_limit.default_per_turn_per_tool: u32?
-rate_limit.on_exceeded: RateAction
+rate_limit.on_exceeded: RateAction (one of: alert | deny)
 rate_limit.per_turn_total: u32?
 rate_limit.tools.*.per_turn: u32?
 rate_limit.tools.*.per_window: u32?
@@ -286,35 +286,35 @@ role[].name: str
 role[].parent_role: str?
 role[].system_prompt: str?
 role[].tool_allowlist: [str]?
-role[].trust_ceiling: TrustTier?
+role[].trust_ceiling: TrustTier? (one of: Untrusted | SemiTrusted | Trusted | Kernel)
 routing.classifier.enabled: bool
 routing.classifier.timeout_ms: u64
 routing.discover: bool
 routing.enabled: bool
 routing.endpoints.*.base_url: str?
-routing.endpoints.*.kind: EndpointKind
-routing.endpoints.*.locality: Locality?
-routing.escalation.mode: EscalationMode
+routing.endpoints.*.kind: EndpointKind (one of: ollama | llama_router | openai_compat | lemonade | anthropic | openai)
+routing.endpoints.*.locality: Locality? (one of: local | cloud)
+routing.escalation.mode: EscalationMode (one of: never | ask | auto)
 routing.escalation.no_local_candidate: bool
 routing.escalation.on_failure: bool
 routing.escalation.tiers: [str]
-routing.models[].capabilities: [Capability]
-routing.models[].capabilities_deny: [Capability]
+routing.models[].capabilities: [Capability] (one of: completion | tools | vision | thinking | audio | embedding)
+routing.models[].capabilities_deny: [Capability] (one of: completion | tools | vision | thinking | audio | embedding)
 routing.models[].context_window: u32?
 routing.models[].endpoint: str?
 routing.models[].id: str
-routing.models[].locality: Locality?
+routing.models[].locality: Locality? (one of: local | cloud)
 routing.models[].priority: i32?
-routing.models[].strengths: [Strength]?
-routing.models[].tier: Tier?
+routing.models[].strengths: [Strength]? (one of: code | reasoning | chat | summarize)
+routing.models[].tier: Tier? (one of: small | medium | large)
 routing.sensitive.channels: [str]
 routing.sensitive.tool_prefixes: [str]
-routing.tasks.*.strengths: [Strength]?
-routing.tasks.*.tier: Tier?
+routing.tasks.*.strengths: [Strength]? (one of: code | reasoning | chat | summarize)
+routing.tasks.*.tier: Tier? (one of: small | medium | large)
 routing.vram_bytes: u64?
 sandbox.allow_leaving_process_group: bool?
 sandbox.allow_unix_sockets: bool?
-sandbox.default_backend: str?
+sandbox.default_backend: str? (one of: none | auto | bubblewrap | bwrap | firejail)
 sandbox.require_enforcement: bool?
 sandbox.share_system_tmp: bool?
 schedule[].cron: str
@@ -322,7 +322,7 @@ schedule[].enabled: bool
 schedule[].name: str
 schedule[].notify_target: str? (deprecated)
 schedule[].notify_targets: [str]
-schedule[].notify_when: str?
+schedule[].notify_when: str? (one of: always | on_failed | on_completed_non_empty | on_completed_grounded)
 schedule[].prompt: str
 schedule[].report_kind: str?
 schedule[].role: str
@@ -350,7 +350,7 @@ skills.auto_propose.enabled: bool?
 skills.auto_propose.fuzzy_match_threshold: f32? (advanced)
 skills.auto_propose.heuristic.distinct_tool_id_min: u32? (advanced)
 skills.auto_propose.heuristic.duration_ms_min: u64? (advanced)
-skills.auto_propose.heuristic.mode: str? (advanced)
+skills.auto_propose.heuristic.mode: str? (one of: any | all) (advanced)
 skills.auto_propose.heuristic.require_gate_resolve: bool? (advanced)
 skills.auto_propose.heuristic.tool_call_count_min: u32? (advanced)
 skills.auto_propose.judge_max_tokens: u32? (advanced)
@@ -409,7 +409,7 @@ webhook[].enabled: bool
 webhook[].name: str
 webhook[].notify_target: str? (deprecated)
 webhook[].notify_targets: [str]
-webhook[].notify_when: str?
+webhook[].notify_when: str? (one of: always | on_failed | on_completed_non_empty | on_completed_grounded)
 webhook[].prompt: str
 webhook[].role: str
 webhook[].wrap_mission: bool

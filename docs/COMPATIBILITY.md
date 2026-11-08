@@ -4,9 +4,10 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
 
 ## Stable
 
-- **Config keys and their defaults** (the snapshot checks keys and types;
-  see How this is checked). Every key path the config accepts, with its
-  type, and the aliases it accepts. Snapshot: `docs/stable/config.txt`.
+- **Config keys and their defaults** (the snapshot checks keys, types
+  and value sets; see How this is checked). Every key path the config
+  accepts, with its type, the values a key that takes one of a fixed set
+  accepts, and the aliases it accepts. Snapshot: `docs/stable/config.txt`.
 - **The CLI commands and flags.** Each command and its usage lines, the
   global flags (`--instance`, `--provider`, `--mcp`, ...) and the old flag
   spellings still accepted. Snapshot: `docs/stable/cli.txt`.
@@ -82,10 +83,10 @@ purpose.
 
 The check has limits:
 
-- It freezes config key paths and their types. It does not freeze default
-  values, or the allowed values of keys that take one of a fixed set
-  (for example, the access levels). The rules above and review cover
-  those.
+- It freezes config key paths, their types, and the values a key that
+  takes one of a fixed set accepts (for example, the access levels),
+  with their accepted alternative spellings. It does not freeze default
+  values; the rules above and review cover those.
 - The CLI snapshot freezes each command and its usage lines, and each
   global flag, as written in the help tables. It does not test behaviour.
 - The env snapshot lists the variable names the config loader reads; a

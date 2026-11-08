@@ -13259,9 +13259,75 @@ fn stable_config_keys() {
             }
             match v {
                 Format::TypeName(t) if is_struct(reg, v) => fields(&path, t, reg, out),
-                _ => out.push(format!("{path}: {}", short(value))),
+                _ => {
+                    let mut line = format!("{path}: {}", short(value));
+                    // R5: an enum key lists the values it accepts.
+                    if let Some(set) = variants(reg, value) {
+                        line.push_str(&format!(" (one of: {})", set.join(" | ")));
+                    }
+                    out.push(line);
+                }
             }
         }
+    }
+    /// The spellings an enum type accepts, looking through `Option` and lists.
+    fn variants(reg: &Registry, f: &Format) -> Option<Vec<String>> {
+        match f {
+            Format::Option(inner) | Format::Seq(inner) => variants(reg, inner),
+            Format::TypeName(t) if matches!(reg.get(t), Some(ContainerFormat::Enum(_))) => {
+                let (_, set) = enum_sets().into_iter().find(|(n, _)| n == t)?;
+                Some(set.iter().map(|v| v.to_string()).collect())
+            }
+            _ => None,
+        }
+    }
+    /// R5: every config enum with every spelling it accepts, aliases
+    /// included (serde lists each variant's aliases beside its name; a
+    /// dropped alias breaks configs too). Read from the type's own
+    /// `Deserialize`, which hands its variant list to `deserialize_enum`.
+    fn enum_sets() -> Vec<(String, &'static [&'static str])> {
+        type Seen = std::rc::Rc<std::cell::RefCell<Option<(&'static str, &'static [&'static str])>>>;
+        struct Variants(Seen);
+        impl<'de> serde::Deserializer<'de> for Variants {
+            type Error = serde::de::value::Error;
+            fn deserialize_enum<V: serde::de::Visitor<'de>>(
+                self,
+                name: &'static str,
+                variants: &'static [&'static str],
+                _: V,
+            ) -> Result<V::Value, Self::Error> {
+                *self.0.borrow_mut() = Some((name, variants));
+                Err(serde::de::Error::custom("recorded"))
+            }
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes
+                byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map
+                struct identifier ignored_any
+            }
+            fn deserialize_any<V: serde::de::Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+                Err(serde::de::Error::custom("not an enum"))
+            }
+        }
+        fn of<E: serde::de::DeserializeOwned>() -> (String, &'static [&'static str]) {
+            let seen = Seen::default();
+            let _ = E::deserialize(Variants(seen.clone()));
+            let (name, variants) = seen.borrow().expect("a config enum derives Deserialize");
+            (name.to_string(), variants)
+        }
+        vec![
+            of::<AccessLevel>(),
+            of::<AutonomyLevel>(),
+            of::<ProviderKind>(),
+            of::<EscalationMode>(),
+            of::<TrustTier>(),
+            of::<aivyx_cost::BudgetAction>(),
+            of::<aivyx_cost::RateAction>(),
+            of::<aivyx_route::Capability>(),
+            of::<aivyx_route::EndpointKind>(),
+            of::<aivyx_route::Locality>(),
+            of::<aivyx_route::Strength>(),
+            of::<aivyx_route::Tier>(),
+        ]
     }
     /// Key paths (under `prefix`) of one struct type.
     ///
@@ -13279,6 +13345,13 @@ fn stable_config_keys() {
             .trace_simple_type::<T>()
             .unwrap_or_else(|e| panic!("cannot trace {prefix}: {e:?}"));
         let mut registry = tracer.registry_unchecked();
+        for (name, c) in &registry {
+            assert!(
+                !matches!(c, ContainerFormat::Enum(_)) || enum_sets().iter().any(|(n, _)| n == name),
+                "{prefix}: config enum `{name}` is not in `enum_sets` in stable_config_keys, \
+                 so its values are not listed: add it there"
+            );
+        }
         let mut out = Vec::new();
         let Format::TypeName(name) = format else { panic!("{prefix} is not a struct") };
         if !aliases.is_empty() {
@@ -13542,8 +13615,54 @@ fn stable_config_keys() {
             }
         }
     }
-    // Lines outside the 1.x promise end with their tag (`not_stable`).
+    // R5: string keys that take one of a fixed set list it, from the same
+    // const the loader validates against.
+    let string_sets: &[(&str, &[&str])] = &[
+        ("email.tls_mode", crate::EMAIL_TLS_MODES),
+        ("file_watch[].notify_when", crate::NOTIFY_WHEN_VALUES),
+        ("mcp_server[].transport", crate::MCP_TRANSPORTS),
+        ("memory.profile", crate::MemoryProfile::NAMES),
+        ("memory.retention[].retention", crate::MEMORY_RETENTION_VALUES),
+        ("notify_target[].kind", crate::NOTIFY_TARGET_KINDS),
+        ("persona.auto_propose.heuristic.mode", crate::HEURISTIC_MODES),
+        ("sandbox.default_backend", crate::SANDBOX_DEFAULT_BACKENDS),
+        ("schedule[].notify_when", crate::NOTIFY_WHEN_VALUES),
+        ("skills.auto_propose.heuristic.mode", crate::HEURISTIC_MODES),
+        ("webhook[].notify_when", crate::NOTIFY_WHEN_VALUES),
+    ];
+    for (path, set) in string_sets {
+        let line = out
+            .iter_mut()
+            .find(|l| l.starts_with(&format!("{path}: str")))
+            .unwrap_or_else(|| panic!("{path} is not a string key"));
+        line.push_str(&format!(" (one of: {})", set.join(" | ")));
+    }
+    // Lines outside the 1.x promise end with their tag (`not_stable`). An
+    // enum value that is not stable moves out of its key's set onto its own
+    // `key = "value"` line, which is then tagged.
     use crate::not_stable::{Snapshot, stale_entries, tag_for};
+    let mut value_lines = Vec::new();
+    for line in &mut out {
+        let Some((key, rest)) = line.split_once(": ") else { continue };
+        let Some(start) = rest.find(" (one of: ") else { continue };
+        let end = start + rest[start..].find(')').expect("closed set");
+        let set: Vec<&str> = rest[start + " (one of: ".len()..end].split(" | ").collect();
+        let key_tag = tag_for(Snapshot::Config, key);
+        let (moved, kept): (Vec<&str>, Vec<&str>) = set
+            .into_iter()
+            .partition(|v| tag_for(Snapshot::Config, &format!("{key} = \"{v}\"")) != key_tag);
+        if moved.is_empty() {
+            continue;
+        }
+        value_lines.extend(moved.iter().map(|v| format!("{key} = \"{v}\"")));
+        *line = format!(
+            "{key}: {}{}{}",
+            &rest[..start],
+            format_args!(" (one of: {})", kept.join(" | ")),
+            &rest[end + 1..]
+        );
+    }
+    out.extend(value_lines);
     for line in &mut out {
         let key = line.split_once(": ").map_or(line.as_str(), |(k, _)| k);
         if let Some(tag) = tag_for(Snapshot::Config, key) {
@@ -13836,4 +13955,62 @@ fn a_trigger_without_a_role_runs_as_the_active_role() {
     // `--role` / AIVYX_PA_ROLE pick the active role, so they pick it here too.
     env.set("AIVYX_PA_ROLE", "writer");
     assert_eq!(load_with_toml(body, "trigger-role-env").schedules[0].role, "writer");
+}
+
+/// R5: every value in the string value sets frozen in docs/stable/config.txt
+/// is one the loader accepts.
+#[test]
+fn every_listed_string_value_loads() {
+    let env = EnvScope::new();
+    const EMAIL: &str = "[email]\nhost = \"smtp.example.com\"\nusername = \"a@example.com\"\n\
+                         password = \"pw\"\nfrom = \"a@example.com\"\n";
+    let mut bodies: Vec<String> = Vec::new();
+    for v in crate::EMAIL_TLS_MODES {
+        bodies.push(format!("{EMAIL}tls_mode = \"{v}\"\n"));
+    }
+    for v in crate::SANDBOX_DEFAULT_BACKENDS {
+        bodies.push(format!("[sandbox]\ndefault_backend = \"{v}\"\n"));
+    }
+    for v in crate::MCP_TRANSPORTS {
+        let how = if *v == "stdio" { "command = \"echo\"" } else { "url = \"http://127.0.0.1:1/x\"" };
+        bodies.push(format!("[[mcp_server]]\nname = \"m\"\ntransport = \"{v}\"\n{how}\n"));
+    }
+    for v in crate::NOTIFY_TARGET_KINDS {
+        let extra = match *v {
+            "telegram" => "chat_id = \"1\"",
+            "webhook" => "url = \"https://example.com/hook\"",
+            "email" => "to = \"a@example.com\"",
+            _ => "",
+        };
+        bodies.push(format!("{EMAIL}[[notify_target]]\nname = \"n\"\nkind = \"{v}\"\n{extra}\n"));
+    }
+    for v in crate::NOTIFY_WHEN_VALUES {
+        bodies.push(format!(
+            "[[role]]\nname = \"default\"\ncapability_scopes = [\"notify.send\"]\n\
+             trust_ceiling = \"Trusted\"\n\
+             [[notify_target]]\nname = \"me\"\nkind = \"web-ui\"\n\
+             [[schedule]]\nname = \"s\"\ncron = \"0 0 9 * * *\"\nprompt = \"p\"\n\
+             notify_targets = [\"me\"]\nnotify_when = \"{v}\"\n\
+             [[webhook]]\nname = \"w\"\nprompt = \"p\"\nnotify_targets = [\"me\"]\nnotify_when = \"{v}\"\n\
+             [[file_watch]]\nname = \"f\"\npath = \"/tmp\"\nprompt = \"p\"\n\
+             notify_targets = [\"me\"]\nnotify_when = \"{v}\"\n"
+        ));
+    }
+    for v in crate::HEURISTIC_MODES {
+        bodies.push(format!(
+            "[skills.auto_propose]\nenabled = true\n[skills.auto_propose.heuristic]\nmode = \"{v}\"\n\
+             [persona.auto_propose]\nenabled = true\n[persona.auto_propose.heuristic]\nmode = \"{v}\"\n"
+        ));
+    }
+    for v in crate::MEMORY_RETENTION_VALUES {
+        bodies.push(format!("[[memory.retention]]\ntopic_glob = \"a/*\"\nretention = \"{v}\"\n"));
+    }
+    for (i, body) in bodies.iter().enumerate() {
+        let cfg = load_with_toml_result(&format!("\n{body}"), &format!("value-set-{i}"));
+        assert!(cfg.is_ok(), "{body}\n=> {:?}", cfg.err());
+    }
+    for name in crate::MemoryProfile::NAMES {
+        assert_ne!(crate::MemoryProfile::from_arg(Some(name)), crate::MemoryProfile::Off, "{name}");
+    }
+    drop(env);
 }
