@@ -68,8 +68,10 @@ const fn entry(snapshot: Snapshot, prefix: &'static str, tag: Tag) -> NotStable 
     }
 }
 
+use Snapshot::Cli;
 use Snapshot::Config as C;
 use Tag::Advanced as ADV;
+use Tag::BuildTimeFeature as BUILD;
 
 /// Every not-stable snapshot entry (see the module docs).
 pub const NOT_STABLE: &[NotStable] = &[
@@ -95,6 +97,14 @@ pub const NOT_STABLE: &[NotStable] = &[
     entry(C, "skills.auto_propose.", ADV),
     entry(C, "tool_relevance.", ADV),
     entry(C, "wiki.", ADV),
+    // R9: features no release binary has (`provider-mistral-rs`,
+    // `channel-voice`). `federation yubikey-init` (`yubikey`) is left out of
+    // cli.txt instead: help shows it only in a build with the feature.
+    entry(C, "agent.provider = \"mistral", BUILD),
+    entry(C, "mistralrs.", BUILD),
+    entry(C, "voice.", BUILD),
+    entry(Cli, "--channel voice", BUILD),
+    entry(Cli, "--provider mistralrs", BUILD),
 ];
 
 /// The tag of the snapshot line whose key (see [`Snapshot`]) is `key`.

@@ -89,7 +89,7 @@ Generation options passed to Ollama when it is the provider. Unset keys keep Oll
 
 ### `[mistralrs]`
 
-The embedded, in-process mistral.rs engine (`provider = "mistralrs"`) — runs a local GGUF model with no separate server.
+The embedded, in-process mistral.rs engine (`provider = "mistralrs"`) — runs a local GGUF model with no separate server. Build-time feature: only a build with `provider-mistral-rs` has it (release binaries don't), and it is not covered by the 1.x compatibility promise.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -708,7 +708,7 @@ Signal through your own signal-cli daemon: the channel and `signal.send`. See [C
 
 ### `[voice]`
 
-The voice channel (`--channel voice`): speech recognition and text-to-speech engines and devices.
+The voice channel (`--channel voice`): speech recognition and text-to-speech engines and devices. Build-time feature: only a build with `channel-voice` has it (release binaries don't), and it is not covered by the 1.x compatibility promise.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|

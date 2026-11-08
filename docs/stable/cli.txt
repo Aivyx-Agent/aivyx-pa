@@ -28,9 +28,6 @@ daemon
   aivyx-pa daemon uninstall
 doctor
   aivyx-pa doctor
-federation
-  aivyx-pa federation yubikey-init <instance-id> <key-binding-path>
-      [--card <serial>] [--overwrite-existing-key]
 identity
   aivyx-pa identity export <path>
   aivyx-pa identity import <path> [--force]
@@ -138,10 +135,12 @@ workspace
   --instance <name>
   --verify-only
   --channel <kind>
+  --channel voice (build-time feature)
   --role <name>
   --print-role <name>
   --no-daemon
   --provider <kind>
+  --provider mistralrs (build-time feature)
   --mcp <name:command[:arg1,arg2,...]>
   --mcp-sse <name:url>
   --version, -V

@@ -15,11 +15,11 @@ These work with any command.
 |---|---|
 | `--instance <name>` | Use a named instance — a separate agent with its own config, store and Studio. Same as setting `AIVYX_PA_INSTANCE`; the flag wins. Without it you get the `default` instance. See [Named instances](../../guide/16-named-instances.md). |
 | `--verify-only` | Verify the audit chain and exit (forensic check; no session). |
-| `--channel <kind>` | Run the session on a channel instead of the terminal: `local`, `telegram`, `discord`, `slack`, `matrix`, `proton`, `signal` or `voice`. |
+| `--channel <kind>` | Run the session on a channel instead of the terminal: `local`, `telegram`, `discord`, `slack`, `matrix`, `proton`, `signal` or `voice`. `voice` needs a build with the `channel-voice` feature, which release binaries don't have. |
 | `--role <name>` | Use a named role (from `[[role]]` in your config) for this session. |
 | `--print-role <name>` | Print a role's full capability envelope and exit. |
 | `--no-daemon` | Chat in-process: don't connect to a running daemon or start one. |
-| `--provider <kind>` | Override the configured model provider for this run: `anthropic`, `openai`, `ollama`, `llamacpp`, `jan`, `mistralrs`, `broker` or `lemonade`. |
+| `--provider <kind>` | Override the configured model provider for this run: `anthropic`, `openai`, `ollama`, `llamacpp`, `jan`, `mistralrs`, `broker` or `lemonade`. `mistralrs` needs a build with the `provider-mistral-rs` feature, which release binaries don't have. |
 | `--mcp <name:command[:arg1,arg2,…]>` | Attach a stdio MCP server for this session. `--mcp-server` is the old spelling: it still works, with a warning (in aivyx-coder, `--mcp-server` means the opposite: run coder as a server). |
 | `--mcp-sse <name:url>` | Attach an SSE MCP server for this session. |
 | `--version`, `-V` | Print the version and exit. |
@@ -580,7 +580,10 @@ aivyx-pa identity import <path> [--force]
 ### `aivyx-pa federation`
 
 Bind the federation identity to a YubiKey so the key never leaves the
-hardware (requires a build with YubiKey support and `pcscd`).
+hardware. Only in a build with the `yubikey` feature (release binaries
+don't have it; `aivyx-pa --help` lists the command only in such a
+build), and it needs `pcscd`. Not covered by the 1.x compatibility
+promise.
 
 ```
 aivyx-pa federation yubikey-init <instance-id> <key-binding-path> [--card <serial>] [--overwrite-existing-key]

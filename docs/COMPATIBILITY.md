@@ -49,6 +49,14 @@ one list of tagged entries is `NOT_STABLE` in
   `[ollama] prompt_strategies`. Each section's `enabled` switches stay
   stable, and so does `[memory] profile`, the setting that turns the
   learning features on as a set.
+- **Build-time features**, tagged `(build-time feature)`. What only a
+  build with a non-default Cargo feature has; no release binary does:
+  the `[mistralrs]` section, `agent.provider = "mistralrs"` and
+  `--provider mistralrs` (`provider-mistral-rs`), the `[voice]` section
+  and `--channel voice` (`channel-voice`), and
+  `aivyx-pa federation yubikey-init` (`yubikey`). The last is not in
+  `cli.txt` at all, because the help shows it only in a build with the
+  feature.
 - **Previews.** Today these are the Matrix, Proton Mail and Signal channels
   (updated by the Channel Activation Milestone). A preview can change or
   be removed in any release.

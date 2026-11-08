@@ -17435,6 +17435,10 @@ mod tests {
             if help::NON_SUBCOMMAND_DISPATCH_NAMES.contains(&name.as_str()) {
                 continue;
             }
+            // R9: help lists `federation` only in a build with `yubikey`.
+            if name == "federation" && !cfg!(feature = "yubikey") {
+                continue;
+            }
             assert!(
                 help::command_help(name).is_some(),
                 "dispatcher recognises `{name}` (via `args[0] == \"{name}\"`) but \

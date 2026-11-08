@@ -12,7 +12,10 @@ agent.injection_scan_enabled: bool?
 agent.injection_scan_exempt: [str]
 agent.max_reply_tokens: u32?
 agent.model: str?
-agent.provider: ProviderKind? (one of: anthropic | openai | ollama | llama-cpp | llama_cpp | llamacpp | jan | mistral-rs | mistral_rs | mistralrs | aivyx-broker | aivyx_broker | broker | lemonade)
+agent.provider = "mistral-rs" (build-time feature)
+agent.provider = "mistral_rs" (build-time feature)
+agent.provider = "mistralrs" (build-time feature)
+agent.provider: ProviderKind? (one of: anthropic | openai | ollama | llama-cpp | llama_cpp | llamacpp | jan | aivyx-broker | aivyx_broker | broker | lemonade)
 agent.role: str?
 agent.system_prompt: str?
 agent.turn_timeout_secs: u64?
@@ -140,11 +143,11 @@ memory.retention[].retention: str? (one of: forever)
 memory.retention[].retention_days: u64?
 memory.retention[].topic_glob: str
 memory.ttl_secs: u64?
-mistralrs.chat_template_path: str?
-mistralrs.constrain_tool_calls: bool
-mistralrs.max_seq_len: u64?
-mistralrs.model_file: str?
-mistralrs.model_path: str?
+mistralrs.chat_template_path: str? (build-time feature)
+mistralrs.constrain_tool_calls: bool (build-time feature)
+mistralrs.max_seq_len: u64? (build-time feature)
+mistralrs.model_file: str? (build-time feature)
+mistralrs.model_path: str? (build-time feature)
 notify_target[].chat_id: str?
 notify_target[].default: bool
 notify_target[].enabled: bool
@@ -395,16 +398,16 @@ tool_relevance.enabled: bool?
 tool_relevance.max_keywords: u32? (advanced)
 tool_relevance.min_outcomes_to_show: u32? (advanced)
 tool_relevance.top_k_per_section: u32? (advanced)
-voice.asr_beam_size: u64?
-voice.asr_engine: str?
-voice.asr_language: str?
-voice.asr_model_path: str?
-voice.input_device: str?
-voice.output_device: str?
-voice.tts_engine: str?
-voice.tts_model_dir: str?
-voice.tts_speed: f32?
-voice.tts_voice_name: str?
+voice.asr_beam_size: u64? (build-time feature)
+voice.asr_engine: str? (build-time feature)
+voice.asr_language: str? (build-time feature)
+voice.asr_model_path: str? (build-time feature)
+voice.input_device: str? (build-time feature)
+voice.output_device: str? (build-time feature)
+voice.tts_engine: str? (build-time feature)
+voice.tts_model_dir: str? (build-time feature)
+voice.tts_speed: f32? (build-time feature)
+voice.tts_voice_name: str? (build-time feature)
 webhook[].enabled: bool
 webhook[].name: str
 webhook[].notify_target: str? (deprecated)

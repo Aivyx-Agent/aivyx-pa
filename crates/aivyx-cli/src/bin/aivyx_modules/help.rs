@@ -424,6 +424,8 @@ pub const COMMANDS: &[CommandHelp] = &[
             "aivyx-pa identity import <path> [--force]",
         ],
     },
+    // R9: a build-time feature (`yubikey`), so only builds with it show it.
+    #[cfg(feature = "yubikey")]
     CommandHelp {
         name: "federation",
         group: Group::Inspection,
@@ -587,24 +589,67 @@ mod tests {
 
     use super::*;
 
+    /// R9: `federation yubikey-init` needs the `yubikey` feature, so a build
+    /// without it does not offer it in help.
+    #[test]
+    fn federation_is_in_help_only_with_the_yubikey_feature() {
+        let help = render_top_level_help();
+        let shown = command_help("federation").is_some();
+        assert_eq!(shown, cfg!(feature = "yubikey"));
+        assert_eq!(help.contains("  federation "), cfg!(feature = "yubikey"), "{help}");
+    }
+
     /// The command line and on-disk/wire format versions pa's 1.0 promises
     /// (docs/COMPATIBILITY.md): every `COMMANDS` entry with its usage lines,
     /// and the version constants pa writes. A change fails until
     /// `UPDATE_STABLE_SURFACE=1 cargo test -p aivyx-cli stable_` rewrites
     /// `docs/stable/` on purpose.
     fn stable_surface() -> [(&'static str, String); 2] {
+        use aivyx_config::not_stable::{NOT_STABLE, Snapshot, stale_entries, tag_for};
+        let suffix = |line: &str| tag_for(Snapshot::Cli, line).map_or("", |t| t.suffix());
         let mut commands: Vec<&CommandHelp> = COMMANDS.iter().collect();
+        // R9: the snapshot is the default build's surface. `federation`
+        // exists only with the `yubikey` feature, which hides it otherwise.
+        commands.retain(|c| c.name != "federation");
         commands.sort_by_key(|c| c.name);
         let mut cli = Vec::new();
         for c in commands {
-            cli.push(c.name.to_string());
-            cli.extend(c.usage.iter().map(|u| format!("  {u}")));
+            // A usage line is tagged by its own text (`not_stable`); a
+            // continuation line (indented) carries its usage line's tag, and
+            // the command's name line is tagged when all its usage lines are.
+            let mut tags: Vec<&str> = Vec::new();
+            for u in c.usage {
+                let tag = match tags.last() {
+                    Some(last) if u.starts_with(' ') => last,
+                    _ => suffix(u),
+                };
+                tags.push(tag);
+            }
+            let common = if tags.iter().all(|t| *t == tags[0]) { tags[0] } else { "" };
+            cli.push(format!("{}{common}", c.name));
+            cli.extend(c.usage.iter().zip(&tags).map(|(u, t)| format!("  {u}{t}")));
+        }
+        // R4: the global flags, from the table the help is rendered from. A
+        // flag value that is not stable (`--channel matrix`) gets its own
+        // tagged line, and must be one the flag's help names.
+        cli.push("(global flags)".to_string());
+        for f in GLOBAL_FLAGS {
+            cli.push(format!("  {}{}", f.usage, suffix(f.usage)));
+            let flag = f.usage.split([' ', ',']).next().unwrap();
+            for e in NOT_STABLE.iter().filter(|e| e.snapshot == Snapshot::Cli) {
+                let Some(value) = e.prefix.strip_prefix(flag).and_then(|v| v.strip_prefix(' ')) else {
+                    continue;
+                };
+                let help = f.help.join(" ");
+                assert!(
+                    help.split(|c: char| !c.is_alphanumeric() && c != '-').any(|w| w == value),
+                    "NOT_STABLE names `{flag} {value}`, which the flag's help does not list"
+                );
+                cli.push(format!("  {}{}", e.prefix, e.tag.suffix()));
+            }
         }
         // Old flag spellings still accepted (they warn): part of the surface
         // until 2.0, like the config's deprecated aliases.
-        // R4: the global flags, from the table the help is rendered from.
-        cli.push("(global flags)".to_string());
-        cli.extend(GLOBAL_FLAGS.iter().map(|f| format!("  {}", f.usage)));
         cli.push("(deprecated flags)".to_string());
         cli.extend(
             crate::DEPRECATED_FLAGS
@@ -700,6 +745,14 @@ mod tests {
         }
         formats.extend(webhook);
         formats.sort();
+        for line in &mut formats {
+            let tag = tag_for(Snapshot::Formats, line).map_or("", |t| t.suffix());
+            line.push_str(tag);
+        }
+        for (snapshot, lines) in [(Snapshot::Cli, &cli), (Snapshot::Formats, &formats)] {
+            let stale = stale_entries(snapshot, lines.iter().map(String::as_str));
+            assert!(stale.is_empty(), "NOT_STABLE entries that tag no {snapshot:?} line: {stale:?}");
+        }
         [("cli.txt", cli.join("\n") + "\n"), ("formats.txt", formats.join("\n") + "\n")]
     }
 
