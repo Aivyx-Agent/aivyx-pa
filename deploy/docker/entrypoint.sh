@@ -49,12 +49,21 @@ _gatehouse_awk='
         sec = $0; gsub(/^[[:space:]]*\[[[:space:]]*|[[:space:]]*\].*$/, "", sec); next
     }
     { line = $0; sub(/^[[:space:]]+/, "", line) }
-    (sec == "studio" && line ~ /^host[[:space:]]*=/) || (sec == "daemon" && line ~ /^web_ui_host[[:space:]]*=/) {
-        if (line !~ /=[[:space:]]*"(127\.|::1)/) exposed = sec
+    # The bind host as the daemon resolves it: `[studio] host` wins over the
+    # deprecated `[daemon] web_ui_host` when both are set.
+    sec == "studio" && line ~ /^host[[:space:]]*=/ {
+        new_set = 1; new_off = (line !~ /=[[:space:]]*"(127\.|::1)/)
+    }
+    sec == "daemon" && line ~ /^web_ui_host[[:space:]]*=/ {
+        old_set = 1; old_off = (line !~ /=[[:space:]]*"(127\.|::1)/)
     }
     (sec == "studio" && line ~ /^(auth_token|insecure_no_auth)[[:space:]]*=/) { auth = 1 }
     (sec == "daemon" && line ~ /^web_ui_(auth_token|insecure_no_auth)[[:space:]]*=/) { auth = 1 }
-    END { if (exposed != "" && !auth) print exposed }'
+    END {
+        if (new_set) { if (new_off) exposed = "studio" }
+        else if (old_set && old_off) exposed = "daemon"
+        if (exposed != "" && !auth) print exposed
+    }'
 _where="$(awk "$_gatehouse_awk" "$_cfg")"
 if [ -n "$_where" ]; then
     _tok="$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 43)"
