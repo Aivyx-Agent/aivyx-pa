@@ -1,7 +1,7 @@
 //! Chapter Keyring — the master passphrase in the OS credential store.
 //!
 //! Removes the plaintext-secret-at-rest weakness for **interactive / desktop**
-//! use: instead of `AIVYX_PA_PASSPHRASE` in the environment or `[aivyx_pa]
+//! use: instead of `AIVYX_PA_PASSPHRASE` in the environment or `[storage]
 //! passphrase` in the TOML (both plaintext), the operator stores the master
 //! passphrase once in the OS keyring (Secret Service on Linux, Keychain on
 //! macOS, Credential Manager on Windows), and the daemon reads it from there at

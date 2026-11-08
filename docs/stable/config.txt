@@ -15,7 +15,7 @@ agent.provider: ProviderKind?
 agent.system_prompt: str?
 agent.turn_timeout_secs: u64?
 aivyx: legacy-table-ignored
-aivyx_pa.passphrase: str?
+aivyx_pa.passphrase: deprecated alias of storage.passphrase
 anthropic.api_key: str?
 applications.binary_path: str?
 applications.enabled: bool?
@@ -363,6 +363,7 @@ slack.team_command_allowed_senders: [str]
 slack.team_id: str?
 slack.team_run_channel: bool
 slack.team_trigger_rate_limit: u32?
+storage.passphrase: str?
 storage.path: str?
 team.config_path: deprecated alias of team.roster_path
 team.roster_path: str?

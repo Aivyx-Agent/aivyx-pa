@@ -4302,8 +4302,6 @@ struct RawToml {
     /// voice channel adapter.
     #[serde(default)]
     voice: VoiceOptions,
-    #[serde(default)]
-    aivyx_pa: RawAivyxPa,
     /// Legacy pre-rename `[aivyx]` section name. Never read for its
     /// contents — captured only so the loader can detect its presence
     /// and warn loudly that it's silently ignored (see the
@@ -5067,6 +5065,13 @@ struct RawWorkspaceJournaling {
 struct RawStorage {
     #[serde(default)]
     path: Option<PathBuf>,
+    /// The store passphrase in plain text. Avoid this outside throwaway
+    /// setups: prefer the OS keyring (`aivyx-pa keyring set`) or
+    /// `AIVYX_PA_PASSPHRASE`. A passphrase read from here warns at startup.
+    ///
+    /// Was `[aivyx_pa] passphrase` (a deprecated alias since R25).
+    #[serde(default)]
+    passphrase: Option<SecretString>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -6223,12 +6228,6 @@ struct RawFailureOutcomesConfig {
     escalated: Option<bool>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct RawAivyxPa {
-    #[serde(default)]
-    passphrase: Option<SecretString>,
-}
-
 // --------------------------------------------------------------------
 // Encrypted-store key constants
 // --------------------------------------------------------------------
@@ -6937,8 +6936,9 @@ impl AivyxConfig {
         let passphrase = env_secret(ENV_PASSPHRASE)
             .map(|s| SourcedSecret::new(s, FieldSource::Env))
             .or_else(|| {
-                toml.aivyx_pa
+                toml.storage
                     .passphrase
+                    .clone()
                     .filter(|s| !s.expose_secret().is_empty())
                     .map(|s| SourcedSecret::new(s, FieldSource::Toml))
             });
@@ -7611,9 +7611,10 @@ impl AivyxConfig {
         if toml.legacy_aivyx_section.is_some() {
             warnings.push(
                 "found a `[aivyx]` section in your config, but this \
-                 version expects `[aivyx_pa]` — your passphrase (if \
-                 any) in the old section was NOT read; rename the \
-                 section to `[aivyx_pa]`."
+                 version does not read it — your passphrase (if any) in \
+                 the old section was NOT read; store it in the OS keyring \
+                 (`aivyx-pa keyring set`) or `AIVYX_PA_PASSPHRASE`, or move \
+                 it to `[storage] passphrase`."
                     .to_string(),
             );
         }
@@ -7621,6 +7622,17 @@ impl AivyxConfig {
         // An old spelling still works; say once that it is deprecated and
         // what replaces it (1.0 readiness audit R7 and on).
         warnings.extend(deprecated);
+
+        // A plain-text store passphrase in the file is allowed but never
+        // quiet (R25), under either spelling; one where the env var won is
+        // not the one in use, so it does not warn here.
+        if passphrase.as_ref().is_some_and(|p| p.source == FieldSource::Toml) {
+            warnings.push(format!(
+                "the store passphrase is read from the config file in plain text; keep it in \
+                 the OS keyring instead (`aivyx-pa keyring set`) or in `{ENV_PASSPHRASE}`, \
+                 and remove it from the file"
+            ));
+        }
 
         // A key no section type reads is dropped; say so, once per key,
         // with the nearest known key (R8). The legacy `[aivyx]` table is

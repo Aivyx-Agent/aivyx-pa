@@ -343,7 +343,7 @@ fn fetch_passphrase_bytes(source: PassphraseSource) -> Result<Vec<u8>, Passphras
             if bytes.is_empty() {
                 // Same posture as EnvEmpty: empty passphrase is
                 // refused outright. Argon2id would happily hash it.
-                Err(PassphraseError::EnvEmpty("config:[aivyx_pa]passphrase".into()))
+                Err(PassphraseError::EnvEmpty("config:[storage]passphrase".into()))
             } else {
                 Ok(bytes)
             }
@@ -651,7 +651,7 @@ mod tests {
     // ---- FromConfig source (Phase 51 Task 4) ------------------------
     //
     // The PassphraseSource::FromConfig variant is what makes the
-    // [aivyx_pa] passphrase TOML field actually drive derivation. Phase
+    // [storage] passphrase TOML field actually drive derivation. Phase
     // 47 visual-pass discovered a footgun: TOML was parsed but the
     // binary required AIVYX_PA_PASSPHRASE in env anyway. Phase 51
     // fixes it; these tests pin the fix.

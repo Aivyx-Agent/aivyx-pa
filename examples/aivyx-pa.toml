@@ -17,7 +17,7 @@
 # ----------------------------------------------------------------
 #
 # A real deployment supplies `[anthropic] api_key`, `[fs] root`,
-# `[storage] path`, `[aivyx_pa] passphrase`, etc. They are omitted
+# `[storage] path`, `[storage] passphrase`, etc. They are omitted
 # here so the file can be loaded by tests via `LoadOptions`
 # with `require_api_key = false`. Copy this file and add those
 # fields before pointing a live binary at it.

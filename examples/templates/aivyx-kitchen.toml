@@ -38,8 +38,10 @@ path = "~/.local/share/aivyx-pa/store.redb"
 # is the system of record; the filesystem is just for documents.
 root = "~/kitchen"
 
-[aivyx_pa]
-# passphrase = "set-a-real-passphrase"   # or AIVYX_PA_PASSPHRASE env var
+# Master-key passphrase: keep it in the OS keyring (`aivyx-pa keyring
+# set`) or the AIVYX_PA_PASSPHRASE env var; with neither, the daemon
+# prompts on first launch. (`[storage] passphrase = "..."` also works, but
+# is plain text and warns at startup.)
 
 [daemon]
 web_ui = true

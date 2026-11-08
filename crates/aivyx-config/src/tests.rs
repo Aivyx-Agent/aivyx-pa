@@ -343,6 +343,7 @@ root = "/tmp/toml-fs"
 
 [storage]
 path = "/tmp/toml-store.redb"
+passphrase = "toml-passphrase"
 
 [memory]
 max_per_topic = 777
@@ -350,9 +351,6 @@ max_per_topic = 777
 [telegram]
 token = "toml:123:abc"
 chat_id = 99
-
-[aivyx_pa]
-passphrase = "toml-passphrase"
 "#,
     )
     .unwrap();
@@ -387,14 +385,14 @@ passphrase = "toml-passphrase"
     drop(env);
 }
 
-/// Task 12 (MEDIUM, security audit 2026-09-16): `RawAivyxPa.passphrase`
+/// Task 12 (MEDIUM, security audit 2026-09-16): `RawStorage.passphrase` (was `RawAivyxPa.passphrase`)
 /// must deserialize straight into a [`secrecy::SecretString`], not a
 /// plain `String` that later gets cloned before being wrapped. This is
 /// primarily a compile-time property — the real assertion is that this
 /// test compiles at all — but it also exercises the value round-trip.
 #[test]
 fn raw_passphrase_field_is_secretstring_not_plain_string() {
-    let raw: crate::RawAivyxPa = toml::from_str(r#"passphrase = "test123""#).unwrap();
+    let raw: crate::RawStorage = toml::from_str(r#"passphrase = "test123""#).unwrap();
     let secret: &secrecy::SecretString = raw.passphrase.as_ref().unwrap();
     assert_eq!(secret.expose_secret(), "test123");
 }
@@ -2014,7 +2012,8 @@ passphrase = "old-section-passphrase-never-read"
         cfg.warnings
     );
     assert!(cfg.warnings[0].contains("[aivyx]"), "{:?}", cfg.warnings);
-    assert!(cfg.warnings[0].contains("[aivyx_pa]"), "{:?}", cfg.warnings);
+    assert!(cfg.warnings[0].contains("[storage] passphrase"), "{:?}", cfg.warnings);
+    assert!(cfg.warnings[0].contains("aivyx-pa keyring set"), "{:?}", cfg.warnings);
     assert!(
         cfg.warnings[0].contains("NOT read"),
         "{:?}",
@@ -2056,10 +2055,11 @@ fn unknown_config_key_is_reported_in_loader_warnings() {
     drop(env);
 }
 
-/// The `[aivyx_pa]` section (the current, correct name) must never
-/// trip the legacy-section warning on its own.
+/// R25: `[aivyx_pa] passphrase` is a deprecated alias of
+/// `[storage] passphrase`: still read, never the legacy-`[aivyx]` warning,
+/// but a deprecation warning plus the plain-text-passphrase warning.
 #[test]
-fn current_aivyx_pa_section_emits_no_legacy_warning() {
+fn aivyx_pa_passphrase_is_a_deprecated_alias_of_storage_passphrase() {
     let env = EnvScope::new();
     let tmp = TempDir::new("current-aivyx-pa-section");
     let toml_path = tmp.path().join("aivyx-pa.toml");
@@ -2085,12 +2085,45 @@ passphrase = "correctly-named-section"
         cfg.passphrase.is_some(),
         "the [aivyx_pa] section's passphrase must be read"
     );
-    assert!(
-        cfg.warnings.is_empty(),
-        "no legacy-section warning expected: {:?}",
-        cfg.warnings
+    assert_eq!(cfg.warnings.len(), 2, "{:?}", cfg.warnings);
+    assert_eq!(
+        cfg.warnings[0],
+        "`aivyx_pa.passphrase` is deprecated; use `storage.passphrase`"
     );
+    assert!(cfg.warnings[1].contains("in plain text"), "{:?}", cfg.warnings);
+    assert!(!cfg.warnings.iter().any(|w| w.contains("[aivyx]")), "{:?}", cfg.warnings);
 
+    drop(env);
+}
+
+/// R25: a passphrase read from the config file warns once at load, naming
+/// the keyring command and the env var; one the env var overrides does not.
+#[test]
+fn a_passphrase_from_the_config_file_warns() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml("\n[storage]\npassphrase = \"p\"\n", "storage-passphrase");
+    assert_eq!(cfg.passphrase.as_ref().unwrap().source, FieldSource::Toml);
+    assert_eq!(cfg.warnings.len(), 1, "{:?}", cfg.warnings);
+    assert!(cfg.warnings[0].contains("`aivyx-pa keyring set`"), "{:?}", cfg.warnings);
+    assert!(cfg.warnings[0].contains("`AIVYX_PA_PASSPHRASE`"), "{:?}", cfg.warnings);
+
+    let none = load_with_toml("\n[agent]\nmodel = \"m\"\n", "no-passphrase");
+    assert!(none.warnings.is_empty(), "{:?}", none.warnings);
+
+    // An empty `[aivyx_pa]` (older templates wrote one with the key
+    // commented out) is not an unknown section.
+    let empty = load_with_toml("\n[aivyx_pa]\n# passphrase = \"x\"\n", "empty-aivyx-pa");
+    assert!(empty.warnings.is_empty(), "{:?}", empty.warnings);
+    drop(env);
+}
+
+#[test]
+fn a_config_file_passphrase_overridden_by_the_env_var_does_not_warn() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PA_PASSPHRASE", "from-env");
+    let cfg = load_with_toml("\n[storage]\npassphrase = \"p\"\n", "storage-passphrase-env");
+    assert_eq!(cfg.passphrase.as_ref().unwrap().source, FieldSource::Env);
+    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
     drop(env);
 }
 
@@ -13371,7 +13404,6 @@ fn stable_config_keys() {
         mistralrs,
         broker,
         voice,
-        aivyx_pa,
         legacy_aivyx_section,
         roles,
         mcp_servers,
@@ -13442,7 +13474,6 @@ fn stable_config_keys() {
         ("mistralrs", plain("mistralrs", &mistralrs)),
         ("broker", plain("broker", &broker)),
         ("voice", plain("voice", &voice)),
-        ("aivyx_pa", plain("aivyx_pa", &aivyx_pa)),
         ("role", array("role[]", &roles)),
         ("mcp_server", array("mcp_server[]", &mcp_servers)),
         ("tool_process", array("tool_process[]", &tool_processes)),

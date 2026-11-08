@@ -151,9 +151,11 @@ pub(crate) fn parse_reporting<T: serde::de::DeserializeOwned>(
     raw: &str,
 ) -> Result<(T, Vec<UnknownKey>, Vec<String>), toml::de::Error> {
     let mut table = raw.parse::<toml::Table>().ok();
+    let original = table.clone();
     let deprecated = table.as_mut().map(crate::deprecated_keys::rewrite).unwrap_or_default();
     let mut ignored = Vec::new();
-    let value: T = if deprecated.is_empty() {
+    // Usually nothing is deprecated and the file is parsed as written.
+    let value: T = if table == original {
         serde_ignored::deserialize(toml::Deserializer::new(raw), |p| {
             ignored.push(clean(&p.to_string()));
         })?

@@ -60,7 +60,7 @@ GROUPS = [
         "agent", "anthropic", "openai", "ollama", "mistralrs", "broker", "kvcache",
         "providers", "routing", "embedding",
     ]),
-    ("Reach and safety", ["fs", "access", "autonomy", "sandbox", "git", "aivyx_pa", "storage"]),
+    ("Reach and safety", ["fs", "access", "autonomy", "sandbox", "git", "storage"]),
     ("Identity and roles", ["profile", "persona_seed", "role", "team", "pack"]),
     ("Memory and learning", [
         "memory", "workspace", "recall_cluster", "wiki", "graph", "recall_judgment",
@@ -98,8 +98,7 @@ INTROS = {
                 f"See [Autonomy and routines]({GUIDE}/15-autonomy-and-routines.md).",
     "sandbox": "OS-level process confinement (Landlock + seccomp) for the commands the agent runs, and the default sandbox wrapped around tool processes that don't declare their own.",
     "git": "The repositories the `git.*` tools may read. Empty means the git tools are not offered.",
-    "aivyx_pa": "The store passphrase. Prefer the OS keyring or `AIVYX_PA_PASSPHRASE` over writing it here.",
-    "storage": "Where the encrypted store lives.",
+    "storage": "Where the encrypted store lives, and its passphrase. Prefer the OS keyring (`aivyx-pa keyring set`) or `AIVYX_PA_PASSPHRASE` over writing the passphrase here.",
     "profile": f"Who you are and how you like to work — the agent reads this every turn. See [Create your agent]({GUIDE}/03-create-your-agent.md).",
     "persona_seed": "Facets the agent's Persona starts with on first launch.",
     "role": "Roles: named bundles of model, prompt and capabilities you can switch between (`--role`). "
@@ -212,7 +211,7 @@ MEANINGS = {
     "pricing.cache_read": "USD per million cached input tokens read.",
     "pricing.cache_write": "USD per million input tokens written to the cache.",
     "broker.base_url": "The broker's address.",
-    "aivyx_pa.passphrase": "The store passphrase in plain text. Avoid this outside throwaway setups.",
+    "storage.passphrase": "The store passphrase in plain text. Avoid this outside throwaway setups; it warns at startup.",
     "mcp_server.sandbox.wrapper": "The sandbox program to run the server under (e.g. `bwrap`).",
     "mcp_server.sandbox.args": "Arguments for the sandbox program.",
     "tool_process.command": "The program to run.",

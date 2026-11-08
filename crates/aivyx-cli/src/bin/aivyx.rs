@@ -6030,7 +6030,7 @@ fn select_passphrase_source(
     } else {
         Err(format!(
             "no passphrase available: `{DEFAULT_ENV_VAR}` is not set, \
-             no `[aivyx_pa] passphrase` in the TOML config, nothing in the OS \
+             no `[storage] passphrase` in the TOML config, nothing in the OS \
              keyring (`aivyx-pa keyring set`), and stdin is not a terminal. \
              Export the env var, set the TOML field, store it in the keyring, \
              or run aivyx-pa from an interactive shell."
@@ -16941,7 +16941,7 @@ mod tests {
             "[anthropic]\n\
              api_key = \"sk-test\"\n\
              \n\
-             [aivyx_pa]\n\
+             [storage]\n\
              passphrase = \"test\"\n\
              {extra}\n",
         );

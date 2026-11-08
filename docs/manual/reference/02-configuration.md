@@ -274,21 +274,14 @@ The repositories the `git.*` tools may read. Empty means the git tools are not o
 |---|---|---|---|
 | `repos` | list of string |  | Paths to the repositories the git tools may read. Each must exist and contain `.git`. |
 
-### `[aivyx_pa]`
-
-The store passphrase. Prefer the OS keyring or `AIVYX_PA_PASSPHRASE` over writing it here.
-
-| Key | Type | Example | Meaning |
-|---|---|---|---|
-| `passphrase` | string |  | The store passphrase in plain text. Avoid this outside throwaway setups. |
-
 ### `[storage]`
 
-Where the encrypted store lives.
+Where the encrypted store lives, and its passphrase. Prefer the OS keyring (`aivyx-pa keyring set`) or `AIVYX_PA_PASSPHRASE` over writing the passphrase here.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `path` | path |  | Absolute path to the redb file. The parent directory must exist; `open` will not create parents. |
+| `passphrase` | string |  | The store passphrase in plain text. Avoid this outside throwaway setups; it warns at startup. |
 
 ## Identity and roles
 
@@ -988,6 +981,7 @@ These older spellings still load through 1.x, with one warning each at startup (
 | Old spelling | Use instead |
 |---|---|
 | `agent.conversation_history_turns` | `agent.conversation_history_messages` |
+| `aivyx_pa.passphrase` | `storage.passphrase` |
 | `confine.allow_leaving_process_group` | `sandbox.allow_leaving_process_group` |
 | `confine.allow_unix_sockets` | `sandbox.allow_unix_sockets` |
 | `confine.require_enforcement` | `sandbox.require_enforcement` |

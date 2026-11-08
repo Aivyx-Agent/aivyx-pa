@@ -60,7 +60,14 @@ pub(crate) const DEPRECATED_KEYS: &[(&str, Change)] = &[
     ),
     // R22: the team file is a Nonagon roster, as aivyx-coder names it.
     ("team.config_path", Change::Renamed("team.roster_path")),
+    // R25: the store's settings are `[storage]`; `[aivyx_pa]` held only this.
+    ("aivyx_pa.passphrase", Change::Renamed("storage.passphrase")),
 ];
+
+/// Sections every key of which was renamed away. One left empty (by a
+/// move, or written empty by an older `aivyx-pa init` with its only key
+/// commented out) is dropped without a word: it holds nothing to warn about.
+const RETIRED_SECTIONS: &[&str] = &["confine", "aivyx_pa"];
 
 fn segments(path: &str) -> impl Iterator<Item = (&str, bool)> + Clone {
     path.split('.').map(|s| match s.strip_suffix("[]") {
@@ -147,14 +154,12 @@ pub(crate) fn rewrite(table: &mut toml::Table) -> Vec<String> {
                     }
                     warnings.push(format!("`{old}` is deprecated; use `{new}`"));
                 }
-                // A section left empty by the move (`[confine]`) goes too, so
-                // it is not reported as an unknown section.
-                if let Some((section, _)) = old.split_once('.') {
-                    if matches!(table.get(section), Some(toml::Value::Table(t)) if t.is_empty()) {
-                        table.remove(section);
-                    }
-                }
             }
+        }
+    }
+    for section in RETIRED_SECTIONS {
+        if matches!(table.get(*section), Some(toml::Value::Table(t)) if t.is_empty()) {
+            table.remove(*section);
         }
     }
     warnings
@@ -196,6 +201,13 @@ mod tests {
     fn other_keys_in_the_old_section_stay_for_the_unknown_key_report() {
         let (t, _) = rewritten("[confine]\nshare_system_tmp = true\nbogus = 1\n");
         assert_eq!(t["confine"]["bogus"].as_integer(), Some(1));
+    }
+
+    #[test]
+    fn an_empty_retired_section_is_dropped_quietly() {
+        let (t, w) = rewritten("[aivyx_pa]\n# passphrase = \"x\"\n[agent]\nmodel = \"m\"\n");
+        assert!(!t.contains_key("aivyx_pa"), "{t:?}");
+        assert!(w.is_empty(), "{w:?}");
     }
 
     #[test]

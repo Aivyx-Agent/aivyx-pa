@@ -5183,12 +5183,12 @@ mod tests {
     /// template (the real `examples/templates/*.toml` files, loaded
     /// through the exact same `include_str!` + `bundled_templates()`
     /// path `aivyx-pa init --template <name>` uses) must produce a
-    /// generated config whose `[aivyx_pa]` section (if any) round-trips
+    /// generated config whose `[storage]` section (if any) round-trips
     /// through the wizard's template-splicing path — and none may
     /// still carry the old, silently-ignored `[aivyx]` section name.
     /// `render_with_template` only overwrites wizard-controlled keys
     /// (provider/model/paths/profile/api key), so any `[aivyx]` /
-    /// `[aivyx_pa]` section in the source template passes through to
+    /// `[aivyx_pa]` / `[storage]` section in the source template passes through to
     /// the generated file verbatim — this test exercises that same
     /// pass-through path against the real bundled templates.
     #[test]
@@ -5203,7 +5203,15 @@ mod tests {
             assert!(
                 !out.contains("[aivyx]"),
                 "template `{}` generated a config with the legacy \
-                 [aivyx] section (should be [aivyx_pa]): {out}",
+                 [aivyx] section: {out}",
+                template.name
+            );
+            // Nor the deprecated `[aivyx_pa]` one (R25): the passphrase is
+            // `[storage] passphrase` now, and better kept out of the file.
+            assert!(
+                !out.contains("[aivyx_pa]"),
+                "template `{}` generated a config with the deprecated \
+                 [aivyx_pa] section: {out}",
                 template.name
             );
         }
