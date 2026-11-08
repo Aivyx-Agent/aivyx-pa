@@ -14308,3 +14308,22 @@ fn stable_config_keys_defaults() {
          UPDATE_STABLE_SURFACE=1 cargo test -p aivyx-config stable_config_keys and commit docs/stable/"
     );
 }
+
+/// R5: the string value sets are matched through their const (`listed`),
+/// so a value is accepted only when the const lists it.
+#[test]
+fn string_keys_match_through_their_value_const() {
+    assert_eq!(crate::listed(crate::MCP_TRANSPORTS, "sse"), Ok("sse"));
+    assert_eq!(crate::listed(crate::MCP_TRANSPORTS, "grpc"), Err("grpc"));
+    assert_eq!(crate::listed(crate::EMAIL_TLS_MODES, "none"), Err("none"));
+    let env = EnvScope::new();
+    let err = load_with_toml_result("\n[sandbox]\ndefault_backend = \"docker\"\n", "listed-bad")
+        .expect_err("an unlisted backend is refused");
+    assert!(err.to_string().contains("none / auto / bubblewrap / bwrap / firejail"), "{err}");
+    assert_eq!(
+        crate::MemoryProfile::from_arg(Some("medium")),
+        crate::MemoryProfile::Off,
+        "an unlisted profile is off, as before"
+    );
+    drop(env);
+}

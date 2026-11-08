@@ -443,15 +443,17 @@ pub fn write_mcp_server_section(
             reason: "name must not be empty".to_string(),
         });
     }
-    let transport_key = match server.transport.as_str() {
-        "stdio" => "stdio",
-        "sse" => "sse",
-        "http" | "streamable-http" => "http",
-        other => {
+    let transport_key = match crate::listed(crate::MCP_TRANSPORTS, server.transport.as_str()) {
+        Ok("stdio") => "stdio",
+        Ok("sse") => "sse",
+        Ok("http" | "streamable-http") => "http",
+        Ok(other) | Err(other) => {
             return Err(ConfigWriteError::InvalidMcpServer {
                 reason: format!(
-                    "server {:?}: unknown transport {:?} (expected \"stdio\", \"sse\", or \"http\")",
-                    server.name, other
+                    "server {:?}: unknown transport {:?} (expected one of: {})",
+                    server.name,
+                    other,
+                    crate::MCP_TRANSPORTS.join(", ")
                 ),
             });
         }
@@ -686,8 +688,8 @@ pub fn write_notify_target_section(
     // top-level `[email]` section.
     let mut doc = load_document(path)?;
 
-    match target.kind.as_str() {
-        "telegram" => {
+    match crate::listed(crate::NOTIFY_TARGET_KINDS, target.kind.as_str()) {
+        Ok("telegram") => {
             if target.chat_id.as_deref().is_none_or(str::is_empty) {
                 return Err(ConfigWriteError::InvalidNotifyTarget {
                     reason: format!(
@@ -697,7 +699,7 @@ pub fn write_notify_target_section(
                 });
             }
         }
-        "webhook" => {
+        Ok("webhook") => {
             let url = target.url.as_deref().unwrap_or("");
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 return Err(ConfigWriteError::InvalidNotifyTarget {
@@ -708,7 +710,7 @@ pub fn write_notify_target_section(
                 });
             }
         }
-        "email" => {
+        Ok("email") => {
             if !target.to.as_deref().unwrap_or("").contains('@') {
                 return Err(ConfigWriteError::InvalidNotifyTarget {
                     reason: format!(
@@ -739,12 +741,14 @@ pub fn write_notify_target_section(
                 });
             }
         }
-        "web-ui" => {}
-        other => {
+        Ok("web-ui") => {}
+        Ok(other) | Err(other) => {
             return Err(ConfigWriteError::InvalidNotifyTarget {
                 reason: format!(
-                    "target {:?}: unknown kind {:?} (expected \"telegram\", \"webhook\", \"email\", or \"web-ui\")",
-                    target.name, other
+                    "target {:?}: unknown kind {:?} (expected one of: {})",
+                    target.name,
+                    other,
+                    crate::NOTIFY_TARGET_KINDS.join(", ")
                 ),
             });
         }
@@ -1062,12 +1066,13 @@ pub fn write_email_section(path: &Path, entry: &EmailEntryWrite) -> Result<(), C
         // final review's #1 password-only bug and #2 [email]-presence gap
         // above; same failure class as both, discovered one round later).
         if let Some(mode) = merged_tls_mode.as_deref() {
-            if mode != "starttls" && mode != "implicit" {
+            if crate::listed(crate::EMAIL_TLS_MODES, mode).is_err() {
                 return Err(ConfigWriteError::InvalidEmailConfig {
                     reason: format!(
                         "[email] tls_mode = {mode:?} is not accepted by the loader — \
-                         supported: \"starttls\" (default), \"implicit\" — this would fail \
-                         to boot the daemon on the next start"
+                         supported: {} (default `starttls`) — this would fail \
+                         to boot the daemon on the next start",
+                        crate::EMAIL_TLS_MODES.join(", ")
                     ),
                 });
             }

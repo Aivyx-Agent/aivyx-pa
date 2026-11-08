@@ -121,6 +121,14 @@ pub const NOTIFY_WHEN_VALUES: &[&str] =
 pub const HEURISTIC_MODES: &[&str] = &["any", "all"];
 /// `[[memory.retention]] retention` (otherwise `retention_days`).
 pub const MEMORY_RETENTION_VALUES: &[&str] = &["forever"];
+
+/// `Ok(value)` when `set` lists it, else `Err(value)`. The loader matches
+/// these string keys on this, never on the raw string, so a value the
+/// const does not list is refused even if a match arm names it: each const
+/// is the one list of what its key accepts.
+fn listed<'a>(set: &[&'static str], value: &'a str) -> Result<&'static str, &'a str> {
+    set.iter().copied().find(|v| *v == value).ok_or(value)
+}
 mod unknown_keys;
 pub use config_write::{
     write_access_section, write_agent_cycle_detection, write_autonomy_section,
@@ -3152,9 +3160,9 @@ impl MemoryProfile {
 
     /// Parse the `[memory] profile` string. Unknown / absent → `Off`.
     pub fn from_arg(s: Option<&str>) -> Self {
-        match s.map(|x| x.trim().to_lowercase()).as_deref() {
-            Some("smart") => MemoryProfile::Smart,
-            Some("lite") => MemoryProfile::Lite,
+        match s.map(|x| x.trim().to_lowercase()).as_deref().map(|v| listed(Self::NAMES, v)) {
+            Some(Ok("smart")) => MemoryProfile::Smart,
+            Some(Ok("lite")) => MemoryProfile::Lite,
             _ => MemoryProfile::Off,
         }
     }
@@ -4953,12 +4961,12 @@ fn resolve_trigger_notify_fields(
     };
     let when = match raw_when {
         None => NotifyWhen::Always,
-        Some(s) => match s {
-            "always" => NotifyWhen::Always,
-            "on_failed" => NotifyWhen::OnFailed,
-            "on_completed_non_empty" => NotifyWhen::OnCompletedNonEmpty,
-            "on_completed_grounded" => NotifyWhen::OnCompletedGrounded,
-            other => {
+        Some(s) => match listed(NOTIFY_WHEN_VALUES, s) {
+            Ok("always") => NotifyWhen::Always,
+            Ok("on_failed") => NotifyWhen::OnFailed,
+            Ok("on_completed_non_empty") => NotifyWhen::OnCompletedNonEmpty,
+            Ok("on_completed_grounded") => NotifyWhen::OnCompletedGrounded,
+            Ok(other) | Err(other) => {
                 return Err(ConfigError::Invalid {
                     field: "trigger.notify_when",
                     reason: format!(
@@ -7002,10 +7010,10 @@ impl AivyxConfig {
                 })?
                 .compile_matcher();
             let policy = match (
-                raw.retention.as_deref(),
+                raw.retention.as_deref().map(|v| listed(MEMORY_RETENTION_VALUES, v)),
                 raw.retention_days,
             ) {
-                (Some("forever"), None) => RetentionPolicy::Forever,
+                (Some(Ok("forever")), None) => RetentionPolicy::Forever,
                 (None, Some(0)) => {
                     return Err(ConfigError::Invalid {
                         field: "memory.retention.retention_days",
@@ -7018,14 +7026,15 @@ impl AivyxConfig {
                     });
                 }
                 (None, Some(days)) => RetentionPolicy::ForDays(days),
-                (Some(other), None) => {
+                (Some(Ok(other) | Err(other)), None) => {
                     return Err(ConfigError::Invalid {
                         field: "memory.retention.retention",
                         reason: format!(
                             "memory.retention.retention = `{other}` is not \
-                             recognized. Supported: \"forever\". (For a \
+                             recognized. Supported: {}. (For a \
                              numeric period use `retention_days = N` \
                              instead.) topic_glob = `{}`",
+                            MEMORY_RETENTION_VALUES.join(", "),
                             raw.topic_glob
                         ),
                     });
@@ -8001,11 +8010,11 @@ impl AivyxConfig {
             if !r.enabled {
                 continue;
             }
-            let transport = match r.transport.as_str() {
-                "stdio" => McpTransportKind::Stdio,
-                "sse" => McpTransportKind::Sse,
-                "http" | "streamable-http" => McpTransportKind::Http,
-                other => {
+            let transport = match listed(MCP_TRANSPORTS, r.transport.as_str()) {
+                Ok("stdio") => McpTransportKind::Stdio,
+                Ok("sse") => McpTransportKind::Sse,
+                Ok("http" | "streamable-http") => McpTransportKind::Http,
+                Ok(other) | Err(other) => {
                     return Err(ConfigError::Invalid {
                         field: "mcp_server.transport",
                         reason: format!(
@@ -8205,14 +8214,14 @@ impl AivyxConfig {
             .map(|s| s.trim().to_ascii_lowercase())
         {
             None => SandboxDefaultBackend::None,
-            Some(s) => match s.as_str() {
-                "none" => SandboxDefaultBackend::None,
-                "auto" => SandboxDefaultBackend::Auto,
-                "bubblewrap" | "bwrap" => {
+            Some(s) => match listed(SANDBOX_DEFAULT_BACKENDS, s.as_str()) {
+                Ok("none") => SandboxDefaultBackend::None,
+                Ok("auto") => SandboxDefaultBackend::Auto,
+                Ok("bubblewrap" | "bwrap") => {
                     SandboxDefaultBackend::Bubblewrap
                 }
-                "firejail" => SandboxDefaultBackend::Firejail,
-                other => {
+                Ok("firejail") => SandboxDefaultBackend::Firejail,
+                Ok(other) | Err(other) => {
                     return Err(ConfigError::Invalid {
                         field: "sandbox.default_backend",
                         reason: format!(
@@ -8366,8 +8375,8 @@ impl AivyxConfig {
                     reason: "name must be non-empty".into(),
                 });
             }
-            let kind = match raw.kind.as_str() {
-                "telegram" => {
+            let kind = match listed(NOTIFY_TARGET_KINDS, raw.kind.as_str()) {
+                Ok("telegram") => {
                     let chat_id = raw.chat_id.ok_or_else(|| ConfigError::Invalid {
                         field: "notify_target.chat_id",
                         reason: format!(
@@ -8388,7 +8397,7 @@ impl AivyxConfig {
                     }
                     NotifyTargetKind::Telegram { chat_id }
                 }
-                "webhook" => {
+                Ok("webhook") => {
                     let url = raw.url.ok_or_else(|| ConfigError::Invalid {
                         field: "notify_target.url",
                         reason: format!(
@@ -8409,7 +8418,7 @@ impl AivyxConfig {
                     }
                     NotifyTargetKind::Webhook { url }
                 }
-                "web-ui" => {
+                Ok("web-ui") => {
                     // Phase 69 — Web UI desktop notification.
                     // No per-target fields; one Web UI per
                     // daemon. Defensive: if the operator
@@ -8422,7 +8431,7 @@ impl AivyxConfig {
                     // them as `Option`.
                     NotifyTargetKind::WebUi
                 }
-                "email" => {
+                Ok("email") => {
                     // Phase 68 — email target. Requires `to` and
                     // the `[email]` section to be configured.
                     let to = raw.to.ok_or_else(|| ConfigError::Invalid {
@@ -8455,7 +8464,7 @@ impl AivyxConfig {
                     }
                     NotifyTargetKind::Email { to }
                 }
-                other => {
+                Ok(other) | Err(other) => {
                     return Err(ConfigError::Invalid {
                         field: "notify_target.kind",
                         reason: format!(
@@ -9807,10 +9816,10 @@ fn build_email_config(raw: &RawEmail) -> Result<Option<EmailConfig>, ConfigError
         });
     }
 
-    let tls_mode = match raw.tls_mode.as_deref() {
-        None | Some("starttls") => TlsMode::Starttls,
-        Some("implicit") => TlsMode::Implicit,
-        Some("none") => {
+    let tls_mode = match raw.tls_mode.as_deref().map(|v| listed(EMAIL_TLS_MODES, v)) {
+        None | Some(Ok("starttls")) => TlsMode::Starttls,
+        Some(Ok("implicit")) => TlsMode::Implicit,
+        Some(Err("none")) => {
             return Err(ConfigError::Invalid {
                 field: "email.tls_mode",
                 reason: "tls_mode = \"none\" is rejected — Aivyx uses \
@@ -9819,7 +9828,7 @@ fn build_email_config(raw: &RawEmail) -> Result<Option<EmailConfig>, ConfigError
                     .into(),
             });
         }
-        Some(other) => {
+        Some(Ok(other) | Err(other)) => {
             return Err(ConfigError::Invalid {
                 field: "email.tls_mode",
                 reason: format!(
@@ -10848,10 +10857,11 @@ fn build_skill_auto_propose_config(
         .as_deref()
         .map(str::to_ascii_lowercase)
         .as_deref()
+        .map(|v| listed(HEURISTIC_MODES, v))
     {
-        Some("any") | None => SkillsAutoProposeMatchMode::Any,
-        Some("all") => SkillsAutoProposeMatchMode::All,
-        Some(other) => {
+        Some(Ok("any")) | None => SkillsAutoProposeMatchMode::Any,
+        Some(Ok("all")) => SkillsAutoProposeMatchMode::All,
+        Some(Ok(other) | Err(other)) => {
             return Err(ConfigError::Invalid {
                 field: "skills.auto_propose.heuristic.mode",
                 reason: format!("expected one of {}, got \"{other}\"", HEURISTIC_MODES.join(", ")),
@@ -10973,10 +10983,10 @@ fn build_persona_auto_propose_config(
         .duration_ms_min
         .unwrap_or(DEFAULT_SKILLS_HEURISTIC_DURATION_MS_MIN);
     let require_gate_resolve = h.require_gate_resolve.unwrap_or(false);
-    let mode = match h.mode.as_deref().map(str::to_ascii_lowercase).as_deref() {
-        Some("any") | None => SkillsAutoProposeMatchMode::Any,
-        Some("all") => SkillsAutoProposeMatchMode::All,
-        Some(other) => {
+    let mode = match h.mode.as_deref().map(str::to_ascii_lowercase).as_deref().map(|v| listed(HEURISTIC_MODES, v)) {
+        Some(Ok("any")) | None => SkillsAutoProposeMatchMode::Any,
+        Some(Ok("all")) => SkillsAutoProposeMatchMode::All,
+        Some(Ok(other) | Err(other)) => {
             return Err(ConfigError::Invalid {
                 field: "persona.auto_propose.heuristic.mode",
                 reason: format!("expected one of {}, got \"{other}\"", HEURISTIC_MODES.join(", ")),
