@@ -14015,6 +14015,144 @@ fn every_listed_string_value_loads() {
     drop(env);
 }
 
+/// Each `AivyxConfig` field (a `defaults.txt` path prefix) and the config
+/// key it is set by, so a default gets its key's not-stable tag
+/// (`not_stable::default_tag_for`). The longest matching prefix wins; a
+/// defaults line that matches none, or maps to no `config.txt` key, fails
+/// `stable_config_keys_defaults`, so this cannot go stale.
+const DEFAULT_FIELD_KEYS: &[(&str, &str)] = &[
+    ("access_level", "access.level"),
+    ("active_role", "agent.role"),
+    ("allow_egress_hosts", "access.allow_egress_hosts"),
+    ("allow_leaving_process_group", "sandbox.allow_leaving_process_group"),
+    ("allow_private_egress", "access.allow_private_egress"),
+    ("allow_sensitive_paths", "access.allow_sensitive_paths"),
+    ("allow_unix_sockets", "sandbox.allow_unix_sockets"),
+    ("anthropic_api_key", "anthropic.api_key"),
+    ("autonomy_auto_approve", "autonomy.auto_approve.scopes"),
+    ("autonomy_level", "autonomy.level"),
+    ("autonomy_overrides", "autonomy.override"),
+    ("autonomy_review_expiry_days", "autonomy.review_expiry_days"),
+    ("broker_base_url", "broker.base_url"),
+    ("budget", "budget"),
+    ("confirm_destructive", "access.confirm_destructive"),
+    ("conversation_history_turns", "agent.conversation_history_messages"),
+    ("correction_consolidation", "correction_consolidation"),
+    ("correction_judgment", "correction_judgment"),
+    ("correction_signal", "correction_signal"),
+    ("cycle_detection", "agent.cycle_detection"),
+    ("discord", "discord"),
+    ("email", "email"),
+    ("embedding", "embedding"),
+    ("file_watches", "file_watch"),
+    ("fs_root", "fs.root"),
+    ("git", "git"),
+    ("graph", "graph"),
+    ("guard_sensitive_paths", "access.guard_sensitive_paths"),
+    ("injection_scan_enabled", "agent.injection_scan_enabled"),
+    ("injection_scan_exempt", "agent.injection_scan_exempt"),
+    ("kvcache_store_path", "kvcache.store_path"),
+    ("loop_config", "loop"),
+    ("matrix", "matrix"),
+    ("max_reply_tokens", "agent.max_reply_tokens"),
+    ("mcp_servers", "mcp_server"),
+    ("memory_canonicalize_topics", "memory.canonicalize_topics"),
+    ("memory_max_per_topic", "memory.max_per_topic"),
+    ("memory_profile", "memory.profile"),
+    ("memory_retention", "memory.retention"),
+    ("memory_ttl_secs", "memory.ttl_secs"),
+    ("mistralrs_options", "mistralrs"),
+    ("model", "agent.model"),
+    ("notify_targets", "notify_target"),
+    ("ollama_options", "ollama"),
+    ("ollama_prompt_strategies", "ollama.prompt_strategies"),
+    ("openai_api_key", "openai.api_key"),
+    ("openai_base_url", "openai.base_url"),
+    ("openai_constrain_tool_calls", "openai.constrain_tool_calls"),
+    ("pack_source", "pack.source"),
+    ("pack_trusted_publishers", "pack.trusted_publishers"),
+    ("passphrase", "storage.passphrase"),
+    ("persona_auto_propose", "persona.auto_propose"),
+    ("persona_consolidation", "persona_consolidation"),
+    ("persona_lifecycle", "persona_lifecycle"),
+    ("persona_seed", "persona_seed"),
+    ("persona_seed.skills", "persona_seed.skill"),
+    ("pricing", "pricing"),
+    ("proactive", "proactive"),
+    ("profile", "profile"),
+    ("proton", "proton"),
+    ("provider", "agent.provider"),
+    ("rate_limit", "rate_limit"),
+    ("recall_cluster", "recall_cluster"),
+    ("recall_feedback", "recall_feedback"),
+    ("recall_judgment", "recall_judgment"),
+    ("reflection_schedules", "reflection_schedule"),
+    ("reminders_check_interval_secs", "reminders.check_interval_secs"),
+    ("require_enforcement", "sandbox.require_enforcement"),
+    ("roles.default", "role[]"),
+    ("routing", "routing"),
+    ("routing_classifier", "routing.classifier"),
+    ("routing_escalation", "routing.escalation"),
+    ("routing_sensitive", "routing.sensitive"),
+    ("sandbox_default_backend", "sandbox.default_backend"),
+    ("schedules", "schedule"),
+    ("share_system_tmp", "sandbox.share_system_tmp"),
+    ("signal", "signal"),
+    ("skill_authoring", "skill_authoring"),
+    ("skill_auto_propose", "skills.auto_propose"),
+    ("skill_defaults", "skill_defaults"),
+    ("skill_refinement", "skill_refinement"),
+    ("skills_trigger_injection", "skills.trigger_injection"),
+    ("slack", "slack"),
+    ("storage_path", "storage.path"),
+    ("system_prompt", "agent.system_prompt"),
+    ("team_config_path", "team.roster_path"),
+    ("telegram", "telegram"),
+    ("tool_name_auto_correct_threshold", "providers.tool_name_auto_correct_threshold"),
+    ("tool_processes", "tool_process"),
+    ("tool_relevance", "tool_relevance"),
+    ("turn_timeout_secs", "agent.turn_timeout_secs"),
+    ("voice_options", "voice"),
+    ("web_ui_allowed_origins", "studio.allowed_origins"),
+    ("web_ui_auth_token", "studio.auth_token"),
+    ("web_ui_host", "studio.host"),
+    ("web_ui_insecure_no_auth", "studio.insecure_no_auth"),
+    ("web_ui_port", "studio.port"),
+    ("webhook_port", "daemon.webhook_port"),
+    ("webhooks", "webhook"),
+    ("wiki", "wiki"),
+    ("workspace_enabled", "workspace.enabled"),
+    ("workspace_journaling_enabled", "workspace.journaling.enabled"),
+    ("workspace_journaling_interval_secs", "workspace.journaling.interval_secs"),
+    ("workspace_path", "workspace.path"),
+];
+
+/// The config key a `defaults.txt` path belongs to, with list indices as
+/// `[]` (`persona_seed.skills[0].name` -> `persona_seed.skills[].name`).
+fn default_field_key(path: &str) -> Option<String> {
+    let (field, key) = DEFAULT_FIELD_KEYS
+        .iter()
+        .filter(|(f, _)| {
+            path == *f || path.starts_with(&format!("{f}.")) || path.starts_with(&format!("{f}["))
+        })
+        .max_by_key(|(f, _)| f.len())?;
+    let mapped = format!("{key}{}", &path[field.len()..]);
+    let mut out = String::with_capacity(mapped.len());
+    let mut in_index = false;
+    for c in mapped.chars() {
+        match c {
+            '[' => {
+                in_index = true;
+                out.push_str("[]");
+            }
+            ']' => in_index = false,
+            _ if in_index => {}
+            _ => out.push(c),
+        }
+    }
+    Some(out)
+}
+
 /// R5: pa's config defaults, frozen in `docs/stable/defaults.txt`: the
 /// `AivyxConfig` resolved from an empty config file, flattened from its
 /// `Debug` (secrets print redacted) to one `path = value` line per field,
@@ -14113,7 +14251,37 @@ fn stable_config_keys_defaults() {
         "# pa's config resolved from an empty config file (AivyxConfig's field names).".into(),
         "# Generated by `stable_config_keys_defaults` in aivyx-config; see docs/COMPATIBILITY.md.".into(),
     ];
-    lines.extend(off.iter().map(|(k, v)| format!("{k} = {v}")));
+    // Every default maps to a config key, and takes that key's tag.
+    let known: Vec<&str> = include_str!("../../../docs/stable/config.txt")
+        .lines()
+        .filter_map(|l| l.split_once(": ").map(|(k, _)| k))
+        .collect();
+    let line = |(k, v): &(String, String)| {
+        let key = default_field_key(k)
+            .unwrap_or_else(|| panic!("defaults.txt `{k}` maps to no config key: add it to DEFAULT_FIELD_KEYS"));
+        let bare = key.trim_end_matches("[]");
+        assert!(
+            known.iter().any(|c| *c == bare
+                || c.starts_with(&format!("{bare}."))
+                || c.starts_with(&format!("{bare}[]"))),
+            "defaults.txt `{k}` maps to `{key}`, which config.txt does not have"
+        );
+        let tag = crate::not_stable::default_tag_for(&key).map_or("", |t| t.suffix());
+        (key, format!("{k} = {v}{tag}"))
+    };
+    let tagged: Vec<(String, String)> = off.iter().map(line).collect();
+    // A `Defaults` entry that tags no default is stale.
+    for e in crate::not_stable::NOT_STABLE
+        .iter()
+        .filter(|e| e.snapshot == crate::not_stable::Snapshot::Defaults)
+    {
+        assert!(
+            tagged.iter().any(|(key, _)| key.starts_with(e.prefix)),
+            "not_stable::NOT_STABLE Defaults entry `{}` tags no default",
+            e.prefix
+        );
+    }
+    lines.extend(tagged.into_iter().map(|(_, l)| l));
     assert!(lines.len() > 100, "premise: the dump flattened: {lines:#?}");
     assert!(!lines.iter().any(|l| l.contains("defaults-")), "a temp path leaked: {lines:#?}");
     for (name, other) in [("lite", &lite), ("smart", &smart)] {
@@ -14122,7 +14290,7 @@ fn stable_config_keys_defaults() {
         let differ: Vec<String> = other
             .iter()
             .filter(|kv| !off.contains(kv))
-            .map(|(k, v)| format!("{k} = {v}"))
+            .map(|kv| line(kv).1)
             .collect();
         assert!(!differ.is_empty(), "the {name} profile changes no default?");
         lines.extend(differ);

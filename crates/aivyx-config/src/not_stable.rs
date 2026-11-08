@@ -23,6 +23,9 @@ pub enum Tag {
     Developer,
     /// A versioned format that is recorded but not promised.
     NotStable,
+    /// A default that may change in a minor release (`defaults.txt` only):
+    /// the user's own setting always wins.
+    Movable,
 }
 
 impl Tag {
@@ -34,6 +37,7 @@ impl Tag {
             Tag::Preview => " (preview)",
             Tag::Developer => " (developer)",
             Tag::NotStable => " (not stable)",
+            Tag::Movable => " (movable)",
         }
     }
 }
@@ -49,6 +53,10 @@ pub enum Snapshot {
     Cli,
     /// `formats.txt`: the line itself (`tool.protocol_version`).
     Formats,
+    /// `defaults.txt`: the config key a default belongs to (the test maps
+    /// each `AivyxConfig` field to it). A default also takes the tag its
+    /// key has in `config.txt`.
+    Defaults,
 }
 
 /// One not-stable entry: every line of `snapshot` that starts with
@@ -125,7 +133,20 @@ pub const NOT_STABLE: &[NotStable] = &[
     // speak is not (yet): a 1.x minor stabilises it once a real tool pack
     // exists.
     entry(Snapshot::Formats, "tool.protocol_version", Tag::NotStable),
+    // Defaults that may change in a minor release (docs/COMPATIBILITY.md):
+    // the suggested model, the built-in system prompt and the starter
+    // persona seed. `aivyx-pa init` writes the user's own choices.
+    entry(Snapshot::Defaults, "agent.model", Tag::Movable),
+    entry(Snapshot::Defaults, "agent.system_prompt", Tag::Movable),
+    entry(Snapshot::Defaults, "role[].system_prompt", Tag::Movable),
+    entry(Snapshot::Defaults, "persona_seed.", Tag::Movable),
 ];
+
+/// The tag of a `defaults.txt` line for config key `key`: its own
+/// [`Snapshot::Defaults`] entry, else the tag the key has in `config.txt`.
+pub fn default_tag_for(key: &str) -> Option<Tag> {
+    tag_for(Snapshot::Defaults, key).or_else(|| tag_for(Snapshot::Config, key))
+}
 
 /// The tag of the snapshot line whose key (see [`Snapshot`]) is `key`.
 pub fn tag_for(snapshot: Snapshot, key: &str) -> Option<Tag> {

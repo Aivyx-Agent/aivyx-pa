@@ -9,7 +9,10 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
   accepts, and the aliases it accepts (snapshot: `docs/stable/config.txt`),
   and the config an empty file resolves to (snapshot:
   `docs/stable/defaults.txt`, with the defaults `[memory] profile`
-  changes listed for `lite` and `smart`).
+  changes listed for `lite` and `smart`). A default follows its key's
+  tag in `config.txt` (an `(advanced)` key's default is not promised
+  either), and the `(movable)` defaults may change in a minor release
+  (see Not stable).
 - **The CLI commands and flags.** Each command and its usage lines, the
   global flags (`--instance`, `--provider`, `--mcp`, ...) and the old flag
   spellings still accepted. Snapshot: `docs/stable/cli.txt`.
@@ -82,6 +85,16 @@ one list of tagged entries is `NOT_STABLE` in
   verify`, `aivyx-pa signal verify` and their `--channel` values. A
   preview can change or be removed in any release. A channel's tag comes
   off when it has been tested with a real client.
+- **Formats not promised yet**, tagged `(not stable)` in `formats.txt`: the
+  tool protocol version (`tool.protocol_version`; see The pack formats
+  above).
+- **Movable defaults**, tagged `(movable)` in `defaults.txt`: the default
+  model (`agent.model`), the default system prompt (`agent.system_prompt`
+  and the built-in `default` role's), and the starter persona seed
+  (`[persona_seed]`). They may change in a minor release, as better
+  models and prompts arrive. A value you set yourself always wins over
+  them, and `aivyx-pa init` writes your own choice of model into the
+  config, so an existing setup does not move.
 - **Developer commands**, tagged `(developer)`: the help's Developer
   group (`aivyx-pa tool-relevance`) and `--print-role`. (`--verify-only`,
   the forensic check, is stable.)
