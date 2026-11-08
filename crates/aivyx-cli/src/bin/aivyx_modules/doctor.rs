@@ -162,11 +162,27 @@ pub async fn run_doctor() -> Result<(), String> {
     check_checkpoints(&cfg).await;
 
     println!();
-    if all_ok {
-        println!("✓ Looks good — your agent is ready. Run `aivyx-pa` to start.");
-        Ok(())
-    } else {
-        Err("one or more checks failed — see the notes above.".into())
+    let summary = doctor_summary(all_ok, role_fix.as_deref());
+    if let Ok(line) = &summary {
+        println!("{line}");
+    }
+    summary.map(|_| ())
+}
+
+/// The doctor's last line: ready only when every check passed and the
+/// config names a role pa can start in. A missing start role is blocking
+/// (plain `aivyx-pa` fails to load the config), unlike the advisory config
+/// warnings, so the summary says so and repeats the line to add.
+fn doctor_summary(all_ok: bool, role_fix: Option<&str>) -> Result<String, String> {
+    match (all_ok, role_fix) {
+        (true, None) => Ok("✓ Looks good — your agent is ready. Run `aivyx-pa` to start.".into()),
+        (_, Some(role)) => Err(format!(
+            "not ready: aivyx-pa won't start until the config names its role. Add this line \
+             under [agent] in {}: role = \"{role}\"{}",
+            config_path().display(),
+            if all_ok { "" } else { " — and see the failed checks above." }
+        )),
+        (false, None) => Err("one or more checks failed — see the notes above.".into()),
     }
 }
 
@@ -1323,7 +1339,11 @@ fn inspection_opts(role_override: Option<String>) -> LoadOptions {
 fn load_config_for_doctor() -> Result<(AivyxConfig, Option<String>), String> {
     match AivyxConfig::load_from_env_and_toml(&inspection_opts(None)) {
         Ok(cfg) => Ok((cfg, None)),
-        Err(e) => match start_role_fix(&e, std::env::var_os("AIVYX_PA_ROLE").is_some()) {
+        // Set means non-empty, the loader's rule for every env var.
+        Err(e) => match start_role_fix(
+            &e,
+            std::env::var("AIVYX_PA_ROLE").is_ok_and(|v| !v.is_empty()),
+        ) {
             Some(role) => Ok((load_config_with_role(Some(role.clone()))?, Some(role))),
             None => Err(format!("failed to load {}: {e}", config_path().display())),
         },
@@ -1371,6 +1391,18 @@ mod tests {
         assert_eq!(start_role_fix(&err("typo", &["coder"]), false), None);
         let line = missing_start_role_warning("coder");
         assert!(line.ends_with("Add this line under [agent]: role = \"coder\""), "{line}");
+    }
+
+    /// Re-review fix: a missing start role is blocking — the summary is
+    /// never "ready" with it, and repeats the line to add.
+    #[test]
+    fn a_missing_start_role_means_not_ready() {
+        assert!(doctor_summary(true, None).unwrap().contains("ready"));
+        for all_ok in [true, false] {
+            let err = doctor_summary(all_ok, Some("coder")).unwrap_err();
+            assert!(err.contains("not ready") && err.contains("role = \"coder\""), "{err}");
+        }
+        assert!(doctor_summary(false, None).unwrap_err().contains("checks failed"));
     }
 
     /// Task 5c item 10: doctor lists every config warning, warning-level.
