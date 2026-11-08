@@ -984,6 +984,9 @@ parent_role = "researcher"
 #   # Chapter Codex — fuse a topic's consolidated wiki-page summary as a
 #   # single high-signal recall unit (needs [wiki] pages synthesized):
 #   recall_wiki_weight   = 0.0    # 0 = off; >0 arms the wiki ranker
+#   # Chapter Lattice — the typed knowledge graph as a recall source:
+#   recall_graph_typed_weight = 0.0   # 0 = off; >0 arms it
+#   # (memory.profile = "smart" sets both weights to 1.0)
 #
 # `rag_min_similarity` is the important one: it is the floor that
 # stops an unrelated prompt from dragging in weakly-related

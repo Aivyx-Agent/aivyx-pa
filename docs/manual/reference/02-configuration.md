@@ -208,7 +208,7 @@ Semantic memory search: the embeddings server, and how recall picks memories for
 | `recall_graph_decay` | number | `0.5` | How much weaker each further link counts (0–1). Default 0.5 (half per link). |
 | `recall_graph_weight` | number | `1.0` | How much those linked memories count in recall. Default 1.0. |
 | `recall_wiki_weight` | number | `0.0` | How much knowledge-wiki pages count in recall. Default 0.0 (off); 1.0 with `memory.profile = "smart"`. |
-| `recall_graph_typed_weight` | number | `1.0` | How much the knowledge graph (topics linked by relations such as depends-on) counts in recall. Default 0.0 (off); 1.0 with `memory.profile = "smart"`. |
+| `recall_graph_typed_weight` | number | `0.0` | How much the knowledge graph (topics linked by relations such as depends-on) counts in recall. Default 0.0 (off); 1.0 with `memory.profile = "smart"`. |
 
 ## Reach and safety
 
