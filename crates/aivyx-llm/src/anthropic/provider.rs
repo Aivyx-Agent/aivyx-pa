@@ -807,7 +807,14 @@ impl AnthropicStream {
             }
             "message_stop" => {
                 self.terminal = Some(self.build_terminal()?);
-                Ok(None)
+                // `max_tokens`: the request's output limit cut the reply
+                // off; `model_context_window_exceeded`: the context did.
+                let stop = self.state.stop_reason.as_deref();
+                Ok(crate::finish_event(
+                    "anthropic",
+                    stop,
+                    matches!(stop, Some("max_tokens" | "model_context_window_exceeded")),
+                ))
             }
             "ping" | "error" => {
                 // `ping` is a heartbeat — ignore. `error` events in the
@@ -1079,6 +1086,45 @@ mod tests {
             vec![LlmMessage::user_text("hi")],
             vec![],
         )
+    }
+
+    /// Task 5c item 11: `stop_reason: "max_tokens"` yields `Truncated`
+    /// after the text; the step still ends with the partial `FinalMessage`.
+    #[tokio::test]
+    async fn max_tokens_stop_reason_yields_truncated() {
+        let script = vec![
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12}}}\n\n",
+            "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello, world\"}}\n\n",
+            "event: content_block_stop\ndata: {\"index\":0}\n\n",
+            "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":7}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        ];
+        let (provider, _t) = provider_with(FakeTransport::ok(script));
+        let (messages, tools) = blank_request_args();
+        let req = LlmRequest {
+            model: "claude-haiku-4-5-20251001",
+            system: None,
+            messages: &messages,
+            tools: &tools,
+            max_tokens: 7,
+            temperature: None,
+            id_slot: None,
+            slot_hint: None,
+            route: None,
+        };
+        let token = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &token).await.unwrap();
+        let mut events = Vec::new();
+        while let Some(ev) = stream.next_event().await.unwrap() {
+            events.push(ev);
+        }
+        assert_eq!(events.last(), Some(&LlmStreamEvent::Truncated), "{events:?}");
+        assert_eq!(events.iter().filter(|e| **e == LlmStreamEvent::Truncated).count(), 1);
+        match stream.finish().await.unwrap() {
+            LlmStepEnd::FinalMessage { text, .. } => assert_eq!(text, "Hello, world"),
+            other => panic!("expected FinalMessage, got {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -559,6 +559,11 @@ pub struct LlmPlanner {
     /// turn spent both `invalid_input` repair rounds; reset in
     /// `begin_turn`. Read through `TurnPlanner::repair_exhausted`.
     turn_repair_exhausted: bool,
+    /// Task 5c item 11 — the step that produced this turn's final message
+    /// was cut off by the model server's output limit
+    /// (`LlmStreamEvent::Truncated`). Reset in `begin_turn`; read through
+    /// `TurnPlanner::reply_truncated`.
+    turn_reply_truncated: bool,
 }
 
 struct KvCacheConfig {
@@ -735,6 +740,7 @@ impl LlmPlanner {
             turn_costs: Vec::new(),
             taint: None,
             turn_repair_exhausted: false,
+            turn_reply_truncated: false,
         }
     }
 
@@ -1126,7 +1132,13 @@ impl LlmPlanner {
     /// Build one `LlmRequest` from the current history + config and
     /// drain the provider's stream, returning the terminal value.
     /// Relays every `TextChunk` to the channel as a `StreamEvent::Text`.
-    async fn one_step(&self, channel: &dyn ChannelContext) -> Result<LlmStepEnd, LlmError> {
+    /// One LLM call: relays its text to the channel and returns its
+    /// terminal, with whether the server cut the reply off at its output
+    /// limit (`LlmStreamEvent::Truncated`).
+    async fn one_step(
+        &self,
+        channel: &dyn ChannelContext,
+    ) -> Result<(LlmStepEnd, bool), LlmError> {
         // Broker mode (`broker_slot_hint`) attaches `slot_hint` instead
         // of pinning `id_slot` directly -- `aivyx-broker` picks the
         // physical slot itself, server-side, using this as a
@@ -1170,6 +1182,7 @@ impl LlmPlanner {
         // `LoopOutcome::Cancelled` / `LoopOutcome::TimedOut` as
         // appropriate. Phase 3 task 4 added this path so wall-clock
         // timeouts actually interrupt a completion mid-token.
+        let mut truncated = false;
         loop {
             let next = tokio::select! {
                 biased;
@@ -1182,6 +1195,9 @@ impl LlmPlanner {
 
             let Some(event) = next else { break };
 
+            if event == LlmStreamEvent::Truncated {
+                truncated = true;
+            }
             if let LlmStreamEvent::TextChunk(ref chunk) = event {
                 // Best-effort relay: if the channel rejects the event,
                 // we log it in the sense of "drop it on the floor" —
@@ -1195,7 +1211,7 @@ impl LlmPlanner {
             // documented contract.
         }
 
-        stream.finish().await
+        Ok((stream.finish().await?, truncated))
     }
 
     /// Phase 126 — per-call dispatch helper extracted from the
@@ -1293,10 +1309,15 @@ impl TurnPlanner for LlmPlanner {
         self.turn_repair_exhausted
     }
 
+    fn reply_truncated(&self) -> bool {
+        self.turn_reply_truncated
+    }
+
     async fn begin_turn(&mut self, message: &Message, turn_id: crate::TurnId) {
         let conversation = self.conversation.unwrap_or(message.session_id);
         self.route_session = Some(conversation.to_string());
         self.turn_repair_exhausted = false;
+        self.turn_reply_truncated = false;
         self.ensure_kv_slot_checked_out().await;
         let mut content = match &message.content {
             MessageContent::Text(text) => vec![ContentBlock::text(text)],
@@ -1520,7 +1541,7 @@ impl TurnPlanner for LlmPlanner {
         // the call dispatches as-is (PHASE_101.md Q3).
         let mut repair_rounds = 0usize;
         loop {
-            let terminal = match self.one_step(channel).await {
+            let (terminal, step_truncated) = match self.one_step(channel).await {
                 Ok(t) => t,
                 Err(LlmError::Cancelled) => {
                     // Mid-stream cancellation (either an external
@@ -1667,6 +1688,7 @@ impl TurnPlanner for LlmPlanner {
                         text: text.clone(),
                         tool_calls: Vec::new(),
                     });
+                    self.turn_reply_truncated = step_truncated;
                     return NextStep::FinalMessage(text);
                 }
                 LlmStepEnd::ToolCalls {
@@ -2469,6 +2491,40 @@ mod tests {
             }
             other => panic!("expected Assistant, got {other:?}"),
         }
+    }
+
+    /// Task 5c item 11: a step whose stream reports `Truncated` makes the
+    /// planner report `reply_truncated` for the turn; the next turn starts
+    /// clear.
+    #[tokio::test]
+    async fn a_truncated_final_step_is_reported_for_the_turn() {
+        let step = |truncated: bool| FakeStep {
+            events: if truncated {
+                vec![LlmStreamEvent::TextChunk("half".to_string()), LlmStreamEvent::Truncated]
+            } else {
+                vec![LlmStreamEvent::TextChunk("whole".to_string())]
+            },
+            terminal: LlmStepEnd::FinalMessage {
+                text: if truncated { "half" } else { "whole" }.to_string(),
+                usage: zero_usage(),
+            },
+        };
+        let provider = FakeLlmProvider::new(vec![step(true), step(false)]);
+        let mut planner = LlmPlanner::new(
+            provider,
+            Arc::new(ToolRegistry::new(vec![])),
+            LlmPlannerConfig::new("m"),
+        );
+        let channel = RecChannel::new();
+        planner.begin_turn(&Message::text(channel.session, "hi"), TurnId::new()).await;
+        let step = planner.next_step(&[], &channel).await;
+        assert!(matches!(step, NextStep::FinalMessage(ref m) if m == "half"));
+        assert!(planner.reply_truncated());
+        planner.begin_turn(&Message::text(channel.session, "again"), TurnId::new()).await;
+        assert!(!planner.reply_truncated(), "reset by begin_turn");
+        let step = planner.next_step(&[], &channel).await;
+        assert!(matches!(step, NextStep::FinalMessage(ref m) if m == "whole"));
+        assert!(!planner.reply_truncated());
     }
 
     // ---- Phase 76 — ContextProvider auto-recall hook -----------

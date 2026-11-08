@@ -472,6 +472,56 @@ pub enum LlmStreamEvent {
     /// here; providers that only emit usage at the end just put it on
     /// the [`LlmStepEnd`] instead.
     Usage(LlmUsage),
+
+    /// The model server stopped this reply at its output-token limit, so
+    /// the text (or tool call) is cut off: OpenAI-compatible
+    /// `finish_reason: "length"`, Anthropic `stop_reason: "max_tokens"`,
+    /// Ollama `done_reason: "length"`. Yielded at most once, after the
+    /// last text chunk. The step still ends with its usual [`LlmStepEnd`]
+    /// (usually a `FinalMessage` with the partial text); this event is how
+    /// a caller tells that apart from a reply the model finished.
+    Truncated,
+}
+
+/// The event to yield for a model call's stop reason (the provider's own
+/// spelling): [`LlmStreamEvent::Truncated`] when `truncated`. A reason other
+/// than the normal ones is logged to stderr (the daemon's log; pa has no
+/// tracing subscriber), so a cut-off or odd ending can be diagnosed without
+/// a line for every healthy call.
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama",
+    feature = "provider-mistral-rs"
+))]
+pub(crate) fn finish_event(
+    provider: &'static str,
+    reason: Option<&str>,
+    truncated: bool,
+) -> Option<LlmStreamEvent> {
+    if let Some(line) = finish_reason_log_line(provider, reason, truncated) {
+        eprintln!("{line}");
+    }
+    truncated.then_some(LlmStreamEvent::Truncated)
+}
+
+/// The stderr line [`finish_event`] writes, or `None` for a normal stop
+/// (`stop`, `end_turn`, `tool_calls`, `tool_use`, `stop_sequence`, or no
+/// reason at all). Pure.
+#[cfg(any(
+    feature = "provider-anthropic",
+    feature = "provider-openai",
+    feature = "provider-ollama",
+    feature = "provider-mistral-rs"
+))]
+fn finish_reason_log_line(provider: &str, reason: Option<&str>, truncated: bool) -> Option<String> {
+    const NORMAL: &[&str] = &["stop", "end_turn", "tool_calls", "tool_use", "stop_sequence"];
+    let reason = reason?;
+    if NORMAL.contains(&reason) && !truncated {
+        return None;
+    }
+    let what = if truncated { "the reply was cut off" } else { "unusual stop" };
+    Some(format!("aivyx-pa {provider}: model call finished with reason `{reason}` ({what})"))
 }
 
 /// Terminal value of an [`LlmStream`]. Returned by [`LlmStream::finish`]
@@ -900,7 +950,7 @@ mod tests {
         while let Some(event) = stream.next_event().await.unwrap() {
             match event {
                 LlmStreamEvent::TextChunk(chunk) => reassembled.push_str(&chunk),
-                LlmStreamEvent::Usage(_) => {}
+                LlmStreamEvent::Usage(_) | LlmStreamEvent::Truncated => {}
             }
         }
 

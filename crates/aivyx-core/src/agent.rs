@@ -1032,6 +1032,12 @@ impl ConcreteAgent {
                     };
                 }
 
+                // Task 5c item 11 — a reply the model server cut off at its
+                // output limit says so, instead of passing for a finished one.
+                if planner.reply_truncated() {
+                    append_turn_note(&mut final_message, crate::REPLY_TRUNCATED_NOTE);
+                }
+
                 // Chapter Candor (#12) — append an honest note if the message
                 // claimed a concrete action whose tool was never called this
                 // turn. Tool names resolved from the turn's observations via the
@@ -7984,6 +7990,60 @@ mod tests {
                 })
             },
         )
+    }
+
+    /// A scripted planner that reports `reply_truncated`.
+    struct TruncatingPlanner {
+        inner: crate::planner::VecPlanner,
+        truncated: bool,
+    }
+
+    #[async_trait]
+    impl TurnPlanner for TruncatingPlanner {
+        async fn next_step(
+            &mut self,
+            observed: &[StepObservation],
+            channel: &dyn ChannelContext,
+        ) -> NextStep {
+            self.inner.next_step(observed, channel).await
+        }
+        fn reply_truncated(&self) -> bool {
+            self.truncated
+        }
+    }
+
+    /// Task 5c item 11: a reply the model server cut off ends the turn with
+    /// the truncation note appended, so every surface showing the final
+    /// message shows it; a finished reply gets no note.
+    #[tokio::test]
+    async fn a_truncated_reply_ends_with_the_truncation_note() {
+        for truncated in [true, false] {
+            let agent = ConcreteAgent::new(
+                AgentId::new(),
+                CapabilitySet::empty(),
+                Arc::new(ToolRegistry::new(vec![])),
+                RecordingAudit::new(),
+                move || {
+                    Box::new(TruncatingPlanner {
+                        inner: crate::planner::VecPlanner::new([NextStep::FinalMessage(
+                            "The three steps are: first, open the".to_string(),
+                        )]),
+                        truncated,
+                    })
+                },
+            );
+            let channel = ArmChannel::new(ArmLog::default());
+            let outcome = agent.turn(Message::text(channel.session, "hi"), &channel).await;
+            let TurnOutcome::Completed { final_message, .. } = &outcome else {
+                panic!("expected Completed, got {outcome:?}");
+            };
+            let mut want = "The three steps are: first, open the".to_string();
+            if truncated {
+                append_turn_note(&mut want, crate::REPLY_TRUNCATED_NOTE);
+            }
+            assert_eq!(final_message, &want);
+            assert_eq!(channel.seen(), Some(want));
+        }
     }
 
     /// Three identical calls: the default repeat breaker trips `Looping`.

@@ -224,6 +224,9 @@ impl LlmProvider for MistralRsProvider {
         let choice = response.choices.into_iter().next().ok_or_else(|| {
             LlmError::Parse("mistralrs: response has no choices".to_string())
         })?;
+        // `"length"`: the reply hit `max_tokens` (the sampler's max length).
+        let truncated = choice.finish_reason == "length";
+        let finish_reason = choice.finish_reason.clone();
         let native_text = choice.message.content.unwrap_or_default();
         let native_tool_calls: Vec<ToolCallEnd> = choice
             .message
@@ -276,6 +279,9 @@ impl LlmProvider for MistralRsProvider {
             text: text.clone(),
             tool_calls,
             usage,
+            finish_reason,
+            truncated,
+            ended: false,
         }))
     }
 
@@ -296,6 +302,12 @@ struct SingleShotStream {
     text: String,
     tool_calls: Vec<ToolCallEnd>,
     usage: LlmUsage,
+    /// The response's `finish_reason`, and whether it means the reply was
+    /// cut off (`"length"`).
+    finish_reason: String,
+    truncated: bool,
+    /// Set once the finish reason has been reported.
+    ended: bool,
 }
 
 #[async_trait]
@@ -304,6 +316,14 @@ impl LlmStream for SingleShotStream {
         if !self.text_emitted && !self.text.is_empty() {
             self.text_emitted = true;
             return Ok(Some(LlmStreamEvent::TextChunk(self.text.clone())));
+        }
+        if !self.ended {
+            self.ended = true;
+            return Ok(crate::finish_event(
+                "mistralrs",
+                Some(&self.finish_reason),
+                self.truncated,
+            ));
         }
         Ok(None)
     }
@@ -369,6 +389,9 @@ mod tests {
             text: "hello".to_string(),
             tool_calls: Vec::new(),
             usage: LlmUsage::default(),
+            finish_reason: "stop".to_string(),
+            truncated: false,
+            ended: false,
         };
         let mut boxed: Box<dyn LlmStream> = Box::new(stream);
         let ev = boxed.next_event().await.unwrap().expect("text chunk");
@@ -397,6 +420,9 @@ mod tests {
                 name_resolution: NameResolution::Known,
             }],
             usage: LlmUsage::default(),
+            finish_reason: "tool_calls".to_string(),
+            truncated: false,
+            ended: false,
         };
         let mut boxed: Box<dyn LlmStream> = Box::new(stream);
         assert!(boxed.next_event().await.unwrap().is_none());
@@ -408,5 +434,25 @@ mod tests {
             }
             other => panic!("expected ToolCalls, got {other:?}"),
         }
+    }
+
+    /// Task 5c item 11: `finish_reason: "length"` yields `Truncated` after
+    /// the text, then the stream ends with the partial `FinalMessage`.
+    #[tokio::test]
+    async fn single_shot_stream_reports_a_length_cut_off() {
+        let stream = SingleShotStream {
+            text_emitted: false,
+            text: "half a sent".to_string(),
+            tool_calls: Vec::new(),
+            usage: LlmUsage::default(),
+            finish_reason: "length".to_string(),
+            truncated: true,
+            ended: false,
+        };
+        let mut boxed: Box<dyn LlmStream> = Box::new(stream);
+        assert!(matches!(boxed.next_event().await.unwrap(), Some(LlmStreamEvent::TextChunk(_))));
+        assert_eq!(boxed.next_event().await.unwrap(), Some(LlmStreamEvent::Truncated));
+        assert!(boxed.next_event().await.unwrap().is_none());
+        assert!(matches!(boxed.finish().await.unwrap(), LlmStepEnd::FinalMessage { .. }));
     }
 }

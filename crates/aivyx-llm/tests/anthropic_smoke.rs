@@ -69,7 +69,7 @@ async fn final_message_against_real_api() {
     while let Some(event) = stream.next_event().await.expect("stream error") {
         match event {
             LlmStreamEvent::TextChunk(chunk) => reassembled.push_str(&chunk),
-            LlmStreamEvent::Usage(_) => {}
+            LlmStreamEvent::Usage(_) | LlmStreamEvent::Truncated => {}
         }
     }
 

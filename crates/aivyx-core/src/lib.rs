@@ -614,6 +614,14 @@ pub enum ToolOutcome {
     Failed(AivyxError),
 }
 
+/// Task 5c item 11 — the note appended (as "⚠ …", like the other turn
+/// notes) to a final message the model server cut off at its output limit
+/// (see `TurnPlanner::reply_truncated`). Worded after aivyx-coder's "response
+/// was truncated (hit the model's output limit)" message.
+pub const REPLY_TRUNCATED_NOTE: &str = "The reply was cut off by the model server's \
+    output limit before it finished. Ask for the rest, or for a shorter answer. \
+    (A reasoning model's thinking counts toward that limit.)";
+
 /// Return value of `Agent::turn`. Five variants — the four D1 termination
 /// conditions plus a `Failed` catch-all so `turn` can return `TurnOutcome`
 /// directly rather than `Result<TurnOutcome, _>` (the D3 contrarian choice:

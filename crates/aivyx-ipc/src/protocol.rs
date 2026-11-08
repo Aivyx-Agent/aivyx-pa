@@ -5932,6 +5932,21 @@ mod tests {
         assert_eq!(concat_text_events(&events), "");
     }
 
+    /// Task 5c item 11: the truncation note the turn loop appends to a
+    /// cut-off reply ("\n\n⚠ …", aivyx-core's `REPLY_TRUNCATED_NOTE`) is
+    /// what the REPL, the TUI and the Studio show after the streamed text.
+    #[test]
+    fn turn_outcome_correction_shows_the_truncation_note() {
+        let note = "⚠ The reply was cut off by the model server's output limit before it finished.";
+        assert_eq!(
+            turn_outcome_correction(
+                "The steps are: first",
+                &format!("completed: The steps are: first\n\n{note}")
+            ),
+            Some(note.to_string())
+        );
+    }
+
     #[test]
     fn turn_outcome_correction_none_when_text_matches_final_message() {
         assert_eq!(

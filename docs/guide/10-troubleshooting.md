@@ -22,6 +22,14 @@ get starved. Run `aivyx-pa doctor` — it flags this. Make sure you pulled a
 **tool-capable** model (for example `qwen3:8b`); very small models that can't
 call tools won't work well as an assistant.
 
+**A reply ends with "⚠ The reply was cut off by the model server's output
+limit".**
+The model server stopped the reply at its limit on how much one reply may
+say, so the end is missing. Ask for the rest, or for a shorter answer. A
+reasoning model's thinking counts toward that limit, so a long think can
+use it up. If it happens early in replies with a local model, its context
+window is probably too small: run `aivyx-pa doctor`.
+
 **The Studio won't load / says disconnected.**
 The Studio is just a window onto the background daemon. If it can't connect, the
 daemon probably isn't running. Start it with `aivyx-pa daemon run` (or launch

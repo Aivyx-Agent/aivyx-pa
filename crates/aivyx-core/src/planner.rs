@@ -135,6 +135,16 @@ pub trait TurnPlanner: Send + Sync {
         false
     }
 
+    /// Task 5c item 11 — whether the reply that ended this turn was cut off
+    /// by the model server's output limit (the provider reported
+    /// `LlmStreamEvent::Truncated` for the step that produced the final
+    /// message). The turn loop then appends [`crate::REPLY_TRUNCATED_NOTE`]
+    /// to the final message. Turn-scoped: reset by [`Self::begin_turn`].
+    /// Planners with no LLM report `false` (the default).
+    fn reply_truncated(&self) -> bool {
+        false
+    }
+
     /// Return the next step given everything observed so far. The
     /// `channel` handle is available for planners that want to relay
     /// mid-step output (LLM token streaming); planners that don't

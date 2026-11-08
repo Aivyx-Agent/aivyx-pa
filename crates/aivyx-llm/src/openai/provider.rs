@@ -451,7 +451,7 @@ impl LlmStream for OpenAiStream {
             match self.next_data_line().await? {
                 Some(line) if line == "[DONE]" => {
                     self.terminal = Some(self.build_terminal()?);
-                    return Ok(None);
+                    return Ok(self.finish_event());
                 }
                 Some(line) => {
                     if let Some(emit) = self.handle_chunk(&line)? {
@@ -460,7 +460,7 @@ impl LlmStream for OpenAiStream {
                 }
                 None => {
                     self.terminal = Some(self.build_terminal()?);
-                    return Ok(None);
+                    return Ok(self.finish_event());
                 }
             }
         }
@@ -476,6 +476,15 @@ impl LlmStream for OpenAiStream {
 }
 
 impl OpenAiStream {
+    /// Once the terminal is built: log the finish reason and yield
+    /// [`LlmStreamEvent::Truncated`] for `finish_reason: "length"` — the
+    /// server's output limit cut the reply off (the terminal itself is the
+    /// usual `FinalMessage` with the partial text).
+    fn finish_event(&self) -> Option<LlmStreamEvent> {
+        let reason = self.state.finish_reason.as_deref();
+        crate::finish_event("openai", reason, reason == Some("length"))
+    }
+
     async fn next_data_line(&mut self) -> Result<Option<String>, LlmError> {
         loop {
             if let Some(line) = try_extract_data_line(&mut self.buf) {
@@ -750,6 +759,64 @@ mod tests {
             vec![LlmMessage::user_text("hello")],
             vec![],
         )
+    }
+
+    /// Task 5c item 11: a stream ending in `finish_reason: "length"` (the
+    /// server's output limit cut the reply off) yields `Truncated` after the
+    /// text, then finishes with the partial text, its usage intact (it comes
+    /// on a later chunk).
+    #[tokio::test]
+    async fn length_finish_reason_yields_truncated() {
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"content\":\"The answer is\"},\"finish_reason\":null}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n\
+data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":1024}}\n\n\
+data: [DONE]\n\n";
+        let provider = test_provider(sse);
+        let (msgs, tools) = simple_request();
+        let req = LlmRequest {
+            model: "gpt-4",
+            system: None,
+            messages: &msgs,
+            tools: &tools,
+            max_tokens: 1024,
+            temperature: None,
+            id_slot: None,
+            slot_hint: None,
+            route: None,
+        };
+        let cancel = CancellationToken::new();
+        let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
+        let mut events = Vec::new();
+        while let Some(ev) = stream.next_event().await.unwrap() {
+            events.push(ev);
+        }
+        assert_eq!(
+            events,
+            vec![
+                LlmStreamEvent::TextChunk("The answer is".to_string()),
+                LlmStreamEvent::Truncated
+            ]
+        );
+        match stream.finish().await.unwrap() {
+            LlmStepEnd::FinalMessage { text, usage } => {
+                assert_eq!(text, "The answer is");
+                assert_eq!(usage.output_tokens, 1024);
+            }
+            other => panic!("expected FinalMessage, got {other:?}"),
+        }
+    }
+
+    /// A normal `stop` yields no `Truncated` (covered for text in
+    /// `text_response_streams_and_finishes`); and the log line is only
+    /// written for an abnormal reason.
+    #[test]
+    fn finish_reason_log_line_is_quiet_for_normal_stops() {
+        assert_eq!(crate::finish_reason_log_line("openai", Some("stop"), false), None);
+        assert_eq!(crate::finish_reason_log_line("openai", None, false), None);
+        let line = crate::finish_reason_log_line("openai", Some("length"), true).unwrap();
+        assert!(line.contains("`length`") && line.contains("cut off"), "{line}");
+        assert!(crate::finish_reason_log_line("ollama", Some("load"), false).is_some());
     }
 
     #[tokio::test]

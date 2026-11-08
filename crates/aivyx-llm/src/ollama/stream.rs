@@ -75,6 +75,8 @@ struct StreamState {
     /// happen with Ollama's protocol but the JSONL reader
     /// doesn't enforce the terminal contract).
     terminal_seen: bool,
+    /// The terminal chunk's `done_reason`, when it sent one.
+    done_reason: Option<String>,
 }
 
 /// The Ollama `LlmStream` impl. Wraps a [`JsonlReader`] and
@@ -127,7 +129,8 @@ impl LlmStream for OllamaStream {
                     // calls finish().
                     if self.state.terminal_seen {
                         self.terminal = Some(self.build_terminal()?);
-                        return Ok(None);
+                        let reason = self.state.done_reason.as_deref();
+                        return Ok(crate::finish_event("ollama", reason, reason == Some("length")));
                     }
                 }
                 None => {
@@ -170,6 +173,7 @@ impl OllamaStream {
         // accumulate them before returning.
         if chunk.done {
             self.state.terminal_seen = true;
+            self.state.done_reason = chunk.done_reason.clone();
             if let Some(prompt) = chunk.prompt_eval_count {
                 self.state.usage.input_tokens = prompt;
             }
@@ -316,6 +320,10 @@ struct OllamaChunk {
     prompt_eval_count: Option<u32>,
     #[serde(default)]
     eval_count: Option<u32>,
+    /// On the `done: true` chunk: `"stop"`, `"length"` (the reply hit
+    /// `num_predict` or the context window), `"load"`, ...
+    #[serde(default)]
+    done_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -373,6 +381,31 @@ mod tests {
     }
 
     // ----- Text-only streaming -----
+
+    /// Task 5c item 11: `done_reason: "length"` on the terminal chunk (the
+    /// reply hit `num_predict` or the context) yields `Truncated` before the
+    /// stream ends; `"stop"` does not.
+    #[tokio::test]
+    async fn length_done_reason_yields_truncated() {
+        let chunks: Vec<&[u8]> = vec![
+            b"{\"message\":{\"role\":\"assistant\",\"content\":\"Half\"},\"done\":false}\n",
+            b"{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"length\",\"eval_count\":128}\n",
+        ];
+        let mut stream = OllamaStream::new(make_reader(chunks), empty_known());
+        assert!(matches!(stream.next_event().await.unwrap(), Some(LlmStreamEvent::TextChunk(_))));
+        assert_eq!(stream.next_event().await.unwrap(), Some(LlmStreamEvent::Truncated));
+        assert!(stream.next_event().await.unwrap().is_none());
+        match Box::new(stream).finish().await.unwrap() {
+            LlmStepEnd::FinalMessage { text, .. } => assert_eq!(text, "Half"),
+            other => panic!("expected FinalMessage, got {other:?}"),
+        }
+
+        let chunks: Vec<&[u8]> = vec![
+            b"{\"message\":{\"role\":\"assistant\",\"content\":\"Done.\"},\"done\":true,\"done_reason\":\"stop\"}\n",
+        ];
+        let mut stream = OllamaStream::new(make_reader(chunks), empty_known());
+        assert!(stream.next_event().await.unwrap().is_none());
+    }
 
     #[tokio::test]
     async fn streams_text_chunks_and_terminates_on_done() {
