@@ -25,7 +25,13 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
   The audit chain format and the redb record shapes are not versioned
   yet. They are stable in 1.0 and get versions before it is released.
 - **The pack formats.** Formats 1 (tool packs) and 2 (config-only packs).
-  Snapshot: `docs/stable/formats.txt`.
+  Snapshot: `docs/stable/formats.txt`. A format 1 pack is stable as a
+  bundle (it installs and verifies in every 1.x), but the tool protocol
+  its tools speak (`tool.protocol_version`, tagged `(not stable)`) and
+  the `aivyx-vertical-sdk` crate they are built with are not stable in
+  1.0: a tool built against them may need a rebuild in a minor release.
+  They will be stabilised in a 1.x minor release once a real tool pack
+  exists.
 - **Webhook payloads.** The field paths of the notify payload and of the
   trigger reply. Snapshot: `docs/stable/formats.txt`.
 
@@ -66,12 +72,14 @@ one list of tagged entries is `NOT_STABLE` in
   group (`aivyx-pa tool-relevance`) and `--print-role`. (`--verify-only`,
   the forensic check, is stable.)
 - **The terminal chat's look**, and keys beyond the documented ones.
-- **Internal crates.** The crates in this repository are not a public API.
+- **Internal crates.** The crates in this repository are not a public API,
+  `aivyx-vertical-sdk` included.
 - **The Studio's HTTP API.** It belongs to the bundled Studio and changes
   with it.
-- **The daemon IPC and tool protocols.** They run between pa's own
-  processes. Their versions are recorded in `docs/stable/formats.txt`, so
-  a change is visible.
+- **The daemon IPC and tool protocols.** The IPC protocol runs between
+  pa's own processes; the tool protocol is the one a format 1 pack's
+  tools speak (see The pack formats above). Their versions are recorded
+  in `docs/stable/formats.txt`, so a change is visible.
 - **The tools the model sees.** Their names, arguments and descriptions
   change as models change.
 

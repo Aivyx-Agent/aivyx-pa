@@ -409,7 +409,11 @@ These properties are **stable** in the sense that a tool
 written against them today will continue to receive them in
 future phases. If a property weakens, that's an amendment.
 
-The following are **not** stable:
+The tool protocol itself (`TOOL_PROTOCOL_VERSION`, today `0.1`) is not
+covered by pa 1.0's compatibility promise (docs/COMPATIBILITY.md): a
+tool may need a rebuild in a 1.x minor release until the protocol is
+stabilised, which happens once a real tool pack exists. In particular,
+the following are **not** stable:
 
 | Surface | Why not |
 |---|---|

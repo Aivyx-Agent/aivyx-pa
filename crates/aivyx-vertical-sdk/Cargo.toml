@@ -1,6 +1,6 @@
 [package]
 name = "aivyx-vertical-sdk"
-description = "The stable contract surface for Aivyx vertical packs. A vertical (e.g. the kitchen pack) depends ONLY on this crate — never on the engine internals directly — so packs survive core refactors. See docs/VERTICAL_PACKS.md."
+description = "The contract surface for Aivyx vertical packs. A vertical (e.g. the kitchen pack) depends ONLY on this crate — never on the engine internals directly — so packs survive core refactors. See docs/VERTICAL_PACKS.md."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,12 +1,11 @@
-//! `aivyx-vertical-sdk` — the **stable contract surface for vertical packs**.
+//! `aivyx-vertical-sdk` — the **contract surface for vertical packs**.
 //!
 //! A vertical pack (the kitchen pack is the open reference example) is *config
 //! and tools over the free engine*, never a fork. But until now packs reached
 //! straight into the engine internals (`aivyx-core`, `aivyx-team`,
 //! `aivyx-capability`, `aivyx-tool`) so every core refactor risked breaking
 //! every paid pack. This crate is the seam that fixes that: it re-exports a
-//! **curated, semver-stable subset** of the engine, and a pack depends on this
-//! crate alone.
+//! **curated subset** of the engine, and a pack depends on this crate alone.
 //!
 //! ## The contract
 //!
@@ -22,7 +21,12 @@
 //!
 //! Or pull the lot in with `use aivyx_vertical_sdk::prelude::*;`.
 //!
-//! ## Stability promise
+//! ## Stability
+//!
+//! Not stable in pa 1.0 (docs/COMPATIBILITY.md): this crate and the tool
+//! protocol it speaks may change in a 1.x minor release, so a tool built
+//! against them may need a rebuild. Format 1 (tool) pack *bundles* are
+//! stable. Both get stabilised in a 1.x minor once a real tool pack exists.
 //!
 //! Items re-exported here are the pack-facing API. They change only with a
 //! deliberate SDK version bump, even when the underlying engine crate moves.

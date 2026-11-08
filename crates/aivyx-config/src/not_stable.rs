@@ -121,6 +121,10 @@ pub const NOT_STABLE: &[NotStable] = &[
     // `--verify-only` (forensics) stays stable.
     entry(Cli, "aivyx-pa tool-relevance", Tag::Developer),
     entry(Cli, "--print-role", Tag::Developer),
+    // R1 (b): format 1 pack bundles are stable, the tool protocol their tools
+    // speak is not (yet): a 1.x minor stabilises it once a real tool pack
+    // exists.
+    entry(Snapshot::Formats, "tool.protocol_version", Tag::NotStable),
 ];
 
 /// The tag of the snapshot line whose key (see [`Snapshot`]) is `key`.

@@ -24,7 +24,7 @@ existing KitchenDB.
 > visible to `aivyx-pa doctor`. Chapters **J.6 / Brigade / Lockup / Mise**.
 
 > **The boundary (new):** both kitchen crates now depend on **one** crate —
-> [`aivyx-vertical-sdk`](../crates/aivyx-vertical-sdk) — a thin, semver-stable
+> [`aivyx-vertical-sdk`](../crates/aivyx-vertical-sdk) — a thin
 > facade that re-exports *only* the pack-facing slice of the engine
 > (`TeamConfig`, `MissionPlan`, `TrustTier`, `Scope`, the `Tool` trait, the
 > tool-process harness). A pack's **shipping code never touches the engine
@@ -106,8 +106,8 @@ are `publish = false`):
   git deps).
 
 Because the SDK is the **only** engine surface a pack compiles against, it is the
-clean cut-seam between repos: a paid pack pins `aivyx-vertical-sdk` (semver-stable)
-and nothing else from the core, so engine refactors can't break it and the public/
+clean cut-seam between repos: a paid pack pins `aivyx-vertical-sdk` (not stable in
+1.0: see docs/COMPATIBILITY.md) and nothing else from the core, so engine refactors can't break it and the public/
 private split costs nothing structurally. *(The in-tree `crates/verticals-private/*`
 glob remains available as an optional local-dev convenience — drop a private pack
 there to build it inside the core workspace — but the separate repo is the home.)*
