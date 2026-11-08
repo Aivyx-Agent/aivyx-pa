@@ -134,6 +134,17 @@ workspace
   aivyx-pa workspace path
   aivyx-pa workspace ls [path]
   aivyx-pa workspace cat <path>
+(global flags)
+  --instance <name>
+  --verify-only
+  --channel <kind>
+  --role <name>
+  --print-role <name>
+  --no-daemon
+  --provider <kind>
+  --mcp <name:command[:arg1,arg2,...]>
+  --mcp-sse <name:url>
+  --version, -V
 (deprecated flags)
   --mcp-server: deprecated alias of --mcp
   --web-ui: deprecated alias of --studio

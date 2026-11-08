@@ -60,6 +60,79 @@ pub struct CommandHelp {
 #[cfg(test)]
 pub const NON_SUBCOMMAND_DISPATCH_NAMES: &[&str] = &["--version", "-V"];
 
+/// One global flag's entry under "Global flags" in the top-level help.
+pub struct GlobalFlag {
+    /// The flag and its argument, as typed (`--role <name>`).
+    pub usage: &'static str,
+    /// Its description, one entry per printed line.
+    pub help: &'static [&'static str],
+}
+
+/// The global flags, in the order the top-level help prints them. R4: this
+/// table is also the "(global flags)" block of `docs/stable/cli.txt`. Read
+/// off the REPL flag loop at the end of `parse_cli_args_from` and the
+/// `--instance` pre-pass; deprecated spellings are `DEPRECATED_FLAGS`.
+pub const GLOBAL_FLAGS: &[GlobalFlag] = &[
+    GlobalFlag {
+        usage: "--instance <name>",
+        help: &["Use a named instance (multi-instance support)."],
+    },
+    GlobalFlag { usage: "--verify-only", help: &["Forensic: verify the audit chain and exit."] },
+    GlobalFlag {
+        usage: "--channel <kind>",
+        help: &["local | telegram | discord | slack | matrix |", "proton | signal | voice."],
+    },
+    GlobalFlag { usage: "--role <name>", help: &["Use a named role for this session."] },
+    GlobalFlag {
+        usage: "--print-role <name>",
+        help: &["Print a role's rendered envelope and exit."],
+    },
+    GlobalFlag {
+        usage: "--no-daemon",
+        help: &["Chat in-process: don't connect to a running", "daemon or start one."],
+    },
+    GlobalFlag {
+        usage: "--provider <kind>",
+        help: &[
+            "anthropic | openai | ollama | llamacpp | jan |",
+            "mistralrs | broker | lemonade.",
+        ],
+    },
+    GlobalFlag {
+        usage: "--mcp <name:command[:arg1,arg2,...]>",
+        help: &[
+            "Attach a stdio MCP server for this session",
+            "(was --mcp-server, still accepted).",
+        ],
+    },
+    GlobalFlag {
+        usage: "--mcp-sse <name:url>",
+        help: &["Attach an SSE MCP server for this session."],
+    },
+    GlobalFlag { usage: "--version, -V", help: &["Print the version and exit."] },
+];
+
+/// The "Global flags" lines of the top-level help: the flag in a 22-column
+/// field, or on its own line when it is wider.
+fn global_flag_lines() -> String {
+    const WIDTH: usize = 22;
+    let indent = " ".repeat(2 + WIDTH + 1);
+    let mut out = String::new();
+    for f in GLOBAL_FLAGS {
+        let mut help = f.help.iter();
+        if f.usage.len() <= WIDTH {
+            let first = help.next().copied().unwrap_or_default();
+            out.push_str(&format!("  {:<WIDTH$} {first}\n", f.usage));
+        } else {
+            out.push_str(&format!("  {}\n", f.usage));
+        }
+        for line in help {
+            out.push_str(&format!("{indent}{line}\n"));
+        }
+    }
+    out
+}
+
 pub const COMMANDS: &[CommandHelp] = &[
     // ---- Chat and front ends ----------------------------------------
     CommandHelp {
@@ -475,21 +548,8 @@ pub fn render_top_level_help() -> String {
     out.push('\n');
 
     out.push_str("Global flags:\n");
-    out.push_str("  --instance <name>      Use a named instance (multi-instance support).\n");
-    out.push_str("  --verify-only          Forensic: verify the audit chain and exit.\n");
-    out.push_str("  --channel <kind>       local | telegram | discord | slack | matrix |\n");
-    out.push_str("                         proton | signal | voice.\n");
-    out.push_str("  --role <name>          Use a named role for this session.\n");
-    out.push_str("  --print-role <name>    Print a role's rendered envelope and exit.\n");
-    out.push_str("  --no-daemon            Chat in-process: don't connect to a running\n");
-    out.push_str("                         daemon or start one.\n");
-    out.push_str("  --provider <kind>      anthropic | openai | ollama | llamacpp | jan |\n");
-    out.push_str("                         mistralrs | broker | lemonade.\n");
-    out.push_str("  --mcp <name:command[:arg1,arg2,...]>\n");
-    out.push_str("                         Attach a stdio MCP server for this session\n");
-    out.push_str("                         (was --mcp-server, still accepted).\n");
-    out.push_str("  --mcp-sse <name:url>   Attach an SSE MCP server for this session.\n");
-    out.push_str("  --version, -V          Print the version and exit.\n\n");
+    out.push_str(&global_flag_lines());
+    out.push('\n');
 
     out.push_str("Run `aivyx-pa <command> --help` for details.\n");
     out
@@ -542,6 +602,9 @@ mod tests {
         }
         // Old flag spellings still accepted (they warn): part of the surface
         // until 2.0, like the config's deprecated aliases.
+        // R4: the global flags, from the table the help is rendered from.
+        cli.push("(global flags)".to_string());
+        cli.extend(GLOBAL_FLAGS.iter().map(|f| format!("  {}", f.usage)));
         cli.push("(deprecated flags)".to_string());
         cli.extend(
             crate::DEPRECATED_FLAGS

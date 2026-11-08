@@ -7,8 +7,14 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
 - **Config keys and their defaults** (the snapshot checks keys and types;
   see How this is checked). Every key path the config accepts, with its
   type, and the aliases it accepts. Snapshot: `docs/stable/config.txt`.
-- **The CLI commands and flags.** Each command and its usage lines.
-  Snapshot: `docs/stable/cli.txt`.
+- **The CLI commands and flags.** Each command and its usage lines, the
+  global flags (`--instance`, `--provider`, `--mcp`, ...) and the old flag
+  spellings still accepted. Snapshot: `docs/stable/cli.txt`.
+- **The environment variables.** The names the config loader reads
+  (`AIVYX_PA_*`, plus `ANTHROPIC_API_KEY`) and what each one sets.
+  Snapshot: `docs/stable/env.txt`. The variables other parts read (the
+  desktop app, one integration or tool) are listed in the environment
+  variables reference but are not in the snapshot.
 - **The instance layout on disk.** Not versioned yet. It gets a version,
   and an entry in `docs/stable/formats.txt`, before 1.0 is released.
 - **The data stores.** Any 1.x reads data written by 1.0. The snapshot
@@ -51,7 +57,8 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
 ## How this is checked
 
 `docs/stable/` is generated from the code; a test fails when it changes.
-The tests are `stable_config_keys` (`cargo test -p aivyx-config`) and the
+The tests are the `stable_config_keys` tests (`cargo test -p aivyx-config`;
+they write `config.txt` and `env.txt`) and the
 `stable_` tests in `aivyx-cli`. A change to the snapshot has to be made on
 purpose.
 
@@ -61,8 +68,10 @@ The check has limits:
   values, or the allowed values of keys that take one of a fixed set
   (for example, the access levels). The rules above and review cover
   those.
-- The CLI snapshot freezes each command and its usage lines as written in
-  the help table. It does not test behaviour.
+- The CLI snapshot freezes each command and its usage lines, and each
+  global flag, as written in the help tables. It does not test behaviour.
+- The env snapshot lists the variable names the config loader reads; a
+  test fails when the loader gains an `ENV_*` constant that is not in it.
 - The format snapshot lists the versions and field paths. It does not test
   that old data still reads. Each store checks its schema version when
   it opens and refuses one it does not know. Reading older data is covered

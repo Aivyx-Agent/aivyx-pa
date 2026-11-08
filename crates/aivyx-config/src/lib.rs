@@ -6291,7 +6291,11 @@ pub mod secret_keys {
 // Env var name constants
 // --------------------------------------------------------------------
 
-const ENV_ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
+/// R4 — the Anthropic key under pa's own prefix; it wins over the bare
+/// [`ENV_ANTHROPIC_API_KEY_BARE`] when both are set.
+const ENV_ANTHROPIC_API_KEY: &str = "AIVYX_PA_ANTHROPIC_API_KEY";
+/// The original, unprefixed name, still accepted (Anthropic's own SDKs read it).
+const ENV_ANTHROPIC_API_KEY_BARE: &str = "ANTHROPIC_API_KEY";
 const ENV_MODEL: &str = "AIVYX_PA_MODEL";
 const ENV_SYSTEM_PROMPT: &str = "AIVYX_PA_SYSTEM_PROMPT";
 const ENV_FS_ROOT: &str = "AIVYX_PA_FS_ROOT";
@@ -6416,6 +6420,40 @@ const ENV_PROVIDER: &str = "AIVYX_PA_PROVIDER";
 /// fall-through, matching the anthropic / openai key pattern.
 const ENV_EMBEDDING_API_KEY: &str = "AIVYX_PA_EMBEDDING_API_KEY";
 
+/// R4 — every environment variable the config loader reads, with what it
+/// sets: pa's stable env surface (`docs/stable/env.txt`,
+/// docs/COMPATIBILITY.md). A test checks that every `ENV_*` constant in
+/// this file is listed (the standard `HOME` / `XDG_CONFIG_HOME` aside).
+pub const STABLE_ENV_VARS: &[(&str, &str)] = &[
+    (aivyx_instance::ENV_INSTANCE, "the named instance (the --instance flag wins)"),
+    (ENV_CONFIG_PATH, "the config file path"),
+    (ENV_PASSPHRASE, "the store passphrase"),
+    (ENV_PROVIDER, "agent.provider"),
+    (ENV_MODEL, "agent.model"),
+    (ENV_SYSTEM_PROMPT, "agent.system_prompt"),
+    (ENV_ROLE, "the active role (the --role flag wins)"),
+    (ENV_ANTHROPIC_API_KEY, "anthropic.api_key"),
+    (ENV_ANTHROPIC_API_KEY_BARE, "anthropic.api_key (when AIVYX_PA_ANTHROPIC_API_KEY is unset)"),
+    (ENV_OPENAI_API_KEY, "openai.api_key"),
+    (ENV_OPENAI_BASE_URL, "openai.base_url"),
+    (ENV_EMBEDDING_API_KEY, "embedding.api_key"),
+    (ENV_KVCACHE_STORE_PATH, "kvcache.store_path"),
+    (ENV_STORAGE_PATH, "storage.path"),
+    (ENV_FS_ROOT, "fs.root"),
+    (ENV_WORKSPACE, "workspace.path"),
+    (ENV_MEMORY_MAX_PER_TOPIC, "memory.max_per_topic"),
+    (ENV_MEMORY_TTL_SECS, "memory.ttl_secs"),
+    (ENV_TELEGRAM_TOKEN, "telegram.token"),
+    (ENV_TELEGRAM_CHAT_ID, "telegram.chat_id"),
+    (ENV_DISCORD_TOKEN, "discord.token"),
+    (ENV_DISCORD_APPLICATION_ID, "discord.application_id"),
+    (ENV_DISCORD_CHANNEL_ID, "discord.channel_id"),
+    (ENV_SLACK_BOT_TOKEN, "slack.bot_token"),
+    (ENV_SLACK_APP_TOKEN, "slack.app_token"),
+    (ENV_SLACK_TEAM_ID, "slack.team_id"),
+    (ENV_SLACK_CHANNEL_ID, "slack.channel_id"),
+];
+
 // --------------------------------------------------------------------
 // Loader
 // --------------------------------------------------------------------
@@ -6473,6 +6511,7 @@ impl AivyxConfig {
         // Secret; stays None if neither env nor TOML supplied one.
         // Storage hydration in Phase 2 of the loader can still fill it.
         let anthropic_api_key = env_secret(ENV_ANTHROPIC_API_KEY)
+            .or_else(|| env_secret(ENV_ANTHROPIC_API_KEY_BARE))
             .map(|s| SourcedSecret::new(s, FieldSource::Env))
             .or_else(|| {
                 toml.anthropic

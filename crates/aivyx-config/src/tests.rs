@@ -90,6 +90,7 @@ impl EnvScope {
         ENV_SCOPE_ACTIVE.with(|f| f.set(true));
         let vars = [
             "ANTHROPIC_API_KEY",
+            "AIVYX_PA_ANTHROPIC_API_KEY",
             "AIVYX_PA_MODEL",
             "AIVYX_PA_SYSTEM_PROMPT",
             "AIVYX_PA_FS_ROOT",
@@ -13698,4 +13699,67 @@ fn a_bad_value_under_a_deprecated_key_names_the_key() {
     let msg = err.to_string();
     assert!(msg.contains("`studio.port` (set as `daemon.web_ui_port`)"), "{msg}");
     drop(env);
+}
+
+/// R4: `AIVYX_PA_ANTHROPIC_API_KEY` sets the Anthropic key; the bare
+/// `ANTHROPIC_API_KEY` is still read, and the prefixed one wins when both
+/// are set.
+#[test]
+fn prefixed_anthropic_key_wins_over_the_bare_name() {
+    let env = EnvScope::new();
+    let key = || {
+        AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only())
+            .unwrap()
+            .anthropic_api_key
+            .map(|k| (k.source, k.value.expose_secret().to_string()))
+    };
+    env.set("ANTHROPIC_API_KEY", "sk-bare");
+    assert_eq!(key(), Some((FieldSource::Env, "sk-bare".to_string())));
+    env.set("AIVYX_PA_ANTHROPIC_API_KEY", "sk-prefixed");
+    assert_eq!(key(), Some((FieldSource::Env, "sk-prefixed".to_string())));
+    env.clear("ANTHROPIC_API_KEY");
+    assert_eq!(key(), Some((FieldSource::Env, "sk-prefixed".to_string())));
+}
+
+/// R4: the environment variables the loader reads are pa's stable env
+/// surface, snapshotted in `docs/stable/env.txt`. Every `ENV_*` constant in
+/// lib.rs must be in [`crate::STABLE_ENV_VARS`] (bar the standard ones), so a
+/// new variable cannot slip past the snapshot.
+#[test]
+fn stable_config_keys_env_vars() {
+    let src = include_str!("lib.rs");
+    let standard = ["HOME", "XDG_CONFIG_HOME"];
+    let mut missing = Vec::new();
+    for line in src.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("const ENV_").or_else(|| {
+            line.trim_start().strip_prefix("pub const ENV_")
+        }) else {
+            continue;
+        };
+        let Some(value) = rest.split('"').nth(1) else { continue };
+        if !standard.contains(&value) && !crate::STABLE_ENV_VARS.iter().any(|(n, _)| *n == value) {
+            missing.push(value.to_string());
+        }
+    }
+    assert!(missing.is_empty(), "ENV_* constants missing from STABLE_ENV_VARS: {missing:?}");
+
+    let mut names: Vec<&str> = crate::STABLE_ENV_VARS.iter().map(|(n, _)| *n).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), crate::STABLE_ENV_VARS.len(), "STABLE_ENV_VARS lists a name twice");
+    let mut lines: Vec<String> =
+        crate::STABLE_ENV_VARS.iter().map(|(n, what)| format!("{n}: {what}")).collect();
+    lines.sort();
+    let text = lines.join("\n") + "\n";
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/stable/env.txt");
+    if std::env::var_os("UPDATE_STABLE_SURFACE").is_some() {
+        std::fs::write(&path, &text).unwrap();
+        return;
+    }
+    assert!(
+        std::fs::read_to_string(&path).unwrap_or_default() == text,
+        "docs/stable/env.txt differs from STABLE_ENV_VARS: a change to pa's stable surface \
+         (docs/COMPATIBILITY.md). If it is intended, run \
+         UPDATE_STABLE_SURFACE=1 cargo test -p aivyx-config stable_config_keys and commit docs/stable/"
+    );
 }

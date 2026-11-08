@@ -8,6 +8,10 @@ Secrets (API keys, tokens, the passphrase) are better kept in the encrypted
 store — `aivyx-pa init`, `aivyx-pa connect` and the Studio put them there.
 Use these variables for scripts, containers and one-off overrides.
 
+The variables in the first four tables, except
+`AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP`, are part of pa's stable surface
+([Compatibility](../../COMPATIBILITY.md)); `docs/stable/env.txt` lists them.
+
 ## Choosing the instance and config
 
 | Variable | Effect |
@@ -24,7 +28,8 @@ Use these variables for scripts, containers and one-off overrides.
 | `AIVYX_PA_MODEL` | `[agent] model` |
 | `AIVYX_PA_SYSTEM_PROMPT` | `[agent] system_prompt` |
 | `AIVYX_PA_ROLE` | the active role (the `--role` flag wins) |
-| `ANTHROPIC_API_KEY` | `[anthropic] api_key` |
+| `AIVYX_PA_ANTHROPIC_API_KEY` | `[anthropic] api_key` |
+| `ANTHROPIC_API_KEY` | `[anthropic] api_key`, when `AIVYX_PA_ANTHROPIC_API_KEY` is unset. The older name, still accepted. |
 | `AIVYX_PA_OPENAI_API_KEY` | `[openai] api_key` |
 | `AIVYX_PA_OPENAI_BASE_URL` | `[openai] base_url` |
 | `AIVYX_PA_EMBEDDING_API_KEY` | `[embedding] api_key` |

@@ -56,7 +56,7 @@ Anthropic as the provider (`[agent] provider = "anthropic"`).
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `api_key` | string |  | Your Anthropic API key. Prefer the encrypted store (`aivyx-pa init` or the Studio) or `ANTHROPIC_API_KEY`. |
+| `api_key` | string |  | Your Anthropic API key. Prefer the encrypted store (`aivyx-pa init` or the Studio) or `AIVYX_PA_ANTHROPIC_API_KEY`. |
 
 ### `[openai]`
 
