@@ -13763,3 +13763,26 @@ fn stable_config_keys_env_vars() {
          UPDATE_STABLE_SURFACE=1 cargo test -p aivyx-config stable_config_keys and commit docs/stable/"
     );
 }
+
+/// Task 5c part 3: `[agent] role` picks the active role when neither
+/// `--role` nor `AIVYX_PA_ROLE` does; the env var still wins over it.
+#[test]
+fn agent_role_selects_the_active_role() {
+    let env = EnvScope::new();
+    let body = "\n[agent]\nrole = \"coder\"\n\n\
+                [[role]]\nname = \"coder\"\n\n[[role]]\nname = \"writer\"\n";
+    let cfg = load_with_toml(body, "agent-role");
+    assert_eq!(cfg.active_role.value, "coder");
+    assert_eq!(cfg.active_role.source, FieldSource::Toml);
+    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+
+    env.set("AIVYX_PA_ROLE", "writer");
+    assert_eq!(load_with_toml(body, "agent-role-env").active_role.value, "writer");
+    env.clear("AIVYX_PA_ROLE");
+
+    let unknown = "\n[agent]\nrole = \"nope\"\n\n[[role]]\nname = \"coder\"\n";
+    assert!(matches!(
+        load_with_toml_result(unknown, "agent-role-unknown"),
+        Err(ConfigError::UnknownRole { ref name, .. }) if name == "nope"
+    ));
+}

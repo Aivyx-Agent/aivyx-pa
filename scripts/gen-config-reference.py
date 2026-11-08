@@ -164,6 +164,7 @@ MEANINGS = {
     "agent.model": "The model id, as the provider names it (e.g. `qwen3:14b`, `claude-sonnet-5`).",
     "agent.system_prompt": "Extra instructions added to the agent's system prompt.",
     "agent.provider": "Which backend serves the model.",
+    "agent.role": "The `[[role]]` to start in when neither `--role` nor `AIVYX_PA_ROLE` picks one. Default `default`. `aivyx-pa init` sets it for templates that have no `default` role.",
     "fs.root": "The directory the file tools may work in. Wins over `[access] root`; setting both to different directories warns at startup.",
     "access.level": "How far the agent reaches: `sandbox` (its own directory), `workspace` (a directory you choose), `home`, `full`, or `custom`.",
     "access.root": "The directory for the `workspace` and `custom` levels (required for those).",

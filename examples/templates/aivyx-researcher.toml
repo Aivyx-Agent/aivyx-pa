@@ -17,6 +17,8 @@
 [agent]
 provider = "ollama"
 model = "llama3.1"
+# The [[role]] below to start in (there is no `default` role here).
+role = "researcher"
 # To use Anthropic Claude instead:
 # provider = "anthropic"
 # model = "claude-sonnet-4-5"

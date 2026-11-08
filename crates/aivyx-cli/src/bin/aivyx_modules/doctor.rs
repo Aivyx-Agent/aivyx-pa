@@ -105,12 +105,16 @@ fn print_ignored_local_configs() {
 /// `aivyx-pa doctor` — run the health checks and report.
 pub async fn run_doctor() -> Result<(), String> {
     print_ignored_local_configs();
-    let cfg = load_config_for_inspection()?;
+    let (cfg, role_fix) = load_config_for_doctor()?;
     if let Some(message) = not_set_up_message(&cfg) {
         return Err(message);
     }
     println!("aivyx-pa doctor — checking your setup\n");
-    print!("{}", config_warnings_section(&cfg.warnings));
+    let mut warnings = cfg.warnings.clone();
+    if let Some(role) = &role_fix {
+        warnings.insert(0, missing_start_role_warning(role));
+    }
+    print!("{}", config_warnings_section(&warnings, role_fix.is_none()));
 
     let provider_ok = match cfg.provider.value {
         ProviderKind::Ollama => check_ollama(&cfg).await,
@@ -170,7 +174,9 @@ pub async fn run_doctor() -> Result<(), String> {
 /// spellings, conflicting settings) as a warning line, or a pass line when
 /// there are none. Warning-level: it never fails the doctor, matching the
 /// start-up banner, which prints the same list.
-fn config_warnings_section(warnings: &[String]) -> String {
+/// `still_runs` is false when one of them stops pa from starting (the
+/// missing start role), and the hint then doesn't claim otherwise.
+fn config_warnings_section(warnings: &[String], still_runs: bool) -> String {
     let mut out = String::from("Config:\n");
     if warnings.is_empty() {
         out.push_str("  \u{2713} no unknown, deprecated or conflicting settings\n");
@@ -180,9 +186,10 @@ fn config_warnings_section(warnings: &[String]) -> String {
         out.push_str(&format!("  \u{26a0} {warning}\n"));
     }
     out.push_str(&format!(
-        "     \u{2192} edit {} to clear {}; the agent still runs\n",
+        "     \u{2192} edit {} to clear {}{}\n",
         config_path().display(),
-        if warnings.len() == 1 { "it" } else { "them" }
+        if warnings.len() == 1 { "it" } else { "them" },
+        if still_runs { "; the agent still runs" } else { "" }
     ));
     out.push('\n');
     out
@@ -1289,36 +1296,99 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn load_config_for_inspection() -> Result<AivyxConfig, String> {
-    let opts = LoadOptions {
+    load_config_with_role(None)
+}
+
+fn load_config_with_role(role_override: Option<String>) -> Result<AivyxConfig, String> {
+    AivyxConfig::load_from_env_and_toml(&inspection_opts(role_override))
+        .map_err(|e| format!("failed to load {}: {e}", config_path().display()))
+}
+
+fn inspection_opts(role_override: Option<String>) -> LoadOptions {
+    LoadOptions {
         toml_path: Some(config_path()),
         require_api_key: false,
         require_telegram_token: false,
         require_discord_token: false,
         require_slack_tokens: false,
-        role_override: None,
-    };
-    AivyxConfig::load_from_env_and_toml(&opts)
-        .map_err(|e| format!("failed to load {}: {e}", config_path().display()))
+        role_override,
+    }
+}
+
+/// The doctor's load. A config made from a template before `init` wrote
+/// `[agent] role` defines one role that isn't `default`, and nothing picks
+/// it, so it doesn't load. Then the doctor loads it with that role, to
+/// check the rest, and returns the role so the Config section can name the
+/// line to add.
+fn load_config_for_doctor() -> Result<(AivyxConfig, Option<String>), String> {
+    match AivyxConfig::load_from_env_and_toml(&inspection_opts(None)) {
+        Ok(cfg) => Ok((cfg, None)),
+        Err(e) => match start_role_fix(&e, std::env::var_os("AIVYX_PA_ROLE").is_some()) {
+            Some(role) => Ok((load_config_with_role(Some(role.clone()))?, Some(role))),
+            None => Err(format!("failed to load {}: {e}", config_path().display())),
+        },
+    }
+}
+
+/// The role to name in `[agent] role` when `err` is "the default role
+/// isn't defined" and exactly one role is, with no `AIVYX_PA_ROLE` set.
+/// Pure.
+fn start_role_fix(err: &aivyx_config::ConfigError, role_env_set: bool) -> Option<String> {
+    match err {
+        aivyx_config::ConfigError::UnknownRole { name, known }
+            if !role_env_set && name == aivyx_config::DEFAULT_ROLE_NAME && known.len() == 1 =>
+        {
+            Some(known[0].clone())
+        }
+        _ => None,
+    }
+}
+
+/// The Config-section warning for [`start_role_fix`], with the exact line.
+fn missing_start_role_warning(role: &str) -> String {
+    format!(
+        "no role is chosen and this config has no `default` role, so aivyx-pa won't start \
+         without `--role {role}`. Add this line under [agent]: role = \"{role}\""
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Task 5c part 3: a config with one role that isn't `default`, and
+    /// nothing choosing it, gets a fix naming the exact line; any other
+    /// unknown-role error (two roles, `AIVYX_PA_ROLE` set) does not.
+    #[test]
+    fn a_config_with_one_non_default_role_gets_the_line_to_add() {
+        let err = |name: &str, known: &[&str]| aivyx_config::ConfigError::UnknownRole {
+            name: name.to_string(),
+            known: known.iter().map(|k| k.to_string()).collect(),
+        };
+        assert_eq!(start_role_fix(&err("default", &["coder"]), false).as_deref(), Some("coder"));
+        assert_eq!(start_role_fix(&err("default", &["coder"]), true), None);
+        assert_eq!(start_role_fix(&err("default", &["a", "b"]), false), None);
+        assert_eq!(start_role_fix(&err("typo", &["coder"]), false), None);
+        let line = missing_start_role_warning("coder");
+        assert!(line.ends_with("Add this line under [agent]: role = \"coder\""), "{line}");
+    }
+
     /// Task 5c item 10: doctor lists every config warning, warning-level.
     #[test]
     fn doctor_lists_config_warnings() {
-        let none = config_warnings_section(&[]);
+        let none = config_warnings_section(&[], true);
         assert!(none.starts_with("Config:\n  \u{2713}"), "{none}");
         let warnings = vec![
             "unknown config key `ollama.base_url`".to_string(),
             "`daemon.web_ui_port` is deprecated; use `studio.port`".to_string(),
         ];
-        let out = config_warnings_section(&warnings);
+        let out = config_warnings_section(&warnings, true);
         for w in &warnings {
             assert!(out.contains(&format!("  \u{26a0} {w}\n")), "{out}");
         }
-        assert!(out.contains("to clear them"), "{out}");
+        assert!(out.contains("to clear them; the agent still runs"), "{out}");
+        let blocked = config_warnings_section(&warnings[..1], false);
+        assert!(blocked.contains("to clear it\n"), "{blocked}");
         assert!(!out.contains('\u{2717}'), "a config warning never fails the doctor: {out}");
     }
 

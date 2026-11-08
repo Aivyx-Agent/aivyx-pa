@@ -49,6 +49,7 @@ The model the agent uses and how a turn behaves. Pairs with one provider section
 | `conversation_history_messages` | integer |  | Conversation-history replay depth in messages (user and assistant lines each count as one). Unset → `8`; `0` disables. |
 | `injection_scan_enabled` | bool |  | Global on/off for the active injection scan. Unset → `true` (fail-closed, matching `[sandbox] require_enforcement`'s posture). |
 | `injection_scan_exempt` | list of string |  | Tool names exempted from the active injection scan even when `injection_scan_enabled` is `true`. Matched exactly against `Tool::name()`. |
+| `role` | string |  | The `[[role]]` to start in when neither `--role` nor `AIVYX_PA_ROLE` picks one. Default `default`. `aivyx-pa init` sets it for templates that have no `default` role. |
 
 ### `[anthropic]`
 

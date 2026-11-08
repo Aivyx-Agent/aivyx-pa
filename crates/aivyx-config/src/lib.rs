@@ -796,7 +796,8 @@ pub struct LoadOptions {
     /// 1. `LoadOptions::role_override` (this field) — typically populated
     ///    from a future `--role <name>` CLI flag.
     /// 2. `AIVYX_PA_ROLE` environment variable.
-    /// 3. [`DEFAULT_ROLE_NAME`] (`"default"`).
+    /// 3. `[agent] role` in the config file.
+    /// 4. [`DEFAULT_ROLE_NAME`] (`"default"`).
     ///
     /// An override that does not match any role loaded from config
     /// surfaces as [`ConfigError::UnknownRole`] at
@@ -1338,7 +1339,8 @@ pub struct AivyxConfig {
     /// 1. [`LoadOptions::role_override`] (populated by the future
     ///    `--role <name>` CLI flag landing in Phase 11 Task 4).
     /// 2. `AIVYX_PA_ROLE` environment variable.
-    /// 3. [`DEFAULT_ROLE_NAME`] (`"default"`).
+    /// 3. `[agent] role` in the config file.
+    /// 4. [`DEFAULT_ROLE_NAME`] (`"default"`).
     ///
     /// The loader validates at load time that `self.roles` contains
     /// a matching entry; if not, it returns
@@ -4987,6 +4989,11 @@ struct RawAgent {
     /// exemptions).
     #[serde(default)]
     injection_scan_exempt: Vec<String>,
+    /// Task 5c part 3 — the `[[role]]` active when neither `--role` nor
+    /// `AIVYX_PA_ROLE` names one. Unset → [`DEFAULT_ROLE_NAME`]. `init`
+    /// writes it for templates whose one role is not named `default`.
+    #[serde(default)]
+    role: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -7913,6 +7920,8 @@ impl AivyxConfig {
             Sourced::new(name, FieldSource::Env)
         } else if let Some(name) = env_string(ENV_ROLE) {
             Sourced::new(name, FieldSource::Env)
+        } else if let Some(name) = toml.agent.role.clone().filter(|n| !n.is_empty()) {
+            Sourced::new(name, FieldSource::Toml)
         } else {
             Sourced::new(DEFAULT_ROLE_NAME.to_string(), FieldSource::Default)
         };

@@ -27,7 +27,7 @@ The variables in the first four tables, except
 | `AIVYX_PA_PROVIDER` | `[agent] provider` |
 | `AIVYX_PA_MODEL` | `[agent] model` |
 | `AIVYX_PA_SYSTEM_PROMPT` | `[agent] system_prompt` |
-| `AIVYX_PA_ROLE` | the active role (the `--role` flag wins) |
+| `AIVYX_PA_ROLE` | `[agent] role`, the active role (the `--role` flag wins) |
 | `AIVYX_PA_ANTHROPIC_API_KEY` | `[anthropic] api_key` |
 | `ANTHROPIC_API_KEY` | `[anthropic] api_key`, when `AIVYX_PA_ANTHROPIC_API_KEY` is unset. The older name, still accepted. |
 | `AIVYX_PA_OPENAI_API_KEY` | `[openai] api_key` |

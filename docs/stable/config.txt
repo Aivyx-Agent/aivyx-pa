@@ -12,6 +12,7 @@ agent.injection_scan_enabled: bool?
 agent.injection_scan_exempt: [str]
 agent.model: str?
 agent.provider: ProviderKind?
+agent.role: str?
 agent.system_prompt: str?
 agent.turn_timeout_secs: u64?
 aivyx: legacy-table-ignored

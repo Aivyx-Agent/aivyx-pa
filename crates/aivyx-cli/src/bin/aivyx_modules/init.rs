@@ -2595,6 +2595,18 @@ impl TemplateDefaults {
 /// section in the template — only the wizard-controlled keys
 /// (provider, model, paths, profile fields, api key) are
 /// overwritten.
+/// The role a config made from template `doc` must name in `[agent] role`:
+/// its first `[[role]]`, when it defines roles and none is named
+/// `default` (the role chosen when nothing names one). `None` otherwise.
+fn template_start_role(doc: &toml_edit::DocumentMut) -> Option<String> {
+    let roles = doc.get("role")?.as_array_of_tables()?;
+    let names: Vec<&str> = roles.iter().filter_map(|r| r.get("name")?.as_str()).collect();
+    if names.contains(&aivyx_config::DEFAULT_ROLE_NAME) {
+        return None;
+    }
+    names.first().map(|n| n.to_string())
+}
+
 fn render_with_template(
     cfg: &InitConfig,
     template_name: &str,
@@ -2605,6 +2617,15 @@ fn render_with_template(
     // [agent] provider + model
     doc["agent"]["provider"] = value(cfg.provider.config_name());
     doc["agent"]["model"] = value(cfg.model.as_str());
+
+    // Task 5c part 3 — a template whose roles don't include `default`
+    // names the one to start in, or the config would not load without
+    // `--role`. One the template already chose is kept.
+    if doc["agent"].get("role").is_none()
+        && let Some(role) = template_start_role(&doc)
+    {
+        doc["agent"]["role"] = value(role);
+    }
 
     // Provider-specific API key. Wipe the inactive provider's
     // api_key block to avoid the template's "alternative
@@ -5196,7 +5217,8 @@ mod tests {
     /// no config warnings (no unknown keys, no deprecated spellings). The
     /// coder/researcher/personal/kitchen templates used to write
     /// `[ollama] base_url`, which is not a key: every config made from them
-    /// warned.
+    /// warned. Loaded exactly as written, with no `--role`: their one role
+    /// is not named `default`, so the config names it in `[agent] role`.
     #[test]
     fn every_bundled_template_generates_a_config_with_no_warnings() {
         let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s.redb", ".", false);
@@ -5204,15 +5226,6 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         for template in crate::init_templates::bundled_templates() {
             let doc: toml_edit::DocumentMut = template.toml_content.parse().unwrap();
-            // The templates' `[[role]]` is not named `default`, so the config
-            // only loads with that role chosen (`--role <name>`); load it so.
-            let role = doc
-                .get("role")
-                .and_then(|r| r.as_array_of_tables())
-                .and_then(|roles| roles.iter().next())
-                .and_then(|role| role.get("name"))
-                .and_then(|name| name.as_str())
-                .map(str::to_string);
             let path = dir.join(format!("{}.toml", template.name));
             std::fs::write(&path, render_with_template(&cfg, &template.name, doc)).unwrap();
             let opts = aivyx_config::LoadOptions {
@@ -5221,7 +5234,7 @@ mod tests {
                 require_telegram_token: false,
                 require_discord_token: false,
                 require_slack_tokens: false,
-                role_override: role,
+                role_override: None,
             };
             let loaded = aivyx_config::AivyxConfig::load_from_env_and_toml(&opts)
                 .unwrap_or_else(|e| panic!("template `{}` does not load: {e}", template.name));
@@ -5233,6 +5246,26 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Task 5c part 3: a template whose roles don't include `default` gets
+    /// `[agent] role` naming its first role; one with a `default` role, or a
+    /// role already chosen, is left alone.
+    #[test]
+    fn a_template_without_a_default_role_names_its_role() {
+        let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s.redb", ".", false);
+        let render = |extra: &str| {
+            let doc: toml_edit::DocumentMut =
+                format!("[agent]\nprovider = \"ollama\"\n{extra}").parse().unwrap();
+            let out = render_with_template(&cfg, "t", doc);
+            let doc: toml_edit::DocumentMut = out.parse().unwrap();
+            doc["agent"].get("role").and_then(|r| r.as_str()).map(str::to_string)
+        };
+        let roles = "[[role]]\nname = \"writer\"\n\n[[role]]\nname = \"coder\"\n";
+        assert_eq!(render(&format!("\n{roles}")).as_deref(), Some("writer"));
+        assert_eq!(render(&format!("role = \"coder\"\n\n{roles}")).as_deref(), Some("coder"));
+        assert_eq!(render("\n[[role]]\nname = \"default\"\n"), None);
+        assert_eq!(render(""), None);
     }
 
     #[test]
