@@ -254,7 +254,7 @@ fn check_service() {
 /// and the operator already has direct read access to `aivyx-pa.toml` on
 /// their own disk. "Regenerate" (writing a fresh token) is a mutating
 /// action and stays out of scope for this read-only command — it's a
-/// `[daemon] web_ui_auth_token` edit in `aivyx-pa.toml`, or a future
+/// `[studio] auth_token` edit in `aivyx-pa.toml`, or a future
 /// Settings-screen affordance.
 /// The branch `check_gatehouse` prints, split out as pure/testable logic
 /// (no `AivyxConfig` needed) from the `println!` side effects.
@@ -339,7 +339,7 @@ pub fn studio_reach(
     state: &aivyx_channel::studio_token::StudioState,
 ) -> Result<std::net::SocketAddr, String> {
     use aivyx_channel::studio_token::{not_running_message, StudioState};
-    cfg_addr.ok_or_else(|| "the Studio is off (`[daemon] web_ui = false`).".to_string())?;
+    cfg_addr.ok_or_else(|| "the Studio is off (`[studio] enabled = false`).".to_string())?;
     match state {
         StudioState::Bound(addr) => Ok(*addr),
         StudioState::Failed(port) => Err(not_running_message(*port)),
@@ -387,7 +387,7 @@ fn studio_command_output(
     token_path: &Path,
     token_only: bool,
 ) -> Result<String, String> {
-    let addr = addr.ok_or_else(|| "the Studio is off (`[daemon] web_ui = false`).".to_string())?;
+    let addr = addr.ok_or_else(|| "the Studio is off (`[studio] enabled = false`).".to_string())?;
     if configured_token.is_none() && !insecure_no_auth && auto_token.is_none() {
         return Err(format!(
             "the Studio isn't running yet — its daemon hasn't started. Run `aivyx-pa` \
@@ -449,7 +449,7 @@ pub fn run_studio(token_only: bool) -> Result<(), String> {
 fn check_gatehouse(cfg: &AivyxConfig) {
     println!("\nStudio (web UI):");
     let Some(addr) = cfg.studio_addr() else {
-        println!("  • the Studio is off (`[daemon] web_ui = false`).");
+        println!("  • the Studio is off (`[studio] enabled = false`).");
         return;
     };
     let token_path = aivyx_channel::studio_token::token_path(&cfg.storage_path.value);
@@ -469,16 +469,16 @@ fn check_gatehouse(cfg: &AivyxConfig) {
         }
         GatehouseStatus::NoTokenOffHost { host } => {
             println!(
-                "  ⚠ bound off-host ({host}) with no `[daemon] web_ui_auth_token` set\n     \
+                "  ⚠ bound off-host ({host}) with no `[studio] auth_token` set\n     \
                  → anyone who can reach this host can drive the agent; set a token \
                  (e.g. `openssl rand -hex 32`) in aivyx-pa.toml, or \
-                 `web_ui_insecure_no_auth = true` if a reverse proxy already \
+                 `[studio] insecure_no_auth = true` if a reverse proxy already \
                  authenticates. See https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/GATEHOUSE.md"
             );
         }
         GatehouseStatus::NoTokenLoopback if cfg.web_ui_insecure_no_auth => {
             println!(
-                "  ⚠ no auth token (`web_ui_insecure_no_auth = true`) — any account \
+                "  ⚠ no auth token (`[studio] insecure_no_auth = true`) — any account \
                  on this machine can open the Studio at {}",
                 aivyx_channel::studio_token::studio_url(addr.ip(), addr.port())
             );
@@ -1430,7 +1430,7 @@ mod tests {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let p = Path::new("/s/studio-token");
         let off = studio_command_output(None, None, false, Some("auto"), p, false).unwrap_err();
-        assert!(off.contains("web_ui = false"), "{off}");
+        assert!(off.contains("[studio] enabled = false"), "{off}");
         let addr = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843));
         let missing = studio_command_output(addr, None, false, None, p, false).unwrap_err();
         assert!(missing.contains("aivyx-pa daemon run") && missing.contains("/s/studio-token"), "{missing}");
@@ -1452,7 +1452,7 @@ mod tests {
         let failed = StudioState::Failed(7843);
         let err = studio_reach(cfg, &failed).unwrap_err();
         assert!(err.starts_with("The Studio isn't running: port 7843 is in use"), "{err}");
-        assert!(err.contains("`[daemon] web_ui_port`") && err.contains("`--web-ui-port`"), "{err}");
+        assert!(err.contains("`[studio] port`") && err.contains("`--studio-port`"), "{err}");
         let line = repl_studio_banner(&failed, None, false, Some("auto"), true).unwrap();
         assert_eq!(line, err);
         assert!(!line.contains("token") && !line.contains("http"), "{line}");
@@ -1460,7 +1460,7 @@ mod tests {
         assert!(studio_reach(cfg, &StudioState::Unknown).unwrap_err().contains("daemon isn't up"));
         assert_eq!(repl_studio_banner(&StudioState::Unknown, None, false, Some("auto"), true), None);
         // Off in the config.
-        assert!(studio_reach(None, &bound).unwrap_err().contains("web_ui = false"));
+        assert!(studio_reach(None, &bound).unwrap_err().contains("[studio] enabled = false"));
     }
 
     #[test]

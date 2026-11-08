@@ -1416,13 +1416,13 @@ pub struct AivyxConfig {
     pub webhook_port: Option<u16>,
     /// Web UI port. `Some(port)` enables the web UI on that port.
     /// `None` means the web UI is disabled. On by default since first-run
-    /// coherence A2 (port 7843); `[daemon] web_ui_port = <N>` picks the
-    /// port and `[daemon] web_ui = false` turns it off (winning over a
+    /// coherence A2 (port 7843); `[studio] port = <N>` picks the
+    /// port and `[studio] enabled = false` turns it off (winning over a
     /// written port). Phase 39.
     pub web_ui_port: Option<u16>,
     /// Web UI bind host. `None` (default) binds `127.0.0.1` — the
     /// localhost-only posture every native install keeps. Chapter Harbor:
-    /// set `[daemon] web_ui_host = "0.0.0.0"` for containerized deployment
+    /// set `[studio] host = "0.0.0.0"` for containerized deployment
     /// (Docker forwards published ports to the container's `0.0.0.0`, not
     /// its loopback, so the appliance profile must bind a routable host).
     /// Binding beyond loopback is a deliberate network exposure — pair it
@@ -1438,19 +1438,19 @@ pub struct AivyxConfig {
     /// Extra WS Origin allowlist entries beyond the built-in loopback origins
     /// (`http://127.0.0.1:<port>`, `http://localhost:<port>`, `http://[::1]:<port>`).
     /// Empty (default) keeps the localhost-only CSWSH/DNS-rebind posture. Chapter
-    /// Harbor: set `[daemon] web_ui_allowed_origins = ["https://studio.example"]`
+    /// Harbor: set `[studio] allowed_origins = ["https://studio.example"]`
     /// to the scheme+host(+port) a remotely-exposed Studio is served at. Each
     /// entry must be a bare origin (scheme://host[:port], no path).
     pub web_ui_allowed_origins: Vec<String>,
     /// Chapter Postern — shared-secret auth token for the web UI's control
     /// plane. `None` (default) = no operator token: the daemon then uses its
     /// automatic `studio-token` file (first-run coherence A2) unless
-    /// `web_ui_insecure_no_auth` is set. When set (`[daemon]
-    /// web_ui_auth_token = "…"`), the Studio's `/ws` WebSocket — the channel
+    /// `[studio] insecure_no_auth` is set. When set (`[studio]
+    /// auth_token = "…"`), the Studio's `/ws` WebSocket — the channel
     /// that drives the agent, reads memory, and writes config — requires the
     /// token, and static routes prompt for it via HTTP Basic. This closes the
     /// unauthenticated control plane when the Studio is exposed off-host
-    /// (`web_ui_host = "0.0.0.0"`); strongly recommended in that case.
+    /// (`[studio] host = "0.0.0.0"`); strongly recommended in that case.
     pub web_ui_auth_token: Option<aivyx_capability::display::SecretString>,
     /// Chapter Roster — the operator's team-config file. `[team] roster_path`
     /// points at a `[team]`-rooted TOML document (the same shape packs like
@@ -4356,6 +4356,9 @@ struct RawToml {
     /// `[daemon]` section. Phase 28 Task 3.
     #[serde(default)]
     daemon: RawDaemon,
+    /// `[studio]` section. R21 — the web Studio (was `[daemon] web_ui*`).
+    #[serde(default)]
+    studio: RawStudio,
     /// `[profile]` section. Phase 57 (PRODUCT.md P13). Absent
     /// section deserializes via `Default` into an all-`None` /
     /// all-empty raw shape, which the loader then maps to
@@ -4364,21 +4367,40 @@ struct RawToml {
     profile: RawProfile,
 }
 
-/// `[daemon]` section in the TOML file. Phase 28 Task 3.
-/// Phase 39 adds `web_ui` and `web_ui_port` for the web UI channel.
-/// Chapter Harbor adds `web_ui_host` for containerized deployment.
+/// `[daemon]` section in the TOML file. Phase 28 Task 3. The Studio's
+/// settings were `web_ui*` keys here until R21 moved them to `[studio]`
+/// (the old spellings are deprecated aliases, `deprecated_keys`).
 #[derive(Debug, Default, Deserialize)]
 struct RawDaemon {
     webhook_port: Option<u16>,
-    web_ui: Option<bool>,
-    web_ui_port: Option<u16>,
-    web_ui_host: Option<String>,
-    web_ui_allowed_origins: Option<Vec<String>>,
-    web_ui_auth_token: Option<aivyx_capability::display::SecretString>,
+}
+
+/// `[studio]` section: the daemon's web Studio. Was `[daemon] web_ui`,
+/// `web_ui_port`, `web_ui_host`, `web_ui_allowed_origins`,
+/// `web_ui_auth_token` and `web_ui_insecure_no_auth` (Phase 39, Chapters
+/// Harbor, Postern and Gatehouse); renamed by R21, old spellings kept as
+/// deprecated aliases.
+#[derive(Debug, Default, Deserialize)]
+struct RawStudio {
+    /// `false` turns the Studio off (winning over a written `port`). On by
+    /// default.
+    enabled: Option<bool>,
+    /// The Studio's port. Unset means 7843 (a named instance gets its own
+    /// from `instances create`).
+    port: Option<u16>,
+    /// The bind address. Unset means `127.0.0.1`. Binding beyond loopback
+    /// needs `auth_token` (or `insecure_no_auth`) — see `docs/DOCKER.md`.
+    host: Option<String>,
+    /// Extra WS Origin allowlist entries beyond the built-in loopback
+    /// origins. Empty (default) keeps the localhost-only CSWSH posture.
+    allowed_origins: Option<Vec<String>>,
+    /// Your own Studio sign-in token. Unset means the automatic one, kept in
+    /// a `studio-token` file next to the store.
+    auth_token: Option<aivyx_capability::display::SecretString>,
     /// Chapter Gatehouse — the exposure-interlock escape hatch: binding
     /// beyond loopback with NO auth token is a config error unless this
     /// is explicitly `true` (the behind-my-own-reverse-proxy case).
-    web_ui_insecure_no_auth: Option<bool>,
+    insecure_no_auth: Option<bool>,
 }
 
 /// `[team]` section. Chapter Roster — points the daemon at a `[team]`-rooted
@@ -6426,9 +6448,9 @@ impl AivyxConfig {
     }
 
     /// First-run coherence A2 — where the daemon serves the Studio, or
-    /// `None` when it's off (`[daemon] web_ui = false`). The host defaults to
+    /// `None` when it's off (`[studio] enabled = false`). The host defaults to
     /// `127.0.0.1`, exactly as the daemon's bind does. This is the config's
-    /// view only: the daemon's `--web-ui` / `--web-ui-port` flags can still
+    /// view only: the daemon's `--studio` / `--studio-port` flags can still
     /// override it for one run.
     pub fn studio_addr(&self) -> Option<std::net::SocketAddr> {
         let host = self
@@ -8649,11 +8671,11 @@ impl AivyxConfig {
 
         // Chapter Gatehouse — hoisted so the exposure interlock below can
         // see host + token together before the struct is built.
-        let web_ui_host: Option<std::net::IpAddr> = match toml.daemon.web_ui_host {
+        let web_ui_host: Option<std::net::IpAddr> = match toml.studio.host {
             None => None,
             Some(s) => Some(s.parse::<std::net::IpAddr>().map_err(|_| {
                 ConfigError::Invalid {
-                    field: "daemon.web_ui_host",
+                    field: "studio.host",
                     reason: format!(
                         "must be an IP address (e.g. \"127.0.0.1\" or \
                          \"0.0.0.0\"); got {s:?}"
@@ -8661,7 +8683,7 @@ impl AivyxConfig {
                 }
             })?),
         };
-        let web_ui_auth_token: Option<aivyx_capability::display::SecretString> = match toml.daemon.web_ui_auth_token {
+        let web_ui_auth_token: Option<aivyx_capability::display::SecretString> = match toml.studio.auth_token {
             // A whitespace-only or empty token is a config error — it would
             // silently read as "auth on" while trivially guessable.
             Some(t) if t.trim().is_empty() => {
@@ -8691,7 +8713,7 @@ impl AivyxConfig {
             other => other,
         };
         let web_ui_insecure_no_auth =
-            toml.daemon.web_ui_insecure_no_auth.unwrap_or(false);
+            toml.studio.insecure_no_auth.unwrap_or(false);
         // Chapter Gatehouse — the exposure interlock (v1.0 runway decision
         // 2, locked 2026-07-04): binding the Studio beyond loopback with NO
         // auth token is refused at config load — fail-fast, impossible to
@@ -8705,14 +8727,14 @@ impl AivyxConfig {
             && !web_ui_insecure_no_auth
         {
             return Err(ConfigError::Invalid {
-                field: "daemon.web_ui_host",
-                reason: "binding the web UI beyond loopback without \
-                         `daemon.web_ui_auth_token` would expose an \
+                field: "studio.host",
+                reason: "binding the Studio beyond loopback without \
+                         `[studio] auth_token` would expose an \
                          UNAUTHENTICATED agent (filesystem + shell reach) to \
-                         the network. Set `web_ui_auth_token` (e.g. `openssl \
+                         the network. Set `[studio] auth_token` (e.g. `openssl \
                          rand -hex 32`), or — ONLY behind your own \
                          authenticating reverse proxy — set \
-                         `web_ui_insecure_no_auth = true`"
+                         `[studio] insecure_no_auth = true`"
                     .to_string(),
             });
         }
@@ -8816,20 +8838,20 @@ impl AivyxConfig {
             notify_targets,
             reflection_schedules,
             webhook_port: toml.daemon.webhook_port,
-            web_ui_port: match (toml.daemon.web_ui, toml.daemon.web_ui_port) {
-                // First-run coherence A2 — `web_ui = false` is the one
+            web_ui_port: match (toml.studio.enabled, toml.studio.port) {
+                // First-run coherence A2 — `enabled = false` is the one
                 // opt-out, and it wins even over a written port.
                 (Some(false), _) => None,
                 // An explicit port picks where it's served.
                 (_, Some(port)) => Some(port),
-                // On by default (and `web_ui = true`): loopback 7843,
+                // On by default (and `enabled = true`): loopback 7843,
                 // behind the daemon's automatic token.
                 (_, None) => Some(7843),
             },
             web_ui_host,
             web_ui_insecure_no_auth,
             web_ui_allowed_origins: {
-                let entries = toml.daemon.web_ui_allowed_origins.unwrap_or_default();
+                let entries = toml.studio.allowed_origins.unwrap_or_default();
                 for o in &entries {
                     // A bare origin: scheme://authority, no path/query/fragment.
                     let authority = o.split_once("://").map(|(_, rest)| rest);
@@ -8840,7 +8862,7 @@ impl AivyxConfig {
                             && !a.contains('#'));
                     if !valid {
                         return Err(ConfigError::Invalid {
-                            field: "daemon.web_ui_allowed_origins",
+                            field: "studio.allowed_origins",
                             reason: format!(
                                 "each entry must be a bare origin \
                                  (scheme://host[:port], no path); got {o:?}"

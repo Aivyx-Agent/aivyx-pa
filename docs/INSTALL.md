@@ -168,7 +168,7 @@ cargo build -p aivyx-desktop --release
 ```
 
 On launch it attaches to a running daemon, or spawns one (`aivyx-pa daemon run
---web-ui`) — resolving the `aivyx-pa` binary from `AIVYX_PA_BIN`, else the one
+--studio`) — resolving the `aivyx-pa` binary from `AIVYX_PA_BIN`, else the one
 installed beside the app (the `.deb` and `.app` both ship it, so the versions
 match), else `PATH`. The daemon's output goes to
 `~/.local/state/aivyx-pa/desktop-daemon.log`. If it can't start — typically
@@ -355,8 +355,8 @@ live in `./workspace` (mounted at `/work`).
 ### What you should know
 
 - **Localhost only by default.** The compose publishes to `127.0.0.1:7843`.
-  Exposing the Studio off-host needs **both** `[daemon] web_ui_host = "0.0.0.0"`
-  *and* `[daemon] web_ui_allowed_origins = ["https://your-host"]` (the daemon
+  Exposing the Studio off-host needs **both** `[studio] host = "0.0.0.0"`
+  *and* `[studio] allowed_origins = ["https://your-host"]` (the daemon
   rejects off-host WebSocket origins otherwise), **plus** auth + TLS in front
   (a reverse proxy like Caddy/Traefik — Aivyx PA doesn't ship one). The daemon
   prints a one-line warning when it binds a non-loopback host. **Also check
@@ -394,7 +394,7 @@ phase); until then `docker compose up --build` builds it locally from source.
 | Your files (what `fs.*` reaches) | `~/aivyx-pa-sandbox` at the default `sandbox` access level | Yes — `aivyx-pa access`, TOML `[fs] root` |
 | The assistant's own notebook | `~/.aivyx-pa/workspace` (journal, ideas, plans) | No |
 | Daemon socket, PID file, log | `$XDG_RUNTIME_DIR/aivyx-pa/daemon.{sock,pid,log}` (else `~/.local/share/aivyx-pa/`) | No |
-| Studio (web UI) | `127.0.0.1:7843` | Yes — TOML `[daemon] web_ui_port` or `--web-ui-port <N>` |
+| Studio (web UI) | `127.0.0.1:7843` | Yes — TOML `[studio] port` or `--studio-port <N>` |
 
 ## Running several agents (named instances)
 
@@ -406,7 +406,7 @@ memory, audit log, passphrase and Studio. They share nothing.
 ```sh
 aivyx-pa instances create research      # picks a Studio port, runs setup for it
 aivyx-pa instances list                 # every instance: running?, Studio port, config
-aivyx-pa --instance research daemon run --web-ui
+aivyx-pa --instance research daemon run --studio
 aivyx-pa --instance research            # chat with it
 aivyx-pa --instance research daemon install   # its own background service
 aivyx-pa instances remove research      # asks you to type the name back
@@ -428,12 +428,12 @@ Where a named instance's files go:
 | Notebook, tool-process configs | `~/.aivyx-pa/instances/<n>/` |
 | Daemon socket and PID file | `$XDG_RUNTIME_DIR/aivyx-pa/instances/<n>/` |
 | Background service | `aivyx-pa-daemon-<n>.service` (macOS: `com.aivyx-pa.daemon.<n>`) |
-| Studio | the port `instances create` chose (`[daemon] web_ui_port`), from 7844 up |
+| Studio | the port `instances create` chose (`[studio] port`), from 7844 up |
 
 Good to know:
 
 - **Ports must differ.** `instances create` picks a free one and writes it
-  into the instance's config; if you set `web_ui_port` by hand, keep it
+  into the instance's config; if you set `[studio] port` by hand, keep it
   unique. Each Studio shows its instance name in the tab title.
 - **`remove` refuses** the `default` instance, a running instance, and
   one with an installed service — stop it and run
@@ -674,7 +674,7 @@ logout and reboot — no hand-rolled `systemd`/`launchd` files.
 
 ```sh
 # install + start the daemon as a per-user service
-aivyx-pa daemon install         # add --web-ui to also serve the Studio
+aivyx-pa daemon install         # add --studio to also serve the Studio
                                 # add --no-start to install without starting
 
 # check it (also shown in `aivyx-pa doctor`)
@@ -708,7 +708,7 @@ aivyx-pa daemon uninstall
   (always-on by design) or the desktop app's autostart instead.
 
 Re-running `aivyx-pa daemon install` is idempotent — it rewrites the unit
-and restarts the service, picking up a new binary path or `--web-ui`.
+and restarts the service, picking up a new binary path or `--studio`.
 
 **You're running.** Open the Studio in a browser — it has its own
 built-in guide (Welcome → Getting started → Create your agent) that

@@ -736,7 +736,7 @@ fn offer_service_install(
                 )
                 .map_err(|write_err| format!("write error: {write_err}"))?;
             }
-            // `web_ui = false` only means "no `--web-ui` flag on the unit";
+            // `false` here only means "no `--studio` flag on the unit";
             // the daemon serves the Studio by default, so none is needed.
             match run_install(false, true) {
                 Ok(()) => {
@@ -3296,8 +3296,8 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // (audit P17/P18); the default instance keeps "unset means 7843".
     let web_ui_port = super::instances::ensure_studio_port().unwrap_or_else(|e| {
         eprintln!(
-            "warning: couldn't record this instance's Studio port ({e}); set `[daemon] \
-             web_ui_port` in its config, or the Studio may try the default instance's port"
+            "warning: couldn't record this instance's Studio port ({e}); set `[studio] \
+             port` in its config, or the Studio may try the default instance's port"
         );
         aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT
     });
@@ -4112,7 +4112,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        // No `--web-ui` on the unit: the daemon serves the Studio by default.
+        // No `--studio` on the unit: the daemon serves the Studio by default.
         assert_eq!(captured, Some((false, true)));
         let out = String::from_utf8(output).unwrap();
         assert!(out.contains("Installed as a background service"));

@@ -25,25 +25,25 @@ path = "/root/.aivyx-pa/store.redb"
 # what you mount.
 root = "/work"
 
-[daemon]
-# Serve the Studio. web_ui_host = 0.0.0.0 is REQUIRED in a container: Docker
+[studio]
+# Serve the Studio. host = 0.0.0.0 is REQUIRED in a container: Docker
 # forwards a published port to the container's 0.0.0.0, not its loopback, so the
 # default 127.0.0.1 bind would be unreachable. Binding beyond loopback is a
 # deliberate exposure — publish only to host-localhost (compose does) or front
 # it with auth + TLS for remote access (docs/DOCKER.md).
-web_ui = true
-web_ui_host = "0.0.0.0"
+enabled = true
+host = "0.0.0.0"
 
 # REQUIRED off loopback (Chapter Gatehouse): the daemon refuses to bind the
 # Studio beyond localhost without a token — unless you explicitly set
-# `web_ui_insecure_no_auth = true` because YOUR OWN reverse proxy authenticates
+# `insecure_no_auth = true` because YOUR OWN reverse proxy authenticates
 # in front. Leave both unset here and the container entrypoint generates a
-# token at first boot, inserts it below web_ui_host, and prints it once to the
+# token at first boot, inserts it below `host`, and prints it once to the
 # container log. Browsers are prompted (HTTP Basic; the token is the password);
 # non-browser clients send `Authorization: Bearer <token>`. Not a TLS
 # substitute.
-# web_ui_auth_token = "REPLACE-with-openssl-rand-hex-32"
-# web_ui_insecure_no_auth = false
+# auth_token = "REPLACE-with-openssl-rand-hex-32"
+# insecure_no_auth = false
 
 # The agent boots without a Profile/Persona on purpose: open the Studio and use
 # the **Create** screen (Chapter Genesis) to shape your assistant. A minimal

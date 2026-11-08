@@ -75,7 +75,7 @@ GROUPS = [
         "schedule", "webhook", "file_watch", "notify_target", "reminders", "proactive", "loop",
     ]),
     ("Cost and limits", ["pricing", "budget", "rate_limit"]),
-    ("The daemon and the Studio", ["daemon"]),
+    ("The daemon and the Studio", ["daemon", "studio"]),
 ]
 
 INTROS = {
@@ -145,7 +145,8 @@ INTROS = {
     "pricing": "Per-model prices, in USD per million tokens, overriding the built-in table. Used for cost reports and budgets.",
     "budget": "Spending caps in USD (and tokens), and what happens when one is reached.",
     "rate_limit": "Caps on tool calls per turn, overall and per tool.",
-    "daemon": f"The daemon's web listeners: the Studio and webhooks. See [Desktop app]({GUIDE}/11-desktop-app.md) and [Named instances]({GUIDE}/16-named-instances.md).",
+    "daemon": "The daemon's webhook listener. (The Studio's settings were `web_ui*` keys here; they are `[studio]` now.)",
+    "studio": f"The Studio, the daemon's web app. See [Desktop app]({GUIDE}/11-desktop-app.md) and [Named instances]({GUIDE}/16-named-instances.md).",
 }
 
 # Plain-words meanings. An exact "<section path>.<key>" entry wins over the
@@ -247,10 +248,12 @@ MEANINGS = {
     "notify_target.retry_count": "Retries after a transient failure (network error, timeout, or a 5xx reply). Default 0.",
     "proactive.max_per_window": "Most proactive messages per `window_secs`, whatever the signals say. Default 3.",
     "budget.per_mission_usd": "Most USD one team mission started by the loop may spend across all its specialists. Unset means no cap.",
-    "daemon.web_ui_auth_token": "Your own Studio sign-in token. Unset means the automatic one, kept in a `studio-token` file next to the store.",
-    "daemon.web_ui": "Serve the Studio. On by default; `false` wins over `web_ui_port`.",
-    "daemon.web_ui_port": "The Studio's port. Default 7843; each named instance needs its own (`instances create` picks one from 7844).",
-    "daemon.web_ui_insecure_no_auth": "Allow the Studio with no token at all — only for binding beyond loopback behind your own authenticating proxy.",
+    "studio.auth_token": "Your own Studio sign-in token. Unset means the automatic one, kept in a `studio-token` file next to the store.",
+    "studio.enabled": "Serve the Studio. On by default; `false` wins over `port`.",
+    "studio.port": "The Studio's port. Default 7843; each named instance needs its own (`instances create` picks one from 7844).",
+    "studio.host": "The address the Studio binds. Unset → `127.0.0.1` (localhost only). Beyond loopback it needs `auth_token`.",
+    "studio.allowed_origins": "Extra WS Origin allowlist entries beyond the built-in loopback origins. Empty (default) keeps the localhost-only CSWSH posture.",
+    "studio.insecure_no_auth": "Allow the Studio with no token at all — only for binding beyond loopback behind your own authenticating proxy.",
     "*.notify_target": "Deprecated (warns): a single notify target, the older spelling of `notify_targets`. Don't set both.",
     "embedding.recall_lexical_weight": "Weight of keyword matching in hybrid recall. Default 1.0.",
     "telegram.token": "The bot token from @BotFather. Prefer the encrypted store (`aivyx-pa connect`) over writing it here.",

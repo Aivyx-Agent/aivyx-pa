@@ -21,10 +21,10 @@ connect
 cost
   aivyx-pa cost [--today]
 daemon
-  aivyx-pa daemon run [--web-ui] [--web-ui-port <N>]
+  aivyx-pa daemon run [--studio] [--studio-port <N>]
   aivyx-pa daemon status
   aivyx-pa daemon stop
-  aivyx-pa daemon install [--web-ui] [--no-start]
+  aivyx-pa daemon install [--studio] [--no-start]
   aivyx-pa daemon uninstall
 doctor
   aivyx-pa doctor
@@ -134,3 +134,7 @@ workspace
   aivyx-pa workspace path
   aivyx-pa workspace ls [path]
   aivyx-pa workspace cat <path>
+(deprecated flags)
+  --mcp-server: deprecated alias of --mcp
+  --web-ui: deprecated alias of --studio
+  --web-ui-port: deprecated alias of --studio-port

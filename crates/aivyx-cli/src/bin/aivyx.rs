@@ -2348,7 +2348,7 @@ enum CliMode {
     DaemonStatus,
     /// `aivyx-pa daemon stop`: send graceful shutdown to a running daemon.
     DaemonStop,
-    /// `aivyx-pa daemon install [--web-ui] [--no-start]` (Chapter Belay): install
+    /// `aivyx-pa daemon install [--studio] [--no-start]` (Chapter Belay): install
     /// the daemon as a persistent user service (systemd user unit + linger).
     DaemonInstall { web_ui: bool, start: bool },
     /// `aivyx-pa daemon uninstall`: stop, disable, and remove the service.
@@ -3023,7 +3023,7 @@ struct CliArgs {
     mcp_servers: Vec<CliMcpServer>,
     mcp_sse_servers: Vec<CliMcpSse>,
     provider: Option<ProviderKind>,
-    /// Web UI port override from `--web-ui` or `--web-ui-port <N>`.
+    /// Web UI port override from `--studio` or `--studio-port <N>`.
     /// `Some(port)` enables the web UI in daemon mode. Phase 39.
     web_ui_port: Option<u16>,
 }
@@ -3132,7 +3132,11 @@ fn parse_cli_args() -> Result<CliArgs, String> {
 
 /// Old flag spellings that still work, and what replaces each (1.0
 /// readiness audit). `parse_cli_args_from` accepts both.
-const DEPRECATED_FLAGS: &[(&str, &str)] = &[("--mcp-server", "--mcp")];
+const DEPRECATED_FLAGS: &[(&str, &str)] = &[
+    ("--mcp-server", "--mcp"),
+    ("--web-ui", "--studio"),
+    ("--web-ui-port", "--studio-port"),
+];
 
 /// One warning per deprecated flag spelling in `args` (however often it is
 /// repeated), up to a `--`, after which nothing is a flag.
@@ -3283,7 +3287,8 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let mut di = 2;
                 while di < args.len() {
                     match args[di].as_str() {
-                        "--web-ui" => web_ui = true,
+                        // `--web-ui` is the deprecated spelling (R21).
+                        "--studio" | "--web-ui" => web_ui = true,
                         "--no-start" => start = false,
                         other => {
                             return Err(format!(
@@ -3321,22 +3326,23 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         let mut di = 2;
         while di < args.len() {
             match args[di].as_str() {
-                "--web-ui" if mode == CliMode::DaemonRun => {
-                    // No port given: the configured `[daemon] web_ui_port`, else
+                // `--web-ui` / `--web-ui-port` are the deprecated spellings (R21).
+                "--studio" | "--web-ui" if mode == CliMode::DaemonRun => {
+                    // No port given: the configured `[studio] port`, else
                     // the default (resolved by `studio_port_wanted`, audit P17).
                     daemon_web_ui_port = Some(BARE_WEB_UI_FLAG);
                     di += 1;
                 }
-                "--web-ui-port" if mode == CliMode::DaemonRun => {
+                flag @ ("--studio-port" | "--web-ui-port") if mode == CliMode::DaemonRun => {
                     let value = args
                         .get(di + 1)
-                        .ok_or_else(|| "`--web-ui-port` requires a port number".to_string())?;
+                        .ok_or_else(|| format!("`{flag}` requires a port number"))?;
                     let port: u16 = value
                         .parse()
                         .ok()
                         .filter(|p| *p != BARE_WEB_UI_FLAG)
                         .ok_or_else(|| {
-                            format!("`--web-ui-port` value `{value}` is not a valid port number")
+                            format!("`{flag}` value `{value}` is not a valid port number")
                         })?;
                     daemon_web_ui_port = Some(port);
                     di += 2;
@@ -3344,7 +3350,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 other => {
                     return Err(format!(
                         "unrecognized argument after `{subcmd}`: `{other}`. \
-                         `{subcmd}` supports: --web-ui, --web-ui-port <N>"
+                         `{subcmd}` supports: --studio, --studio-port <N>"
                     ));
                 }
             }
@@ -6747,13 +6753,13 @@ fn area_flags(
     }
 }
 
-/// `daemon run --web-ui` with no port is parsed as this (0 is never a real
-/// Studio port; an explicit `--web-ui-port 0` is refused).
+/// `daemon run --studio` with no port is parsed as this (0 is never a real
+/// Studio port; an explicit `--studio-port 0` is refused).
 const BARE_WEB_UI_FLAG: u16 = 0;
 
-/// The Studio port `daemon run` serves on: an explicit `--web-ui-port` wins;
-/// a bare `--web-ui` means "serve it" on the instance's configured
-/// `[daemon] web_ui_port`, else the default; with no flag the config decides
+/// The Studio port `daemon run` serves on: an explicit `--studio-port` wins;
+/// a bare `--studio` means "serve it" on the instance's configured
+/// `[studio] port`, else the default; with no flag the config decides
 /// (audit P17: a bare flag used to pick the default port and ignore the
 /// configured one, so a named instance bound the default instance's port).
 fn studio_port_wanted(cli: Option<u16>, configured: Option<u16>) -> Option<u16> {
@@ -14899,8 +14905,8 @@ mod tests {
 
     #[test]
     fn daemon_install_parses_web_ui_and_no_start_flags() {
-        let parsed = parse_cli_args_from(&argv(&["daemon", "install", "--web-ui", "--no-start"]))
-            .expect("`daemon install --web-ui --no-start` must parse");
+        let parsed = parse_cli_args_from(&argv(&["daemon", "install", "--studio", "--no-start"]))
+            .expect("`daemon install --studio --no-start` must parse");
         assert_eq!(
             parsed.mode,
             CliMode::DaemonInstall {
@@ -15225,17 +15231,17 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // --web-ui / --web-ui-port — Phase 39
+    // --studio / --studio-port (were --web-ui / --web-ui-port) — Phase 39
     // -----------------------------------------------------------------
 
     #[test]
     fn web_ui_flag_sets_default_port() {
         let parsed =
-            parse_cli_args_from(&argv(&["daemon", "run", "--web-ui"])).expect("must parse");
+            parse_cli_args_from(&argv(&["daemon", "run", "--studio"])).expect("must parse");
         assert_eq!(parsed.web_ui_port, Some(BARE_WEB_UI_FLAG));
     }
 
-    /// Audit P17: a bare `--web-ui` uses the instance's configured port.
+    /// Audit P17: a bare `--studio` uses the instance's configured port.
     #[test]
     fn a_bare_web_ui_flag_uses_the_configured_port() {
         let default = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
@@ -15245,25 +15251,25 @@ mod tests {
         assert_eq!(studio_port_wanted(None, Some(7861)), Some(7861));
         assert_eq!(studio_port_wanted(None, None), None);
         let parsed =
-            parse_cli_args_from(&argv(&["daemon", "run", "--web-ui"])).expect("must parse");
+            parse_cli_args_from(&argv(&["daemon", "run", "--studio"])).expect("must parse");
         assert_eq!(studio_port_wanted(parsed.web_ui_port, Some(7861)), Some(7861));
     }
 
     #[test]
     fn web_ui_port_zero_is_refused() {
-        assert!(parse_cli_args_from(&argv(&["daemon", "run", "--web-ui-port", "0"])).is_err());
+        assert!(parse_cli_args_from(&argv(&["daemon", "run", "--studio-port", "0"])).is_err());
     }
 
     #[test]
     fn web_ui_port_flag_sets_custom_port() {
-        let parsed = parse_cli_args_from(&argv(&["daemon", "run", "--web-ui-port", "8080"]))
+        let parsed = parse_cli_args_from(&argv(&["daemon", "run", "--studio-port", "8080"]))
             .expect("must parse");
         assert_eq!(parsed.web_ui_port, Some(8080));
     }
 
     #[test]
     fn web_ui_port_flag_invalid_value_errors() {
-        let err = parse_cli_args_from(&argv(&["daemon", "run", "--web-ui-port", "notaport"]))
+        let err = parse_cli_args_from(&argv(&["daemon", "run", "--studio-port", "notaport"]))
             .expect_err("invalid port must error");
         assert!(err.contains("not a valid port"), "error: {err}");
     }
@@ -15272,6 +15278,30 @@ mod tests {
     fn no_web_ui_flag_means_none() {
         let parsed = parse_cli_args_from(&argv(&["daemon", "run"])).expect("must parse");
         assert_eq!(parsed.web_ui_port, None);
+    }
+
+    /// R21: `--web-ui` / `--web-ui-port` still parse exactly as `--studio` /
+    /// `--studio-port` do, on `daemon run` and `daemon install`, and each
+    /// warns once.
+    #[test]
+    fn deprecated_web_ui_flags_still_work_and_warn() {
+        let old = parse_cli_args_from(&argv(&["daemon", "run", "--web-ui"])).expect("must parse");
+        assert_eq!(old.web_ui_port, Some(BARE_WEB_UI_FLAG));
+        let old = parse_cli_args_from(&argv(&["daemon", "run", "--web-ui-port", "8080"]))
+            .expect("must parse");
+        assert_eq!(old.web_ui_port, Some(8080));
+        let old = parse_cli_args_from(&argv(&["daemon", "install", "--web-ui"])).expect("parses");
+        assert_eq!(old.mode, CliMode::DaemonInstall { web_ui: true, start: true });
+        assert_eq!(
+            deprecated_flag_warnings(&argv(&["daemon", "run", "--web-ui", "--web-ui-port", "1"])),
+            vec![
+                "`--web-ui` is deprecated; use `--studio`".to_string(),
+                "`--web-ui-port` is deprecated; use `--studio-port`".to_string(),
+            ]
+        );
+        assert!(deprecated_flag_warnings(&argv(&["daemon", "run", "--studio"])).is_empty());
+        let err = parse_cli_args_from(&argv(&["daemon", "run", "--web-ui-port"])).unwrap_err();
+        assert!(err.contains("`--web-ui-port` requires a port number"), "{err}");
     }
 
     // -----------------------------------------------------------------------

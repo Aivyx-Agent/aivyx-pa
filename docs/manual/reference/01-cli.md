@@ -84,16 +84,17 @@ Names are 1–32 characters of `a-z`, `0-9` and `-`. See
 The background process every front end talks to.
 
 ```
-aivyx-pa daemon run [--web-ui] [--web-ui-port <N>]
+aivyx-pa daemon run [--studio] [--studio-port <N>]
 aivyx-pa daemon status
 aivyx-pa daemon stop
-aivyx-pa daemon install [--web-ui] [--no-start]
+aivyx-pa daemon install [--studio] [--no-start]
 aivyx-pa daemon uninstall
 ```
 
-- `run` — run the daemon in this terminal. `--web-ui` serves the Studio
-  (default port 7843, or `[daemon] web_ui_port`); `--web-ui-port` overrides
-  the port.
+- `run` — run the daemon in this terminal. `--studio` serves the Studio
+  (default port 7843, or `[studio] port`); `--studio-port` overrides
+  the port. `--web-ui` and `--web-ui-port` are the old spellings: they still
+  work, with a warning.
 - `status` — whether it's running, its protocol version, socket and PID (and
   the instance, for a named one).
 - `stop` — ask the running daemon to shut down cleanly.

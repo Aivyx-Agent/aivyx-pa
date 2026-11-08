@@ -20,7 +20,7 @@ services:
       dockerfile: Dockerfile
     image: aivyx:dev
     # Host-localhost only by default. To expose remotely, change the host side
-    # AND set a [daemon] web_ui_allowed_origins (HB.2) + front it with TLS/auth.
+    # AND set a [studio] allowed_origins (HB.2) + front it with TLS/auth.
     ports:
       - "127.0.0.1:7843:7843"
     volumes:

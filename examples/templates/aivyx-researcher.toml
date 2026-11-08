@@ -44,8 +44,8 @@ root = "~/research"
 # prompts on first launch. (`[storage] passphrase = "..."` also works, but
 # is plain text and warns at startup.)
 
-[daemon]
-web_ui = true
+[studio]
+enabled = true
 
 # ----------------------------------------------------------------
 # Profile — operator-declared identity layer (P13)

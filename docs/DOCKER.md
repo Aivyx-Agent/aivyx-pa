@@ -3,7 +3,8 @@
 > **Status:** ✅ **shipped** (Chapter Harbor HB.0–HB.5 complete). Aivyx PA ships as a
 > **docker-compose appliance**: a one-command, always-on daemon + Studio for a
 > homelab box or VPS, no Rust toolchain on the operator's machine. The two opt-in
-> daemon changes (`web_ui_host` §4.1, `web_ui_allowed_origins` §4.2) are in; the
+> daemon changes (`[studio] host` §4.1, `[studio] allowed_origins` §4.2; `web_ui_host` /
+> `web_ui_allowed_origins` under `[daemon]` before 1.0) are in; the
 > `Dockerfile` + `docker-compose.yml` + baked appliance config are **built and
 > run end-to-end** (HB.1 §9); the OAuth-in-Docker recipe is documented (§7); the
 > operator install steps live in
@@ -84,7 +85,7 @@ every existing native install behaves identically.
 loopback. Docker port-publishing forwards host:port → the **container's
 `0.0.0.0`**, never its loopback, so a 127.0.0.1-bound process is **unreachable
 even with `-p 7843:7843`**. Harbor adds an opt-in bind host (e.g.
-`[daemon] web_ui_host = "0.0.0.0"`, default `127.0.0.1`). **Required even for the
+`[studio] host = "0.0.0.0"`, default `127.0.0.1`; `[daemon] web_ui_host` before 1.0). **Required even for the
 localhost-only spike** (the container must bind `0.0.0.0` for the forward to land).
 
 ### 4.2 Configurable WS Origin allowlist (`web_ui.rs:~269`)
@@ -96,15 +97,15 @@ sends `Origin: http://localhost:7843`, which **passes** — so a localhost-only
 spike needs *only* §4.1. But accessing from another machine
 (`http://studio.mybox.lan:7843`) sends a non-allowlisted Origin and is
 **rejected**. Remote access therefore needs an opt-in allowlist
-(`[daemon] web_ui_allowed_origins = ["https://studio.mybox.lan"]`), empty by
+(`[studio] allowed_origins = ["https://studio.mybox.lan"]`), empty by
 default (= localhost-only, today's behavior). Loosening it is a real exposure;
 pair it with the built-in auth token (below) and TLS terminated at a proxy.
 
-### 4.3 Web UI auth token (`[daemon] web_ui_auth_token`, Chapter Postern)
+### 4.3 Web UI auth token (`[studio] auth_token`, Chapter Postern)
 
 The `/ws` WebSocket is the Studio's control plane (agent turns, config writes,
 memory reads). Binding off-host without auth leaves it open to anyone on the
-network. Set `[daemon] web_ui_auth_token = "<opaque>"` (e.g. `openssl rand -hex
+network. Set `[studio] auth_token = "<opaque>"` (e.g. `openssl rand -hex
 32`) to require it: the browser is prompted via HTTP Basic on first load (the
 token is the password; any username), a cookie is planted, and the `/ws`
 upgrade requires that cookie; non-browser clients send `Authorization: Bearer
@@ -162,7 +163,7 @@ services:
       - AIVYX_PA_PROVIDER=anthropic                # cloud profile first (no GPU/OAuth)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     secrets: [aivyx_pa_passphrase]                 # → AIVYX_PA_PASSPHRASE via file
-    # config (baked or mounted) sets: [daemon] web_ui_host="0.0.0.0", web_ui=true,
+    # config (baked or mounted) sets: [studio] host="0.0.0.0", enabled=true,
     #   [access] level rooted at /work
   # ── optional local-model profile ──
   ollama:

@@ -126,7 +126,7 @@ pub fn grants_lines(summary: &PaPartSummary) -> String {
 /// `Err` lists every problem found, not just the first.
 /// The sections a pack's template may set: who the agent is and what it
 /// does. Everything else — how far it reaches (`[access]`, `[fs]`,
-/// `[sandbox]`), whether and where it's exposed (`[daemon]`), what
+/// `[sandbox]`), whether and where it's exposed (`[studio]`, `[daemon]`), what
 /// programs it runs (`[[tool_process]]`, `[[mcp_server]]`), where its
 /// traffic goes (`[openai]`, `[providers]`, …) and whom it trusts
 /// (`[pack]`) — is the operator's, set after install. An allowlist, so a
@@ -596,6 +596,8 @@ trust_ceiling = "Trusted"
         let cases = [
             ("[access]", "[access]\nlevel = \"full\"\n"),
             ("[access]", "[access]\nallow_sensitive_paths = [\"~/.ssh\"]\n"),
+            ("[studio]", "[studio]\nhost = \"0.0.0.0\"\ninsecure_no_auth = true\n"),
+            // The deprecated spelling (R21) is refused just the same.
             ("[daemon]", "[daemon]\nweb_ui_host = \"0.0.0.0\"\nweb_ui_insecure_no_auth = true\n"),
             ("[[tool_process]]", "[[tool_process]]\nname = \"x\"\ncommand = \"sh\"\n"),
             ("[[mcp_server]]", "[[mcp_server]]\nname = \"x\"\ncommand = \"sh\"\n"),

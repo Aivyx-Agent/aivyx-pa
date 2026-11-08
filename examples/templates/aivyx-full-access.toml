@@ -39,8 +39,8 @@ confirm_destructive = true
 num_ctx = 16384
 num_predict = 1024
 
-[daemon]
-web_ui = true
+[studio]
+enabled = true
 
 # No explicit [[role]]: the default role grants the full fs + shell set at
 # the level's fs_root. Declare a [[role]] only to NARROW the tool surface

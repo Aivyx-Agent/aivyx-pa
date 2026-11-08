@@ -962,17 +962,24 @@ Per-tool overrides, keyed by tool name (e.g. `"web.fetch"`).
 
 ### `[daemon]`
 
-The daemon's web listeners: the Studio and webhooks. See [Desktop app](../../guide/11-desktop-app.md) and [Named instances](../../guide/16-named-instances.md).
+The daemon's webhook listener. (The Studio's settings were `web_ui*` keys here; they are `[studio]` now.)
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `webhook_port` | integer |  | Port for the localhost-only webhook HTTP listener. |
-| `web_ui` | bool | `false` | Serve the Studio. On by default; `false` wins over `web_ui_port`. |
-| `web_ui_port` | integer | `7843` | The Studio's port. Default 7843; each named instance needs its own (`instances create` picks one from 7844). |
-| `web_ui_host` | string | `"0.0.0.0"` | Bind host for the web UI server. Unset → `127.0.0.1` (the localhost-only default). |
-| `web_ui_allowed_origins` | list of string |  | Extra WS Origin allowlist entries beyond the built-in loopback origins. Empty (default) keeps the localhost-only CSWSH posture. |
-| `web_ui_auth_token` | string | `"..."` | Your own Studio sign-in token. Unset means the automatic one, kept in a `studio-token` file next to the store. |
-| `web_ui_insecure_no_auth` | bool |  | Allow the Studio with no token at all — only for binding beyond loopback behind your own authenticating proxy. |
+
+### `[studio]`
+
+The Studio, the daemon's web app. See [Desktop app](../../guide/11-desktop-app.md) and [Named instances](../../guide/16-named-instances.md).
+
+| Key | Type | Example | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Serve the Studio. On by default; `false` wins over `port`. |
+| `port` | integer | `7843` | The Studio's port. Default 7843; each named instance needs its own (`instances create` picks one from 7844). |
+| `host` | string | `"0.0.0.0"` | The address the Studio binds. Unset → `127.0.0.1` (localhost only). Beyond loopback it needs `auth_token`. |
+| `allowed_origins` | list of string |  | Extra WS Origin allowlist entries beyond the built-in loopback origins. Empty (default) keeps the localhost-only CSWSH posture. |
+| `auth_token` | string | `"..."` | Your own Studio sign-in token. Unset means the automatic one, kept in a `studio-token` file next to the store. |
+| `insecure_no_auth` | bool |  | Allow the Studio with no token at all — only for binding beyond loopback behind your own authenticating proxy. |
 
 ## Deprecated spellings
 
@@ -986,6 +993,12 @@ These older spellings still load through 1.x, with one warning each at startup (
 | `confine.allow_unix_sockets` | `sandbox.allow_unix_sockets` |
 | `confine.require_enforcement` | `sandbox.require_enforcement` |
 | `confine.share_system_tmp` | `sandbox.share_system_tmp` |
+| `daemon.web_ui` | `studio.enabled` |
+| `daemon.web_ui_allowed_origins` | `studio.allowed_origins` |
+| `daemon.web_ui_auth_token` | `studio.auth_token` |
+| `daemon.web_ui_host` | `studio.host` |
+| `daemon.web_ui_insecure_no_auth` | `studio.insecure_no_auth` |
+| `daemon.web_ui_port` | `studio.port` |
 | `discord.channel_filter` | `discord.channel_id` |
 | `matrix.room_filter` | `matrix.room_id` |
 | `slack.channel_filter` | `slack.channel_id` |

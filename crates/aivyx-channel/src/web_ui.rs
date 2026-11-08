@@ -220,7 +220,7 @@ pub async fn run_web_ui_server_notify(
         eprintln!(
             "aivyx-pa web ui: WARNING — binding {host} (non-loopback). The Studio \
              is exposed beyond this host. Put TLS in front, and set \
-             `[daemon] web_ui_allowed_origins` for the hostnames you serve. See \
+             `[studio] allowed_origins` for the hostnames you serve. See \
              docs/DOCKER.md. If a client can't connect even though this \
              process is bound and healthy, check the host's own firewall \
              (ufw/firewalld/iptables) — a green Aivyx-side check (bind, \
@@ -232,7 +232,7 @@ pub async fn run_web_ui_server_notify(
         // may add auth), but make the exposure impossible to miss.
         if auth_token.is_none() {
             eprintln!(
-                "aivyx-pa web ui: WARNING — no `[daemon] web_ui_auth_token` set \
+                "aivyx-pa web ui: WARNING — no `[studio] auth_token` set \
                  while bound off-host: ANYONE who can reach {addr} can drive \
                  the agent, read memory, and change config. Set a token."
             );
@@ -742,7 +742,7 @@ fn parse_origin(request_head: &str) -> Option<&str> {
 /// - no `Origin` header → a non-browser client (CLI / IPC probe / native), allowed;
 /// - an `Origin` that exactly matches one of our loopback origins on `port`;
 /// - an `Origin` that matches an operator-configured `extra_origins` entry
-///   (Chapter Harbor `[daemon] web_ui_allowed_origins` — empty by default, so
+///   (Chapter Harbor `[studio] allowed_origins` — empty by default, so
 ///   the localhost-only posture is unchanged unless the operator opts in to
 ///   remote exposure).
 ///

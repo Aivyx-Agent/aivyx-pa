@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use aivyx_instance::{BaseDirs, InstanceName, InstancePaths, list_instances};
 
-/// The default instance's Studio port (`[daemon] web_ui_port` unset).
+/// The default instance's Studio port (`[studio] port` unset).
 const DEFAULT_PORT: u16 = aivyx_channel::web_ui::DEFAULT_WEB_UI_PORT;
 /// Named instances get the lowest free port from here up.
 const FIRST_NAMED_PORT: u16 = 7844;
@@ -63,33 +63,45 @@ fn configured_port(paths: &InstancePaths) -> u16 {
         .config_file()
         .and_then(|f| std::fs::read_to_string(f).ok())
         .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
-        .and_then(|doc| doc.get("daemon")?.get("web_ui_port")?.as_integer())
-        .and_then(|p| u16::try_from(p).ok())
+        .and_then(|doc| studio_port_in(&doc))
         .unwrap_or(DEFAULT_PORT)
 }
 
-/// Write `[daemon] web_ui_port = <port>` into `config`, keeping everything
-/// else (comments included) as it is.
+/// `[studio] port`, else its deprecated alias `[daemon] web_ui_port` (R21),
+/// the same precedence the config loader uses.
+fn studio_port_in(doc: &toml_edit::DocumentMut) -> Option<u16> {
+    let port = |section: &str, key: &str| doc.get(section)?.get(key)?.as_integer();
+    port("studio", "port")
+        .or_else(|| port("daemon", "web_ui_port"))
+        .and_then(|p| u16::try_from(p).ok())
+}
+
+/// Write `[studio] port = <port>` into `config`, keeping everything else
+/// (comments included) as it is. A deprecated `[daemon] web_ui_port` is
+/// removed, since the new key would win over it anyway.
 pub(crate) fn write_port(config: &Path, port: u16) -> Result<(), String> {
     let text = std::fs::read_to_string(config)
         .map_err(|e| format!("read {}: {e}", config.display()))?;
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .map_err(|e| format!("parse {}: {e}", config.display()))?;
-    if doc.get("daemon").is_none() {
-        doc["daemon"] = toml_edit::Item::Table(toml_edit::Table::new());
+    if doc.get("studio").is_none() {
+        doc["studio"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
-    doc["daemon"]["web_ui_port"] = toml_edit::value(i64::from(port));
+    doc["studio"]["port"] = toml_edit::value(i64::from(port));
+    if let Some(daemon) = doc.get_mut("daemon").and_then(|d| d.as_table_like_mut()) {
+        daemon.remove("web_ui_port");
+    }
     std::fs::write(config, doc.to_string()).map_err(|e| format!("write {}: {e}", config.display()))
 }
 
-/// The Studio port written in `config`'s `[daemon] web_ui_port`, if any.
+/// The Studio port written in `config`'s `[studio] port` (or the
+/// deprecated `[daemon] web_ui_port`), if any.
 fn port_in_config(config: &Path) -> Option<u16> {
     std::fs::read_to_string(config)
         .ok()
         .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
-        .and_then(|doc| doc.get("daemon")?.get("web_ui_port")?.as_integer())
-        .and_then(|p| u16::try_from(p).ok())
+        .and_then(|doc| studio_port_in(&doc))
 }
 
 /// The Studio port the instance whose config is `config` serves on, writing
@@ -302,10 +314,10 @@ mod tests {
         std::fs::write(&cfg, "[profile]\nassistant_name = \"X\"\n").unwrap();
         // default instance: unset means the default, nothing written
         assert_eq!(ensure_port_at(&cfg, true, || 9999).unwrap(), DEFAULT_PORT);
-        assert!(!std::fs::read_to_string(&cfg).unwrap().contains("web_ui_port"));
+        assert!(!std::fs::read_to_string(&cfg).unwrap().contains("port"));
         // named instance: picks and writes
         assert_eq!(ensure_port_at(&cfg, false, || 7852).unwrap(), 7852);
-        assert!(std::fs::read_to_string(&cfg).unwrap().contains("web_ui_port = 7852"));
+        assert!(std::fs::read_to_string(&cfg).unwrap().contains("[studio]\nport = 7852"));
         // an existing port is kept
         assert_eq!(ensure_port_at(&cfg, false, || 7853).unwrap(), 7852);
         std::fs::remove_dir_all(&dir).ok();
@@ -370,7 +382,24 @@ mod tests {
         let text = std::fs::read_to_string(&cfg).unwrap();
         assert!(text.contains("# mine"), "{text}");
         assert!(text.contains("model = \"m\""), "{text}");
-        assert!(text.contains("web_ui_port = 7850"), "{text}");
+        assert!(text.contains("[studio]\nport = 7850"), "{text}");
+    }
+
+    /// R21: a config still on `[daemon] web_ui_port` is read, and rewriting
+    /// the port moves it to `[studio] port`.
+    #[test]
+    fn the_deprecated_daemon_port_is_read_and_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("aivyx-pa.toml");
+        std::fs::write(&cfg, "[daemon]\nwebhook_port = 7000\nweb_ui_port = 7851\n").unwrap();
+        assert_eq!(port_in_config(&cfg), Some(7851));
+        write_port(&cfg, 7860).unwrap();
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        assert!(!text.contains("web_ui_port"), "{text}");
+        assert!(text.contains("webhook_port = 7000"), "{text}");
+        assert_eq!(port_in_config(&cfg), Some(7860));
+        std::fs::write(&cfg, "[daemon]\nweb_ui_port = 7851\n[studio]\nport = 7852\n").unwrap();
+        assert_eq!(port_in_config(&cfg), Some(7852), "the new key wins");
     }
 
     #[test]
@@ -386,7 +415,7 @@ mod tests {
         assert_eq!(configured_port(&r), DEFAULT_PORT);
         let cfg = r.config_file().unwrap();
         std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
-        std::fs::write(&cfg, "[daemon]\nweb_ui_port = 7851\n").unwrap();
+        std::fs::write(&cfg, "[studio]\nport = 7851\n").unwrap();
         assert_eq!(configured_port(&r), 7851);
     }
 }

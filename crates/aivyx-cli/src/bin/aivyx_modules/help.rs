@@ -93,10 +93,10 @@ pub const COMMANDS: &[CommandHelp] = &[
         group: Group::Daemon,
         summary: "Run, check, stop, install, or uninstall the daemon",
         usage: &[
-            "aivyx-pa daemon run [--web-ui] [--web-ui-port <N>]",
+            "aivyx-pa daemon run [--studio] [--studio-port <N>]",
             "aivyx-pa daemon status",
             "aivyx-pa daemon stop",
-            "aivyx-pa daemon install [--web-ui] [--no-start]",
+            "aivyx-pa daemon install [--studio] [--no-start]",
             "aivyx-pa daemon uninstall",
         ],
     },
@@ -540,6 +540,14 @@ mod tests {
             cli.push(c.name.to_string());
             cli.extend(c.usage.iter().map(|u| format!("  {u}")));
         }
+        // Old flag spellings still accepted (they warn): part of the surface
+        // until 2.0, like the config's deprecated aliases.
+        cli.push("(deprecated flags)".to_string());
+        cli.extend(
+            crate::DEPRECATED_FLAGS
+                .iter()
+                .map(|(old, new)| format!("  {old}: deprecated alias of {new}")),
+        );
 
         // Webhook payloads as JSON key paths. Outgoing: the `notify_target`
         // webhook body. Inbound: `POST /trigger/<id>` reads no body; its

@@ -155,7 +155,7 @@ fn daemon_log() -> Option<std::path::PathBuf> {
 }
 
 /// Ensure a daemon is serving the Studio: attach if one is up (no child),
-/// else spawn `aivyx-pa daemon run --web-ui` (env inherited, output to
+/// else spawn `aivyx-pa daemon run --studio` (env inherited, output to
 /// [`daemon_log`]) and return the child so we can stop it on quit. When the
 /// Studio still isn't there, the [`first_run::SetupProblem`] says why, for
 /// the page shown instead (First-run E).
@@ -181,7 +181,7 @@ fn ensure_daemon() -> (Option<Child>, Option<first_run::SetupProblem>) {
     };
     let bin = aivyx_bin();
     let mut child = match Command::new(&bin)
-        .args(["daemon", "run", "--web-ui"])
+        .args(["daemon", "run", "--studio"])
         .stdin(Stdio::null())
         .stdout(out)
         .stderr(err)

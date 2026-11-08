@@ -42,12 +42,12 @@ correction_consolidation.min_samples: u32?
 correction_judgment.enabled: bool?
 correction_judgment.max_corrections_per_cycle: u32?
 correction_signal.attribute_tools: bool?
-daemon.web_ui: bool?
-daemon.web_ui_allowed_origins: [str]?
-daemon.web_ui_auth_token: str?
-daemon.web_ui_host: str?
-daemon.web_ui_insecure_no_auth: bool?
-daemon.web_ui_port: u16?
+daemon.web_ui: deprecated alias of studio.enabled
+daemon.web_ui_allowed_origins: deprecated alias of studio.allowed_origins
+daemon.web_ui_auth_token: deprecated alias of studio.auth_token
+daemon.web_ui_host: deprecated alias of studio.host
+daemon.web_ui_insecure_no_auth: deprecated alias of studio.insecure_no_auth
+daemon.web_ui_port: deprecated alias of studio.port
 daemon.webhook_port: u16?
 discord.application_id: u64?
 discord.channel_filter: deprecated alias of discord.channel_id
@@ -365,6 +365,12 @@ slack.team_run_channel: bool
 slack.team_trigger_rate_limit: u32?
 storage.passphrase: str?
 storage.path: str?
+studio.allowed_origins: [str]?
+studio.auth_token: str?
+studio.enabled: bool?
+studio.host: str?
+studio.insecure_no_auth: bool?
+studio.port: u16?
 team.config_path: deprecated alias of team.roster_path
 team.roster_path: str?
 telegram.chat_filter: deprecated alias of telegram.chat_id

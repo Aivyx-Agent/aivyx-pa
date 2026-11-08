@@ -82,7 +82,7 @@ background service installed — stop it and run
 ## Good to know
 
 - **Keep ports different.** `instances create` writes a free port into the
-  new instance's config. If you change `web_ui_port` by hand, keep each one
+  new instance's config. If you change `[studio] port` by hand, keep each one
   unique.
 - **A config file in the current folder wins.** If the folder you're in has
   its own `aivyx-pa.toml`, every instance started there reads it — the

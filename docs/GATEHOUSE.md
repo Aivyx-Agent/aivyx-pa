@@ -10,6 +10,11 @@
 > exposed to a network *by accident* — the ~175k-exposed-Ollama-hosts
 > lesson, applied before v1.0's appliance story invites it.
 
+> **Key names since 1.0:** the Studio settings below are `[studio] host`,
+> `allowed_origins`, `auth_token` and `insecure_no_auth`; the `[daemon] web_ui_*`
+> names this record uses are their deprecated spellings (still accepted, with a
+> warning).
+
 ## What shipped (GH.1)
 
 - **The interlock, enforced at config load** (not at bind time — a

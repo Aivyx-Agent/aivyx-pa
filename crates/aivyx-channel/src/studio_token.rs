@@ -3,7 +3,7 @@
 //! The Studio is on by default, bound to loopback. Loopback TCP is still
 //! reachable by every local user account, so "on by default" must never
 //! mean "unauthenticated": when the operator has set neither
-//! `[daemon] web_ui_auth_token` nor `web_ui_insecure_no_auth`, the daemon
+//! `[studio] auth_token` nor `insecure_no_auth`, the daemon
 //! uses a token of its own, kept in a `studio-token` file next to the
 //! store (the parent directory of the effective `storage_path`).
 //!
@@ -78,7 +78,7 @@ fn read_checked(path: &Path) -> Result<Option<String>, String> {
             "the Studio token file {} is empty or damaged (expected {TOKEN_LEN} \
              letters and digits). Delete it to have a new token generated \
              (open Studio tabs will need the new sign-in link), or set \
-             `[daemon] web_ui_auth_token` in aivyx-pa.toml.",
+             `[studio] auth_token` in aivyx-pa.toml.",
             path.display()
         ));
     }
@@ -209,7 +209,7 @@ fn tighten_mode(path: &Path) {
 
 /// The token the daemon protects the Studio with:
 ///
-/// - the operator's `[daemon] web_ui_auth_token`, when set (no file is
+/// - the operator's `[studio] auth_token`, when set (no file is
 ///   created);
 /// - none, when `web_ui_insecure_no_auth` is set;
 /// - otherwise the automatic token at `path` ([`load_or_create`]).
@@ -337,7 +337,7 @@ pub fn read_status_waiting(socket_path: &Path, wait: std::time::Duration) -> Stu
 pub fn not_running_message(port: u16) -> String {
     format!(
         "The Studio isn't running: port {port} is in use (another program or another pa \
-         instance). Set `[daemon] web_ui_port` or pass `--web-ui-port`."
+         instance). Set `[studio] port` or pass `--studio-port`."
     )
 }
 

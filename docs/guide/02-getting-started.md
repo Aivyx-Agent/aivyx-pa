@@ -85,7 +85,7 @@ The first time, you'll land on the **Create your agent** screen if you haven't
 set up an identity yet; otherwise you arrive at the **Command Center** — your
 logbook of what needs you and what your assistant has done since you were
 last here.
-Don't want the Studio at all? Set `web_ui = false` under `[daemon]` in
+Don't want the Studio at all? Set `enabled = false` under `[studio]` in
 `aivyx-pa.toml`.
 
 > **Prefer a real app?** The [desktop app](11-desktop-app.md) puts the Studio in

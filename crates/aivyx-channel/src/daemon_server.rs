@@ -1623,8 +1623,8 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                 eprintln!(
                     "aivyx-pa web ui error: {e}\n  \
                      the Studio is NOT running (the rest of the daemon is). Another program \
-                     may hold that port, or this instance's `[daemon] web_ui_port` is unset \
-                     and it needs its own; set it, or pass `--web-ui-port <N>`."
+                     may hold that port, or this instance's `[studio] port` is unset \
+                     and it needs its own; set it, or pass `--studio-port <N>`."
                 );
             }
         })

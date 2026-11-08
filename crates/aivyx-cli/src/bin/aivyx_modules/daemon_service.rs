@@ -16,7 +16,7 @@
 //! - **macOS = a launchd `LaunchAgent`** plist at
 //!   `~/Library/LaunchAgents/com.aivyx-pa.daemon.plist` (rendered in AN.2).
 //! - **Windows = out of scope** for now (documented; the desktop app covers it).
-//! - **Command surface:** `aivyx-pa daemon install [--web-ui] [--no-start]` and
+//! - **Command surface:** `aivyx-pa daemon install [--studio] [--no-start]` and
 //!   `aivyx-pa daemon uninstall` (wired in AN.1).
 //! - **Secret handling (the real decision):** the unit references an *optional*
 //!   env file (`EnvironmentFile=-<path>`, mode `0o600`) rather than baking the
@@ -139,7 +139,7 @@ pub fn render_systemd_unit_for(
     working_dir: &str,
     paths: &aivyx_instance::InstancePaths,
 ) -> String {
-    let web_ui_flag = if web_ui { " --web-ui" } else { "" };
+    let web_ui_flag = if web_ui { " --studio" } else { "" };
     let instance_flag = if !paths.name().is_default() {
         format!(" --instance {}", paths.name().as_str())
     } else {
@@ -551,7 +551,7 @@ pub fn render_launchd_plist_for(
         ));
     }
     if web_ui {
-        program_args.push_str("        <string>--web-ui</string>\n");
+        program_args.push_str("        <string>--studio</string>\n");
     }
     let config_env = explicit_config_path(working_dir)
         .map(|p| {
@@ -954,10 +954,10 @@ mod tests {
     #[test]
     fn web_ui_flag_is_threaded_into_execstart() {
         let with = render_systemd_unit("/b/aivyx-pa", true, "/e", "/w");
-        assert!(with.contains("ExecStart=/b/aivyx-pa daemon run --web-ui\n"));
+        assert!(with.contains("ExecStart=/b/aivyx-pa daemon run --studio\n"));
         let without = render_systemd_unit("/b/aivyx-pa", false, "/e", "/w");
         assert!(without.contains("ExecStart=/b/aivyx-pa daemon run\n"));
-        assert!(!without.contains("--web-ui"));
+        assert!(!without.contains("--studio") && !without.contains("--web-ui"));
     }
 
     #[test]
@@ -1031,9 +1031,9 @@ mod tests {
     #[test]
     fn launchd_plist_threads_web_ui_and_carries_the_secret() {
         let with = render_launchd_plist("/b/aivyx-pa", true, "/w", "pw");
-        assert!(with.contains("<string>--web-ui</string>"));
+        assert!(with.contains("<string>--studio</string>"));
         let without = render_launchd_plist("/b/aivyx-pa", false, "/w", "pw");
-        assert!(!without.contains("--web-ui"));
+        assert!(!without.contains("--studio") && !without.contains("--web-ui"));
         // macOS DOES carry the secret in the plist (0600) — the documented
         // platform difference from Linux's env-file.
         assert!(without.contains("<key>AIVYX_PA_PASSPHRASE</key>\n        <string>pw</string>"));

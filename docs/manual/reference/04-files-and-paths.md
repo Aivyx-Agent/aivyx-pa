@@ -26,7 +26,7 @@ layout is used on Linux, macOS and WSL.
 | Integration settings (Gmail, Obsidian, toolkit…) | `~/.aivyx-pa/tool-processes/<tool>/` | — |
 | KV-cache slots (local llama.cpp) | Linux: `~/.local/share/aivyx-pa/kvcache`; macOS: `~/Library/Application Support/aivyx-pa/kvcache` | `[kvcache] store_path`, `AIVYX_PA_KVCACHE_STORE_PATH` |
 | Generated images | `~/.local/share/aivyx-pa/vision/` | the vision tool's own config |
-| Studio | `http://127.0.0.1:7843` | `[daemon] web_ui_port`, `web_ui_host` |
+| Studio | `http://127.0.0.1:7843` | `[studio] port`, `host` |
 | Background service | Linux: `aivyx-pa-daemon.service` (user unit); macOS: `com.aivyx-pa.daemon` | `aivyx-pa daemon install` / `uninstall` |
 | Passphrase in the OS keyring | service `aivyx-pa`, account `passphrase` | — |
 | The binary | `~/.cargo/bin/aivyx-pa` from the installer | the installer's `--install-path` |

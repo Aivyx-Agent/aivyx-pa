@@ -53,7 +53,7 @@ fn instances_list_sees_default_and_named() {
     std::fs::create_dir_all(h.join(".config/aivyx-pa/instances/research")).unwrap();
     std::fs::write(
         h.join(".config/aivyx-pa/instances/research/aivyx-pa.toml"),
-        "[daemon]\nweb_ui_port = 7844\n",
+        "[studio]\nport = 7844\n",
     )
     .unwrap();
     std::fs::write(h.join(".config/aivyx-pa/aivyx-pa.toml"), "").unwrap();

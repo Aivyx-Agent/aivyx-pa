@@ -474,8 +474,8 @@ unauthenticated Studio would hand every local account the operator's
 agent — its filesystem and shell reach, its memory, its config.
 
 **Mitigation:** on by default never means unauthenticated. When the
-operator sets neither `[daemon] web_ui_auth_token` nor
-`web_ui_insecure_no_auth`, the daemon uses an **automatic token**
+operator sets neither `[studio] auth_token` nor
+`[studio] insecure_no_auth`, the daemon uses an **automatic token**
 (`aivyx-channel/src/studio_token.rs`): 256 bits, 43 alphanumeric
 characters (the Harbor entrypoint's shape), kept in `studio-token` next
 to the store, written atomically with mode `0600` and reused on later
@@ -496,7 +496,7 @@ built-in sensitive basename (`aivyx-core/src/sensitive_paths.rs`), so
 `fs.read`, the data readers and the Documents browser refuse it, and
 `shell.exec`'s command scan refuses the obvious spellings (best-effort:
 a shell can obfuscate a path). An operator-set token always wins
-(no file is created), and `web_ui_insecure_no_auth = true` is the
+(no file is created), and `[studio] insecure_no_auth = true` is the
 explicit, documented way back to no token at all.
 
 **Residual:** the token is never written to a persistent log. When the

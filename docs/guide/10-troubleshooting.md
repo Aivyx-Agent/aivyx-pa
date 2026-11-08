@@ -61,7 +61,7 @@ needs your sign-off — approve it to continue), or it reached a **budget** limi
 **A second assistant won't start, or its Studio shows the wrong one.**
 With [named instances](16-named-instances.md), each needs its own Studio port.
 `aivyx-pa instances list` shows every instance's port; set a free one with
-`web_ui_port` under `[daemon]` in that instance's config. Also check you're
+`port` under `[studio]` in that instance's config. Also check you're
 not in a folder with its own `aivyx-pa.toml` — that file wins for every
 instance started there.
 

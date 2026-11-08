@@ -62,6 +62,13 @@ pub(crate) const DEPRECATED_KEYS: &[(&str, Change)] = &[
     ("team.config_path", Change::Renamed("team.roster_path")),
     // R25: the store's settings are `[storage]`; `[aivyx_pa]` held only this.
     ("aivyx_pa.passphrase", Change::Renamed("storage.passphrase")),
+    // R21: the web UI is the Studio, with its own section.
+    ("daemon.web_ui", Change::Renamed("studio.enabled")),
+    ("daemon.web_ui_port", Change::Renamed("studio.port")),
+    ("daemon.web_ui_host", Change::Renamed("studio.host")),
+    ("daemon.web_ui_allowed_origins", Change::Renamed("studio.allowed_origins")),
+    ("daemon.web_ui_auth_token", Change::Renamed("studio.auth_token")),
+    ("daemon.web_ui_insecure_no_auth", Change::Renamed("studio.insecure_no_auth")),
 ];
 
 /// Sections every key of which was renamed away. One left empty (by a

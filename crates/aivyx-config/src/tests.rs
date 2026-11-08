@@ -4692,7 +4692,7 @@ fn provider_kind_lemonade_is_a_local_openai_compatible_provider() {
 }
 
 // ------------------------------------------------------------------
-// [daemon] web_ui / web_ui_port — Phase 39
+// [studio] enabled / port (was [daemon] web_ui / web_ui_port) — Phase 39
 // ------------------------------------------------------------------
 
 #[test]
@@ -4703,8 +4703,8 @@ fn daemon_web_ui_true_yields_default_port() {
     std::fs::write(
         &toml_path,
         r#"
-[daemon]
-web_ui = true
+[studio]
+enabled = true
 "#,
     )
     .unwrap();
@@ -4729,8 +4729,8 @@ fn daemon_web_ui_port_overrides_default() {
     std::fs::write(
         &toml_path,
         r#"
-[daemon]
-web_ui_port = 9999
+[studio]
+port = 9999
 "#,
     )
     .unwrap();
@@ -4755,8 +4755,8 @@ fn daemon_web_ui_false_disables() {
     std::fs::write(
         &toml_path,
         r#"
-[daemon]
-web_ui = false
+[studio]
+enabled = false
 "#,
     )
     .unwrap();
@@ -4801,15 +4801,15 @@ fn daemon_web_ui_absent_defaults_on() {
 
 #[test]
 fn daemon_web_ui_false_wins_over_an_explicit_port() {
-    // With the Studio on by default, `web_ui = false` is the one opt-out
+    // With the Studio on by default, `[studio] enabled = false` is the one opt-out
     // and must stay authoritative even when a port is also written.
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[daemon]\nweb_ui = false\nweb_ui_port = 9000\n",
+        "\n[studio]\nenabled = false\nport = 9000\n",
         "web-ui-false-port",
     );
     assert_eq!(cfg.web_ui_port, None);
-    let cfg = load_with_toml("\n[daemon]\nweb_ui_port = 9000\n", "web-ui-port-only");
+    let cfg = load_with_toml("\n[studio]\nport = 9000\n", "web-ui-port-only");
     assert_eq!(cfg.web_ui_port, Some(9000));
     drop(env);
 }
@@ -4824,15 +4824,15 @@ fn studio_addr_reports_the_effective_bind() {
         Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7843))
     );
     let cfg = load_with_toml(
-        "\n[daemon]\nweb_ui_port = 9001\nweb_ui_host = \"0.0.0.0\"\n\
-         web_ui_auth_token = \"t0ken-t0ken\"\n",
+        "\n[studio]\nport = 9001\nhost = \"0.0.0.0\"\n\
+         auth_token = \"t0ken-t0ken\"\n",
         "studio-addr-custom",
     );
     assert_eq!(
         cfg.studio_addr(),
         Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9001))
     );
-    let cfg = load_with_toml("\n[daemon]\nweb_ui = false\n", "studio-addr-off");
+    let cfg = load_with_toml("\n[studio]\nenabled = false\n", "studio-addr-off");
     assert_eq!(cfg.studio_addr(), None);
     drop(env);
 }
@@ -4842,7 +4842,7 @@ fn daemon_web_ui_host_absent_defaults_to_none() {
     // Chapter Harbor — no web_ui_host → None (the daemon binds 127.0.0.1,
     // the localhost-only default every native install keeps).
     let env = EnvScope::new();
-    let cfg = load_with_toml("\n[daemon]\nweb_ui = true\n", "web-ui-host-absent");
+    let cfg = load_with_toml("\n[studio]\nenabled = true\n", "web-ui-host-absent");
     assert_eq!(cfg.web_ui_host, None);
     drop(env);
 }
@@ -4854,8 +4854,8 @@ fn daemon_web_ui_host_parses_bind_all() {
     // tested separately below.)
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"0.0.0.0\"\n\
-         web_ui_auth_token = \"t0ken-t0ken\"\n",
+        "\n[studio]\nenabled = true\nhost = \"0.0.0.0\"\n\
+         auth_token = \"t0ken-t0ken\"\n",
         "web-ui-host-all",
     );
     assert_eq!(
@@ -4914,7 +4914,7 @@ fn gatehouse_off_host_without_token_is_refused() {
     let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
-        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"0.0.0.0\"\n",
+        "\n[studio]\nenabled = true\nhost = \"0.0.0.0\"\n",
     )
     .unwrap();
     let opts = LoadOptions {
@@ -4928,8 +4928,8 @@ fn gatehouse_off_host_without_token_is_refused() {
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must refuse");
     let msg = err.to_string();
     assert!(msg.contains("UNAUTHENTICATED"), "names the risk: {msg}");
-    assert!(msg.contains("web_ui_auth_token"), "names remedy 1: {msg}");
-    assert!(msg.contains("web_ui_insecure_no_auth"), "names remedy 2: {msg}");
+    assert!(msg.contains("auth_token"), "names remedy 1: {msg}");
+    assert!(msg.contains("insecure_no_auth"), "names remedy 2: {msg}");
     drop(env);
 }
 
@@ -4940,8 +4940,8 @@ fn gatehouse_escape_hatch_permits_bare_off_host_bind() {
     // still fire — that path is web_ui.rs's).
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"0.0.0.0\"\n\
-         web_ui_insecure_no_auth = true\n",
+        "\n[studio]\nenabled = true\nhost = \"0.0.0.0\"\n\
+         insecure_no_auth = true\n",
         "gatehouse-hatch",
     );
     assert!(cfg.web_ui_insecure_no_auth);
@@ -4955,7 +4955,7 @@ fn gatehouse_loopback_without_token_is_untouched() {
     // needs no token and no hatch — byte-identical to pre-Gatehouse.
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[daemon]\nweb_ui = true\nweb_ui_host = \"127.0.0.1\"\n",
+        "\n[studio]\nenabled = true\nhost = \"127.0.0.1\"\n",
         "gatehouse-loopback",
     );
     assert_eq!(cfg.web_ui_auth_token, None);
@@ -4969,7 +4969,7 @@ fn daemon_web_ui_host_rejects_non_ip() {
     let env = EnvScope::new();
     let tmp = TempDir::new("web-ui-host-bad");
     let toml_path = tmp.path().join("aivyx-pa.toml");
-    std::fs::write(&toml_path, "\n[daemon]\nweb_ui_host = \"not-an-ip\"\n").unwrap();
+    std::fs::write(&toml_path, "\n[studio]\nhost = \"not-an-ip\"\n").unwrap();
     let opts = LoadOptions {
         toml_path: Some(toml_path),
         require_api_key: false,
@@ -4980,7 +4980,7 @@ fn daemon_web_ui_host_rejects_non_ip() {
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must reject");
     assert!(
-        err.to_string().contains("web_ui_host"),
+        err.to_string().contains("studio.host"),
         "error should name the field: {err}"
     );
     drop(env);
@@ -4989,7 +4989,7 @@ fn daemon_web_ui_host_rejects_non_ip() {
 #[test]
 fn daemon_web_ui_allowed_origins_absent_is_empty() {
     let env = EnvScope::new();
-    let cfg = load_with_toml("\n[daemon]\nweb_ui = true\n", "origins-absent");
+    let cfg = load_with_toml("\n[studio]\nenabled = true\n", "origins-absent");
     assert!(cfg.web_ui_allowed_origins.is_empty());
     drop(env);
 }
@@ -4998,7 +4998,7 @@ fn daemon_web_ui_allowed_origins_absent_is_empty() {
 fn daemon_web_ui_auth_token_absent_is_none() {
     // Chapter Postern — no token → no auth (byte-identical default).
     let env = EnvScope::new();
-    let cfg = load_with_toml("\n[daemon]\nweb_ui = true\n", "token-absent");
+    let cfg = load_with_toml("\n[studio]\nenabled = true\n", "token-absent");
     assert_eq!(cfg.web_ui_auth_token, None);
     drop(env);
 }
@@ -5007,7 +5007,7 @@ fn daemon_web_ui_auth_token_absent_is_none() {
 fn daemon_web_ui_auth_token_is_read() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[daemon]\nweb_ui = true\nweb_ui_auth_token = \"s3cret-TOKEN_9.~\"\n",
+        "\n[studio]\nenabled = true\nauth_token = \"s3cret-TOKEN_9.~\"\n",
         "token-set",
     );
     assert_eq!(cfg.web_ui_auth_token.as_deref(), Some("s3cret-TOKEN_9.~"));
@@ -5018,12 +5018,12 @@ fn daemon_web_ui_auth_token_is_read() {
 fn daemon_web_ui_auth_token_rejects_empty() {
     let env = EnvScope::new();
     let err = load_with_toml_result(
-        "\n[daemon]\nweb_ui_auth_token = \"   \"\n",
+        "\n[studio]\nauth_token = \"   \"\n",
         "token-empty",
     )
     .expect_err("blank token must be rejected");
     assert!(
-        err.to_string().contains("web_ui_auth_token"),
+        err.to_string().contains("auth_token"),
         "error should name the field: {err}"
     );
     drop(env);
@@ -5034,12 +5034,12 @@ fn daemon_web_ui_auth_token_rejects_unsafe_chars() {
     // A token with cookie-breaking chars (space, `;`) is rejected up front.
     let env = EnvScope::new();
     let err = load_with_toml_result(
-        "\n[daemon]\nweb_ui_auth_token = \"bad token;drop\"\n",
+        "\n[studio]\nauth_token = \"bad token;drop\"\n",
         "token-unsafe",
     )
     .expect_err("unsafe token must be rejected");
     assert!(
-        err.to_string().contains("web_ui_auth_token"),
+        err.to_string().contains("auth_token"),
         "error should name the field: {err}"
     );
     drop(env);
@@ -5049,7 +5049,7 @@ fn daemon_web_ui_auth_token_rejects_unsafe_chars() {
 fn daemon_web_ui_allowed_origins_parses_bare_origins() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[daemon]\nweb_ui = true\nweb_ui_allowed_origins = [\"https://studio.example\", \"http://box.lan:7843\"]\n",
+        "\n[studio]\nenabled = true\nallowed_origins = [\"https://studio.example\", \"http://box.lan:7843\"]\n",
         "origins-ok",
     );
     assert_eq!(
@@ -5067,7 +5067,7 @@ fn daemon_web_ui_allowed_origins_rejects_path() {
     let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
-        "\n[daemon]\nweb_ui_allowed_origins = [\"https://studio.example/app\"]\n",
+        "\n[studio]\nallowed_origins = [\"https://studio.example/app\"]\n",
     )
     .unwrap();
     let opts = LoadOptions {
@@ -5080,7 +5080,7 @@ fn daemon_web_ui_allowed_origins_rejects_path() {
     };
     let err = AivyxConfig::load_from_env_and_toml(&opts).expect_err("must reject");
     assert!(
-        err.to_string().contains("web_ui_allowed_origins"),
+        err.to_string().contains("studio.allowed_origins"),
         "error should name the field: {err}"
     );
     drop(env);
@@ -13182,8 +13182,8 @@ fn raw_config_debug_never_prints_a_secret() {
 api_key = "SECRET-ANTHROPIC"
 [openai]
 api_key = "SECRET-OPENAI"
-[daemon]
-web_ui_auth_token = "SECRET-STUDIO"
+[studio]
+auth_token = "SECRET-STUDIO"
 [telegram]
 token = "SECRET-TELEGRAM"
 [discord]
@@ -13416,6 +13416,7 @@ fn stable_config_keys() {
         notify_targets,
         reflection_schedules,
         daemon,
+        studio,
         profile,
         routing,
     } = raw;
@@ -13485,6 +13486,7 @@ fn stable_config_keys() {
         ("notify_target", array("notify_target[]", &notify_targets)),
         ("reflection_schedule", array("reflection_schedule[]", &reflection_schedules)),
         ("daemon", plain("daemon", &daemon)),
+        ("studio", plain("studio", &studio)),
         ("profile", plain("profile", &profile)),
         ("routing", plain("routing", &shared)),
         ("routing", plain("routing.escalation", &escalation)),
@@ -13585,5 +13587,72 @@ fn conversation_history_turns_is_a_deprecated_alias_of_messages() {
 
     let default = load_with_toml("\n", "history-default");
     assert_eq!(default.conversation_history_turns, crate::DEFAULT_CONVERSATION_HISTORY_TURNS);
+    drop(env);
+}
+
+/// R21: each `[daemon] web_ui*` key is a deprecated alias of its `[studio]`
+/// key, loading into the same field with one warning each; `[studio]` wins
+/// when both are set.
+#[test]
+fn daemon_web_ui_keys_are_deprecated_aliases_of_the_studio_section() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[daemon]\nwebhook_port = 7000\nweb_ui = true\nweb_ui_port = 9100\n\
+         web_ui_host = \"0.0.0.0\"\nweb_ui_allowed_origins = [\"https://studio.example\"]\n\
+         web_ui_auth_token = \"t0ken-t0ken\"\nweb_ui_insecure_no_auth = false\n",
+        "studio-aliases",
+    );
+    assert_eq!(cfg.webhook_port, Some(7000));
+    assert_eq!(cfg.web_ui_port, Some(9100));
+    assert_eq!(cfg.web_ui_host, Some("0.0.0.0".parse().unwrap()));
+    assert_eq!(cfg.web_ui_allowed_origins, vec!["https://studio.example".to_string()]);
+    assert_eq!(cfg.web_ui_auth_token.as_deref(), Some("t0ken-t0ken"));
+    assert!(!cfg.web_ui_insecure_no_auth);
+    let expected: Vec<String> = [
+        ("web_ui", "enabled"),
+        ("web_ui_port", "port"),
+        ("web_ui_host", "host"),
+        ("web_ui_allowed_origins", "allowed_origins"),
+        ("web_ui_auth_token", "auth_token"),
+        ("web_ui_insecure_no_auth", "insecure_no_auth"),
+    ]
+    .iter()
+    .map(|(old, new)| format!("`daemon.{old}` is deprecated; use `studio.{new}`"))
+    .collect();
+    assert_eq!(cfg.warnings, expected);
+
+    // `web_ui = false` still turns the Studio off.
+    let off = load_with_toml("\n[daemon]\nweb_ui = false\n", "studio-alias-off");
+    assert_eq!(off.web_ui_port, None);
+
+    // Both set: the `[studio]` key wins.
+    let both = load_with_toml(
+        "\n[daemon]\nweb_ui_port = 9100\n[studio]\nport = 9200\n",
+        "studio-alias-both",
+    );
+    assert_eq!(both.web_ui_port, Some(9200));
+    assert!(both.warnings[0].contains("`studio.port` wins"), "{:?}", both.warnings);
+    drop(env);
+}
+
+/// The bundled `init --template` files and the commented example config
+/// use only current spellings: no deprecation warning (the 1.0 renames, R7
+/// and on).
+#[test]
+fn bundled_templates_and_example_use_no_deprecated_keys() {
+    let env = EnvScope::new();
+    let files = [
+        ("coder", include_str!("../../../examples/templates/aivyx-coder.toml")),
+        ("researcher", include_str!("../../../examples/templates/aivyx-researcher.toml")),
+        ("personal", include_str!("../../../examples/templates/aivyx-personal.toml")),
+        ("kitchen", include_str!("../../../examples/templates/aivyx-kitchen.toml")),
+        ("full-access", include_str!("../../../examples/templates/aivyx-full-access.toml")),
+        ("example", include_str!("../../../examples/aivyx-pa.toml")),
+    ];
+    for (name, text) in files {
+        let (_, _, deprecated) =
+            crate::unknown_keys::parse_reporting::<crate::RawToml>(text).expect(name);
+        assert!(deprecated.is_empty(), "{name}: {deprecated:?}");
+    }
     drop(env);
 }
