@@ -119,7 +119,10 @@ aivyx-pa init [--template <name>] [--list-templates]
 ### `aivyx-pa doctor`
 
 Check your setup and say what's wrong: config, store, passphrase, model
-connection, the Studio, installed integrations and packs.
+connection, the Studio, installed integrations and packs. Its "Config"
+section lists the config warnings — unknown keys, deprecated spellings,
+conflicting settings — the same list printed when pa starts. They are
+warnings: they do not fail the doctor.
 
 ```
 aivyx-pa doctor

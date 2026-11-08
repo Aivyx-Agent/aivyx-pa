@@ -110,6 +110,7 @@ pub async fn run_doctor() -> Result<(), String> {
         return Err(message);
     }
     println!("aivyx-pa doctor — checking your setup\n");
+    print!("{}", config_warnings_section(&cfg.warnings));
 
     let provider_ok = match cfg.provider.value {
         ProviderKind::Ollama => check_ollama(&cfg).await,
@@ -163,6 +164,28 @@ pub async fn run_doctor() -> Result<(), String> {
     } else {
         Err("one or more checks failed — see the notes above.".into())
     }
+}
+
+/// The "Config:" section: each config warning (unknown keys, deprecated
+/// spellings, conflicting settings) as a warning line, or a pass line when
+/// there are none. Warning-level: it never fails the doctor, matching the
+/// start-up banner, which prints the same list.
+fn config_warnings_section(warnings: &[String]) -> String {
+    let mut out = String::from("Config:\n");
+    if warnings.is_empty() {
+        out.push_str("  \u{2713} no unknown, deprecated or conflicting settings\n");
+        return out;
+    }
+    for warning in warnings {
+        out.push_str(&format!("  \u{26a0} {warning}\n"));
+    }
+    out.push_str(&format!(
+        "     \u{2192} edit {} to clear {}; the agent still runs\n",
+        config_path().display(),
+        if warnings.len() == 1 { "it" } else { "them" }
+    ));
+    out.push('\n');
+    out
 }
 
 /// The roots the agent checkpoints (`fs_root` and every `[git] repos`
@@ -1281,6 +1304,23 @@ fn load_config_for_inspection() -> Result<AivyxConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Task 5c item 10: doctor lists every config warning, warning-level.
+    #[test]
+    fn doctor_lists_config_warnings() {
+        let none = config_warnings_section(&[]);
+        assert!(none.starts_with("Config:\n  \u{2713}"), "{none}");
+        let warnings = vec![
+            "unknown config key `ollama.base_url`".to_string(),
+            "`daemon.web_ui_port` is deprecated; use `studio.port`".to_string(),
+        ];
+        let out = config_warnings_section(&warnings);
+        for w in &warnings {
+            assert!(out.contains(&format!("  \u{26a0} {w}\n")), "{out}");
+        }
+        assert!(out.contains("to clear them"), "{out}");
+        assert!(!out.contains('\u{2717}'), "a config warning never fails the doctor: {out}");
+    }
 
     #[tokio::test]
     async fn a_refused_repository_gets_a_checkpoints_line() {
