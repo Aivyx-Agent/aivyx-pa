@@ -5191,6 +5191,50 @@ mod tests {
     /// `[aivyx_pa]` / `[storage]` section in the source template passes through to
     /// the generated file verbatim — this test exercises that same
     /// pass-through path against the real bundled templates.
+    /// Task 5c item 12: a config made from any bundled template, through the
+    /// same splicing path `aivyx-pa init --template <name>` uses, loads with
+    /// no config warnings (no unknown keys, no deprecated spellings). The
+    /// coder/researcher/personal/kitchen templates used to write
+    /// `[ollama] base_url`, which is not a key: every config made from them
+    /// warned.
+    #[test]
+    fn every_bundled_template_generates_a_config_with_no_warnings() {
+        let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s.redb", ".", false);
+        let dir = std::env::temp_dir().join(format!("aivyx-tpl-warn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for template in crate::init_templates::bundled_templates() {
+            let doc: toml_edit::DocumentMut = template.toml_content.parse().unwrap();
+            // The templates' `[[role]]` is not named `default`, so the config
+            // only loads with that role chosen (`--role <name>`); load it so.
+            let role = doc
+                .get("role")
+                .and_then(|r| r.as_array_of_tables())
+                .and_then(|roles| roles.iter().next())
+                .and_then(|role| role.get("name"))
+                .and_then(|name| name.as_str())
+                .map(str::to_string);
+            let path = dir.join(format!("{}.toml", template.name));
+            std::fs::write(&path, render_with_template(&cfg, &template.name, doc)).unwrap();
+            let opts = aivyx_config::LoadOptions {
+                toml_path: Some(path),
+                require_api_key: false,
+                require_telegram_token: false,
+                require_discord_token: false,
+                require_slack_tokens: false,
+                role_override: role,
+            };
+            let loaded = aivyx_config::AivyxConfig::load_from_env_and_toml(&opts)
+                .unwrap_or_else(|e| panic!("template `{}` does not load: {e}", template.name));
+            assert!(
+                loaded.warnings.is_empty(),
+                "template `{}` warns: {:#?}",
+                template.name,
+                loaded.warnings
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn bundled_templates_never_generate_a_legacy_aivyx_section() {
         let cfg = init_config_no_profile(Provider::Ollama, "qwen3:8b", None, "s.redb", ".", false);

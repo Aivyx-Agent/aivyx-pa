@@ -18,12 +18,15 @@ model = "llama3.1"
 # model = "claude-sonnet-4-5"
 # (and uncomment the [anthropic] block below)
 
-[ollama]
-# Local Ollama on default port. Run `ollama pull llama3.1` once.
-base_url = "http://localhost:11434"
+# Run `ollama pull llama3.1` once.
+# Ollama on this machine, on its default port (http://localhost:11434).
+# If it listens somewhere else, set its URL under [openai] — pa's one
+# server-URL key for every local provider, Ollama included:
+# [openai]
+# base_url = "http://gpu-host.local:11434"
 
 # [anthropic]
-# api_key = "sk-ant-..."   # or set ANTHROPIC_API_KEY env var
+# api_key = "sk-ant-..."   # or set AIVYX_PA_ANTHROPIC_API_KEY
 
 # ----------------------------------------------------------------
 # Storage + filesystem sandbox

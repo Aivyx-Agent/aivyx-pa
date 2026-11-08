@@ -13,7 +13,7 @@
 #
 # Then point the daemon at it in your mounted config:
 #   [agent]  provider = "ollama"   model = "llama3.1"
-#   [ollama] base_url = "http://ollama:11434"
+#   [openai] base_url = "http://ollama:11434"   # the Ollama URL
 
 services:
   ollama:

@@ -20,8 +20,11 @@
 provider = "ollama"
 model = "llama3.1"
 
-[ollama]
-base_url = "http://localhost:11434"
+# Ollama on this machine, on its default port (http://localhost:11434).
+# If it listens somewhere else, set its URL under [openai] — pa's one
+# server-URL key for every local provider, Ollama included:
+# [openai]
+# base_url = "http://gpu-host.local:11434"
 
 # [anthropic]
 # api_key = "sk-ant-..."
