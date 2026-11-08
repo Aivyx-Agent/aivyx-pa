@@ -53,6 +53,11 @@ pub(crate) const DEPRECATED_KEYS: &[(&str, Change)] = &[
     ("discord.channel_filter", Change::Renamed("discord.channel_id")),
     ("slack.channel_filter", Change::Renamed("slack.channel_id")),
     ("matrix.room_filter", Change::Renamed("matrix.room_id")),
+    // R19: the depth counts messages, not turns; the meaning is unchanged.
+    (
+        "agent.conversation_history_turns",
+        Change::Renamed("agent.conversation_history_messages"),
+    ),
 ];
 
 fn segments(path: &str) -> impl Iterator<Item = (&str, bool)> + Clone {

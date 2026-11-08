@@ -36,7 +36,7 @@ that exist; it does not add transcript injection.
 > Vitrine walkthrough showed fresh-context turns break basic
 > conversational expectations on the chat surface, and the operator
 > chose full history replay (default-on, `[agent]
-> conversation_history_turns`). Daemon-routed session turns — including
+> conversation_history_messages`). Daemon-routed session turns — including
 > Wire's piped multi-turn sessions — now replay the session's recent
 > window as real conversation history. Trigger-fired turns and the
 > durable-memory story are unchanged.

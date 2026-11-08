@@ -1264,7 +1264,7 @@ pub struct AivyxConfig {
     /// (`A,B,A,B,…`). `None`/`Some(false)` → off (byte-identical loop). The
     /// binary maps `Some(true)` to `ConcreteAgent::with_cycle_detection`.
     pub cycle_detection: Option<bool>,
-    /// Chapter Thread — `[agent] conversation_history_turns`: the number
+    /// Chapter Thread — `[agent] conversation_history_messages`: the number
     /// of the session's most recent prior **messages** (user and
     /// assistant lines each count as one) replayed into the model's
     /// context as real conversation history on interactive-session
@@ -4944,10 +4944,12 @@ struct RawAgent {
     /// byte-identical). See `ConcreteAgent::with_cycle_detection`.
     #[serde(default)]
     cycle_detection: Option<bool>,
-    /// Chapter Thread — conversation-history replay depth in messages.
+    /// Chapter Thread — conversation-history replay depth in messages
+    /// (user and assistant lines each count as one).
     /// Unset → [`DEFAULT_CONVERSATION_HISTORY_TURNS`]; `0` disables.
+    /// Was `conversation_history_turns` (a deprecated alias since R19).
     #[serde(default)]
-    conversation_history_turns: Option<usize>,
+    conversation_history_messages: Option<usize>,
     /// Chapter Picket Finding 3 follow-up — global on/off for the active
     /// injection scan. Unset → `true` (fail-closed, matching
     /// `[sandbox] require_enforcement`'s posture).
@@ -8770,7 +8772,7 @@ impl AivyxConfig {
             injection_scan_exempt,
             conversation_history_turns: toml
                 .agent
-                .conversation_history_turns
+                .conversation_history_messages
                 .unwrap_or(DEFAULT_CONVERSATION_HISTORY_TURNS),
             voice_options,
             ollama_prompt_strategies,

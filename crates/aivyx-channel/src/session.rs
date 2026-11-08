@@ -188,7 +188,7 @@ pub struct SessionConfig {
     /// `git.commit` configs at the binary's construction sites. `false`
     /// keeps the loop byte-identical to pre-Task-4 behavior.
     pub confirm_integration_writes: bool,
-    /// `[agent] conversation_history_turns` — how many of this session's
+    /// `[agent] conversation_history_messages` — how many of this session's
     /// most recent messages are replayed into each turn, as the daemon
     /// does. `0` keeps turns fresh-context (no replay).
     pub conversation_history_turns: usize,

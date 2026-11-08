@@ -113,7 +113,7 @@
   BUILT same-day (Chapter Thread, docs/THREAD.md): full history
   replay, on by default** — the operator chose real user/assistant
   message replay over block injection; `[agent]
-  conversation_history_turns` (default 8, 0 restores fresh-context).
+  conversation_history_messages` (default 8, 0 restores fresh-context).
   Trigger turns structurally unaffected. Rig verification pending.
 - **P1 (2026-07-05 investigation) — the bundled web-search backend was
   silently dead all day.** DuckDuckGo answers bot-flagged traffic with

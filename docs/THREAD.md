@@ -46,7 +46,7 @@ default** — the model should see the conversation the operator sees.
   empty completion — gets an honest `(no response was produced that
   turn)` assistant filler, which both preserves alternation and lets
   the model SEE that it never answered.
-- **Knob: `[agent] conversation_history_turns`**, default **8**
+- **Knob: `[agent] conversation_history_messages`**, default **8** (was `conversation_history_turns`, still accepted as a deprecated alias)
   messages (four exchanges), `0` disables. Default-ON is a deliberate,
   operator-decided exception to the behaviour-change-is-opt-in
   discipline — recorded here and at the constant.
@@ -76,6 +76,6 @@ default** — the model should see the conversation the operator sees.
 |---|---|---|
 | **TR.0** | This doc. | Reviewed. |
 | **TR.1** ✅ | Core: `PriorTurn` + `ConversationSeeder` trait + `seeded_history_messages` normalization + `begin_turn` seeding + config field/builder. | 8 new unit tests; planner suite green. |
-| **TR.2** ✅ | Channel: `WindowConversationSeeder` over the shared windows (newest-first budget trim, oldest-first replay) + `[agent] conversation_history_turns` (default 8, 0 disables). | 4 new window tests; config check green. |
+| **TR.2** ✅ | Channel: `WindowConversationSeeder` over the shared windows (newest-first budget trim, oldest-first replay) + `[agent] conversation_history_messages` (default 8, 0 disables). | 4 new window tests; config check green. |
 | **TR.3** ✅ | Binary wiring: windows built unconditionally; seeder attached to the daemon planner when the knob > 0. | Full workspace clippy + tests green. |
 | **TR.4** ✅ | **DONE (live on the rig, gpt-oss:20b).** The exact ICAO pair: *"What is the ICAO code for Jandakot airport?"* → YPJT → *"Did you find the correct code?"* → **"Yes, that's correct – Jandakot Airport's ICAO designation is YPJT"** (pre-Thread this produced "which code snippet or project do you mean?"). Second probe: agent asks for the home airport → operator answers "Jandakot" → reply connects ("Your home airport is Jandakot Airport"). Residuals (agent behavior, NOT Thread): the reply appended an unprompted confabulated code "(YJAT)", and the volunteered fact still wasn't memory.written — the persist half of the Vitrine P2 stays open. | Piped two-turn headless sessions, 2026-07-05. |

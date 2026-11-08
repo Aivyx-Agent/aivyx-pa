@@ -13503,3 +13503,36 @@ fn stable_config_keys() {
          UPDATE_STABLE_SURFACE=1 cargo test -p aivyx-config stable_config_keys and commit docs/stable/"
     );
 }
+
+/// R19: `[agent] conversation_history_messages` sets the replay depth;
+/// `conversation_history_turns` is a deprecated alias with the same meaning
+/// (a count of messages), and the new key wins when both are set.
+#[test]
+fn conversation_history_turns_is_a_deprecated_alias_of_messages() {
+    let env = EnvScope::new();
+    let new = load_with_toml("\n[agent]\nconversation_history_messages = 4\n", "history-new");
+    assert_eq!(new.conversation_history_turns, 4);
+    assert!(new.warnings.is_empty(), "{:?}", new.warnings);
+
+    let old = load_with_toml("\n[agent]\nconversation_history_turns = 6\n", "history-old");
+    assert_eq!(old.conversation_history_turns, 6);
+    assert_eq!(
+        old.warnings,
+        vec![
+            "`agent.conversation_history_turns` is deprecated; use \
+             `agent.conversation_history_messages`"
+                .to_string()
+        ]
+    );
+
+    let both = load_with_toml(
+        "\n[agent]\nconversation_history_turns = 6\nconversation_history_messages = 2\n",
+        "history-both",
+    );
+    assert_eq!(both.conversation_history_turns, 2);
+    assert!(both.warnings[0].contains("wins"), "{:?}", both.warnings);
+
+    let default = load_with_toml("\n", "history-default");
+    assert_eq!(default.conversation_history_turns, crate::DEFAULT_CONVERSATION_HISTORY_TURNS);
+    drop(env);
+}

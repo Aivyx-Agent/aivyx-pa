@@ -7382,7 +7382,7 @@ async fn run_async(
         // `[agent] cycle_detection` — arm the small-cycle breaker; mapped to
         // an `Option<CycleConfig>` at each agent-construction site below.
         cycle_detection,
-        // Chapter Thread — `[agent] conversation_history_turns`; threaded
+        // Chapter Thread — `[agent] conversation_history_messages`; threaded
         // into the daemon planner's WindowConversationSeeder below.
         conversation_history_turns,
         // Phase 135 — [voice] section. Bound here so the

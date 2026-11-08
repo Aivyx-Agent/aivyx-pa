@@ -5,7 +5,8 @@ access.confirm_destructive: bool?
 access.guard_sensitive_paths: bool?
 access.level: AccessLevel?
 access.root: str?
-agent.conversation_history_turns: u64?
+agent.conversation_history_messages: u64?
+agent.conversation_history_turns: deprecated alias of agent.conversation_history_messages
 agent.cycle_detection: bool?
 agent.injection_scan_enabled: bool?
 agent.injection_scan_exempt: [str]

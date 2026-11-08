@@ -46,7 +46,7 @@ The model the agent uses and how a turn behaves. Pairs with one provider section
 | `provider` | `anthropic` \| `openai` \| `ollama` \| `llamacpp` \| `jan` \| `mistralrs` \| `broker` \| `lemonade` | `"openai"` | Which backend serves the model. |
 | `turn_timeout_secs` | integer |  | Per-turn wall-clock deadline override (seconds). Unset → the built-in 120s default. |
 | `cycle_detection` | bool |  | Small-cycle breaker switch. `true` arms the loop's repeating-cycle detector (catches `A,B,A,B,…` that the consecutive-identical breaker misses) with the built-in defaults. |
-| `conversation_history_turns` | integer |  | Conversation-history replay depth in messages. Unset → `8`; `0` disables. |
+| `conversation_history_messages` | integer |  | Conversation-history replay depth in messages (user and assistant lines each count as one). Unset → `8`; `0` disables. |
 | `injection_scan_enabled` | bool |  | Global on/off for the active injection scan. Unset → `true` (fail-closed, matching `[sandbox] require_enforcement`'s posture). |
 | `injection_scan_exempt` | list of string |  | Tool names exempted from the active injection scan even when `injection_scan_enabled` is `true`. Matched exactly against `Tool::name()`. |
 
@@ -987,6 +987,7 @@ These older spellings still load through 1.x, with one warning each at startup (
 
 | Old spelling | Use instead |
 |---|---|
+| `agent.conversation_history_turns` | `agent.conversation_history_messages` |
 | `confine.allow_leaving_process_group` | `sandbox.allow_leaving_process_group` |
 | `confine.allow_unix_sockets` | `sandbox.allow_unix_sockets` |
 | `confine.require_enforcement` | `sandbox.require_enforcement` |
