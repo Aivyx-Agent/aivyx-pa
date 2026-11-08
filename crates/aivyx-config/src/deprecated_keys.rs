@@ -120,6 +120,17 @@ fn leaf(path: &str) -> &str {
     path.rsplit_once('.').map_or(path, |(_, l)| l)
 }
 
+/// The old spelling whose value [`rewrite`] moved to `new`, given the table
+/// as the file wrote it: set there under the old path and not the new one.
+pub(crate) fn moved_from(original: &toml::Table, new: &str) -> Option<&'static str> {
+    DEPRECATED_KEYS.iter().find_map(|(old, change)| match change {
+        Change::Renamed(n) if *n == new && is_set(original, old) && !is_set(original, n) => {
+            Some(*old)
+        }
+        _ => None,
+    })
+}
+
 /// Moves every renamed key to its new path and returns one warning per
 /// deprecated spelling found, in [`DEPRECATED_KEYS`] order.
 pub(crate) fn rewrite(table: &mut toml::Table) -> Vec<String> {

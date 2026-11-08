@@ -13686,3 +13686,16 @@ fn fs_root_warns_only_when_it_overrides_access_root() {
     assert!(w.contains("`[fs] root` wins"), "{w}");
     drop(env);
 }
+
+/// A bad value under a deprecated spelling fails the load naming the key
+/// it was read as and the old key the file used (it was moved by the
+/// rename, so the parser's own position would point into rewritten text).
+#[test]
+fn a_bad_value_under_a_deprecated_key_names_the_key() {
+    let env = EnvScope::new();
+    let err = load_with_toml_result("\n[daemon]\nweb_ui_port = \"abc\"\n", "bad-old-port")
+        .expect_err("a string port must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("`studio.port` (set as `daemon.web_ui_port`)"), "{msg}");
+    drop(env);
+}

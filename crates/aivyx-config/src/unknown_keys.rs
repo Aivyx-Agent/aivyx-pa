@@ -40,8 +40,9 @@ fn known_paths() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for line in KNOWN_SNAPSHOT.lines() {
         let Some((path, ty)) = line.split_once(": ") else { continue };
-        // A deprecated spelling is never suggested; its new one is.
-        if ty.starts_with("deprecated alias of ") {
+        // A deprecated spelling is never suggested: neither a renamed one
+        // (its new one is) nor a warn-only one (`schedule[].notify_target`).
+        if ty.starts_with("deprecated alias of ") || ty.ends_with(" (deprecated)") {
             continue;
         }
         let mut prefix = String::new();
@@ -130,6 +131,24 @@ fn lookup<'a>(root: &'a toml::Table, path: &str) -> Option<&'a toml::Value> {
     Some(cur)
 }
 
+/// The dotted key path of the `key = value` line holding byte `pos` in
+/// `text` as `toml::to_string` writes a table: one key per line, under
+/// `[section]` / `[[array]]` headers.
+fn key_at(text: &str, pos: usize) -> Option<String> {
+    let start = text[..pos.min(text.len())].rfind('\n').map_or(0, |i| i + 1);
+    let line = text[start..].lines().next()?;
+    let key = line.split_once('=')?.0.trim().trim_matches('"');
+    let header = text[..start]
+        .lines()
+        .rev()
+        .find_map(|l| l.trim().strip_prefix('['))
+        .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string());
+    Some(match header {
+        Some(h) => format!("{h}.{key}"),
+        None => key.to_string(),
+    })
+}
+
 /// Keys `[routing]` hands to pa's own sub-tables (`RawRouting` flattens the
 /// shared `RoutingConfig` beside them); the shared type ignores these.
 const PA_ROUTING_SUBTABLES: [&str; 3] = ["escalation", "sensitive", "classifier"];
@@ -171,7 +190,23 @@ pub(crate) fn parse_reporting<T: serde::de::DeserializeOwned>(
         serde_ignored::deserialize(toml::Deserializer::new(&rewritten), |p| {
             ignored.push(clean(&p.to_string()));
         })
-        .map_err(|e| <toml::de::Error as serde::de::Error>::custom(e.message()))?
+        .map_err(|e| {
+            // Name the key (the position would point into the rewritten
+            // text), and the old spelling the file used, if it was moved.
+            let key = e.span().and_then(|span| key_at(&rewritten, span.start));
+            let msg = match key {
+                Some(key) => {
+                    let spelled = original
+                        .as_ref()
+                        .and_then(|t| crate::deprecated_keys::moved_from(t, &key))
+                        .map(|old| format!(" (set as `{old}`)"))
+                        .unwrap_or_default();
+                    format!("invalid value for `{key}`{spelled}: {}", e.message())
+                }
+                None => e.message().to_string(),
+            };
+            <toml::de::Error as serde::de::Error>::custom(msg)
+        })?
     };
     ignored.retain(|p| p != "routing" && !p.starts_with("routing."));
     if let Some(routing) = table.as_ref().and_then(|t| t.get("routing")).cloned() {
@@ -222,6 +257,30 @@ mod tests {
 
     fn paths(raw: &str) -> Vec<String> {
         unknown(raw).into_iter().map(|k| k.path).collect()
+    }
+
+    #[test]
+    fn a_bad_value_under_an_old_spelling_names_both_keys() {
+        let err = parse_reporting::<RawToml>("[daemon]\nweb_ui_port = \"abc\"\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("`studio.port`"), "{msg}");
+        assert!(msg.contains("(set as `daemon.web_ui_port`)"), "{msg}");
+    }
+
+    #[test]
+    fn a_warn_only_deprecated_key_is_never_suggested() {
+        assert!(!known_paths().contains("schedule.notify_target"));
+        assert!(known_paths().contains("schedule.notify_targets"));
+        let keys = unknown("[[schedule]]\nname = \"a\"\ncron = \"c\"\nnotify_targt = \"x\"\n");
+        assert_eq!(keys.len(), 1, "{keys:?}");
+        assert_eq!(keys[0].suggestion.as_deref(), Some("schedule.notify_targets"));
+    }
+
+    #[test]
+    fn key_at_reads_the_section_and_key() {
+        let text = "a = 1\n\n[studio]\nport = \"abc\"\n";
+        assert_eq!(key_at(text, text.find("\"abc").unwrap()).as_deref(), Some("studio.port"));
+        assert_eq!(key_at(text, 4).as_deref(), Some("a"));
     }
 
     #[test]
