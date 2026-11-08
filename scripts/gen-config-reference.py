@@ -164,7 +164,7 @@ MEANINGS = {
     "agent.model": "The model id, as the provider names it (e.g. `qwen3:14b`, `claude-sonnet-5`).",
     "agent.system_prompt": "Extra instructions added to the agent's system prompt.",
     "agent.provider": "Which backend serves the model.",
-    "fs.root": "The directory the file tools may work in.",
+    "fs.root": "The directory the file tools may work in. Wins over `[access] root`; setting both to different directories warns at startup.",
     "access.level": "How far the agent reaches: `sandbox` (its own directory), `workspace` (a directory you choose), `home`, `full`, or `custom`.",
     "access.root": "The directory for the `workspace` and `custom` levels (required for those).",
     "access.confirm_destructive": "Ask before irreversible actions (delete, overwrite, destructive shell, outbound messages). Unset — the usual case — means the autonomy level decides: on at every level except `unleashed`. Set it only to override that.",

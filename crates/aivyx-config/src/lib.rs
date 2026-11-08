@@ -6585,6 +6585,20 @@ impl AivyxConfig {
         // `[access] root` and `[access] level`-derived default below the
         // explicit `[fs] root`. A missing HOME with no explicit override is
         // a typed NoHome error. Task 3: sandbox path now comes from InstancePaths.
+        // R17 (amended): `[fs] root` stays a stable key and keeps winning
+        // over `[access] root`; only a config that sets both, differently,
+        // is told which one is in effect.
+        let fs_root_shadows_access_root = match (&toml.fs.root, &toml.access.root) {
+            (Some(fs), Some(access)) if env_path(ENV_FS_ROOT).is_none() && fs != access => {
+                Some(format!(
+                    "`[fs] root` (\"{}\") and `[access] root` (\"{}\") are both set: \
+                     `[fs] root` wins; remove one of them",
+                    fs.display(),
+                    access.display()
+                ))
+            }
+            _ => None,
+        };
         let fs_root = match env_path(ENV_FS_ROOT) {
             Some(p) => Sourced::new(p, FieldSource::Env),
             None => match toml.fs.root.clone() {
@@ -7644,6 +7658,7 @@ impl AivyxConfig {
         // An old spelling still works; say once that it is deprecated and
         // what replaces it (1.0 readiness audit R7 and on).
         warnings.extend(deprecated);
+        warnings.extend(fs_root_shadows_access_root);
 
         // A plain-text store passphrase in the file is allowed but never
         // quiet (R25), under either spelling; one where the env var won is

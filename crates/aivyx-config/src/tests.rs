@@ -13656,3 +13656,33 @@ fn bundled_templates_and_example_use_no_deprecated_keys() {
     }
     drop(env);
 }
+
+/// R17 (amended): `[fs] root` alone (what init, the templates and the
+/// appliance write) is quiet; set together with a different `[access] root`
+/// it warns once, naming both and saying `[fs] root` wins (which it does).
+#[test]
+fn fs_root_warns_only_when_it_overrides_access_root() {
+    let env = EnvScope::new();
+    let tmp = TempDir::new("fs-root-shadow");
+    let fs_dir = tmp.path().join("fs");
+    let access_dir = tmp.path().join("access");
+    let alone = load_with_toml(&format!("\n[fs]\nroot = \"{}\"\n", fs_dir.display()), "fs-alone");
+    assert_eq!(alone.fs_root.value, fs_dir);
+    assert!(alone.warnings.is_empty(), "{:?}", alone.warnings);
+
+    let both = load_with_toml(
+        &format!(
+            "\n[fs]\nroot = \"{}\"\n[access]\nlevel = \"workspace\"\nroot = \"{}\"\n",
+            fs_dir.display(),
+            access_dir.display()
+        ),
+        "fs-and-access",
+    );
+    assert_eq!(both.fs_root.value, fs_dir);
+    assert_eq!(both.warnings.len(), 1, "{:?}", both.warnings);
+    let w = &both.warnings[0];
+    assert!(w.contains(&fs_dir.display().to_string()), "{w}");
+    assert!(w.contains(&access_dir.display().to_string()), "{w}");
+    assert!(w.contains("`[fs] root` wins"), "{w}");
+    drop(env);
+}

@@ -216,7 +216,7 @@ The directory the file tools work in. Usually set through `[access]` instead —
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `root` | path |  | The directory the file tools may work in. |
+| `root` | path |  | The directory the file tools may work in. Wins over `[access] root`; setting both to different directories warns at startup. |
 
 ### `[access]`
 
