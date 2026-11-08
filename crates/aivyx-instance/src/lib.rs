@@ -9,6 +9,15 @@ use std::path::PathBuf;
 pub const ENV_INSTANCE: &str = "AIVYX_PA_INSTANCE";
 pub const DEFAULT_INSTANCE: &str = "default";
 
+/// The version of the instance layout on disk (R2): which files and
+/// directories an instance has and where. Recorded in each instance's
+/// data directory ([`InstancePaths::layout_version_file`]). Bump it (with a
+/// migration) only for a move older code could not follow.
+pub const LAYOUT_VERSION: u32 = 1;
+
+/// The layout version file's name, in the instance's data directory.
+pub const LAYOUT_VERSION_FILE: &str = "layout-version";
+
 /// Instance name — validated alphanumeric + hyphens, max 32 chars.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstanceName(String);
@@ -209,6 +218,49 @@ impl InstancePaths {
             Some(base)
         } else {
             Some(base.join("instances").join(self.name.as_str()))
+        }
+    }
+
+    /// Layout version file: `data_dir/layout-version`, holding
+    /// [`LAYOUT_VERSION`] as a decimal number.
+    pub fn layout_version_file(&self) -> Option<PathBuf> {
+        self.data_dir().map(|d| d.join(LAYOUT_VERSION_FILE))
+    }
+
+    /// Check the instance's layout version and record it (R2). Run when an
+    /// instance is created and each time one starts. An instance without
+    /// the file predates it and is version 1: the file is written then,
+    /// with the data directory if that does not exist yet. A version newer
+    /// than [`LAYOUT_VERSION`] is refused, naming the file.
+    pub fn ensure_layout_version(&self) -> Result<(), String> {
+        let path = self
+            .layout_version_file()
+            .ok_or("can't resolve the instance's data folder (is HOME set?)")?;
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let found: u32 = text.trim().parse().map_err(|_| {
+                    format!("{} does not hold a layout version: {:?}", path.display(), text.trim())
+                })?;
+                if found > LAYOUT_VERSION {
+                    return Err(format!(
+                        "instance `{}` uses layout version {found} ({}), newer than this \
+                         aivyx-pa knows ({LAYOUT_VERSION}): it was set up by a newer aivyx-pa. \
+                         Upgrade aivyx-pa to use it.",
+                        self.name,
+                        path.display()
+                    ));
+                }
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(dir) = path.parent() {
+                    std::fs::create_dir_all(dir)
+                        .map_err(|e| format!("create {}: {e}", dir.display()))?;
+                }
+                std::fs::write(&path, format!("{LAYOUT_VERSION}\n"))
+                    .map_err(|e| format!("write {}: {e}", path.display()))
+            }
+            Err(e) => Err(format!("read {}: {e}", path.display())),
         }
     }
 
@@ -450,6 +502,50 @@ mod tests {
 
     fn p(name: &str, d: BaseDirs) -> InstancePaths {
         InstancePaths::new(InstanceName::parse(name).unwrap(), d)
+    }
+
+    // ---- R2: the layout version ----------------------------------------
+
+    fn temp_instance(name: &str) -> (tempfile::TempDir, InstancePaths) {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = dirs(Some(tmp.path().to_str().unwrap()), None, None, None);
+        (tmp, p(name, d))
+    }
+
+    #[test]
+    fn a_new_instance_gets_the_layout_version_file() {
+        let (_tmp, paths) = temp_instance("research");
+        paths.ensure_layout_version().unwrap();
+        let file = paths.layout_version_file().unwrap();
+        assert!(file.ends_with("aivyx-pa/instances/research/layout-version"), "{file:?}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "1\n");
+        paths.ensure_layout_version().unwrap(); // idempotent
+    }
+
+    /// An instance set up before the file existed: its data directory holds
+    /// the store and nothing else. It starts as version 1 and gets the file;
+    /// nothing else in the directory changes.
+    #[test]
+    fn an_instance_from_before_the_file_is_version_1() {
+        let (_tmp, paths) = temp_instance("default");
+        let data = paths.data_dir().unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("store.redb"), b"old store").unwrap();
+        paths.ensure_layout_version().unwrap();
+        assert_eq!(std::fs::read_to_string(data.join("layout-version")).unwrap(), "1\n");
+        assert_eq!(std::fs::read(data.join("store.redb")).unwrap(), b"old store");
+    }
+
+    #[test]
+    fn a_newer_layout_is_refused() {
+        let (_tmp, paths) = temp_instance("default");
+        let file = paths.layout_version_file().unwrap();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "2\n").unwrap();
+        let err = paths.ensure_layout_version().unwrap_err();
+        assert!(err.contains("layout version 2") && err.contains("Upgrade aivyx-pa"), "{err}");
+        std::fs::write(&file, "two").unwrap();
+        assert!(paths.ensure_layout_version().unwrap_err().contains("does not hold"));
     }
 
     #[test]

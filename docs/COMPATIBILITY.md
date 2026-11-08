@@ -16,14 +16,22 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
   Snapshot: `docs/stable/env.txt`. The variables other parts read (the
   desktop app, one integration or tool) are listed in the environment
   variables reference but are not in the snapshot.
-- **The instance layout on disk.** Not versioned yet. It gets a version,
-  and an entry in `docs/stable/formats.txt`, before 1.0 is released.
+- **The instance layout on disk.** Versioned by a `layout-version` file
+  in each instance's data directory (`instance.layout_version` in
+  `docs/stable/formats.txt`). An instance from before the file is
+  version 1; the file is written when the instance is created and the
+  first time an existing one starts. An instance whose layout is newer
+  than the binary knows is refused, with a message naming the file.
 - **The data stores.** Any 1.x reads data written by 1.0. The snapshot
-  records the store versions that exist today: the table versions, the
-  key-derivation salt, and the schema versions of the toolkit stores and
-  the Google token file. See `docs/stable/formats.txt` for the list.
-  The audit chain format and the redb record shapes are not versioned
-  yet. They are stable in 1.0 and get versions before it is released.
+  records the store versions: the table names, the record version of
+  each table, the key-derivation salt, the audit chain's format, and the
+  schema versions of the toolkit stores and the Google token file. See
+  `docs/stable/formats.txt` for the list. The record versions live in
+  the store's `aivyx_schema_versions` table and the audit chain's format
+  in a header record beside the chain (outside the hash chain, so
+  existing chains verify unchanged). A store or chain from before these
+  versions is version 1 and gets them on its next open; one newer than
+  the binary knows is refused.
 - **The pack formats.** Formats 1 (tool packs) and 2 (config-only packs).
   Snapshot: `docs/stable/formats.txt`. A format 1 pack is stable as a
   bundle (it installs and verifies in every 1.x), but the tool protocol
@@ -32,8 +40,12 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
   1.0: a tool built against them may need a rebuild in a minor release.
   They will be stabilised in a 1.x minor release once a real tool pack
   exists.
-- **Webhook payloads.** The field paths of the notify payload and of the
-  trigger reply. Snapshot: `docs/stable/formats.txt`.
+- **Webhook payloads.** The field paths of the notify payload (which
+  carries `"version": 1`) and of the trigger reply. Snapshot:
+  `docs/stable/formats.txt`.
+- **The `aivyx-pa audit export` lines.** Each JSONL line carries
+  `"version": 1` (`audit_export.version`) and the fields listed in
+  `docs/AUDIT_EXPORT.md`.
 
 ## Not stable
 
@@ -115,6 +127,5 @@ The check has limits:
 - The format snapshot lists the versions and field paths. It does not test
   that old data still reads. Each store checks its schema version when
   it opens and refuses one it does not know. Reading older data is covered
-  by those checks and by review, not by a cross-version test.
-- The instance layout, the audit chain format and the redb record shapes
-  are not in the snapshot until they get versions.
+  by those checks, by tests that open data in the shape the earlier code
+  wrote, and by review, not by a cross-version test.

@@ -235,6 +235,8 @@ pub async fn run_create(name: &InstanceName) -> Result<(), String> {
     crate::init::run_init_wizard(None).await?;
 
     let paths = paths_for(name.clone());
+    // R2: a new instance starts with its layout version recorded.
+    paths.ensure_layout_version()?;
     let config = paths
         .config_file()
         .ok_or("can't resolve the new instance's config path (is HOME set?)")?;

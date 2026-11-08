@@ -346,6 +346,17 @@ impl KeyDomain {
         }
     }
 
+    /// The version of this domain's record shapes (R2). Recorded per
+    /// table in [`SCHEMA_VERSIONS_TABLE`] when the store opens, and
+    /// checked there: a store whose table is at a newer version than this
+    /// binary knows is refused. Bump it (and add a migration) when a
+    /// record shape changes in a way older code could not read.
+    pub const fn record_version(self) -> u32 {
+        // Every table is at its first record version today.
+        let _ = self;
+        1
+    }
+
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
     pub const ALL: [KeyDomain; 28] = [
@@ -468,6 +479,14 @@ pub enum StorageError {
     /// shutting down (process exit), not because storage failed.
     #[error("storage task cancelled: the runtime is shutting down")]
     Cancelled,
+
+    /// A table's records are at a version this binary does not know: the
+    /// store was written by a newer aivyx-pa (R2).
+    #[error(
+        "the store's {table} table is at record version {found}, newer than this \
+         aivyx-pa knows ({known}); it was written by a newer aivyx-pa: upgrade to open it"
+    )]
+    UnsupportedVersion { table: &'static str, found: u32, known: u32 },
 }
 
 impl StorageError {
@@ -526,6 +545,13 @@ impl From<redb::CommitError> for StorageError {
 // --------------------------------------------------------------------
 // StorageConfig — inputs to RedbStorage::open
 // --------------------------------------------------------------------
+
+/// The redb table holding each domain table's record version (R2):
+/// key = the domain's table name, value = its
+/// [`KeyDomain::record_version`]. Plain (not encrypted): it holds
+/// version numbers only. A table with no row here predates versioning
+/// and is version 1 (its row is written on the next open).
+pub const SCHEMA_VERSIONS_TABLE: &str = "aivyx_schema_versions";
 
 /// Open-time configuration. Mirrors the Phase 4 `FsReadToolConfig`
 /// pattern: a plain struct whose fallible `open` produces an
@@ -639,10 +665,31 @@ impl RedbStorage {
             // transaction so a cold store has the full schema
             // before any read hits it.
             let write = db.begin_write()?;
-            for domain in KeyDomain::ALL {
-                let table_def: TableDefinition<&[u8], &[u8]> =
-                    TableDefinition::new(domain.table_name());
-                let _ = write.open_table(table_def)?;
+            {
+                use redb::{ReadableTable, ReadableTableMetadata};
+                let versions_def: TableDefinition<&str, u32> =
+                    TableDefinition::new(SCHEMA_VERSIONS_TABLE);
+                let mut versions = write.open_table(versions_def)?;
+                for domain in KeyDomain::ALL {
+                    let table_def: TableDefinition<&[u8], &[u8]> =
+                        TableDefinition::new(domain.table_name());
+                    let table = write.open_table(table_def)?;
+                    let name = domain.table_name();
+                    let known = domain.record_version();
+                    let found = versions.get(name)?.map(|v| v.value());
+                    match found {
+                        Some(found) if found > known => {
+                            return Err(StorageError::UnsupportedVersion { table: name, found, known });
+                        }
+                        Some(_) => {}
+                        // R2: an empty table takes the current version; rows
+                        // written before versioning are version 1.
+                        None => {
+                            let version = if table.is_empty()? { known } else { 1 };
+                            versions.insert(name, version)?;
+                        }
+                    }
+                }
             }
             write.commit()?;
             if was_cold {
@@ -1123,6 +1170,85 @@ mod tests {
         RedbStorage::open(StorageConfig::new(dir.path()), master)
             .await
             .expect("open store")
+    }
+
+    // ---- R2: record versions ----------------------------------------
+
+    /// Read the schema-versions table straight from the redb file (the
+    /// store must be closed).
+    fn recorded_versions(path: &std::path::Path) -> Vec<(String, u32)> {
+        use redb::{ReadableTable, TableDefinition};
+        let db = redb::Database::create(path).unwrap();
+        let read = db.begin_read().unwrap();
+        let def: TableDefinition<&str, u32> = TableDefinition::new(SCHEMA_VERSIONS_TABLE);
+        let table = read.open_table(def).unwrap();
+        table.iter().unwrap().map(|r| {
+            let (k, v) = r.unwrap();
+            (k.value().to_string(), v.value())
+        }).collect()
+    }
+
+    #[tokio::test]
+    async fn a_new_store_records_every_tables_version() {
+        let dir = StoreDir::new();
+        drop(open_store(&dir, test_master(60)).await);
+        let versions = recorded_versions(&dir.path());
+        assert_eq!(versions.len(), KeyDomain::ALL.len());
+        for d in KeyDomain::ALL {
+            assert!(versions.contains(&(d.table_name().to_string(), d.record_version())), "{d:?}");
+        }
+    }
+
+    /// A store written before R2 has no schema-versions table. Its rows
+    /// still read, and its tables are recorded at version 1. The pre-R2
+    /// store is made by writing with today's code and dropping the table
+    /// R2 added: the rest of the file is what the earlier code wrote.
+    #[tokio::test]
+    async fn a_store_from_before_versioning_opens_at_version_1() {
+        let dir = StoreDir::new();
+        let store = open_store(&dir, test_master(61)).await;
+        store.domain(KeyDomain::Sessions).put(b"s1", b"before-r2").await.unwrap();
+        drop(store);
+        {
+            let db = redb::Database::create(dir.path()).unwrap();
+            let write = db.begin_write().unwrap();
+            let def: TableDefinition<&str, u32> = TableDefinition::new(SCHEMA_VERSIONS_TABLE);
+            assert!(write.delete_table(def).unwrap());
+            write.commit().unwrap();
+        }
+        let store = open_store(&dir, test_master(61)).await;
+        let got = store.domain(KeyDomain::Sessions).get(b"s1").await.unwrap();
+        assert_eq!(got.as_deref(), Some(&b"before-r2"[..]));
+        drop(store);
+        let versions = recorded_versions(&dir.path());
+        assert!(versions.contains(&("aivyx_sessions_v1".to_string(), 1)), "{versions:?}");
+        assert_eq!(versions.len(), KeyDomain::ALL.len());
+    }
+
+    #[tokio::test]
+    async fn a_table_at_a_newer_version_is_refused() {
+        let dir = StoreDir::new();
+        drop(open_store(&dir, test_master(62)).await);
+        {
+            let db = redb::Database::create(dir.path()).unwrap();
+            let write = db.begin_write().unwrap();
+            {
+                let def: TableDefinition<&str, u32> =
+                    TableDefinition::new(SCHEMA_VERSIONS_TABLE);
+                let mut t = write.open_table(def).unwrap();
+                t.insert("aivyx_memory_v1", 2).unwrap();
+            }
+            write.commit().unwrap();
+        }
+        let Err(err) = RedbStorage::open(StorageConfig::new(dir.path()), test_master(62)).await
+        else {
+            panic!("a newer table version is refused");
+        };
+        assert!(matches!(
+            err,
+            StorageError::UnsupportedVersion { table: "aivyx_memory_v1", found: 2, known: 1 }
+        ));
+        assert!(err.to_string().contains("upgrade"), "{err}");
     }
 
     // ---- KeyDomain --------------------------------------------------

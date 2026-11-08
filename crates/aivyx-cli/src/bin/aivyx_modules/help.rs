@@ -714,6 +714,12 @@ mod tests {
                 "toolkit.task_store.schema_version = {}",
                 aivyx_toolkit::task_store::CURRENT_SCHEMA_VERSION
             ),
+            // R2: the instance layout, the audit chain and its export.
+            format!("instance.layout_version = {}", aivyx_instance::LAYOUT_VERSION),
+            format!("instance.layout_version_file = {}", aivyx_instance::LAYOUT_VERSION_FILE),
+            format!("audit.chain.format_version = {}", aivyx_audit::AUDIT_CHAIN_FORMAT_VERSION),
+            format!("audit_export.version = {}", crate::audit_export::AUDIT_EXPORT_VERSION),
+            format!("storage.schema_versions_table = {}", aivyx_storage::SCHEMA_VERSIONS_TABLE),
             format!("ipc.protocol_version = {}", aivyx_ipc::protocol::PROTOCOL_VERSION),
             format!("tool.protocol_version = {}", aivyx_tool::wire::TOOL_PROTOCOL_VERSION),
             // aivyx-pack exposes no constant: probe its manifest dispatcher for the
@@ -739,11 +745,9 @@ mod tests {
             format!("storage.hkdf_salt = {}", String::from_utf8_lossy(aivyx_crypto::HKDF_SALT)),
         ];
         for d in aivyx_storage::KeyDomain::ALL {
-            formats.push(format!(
-                "storage.table.{} = {}",
-                String::from_utf8_lossy(d.as_bytes()),
-                d.table_name()
-            ));
+            let name = String::from_utf8_lossy(d.as_bytes()).into_owned();
+            formats.push(format!("storage.table.{name} = {}", d.table_name()));
+            formats.push(format!("storage.record_version.{name} = {}", d.record_version()));
         }
         formats.extend(webhook);
         formats.sort();

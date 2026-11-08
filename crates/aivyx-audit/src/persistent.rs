@@ -174,6 +174,61 @@ fn audit_key(seq: u64) -> Vec<u8> {
 /// and encryption at rest for free from the domain it already lives in.
 const CHAIN_ANCHOR_KEY: &[u8] = b"z\0chain-anchor";
 
+// ---------------------------------------------------------------------------
+// Chain header — the chain's format version (R2, 1.0 readiness audit).
+// ---------------------------------------------------------------------------
+
+/// The audit chain's format version: the entry key layout, the
+/// `SignedEntry` envelope and how its MAC is computed. Bump it (with a
+/// migration) only for a change older code could not read.
+pub const AUDIT_CHAIN_FORMAT_VERSION: u32 = 1;
+
+/// Reserved key for the chain header. `z`-prefixed like
+/// `CHAIN_ANCHOR_KEY`, so the entry scan never sees it. It is not part of
+/// any entry or MAC, so adding it leaves existing chains verifying as
+/// before. A chain without one predates the header and is format 1;
+/// [`PersistentAuditLog::open`] writes it then (`verify_from_disk` only
+/// reads).
+const CHAIN_HEADER_KEY: &[u8] = b"z\0chain-header";
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ChainHeader {
+    format_version: u32,
+}
+
+/// The chain's format version from its header: `None` when there is no
+/// header yet. An unreadable header is an error, as for the anchor.
+async fn read_header(handle: &DomainHandle) -> Result<Option<u32>, AuditError> {
+    match handle.get(CHAIN_HEADER_KEY).await {
+        Ok(None) => Ok(None),
+        Ok(Some(bytes)) => serde_json::from_slice::<ChainHeader>(&bytes)
+            .map(|h| Some(h.format_version))
+            .map_err(|e| AuditError::Storage(format!("chain header decode failed: {e}"))),
+        Err(e) => Err(AuditError::Storage(format!("chain header read failed: {e}"))),
+    }
+}
+
+/// Refuse a chain whose format is newer than [`AUDIT_CHAIN_FORMAT_VERSION`].
+/// Returns whether the header is missing (so `open` writes it).
+async fn check_header(handle: &DomainHandle) -> Result<bool, AuditError> {
+    match read_header(handle).await? {
+        None => Ok(true),
+        Some(found) if found > AUDIT_CHAIN_FORMAT_VERSION => {
+            Err(AuditError::UnsupportedFormat { found, known: AUDIT_CHAIN_FORMAT_VERSION })
+        }
+        Some(_) => Ok(false),
+    }
+}
+
+async fn write_header(handle: &DomainHandle) -> Result<(), AuditError> {
+    let header = ChainHeader { format_version: AUDIT_CHAIN_FORMAT_VERSION };
+    let bytes = serde_json::to_vec(&header).expect("ChainHeader always serializes");
+    handle
+        .put(CHAIN_HEADER_KEY, &bytes)
+        .await
+        .map_err(|e| AuditError::Storage(format!("chain header write failed: {e}")))
+}
+
 /// The last known tail of the chain: the highest `seq` durably
 /// persisted, and its `mac`. Updated after every successful append
 /// (see `spawn_drain_task`), checked against the real on-disk tail on
@@ -313,7 +368,11 @@ impl PersistentAuditLog {
     ) -> Result<Self, AuditError> {
         // Shared with `verify_from_disk`: one scan+decode+verify
         // pipeline, so reopen and standalone-verify cannot drift.
-        let entries = scan_decode_verify(&storage, &audit_key).await?;
+        let (entries, header_missing) = scan_decode_verify(&storage, &audit_key).await?;
+        // R2: a chain from before the header is format 1; record it.
+        if header_missing {
+            write_header(&storage.domain(KeyDomain::Audit)).await?;
+        }
 
         let chain = Arc::new(HmacChainLog::from_verified_entries(
             audit_key.to_vec(),
@@ -425,7 +484,7 @@ impl PersistentAuditLog {
         storage: Arc<dyn Storage>,
         audit_key: [u8; 32],
     ) -> Result<VerifyReport, AuditError> {
-        let entries = scan_decode_verify(&storage, &audit_key).await?;
+        let (entries, _) = scan_decode_verify(&storage, &audit_key).await?;
         Ok(VerifyReport::from_entries(&entries))
     }
 }
@@ -587,18 +646,20 @@ impl Drop for PersistentAuditLog {
 // definition of "valid on-disk audit state."
 // ---------------------------------------------------------------------------
 
+/// Also returns whether the chain header is missing (see `CHAIN_HEADER_KEY`).
 async fn scan_decode_verify(
     storage: &Arc<dyn Storage>,
     audit_key: &[u8; 32],
-) -> Result<Vec<SignedEntry>, AuditError> {
+) -> Result<(Vec<SignedEntry>, bool), AuditError> {
     let handle = storage.domain(KeyDomain::Audit);
+    let header_missing = check_header(&handle).await?;
     let rows: Vec<ScanRow> = handle
         .scan_prefix(AUDIT_KEY_PREFIX)
         .await
         .map_err(|e| AuditError::Storage(e.to_string()))?;
     let entries = decode_and_validate_rows(audit_key, rows)?;
     check_tail_anchor(&handle, &entries).await?;
-    Ok(entries)
+    Ok((entries, header_missing))
 }
 
 fn decode_and_validate_rows(
@@ -1214,6 +1275,66 @@ mod tests {
             .await
             .expect("missing anchor must not block reopen of an intact chain");
         assert_eq!(log.len(), 1);
+    }
+
+    // ---- R2: the chain header ------------------------------------------
+
+    #[tokio::test]
+    async fn open_writes_the_chain_header() {
+        let (_dir, storage, chain_key) = fresh_storage(70).await;
+        let handle = storage.domain(KeyDomain::Audit);
+        assert_eq!(read_header(&handle).await.unwrap(), None);
+        drop(PersistentAuditLog::open(Arc::clone(&storage), chain_key).await.unwrap());
+        assert_eq!(read_header(&handle).await.unwrap(), Some(AUDIT_CHAIN_FORMAT_VERSION));
+    }
+
+    /// A chain written before the header existed (entries and anchor, no
+    /// header) verifies unchanged; `verify_from_disk` leaves it as it is,
+    /// and `open` records format 1 and keeps chaining onto it. The old
+    /// chain is made by writing with today's code and deleting the header,
+    /// the one key R2 added: entries, MACs and anchor are what the earlier
+    /// code wrote.
+    #[tokio::test]
+    async fn a_chain_from_before_the_header_verifies_and_opens() {
+        let (_dir, storage, chain_key) = fresh_storage(71).await;
+        {
+            let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key).await.unwrap();
+            log.append(sample_turn_started()).unwrap();
+            log.append(sample_tool_call()).unwrap();
+            wait_for_disk(&storage, 2).await;
+            wait_for_anchor(&storage, 1).await;
+        }
+        let handle = storage.domain(KeyDomain::Audit);
+        handle.delete(CHAIN_HEADER_KEY).await.unwrap();
+
+        let report = PersistentAuditLog::verify_from_disk(Arc::clone(&storage), chain_key)
+            .await
+            .expect("a pre-header chain verifies");
+        assert_eq!(report.entries_verified, 2);
+        assert_eq!(read_header(&handle).await.unwrap(), None, "verify only reads");
+
+        let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key).await.unwrap();
+        assert_eq!(read_header(&handle).await.unwrap(), Some(1));
+        assert_eq!(log.len(), 2);
+        log.append(sample_turn_ended()).unwrap();
+        wait_for_disk(&storage, 3).await;
+        drop(log);
+        let report = PersistentAuditLog::verify_from_disk(storage, chain_key).await.unwrap();
+        assert_eq!(report.entries_verified, 3);
+    }
+
+    #[tokio::test]
+    async fn a_chain_in_a_newer_format_is_refused() {
+        let (_dir, storage, chain_key) = fresh_storage(72).await;
+        drop(PersistentAuditLog::open(Arc::clone(&storage), chain_key).await.unwrap());
+        let newer = serde_json::to_vec(&ChainHeader { format_version: 2 }).unwrap();
+        storage.domain(KeyDomain::Audit).put(CHAIN_HEADER_KEY, &newer).await.unwrap();
+        let err = PersistentAuditLog::verify_from_disk(Arc::clone(&storage), chain_key)
+            .await
+            .expect_err("format 2 is refused");
+        assert!(matches!(err, AuditError::UnsupportedFormat { found: 2, known: 1 }), "{err}");
+        assert!(err.to_string().contains("upgrade"), "{err}");
+        assert!(PersistentAuditLog::open(storage, chain_key).await.is_err());
     }
 
     /// I1a (Task 11 round 2, security review): a *corrupt* anchor

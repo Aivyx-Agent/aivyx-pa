@@ -22,8 +22,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
   notify target receives has `"version": 1`. Receivers that ignore
   fields they don't know need no change.
 
+- **Versions on what pa stores, before 1.0.** Each instance gets a
+  `layout-version` file in its data directory, the encrypted store
+  records each table's record version, the audit chain gets a header
+  with its format version (beside the chain, so existing chains verify
+  as before), and each `aivyx-pa audit export` line carries
+  `"version": 1`. Data from earlier releases is version 1 and is
+  recorded as such the first time this release opens it; nothing to do.
+  A newer release's data is refused with a message instead of misread.
+
 ### Changed
 
+- **`aivyx-pa audit export --event-type` takes snake_case**
+  (`tool_call`, `scope_denied`, ...), like every other CLI value. The
+  CamelCase names (`ToolCall`) still work.
 - **A reply the model server cut off says so.** It ends with "⚠ The reply
   was cut off by the model server's output limit…" instead of passing for
   a finished reply.

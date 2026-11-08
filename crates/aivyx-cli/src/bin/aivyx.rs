@@ -1438,6 +1438,13 @@ fn run() -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create storage parent directory {parent:?}: {e}"))?;
     }
+    // R2: refuse an instance laid out by a newer aivyx-pa before touching
+    // its store, and record the layout version of one from before the file.
+    if let Ok(paths) = aivyx_instance::InstancePaths::current() {
+        if paths.layout_version_file().is_some() {
+            paths.ensure_layout_version()?;
+        }
+    }
     let salt_path = salt_path_for(&storage_path);
 
     // ---- Master key ---------------------------------------------------

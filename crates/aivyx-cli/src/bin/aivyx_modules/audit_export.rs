@@ -50,6 +50,11 @@ const DEFAULT_PAGE_SIZE: usize = 1024;
 // Per-line wire shape
 // ---------------------------------------------------------------------------
 
+/// The version of the export's line shape (R2; docs/stable/formats.txt).
+/// Bumped only when a field is removed or changes meaning; new fields can
+/// appear without a bump.
+pub const AUDIT_EXPORT_VERSION: u32 = 1;
+
 /// One line of the JSONL export. Fields are kept flat (no
 /// nesting under a "signed" key) so a `jq` filter like
 /// `.event.kind == "ToolCall"` works without an extra
@@ -60,6 +65,9 @@ const DEFAULT_PAGE_SIZE: usize = 1024;
 /// every tool we expect downstream consumers to use.
 #[derive(Debug, Clone, Serialize)]
 struct ExportLine<'a> {
+    /// [`AUDIT_EXPORT_VERSION`]: on every line, so a line-by-line consumer
+    /// has it (R2).
+    version: u32,
     seq: u64,
     appended_at_ms: u64,
     prev_mac: String,
@@ -79,6 +87,7 @@ struct ExportLine<'a> {
 /// dropping lines.
 pub fn render_line(entry: &SignedEntry) -> Result<String, serde_json::Error> {
     let line = ExportLine {
+        version: AUDIT_EXPORT_VERSION,
         seq: entry.seq,
         appended_at_ms: systemtime_to_ms(entry.appended_at),
         prev_mac: hex_encode(&entry.prev_mac),
@@ -419,8 +428,9 @@ mod tests {
         keys.sort();
         assert_eq!(
             keys,
-            vec!["appended_at_ms", "event", "mac", "prev_mac", "seq"]
+            vec!["appended_at_ms", "event", "mac", "prev_mac", "seq", "version"]
         );
+        assert_eq!(v["version"], 1);
     }
 
     // -- export_chain pagination logic -----------------------------------

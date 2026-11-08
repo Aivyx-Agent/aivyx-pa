@@ -27,10 +27,11 @@ aivyx-pa audit export [--from <seq>] [--limit <N>] > trajectory.jsonl
 
 ## Line shape
 
-Every line is a flat JSON object with five keys:
+Every line is a flat JSON object with six keys:
 
 | Key              | Type           | Notes                                                |
 |------------------|----------------|------------------------------------------------------|
+| `version`        | `u32`          | The line shape's version, `1`. Changes only when a field is removed or changes meaning; new fields can appear without it. |
 | `seq`            | `u64`          | Monotonic 0-based sequence number.                   |
 | `appended_at_ms` | `u64`          | Wall-clock append time, milliseconds since epoch.    |
 | `prev_mac`       | `string` (hex) | 32-byte HMAC of the previous entry. Lowercase hex.   |
@@ -46,13 +47,13 @@ indirection.
 A turn-started event:
 
 ```json
-{"seq":17,"appended_at_ms":1716750000123,"prev_mac":"4a...","mac":"7b...","event":{"kind":"TurnStarted","turn_id":"...","session_id":"...","channel":"Local","trust_tier":"Trusted","effective_capabilities":{...}}}
+{"version":1,"seq":17,"appended_at_ms":1716750000123,"prev_mac":"4a...","mac":"7b...","event":{"kind":"TurnStarted","turn_id":"...","session_id":"...","channel":"Local","trust_tier":"Trusted","effective_capabilities":{...}}}
 ```
 
 A tool call:
 
 ```json
-{"seq":18,"appended_at_ms":1716750000456,"prev_mac":"7b...","mac":"9c...","event":{"kind":"ToolCall","turn_id":"...","tool_id":"...","scope_used":"fs.read:/home/me/notes/**","input_hash":"...","outcome":{...},"duration":{"secs":0,"nanos":4200000}}}
+{"version":1,"seq":18,"appended_at_ms":1716750000456,"prev_mac":"7b...","mac":"9c...","event":{"kind":"ToolCall","turn_id":"...","tool_id":"...","scope_used":"fs.read:/home/me/notes/**","input_hash":"...","outcome":{...},"duration":{"secs":0,"nanos":4200000}}}
 ```
 
 The `AuditEvent` variants are defined in

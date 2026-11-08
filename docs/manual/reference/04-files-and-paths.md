@@ -17,6 +17,7 @@ layout is used on Linux, macOS and WSL.
 | Team config (optional) | `team.toml` beside the config file | `[team] roster_path` |
 | Encrypted store — memory, Persona, skills, audit log, secrets | `~/.local/share/aivyx-pa/store.redb`, plus its salt, `store.redb.salt` | `[storage] path`, `AIVYX_PA_STORAGE_PATH` |
 | Studio sign-in token | `studio-token`, next to the store | — (`aivyx-pa studio` prints a sign-in link) |
+| Layout version of the instance (`1`; a newer aivyx-pa's layout is refused) | `~/.local/share/aivyx-pa/layout-version` | — |
 | Saved passphrase, when there's no OS keyring | `~/.config/aivyx-pa/daemon.env` (mode `0600`) | delete it to be asked each time |
 | Daemon socket and PID file | `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock`, `daemon.pid` — else `~/.local/share/aivyx-pa/` | — |
 | Log of a daemon started on demand | `daemon.log`, next to the socket | — |

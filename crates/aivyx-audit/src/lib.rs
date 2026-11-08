@@ -869,6 +869,14 @@ pub enum AuditError {
         anchor_seq: u64,
         disk_seq: Option<u64>,
     },
+
+    /// The chain header names a format this binary does not know: the
+    /// chain was written by a newer aivyx-pa (R2).
+    #[error(
+        "the audit chain is format {found}, newer than this aivyx-pa knows ({known}); \
+         it was written by a newer aivyx-pa: upgrade to open it"
+    )]
+    UnsupportedFormat { found: u32, known: u32 },
 }
 
 // ---------------------------------------------------------------------------
@@ -1404,7 +1412,7 @@ impl<W: AuditWriter + 'static> aivyx_core::AuditHook for AuditBridge<W> {
 // ---------------------------------------------------------------------------
 
 mod persistent;
-pub use persistent::PersistentAuditLog;
+pub use persistent::{AUDIT_CHAIN_FORMAT_VERSION, PersistentAuditLog};
 
 // ---------------------------------------------------------------------------
 // Utility: input_hash helper for ToolCall events.
