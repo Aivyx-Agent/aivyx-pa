@@ -983,7 +983,11 @@ The Studio, the daemon's web app. See [Desktop app](../../guide/11-desktop-app.m
 
 ## Deprecated spellings
 
-These older spellings still load through 1.x, with one warning each at startup (under "config warnings"). New configs use the new spelling. When both are set, the new one wins.
+These older spellings still load through 1.x, with one warning each at
+startup (under "config warnings"). New configs use the new spelling. For a
+renamed key, when both spellings are set the new one wins (the warning says
+so). `notify_target` is not a rename: it is still read, and setting it
+together with `notify_targets` on one trigger is a load error.
 
 | Old spelling | Use instead |
 |---|---|

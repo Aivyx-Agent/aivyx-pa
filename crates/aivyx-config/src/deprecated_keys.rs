@@ -225,6 +225,46 @@ mod tests {
         assert_eq!(t, raw.parse::<toml::Table>().unwrap());
     }
 
+    /// The hand-maintained "Deprecated spellings" table in the config
+    /// reference lists exactly [`DEPRECATED_KEYS`]: each rename with its new
+    /// key, each warn-only key as still read.
+    #[test]
+    fn reference_lists_every_deprecated_key() {
+        let page = include_str!("../../../docs/manual/reference/02-configuration.md");
+        let section = page
+            .split_once("\n## Deprecated spellings\n")
+            .expect("the reference has a Deprecated spellings section")
+            .1;
+        let mut listed: Vec<(String, Option<String>)> = section
+            .lines()
+            .take_while(|l| !l.starts_with("## "))
+            .filter_map(|l| {
+                let cells: Vec<&str> = l.trim().trim_matches('|').split('|').map(str::trim).collect();
+                let [old, instead] = cells[..] else { return None };
+                let old = old.strip_prefix('`')?.strip_suffix('`')?;
+                let new = instead.strip_prefix('`').and_then(|n| n.strip_suffix('`'));
+                Some((old.to_string(), new.map(str::to_string)))
+            })
+            .collect();
+        let mut expected: Vec<(String, Option<String>)> = DEPRECATED_KEYS
+            .iter()
+            .map(|(old, change)| {
+                let new = match change {
+                    Change::Renamed(new) => Some((*new).to_string()),
+                    Change::Deprecated(_) => None,
+                };
+                ((*old).to_string(), new)
+            })
+            .collect();
+        listed.sort();
+        expected.sort();
+        assert_eq!(
+            listed, expected,
+            "docs/manual/reference/02-configuration.md's Deprecated spellings table \
+             (POSTAMBLE in scripts/gen-config-reference.py) is out of step with DEPRECATED_KEYS"
+        );
+    }
+
     #[test]
     fn is_set_looks_into_arrays_of_tables() {
         let t: toml::Table = "[[schedule]]\nname = \"a\"\n[[schedule]]\nnotify_target = \"x\"\n"

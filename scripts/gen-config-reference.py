@@ -756,25 +756,40 @@ the key is ignored.
 """
 
 
-def deprecated_section(out):
-    """Old spellings that still load, with a warning, from docs/stable/config.txt
-    (written by the `stable_config_keys` test from `deprecated_keys.rs`)."""
-    renamed, kept = [], []
-    for line in (ROOT / "docs" / "stable" / "config.txt").read_text().splitlines():
-        path, _, rest = line.partition(": ")
-        if rest.startswith("deprecated alias of "):
-            renamed.append((path, rest.removeprefix("deprecated alias of ")))
-        elif rest.endswith(" (deprecated)"):
-            kept.append(path)
-    if not renamed and not kept:
-        return
-    out.append("\n## Deprecated spellings\n")
-    out.append("These older spellings still load through 1.x, with one warning each at "
-               "startup (under \"config warnings\"). New configs "
-               "use the new spelling. When both are set, the new one wins.\n")
-    out.append("| Old spelling | Use instead |\n|---|---|")
-    out.extend(f"| `{old}` | `{new}` |" for old, new in renamed)
-    out.extend(f"| `{old}` | still read; see its row above |" for old in kept)
+# Hand-maintained, copied verbatim to the end of the page. The
+# `reference_lists_every_deprecated_key` test in aivyx-config checks it
+# against deprecated_keys.rs, so it can't drift.
+POSTAMBLE = """
+## Deprecated spellings
+
+These older spellings still load through 1.x, with one warning each at
+startup (under "config warnings"). New configs use the new spelling. For a
+renamed key, when both spellings are set the new one wins (the warning says
+so). `notify_target` is not a rename: it is still read, and setting it
+together with `notify_targets` on one trigger is a load error.
+
+| Old spelling | Use instead |
+|---|---|
+| `agent.conversation_history_turns` | `agent.conversation_history_messages` |
+| `aivyx_pa.passphrase` | `storage.passphrase` |
+| `confine.allow_leaving_process_group` | `sandbox.allow_leaving_process_group` |
+| `confine.allow_unix_sockets` | `sandbox.allow_unix_sockets` |
+| `confine.require_enforcement` | `sandbox.require_enforcement` |
+| `confine.share_system_tmp` | `sandbox.share_system_tmp` |
+| `daemon.web_ui` | `studio.enabled` |
+| `daemon.web_ui_allowed_origins` | `studio.allowed_origins` |
+| `daemon.web_ui_auth_token` | `studio.auth_token` |
+| `daemon.web_ui_host` | `studio.host` |
+| `daemon.web_ui_insecure_no_auth` | `studio.insecure_no_auth` |
+| `daemon.web_ui_port` | `studio.port` |
+| `discord.channel_filter` | `discord.channel_id` |
+| `matrix.room_filter` | `matrix.room_id` |
+| `slack.channel_filter` | `slack.channel_id` |
+| `team.config_path` | `team.roster_path` |
+| `telegram.chat_filter` | `telegram.chat_id` |
+| `file_watch[].notify_target` | still read; see its row above |
+| `schedule[].notify_target` | still read; see its row above |
+| `webhook[].notify_target` | still read; see its row above |"""
 
 
 def main():
@@ -798,7 +813,7 @@ def main():
             kind, inner = unwrap(type_name)
             h = {"array": f"[[{key}]]", "map": f"[{key}.<name>]"}.get(kind, f"[{key}]")
             emit_section(out, h, inner, sections[key]["docs"], where, intro=INTROS[key])
-    deprecated_section(out)
+    out.append(POSTAMBLE)
     if UNDOCUMENTED:
         sys.exit("no meaning for: " + ", ".join(UNDOCUMENTED)
                  + " — add a doc comment or a MEANINGS entry in this script")
