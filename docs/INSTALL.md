@@ -594,16 +594,17 @@ uses the existing `net.dns` scope base from Phase 0). Takes a
 plain hostname (no scheme, no port, no slash) and returns the
 resolved IP addresses.
 
-**OS-level process confinement (`[confine]`).** `shell.exec` and
+**OS-level process confinement (`[sandbox]`).** `shell.exec` and
 `git.rs`'s three tools confine every spawned command with Landlock +
 seccomp-bpf (`aivyx-confine`), on by default and unconditionally —
 there is no config key that disables confinement itself. The only
 knob is what happens if Landlock fails to establish a ruleset on a
 given machine (e.g. an old kernel, or Landlock disabled at the
-kernel-config level):
+kernel-config level). (Before 1.0 these keys were `[confine]`; that spelling
+still loads, with a deprecation warning.)
 
 ```toml
-[confine]
+[sandbox]
 require_enforcement = true   # default
 ```
 
@@ -620,11 +621,11 @@ Inside the sandbox a command can't reach local daemons over Unix
 sockets (ssh-agent, gpg-agent, docker, the D-Bus session bus), gets a
 private `TMPDIR` instead of the shared `/tmp`, and can't leave its
 process group, which is killed when the tool call ends. Three opt-outs,
-all default `false`, relax one each — see the commented `[confine]`
+all default `false`, relax one each — see the commented `[sandbox]`
 block in `examples/aivyx-pa.toml` and `docs/THREAT_MODEL.md` §4.1:
 
 ```toml
-[confine]
+[sandbox]
 allow_unix_sockets = false            # true: local daemons reachable (sandbox no longer contains code execution)
 allow_leaving_process_group = false   # true: setsid/setpgid allowed; such processes outlive the call
 share_system_tmp = false              # true: shared /tmp writable instead of a private TMPDIR

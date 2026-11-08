@@ -30,10 +30,10 @@ budget.per_day_usd: f64?
 budget.per_mission_tokens: u64?
 budget.per_mission_usd: f64?
 budget.per_run_usd: f64?
-confine.allow_leaving_process_group: bool?
-confine.allow_unix_sockets: bool?
-confine.require_enforcement: bool?
-confine.share_system_tmp: bool?
+confine.allow_leaving_process_group: deprecated alias of sandbox.allow_leaving_process_group
+confine.allow_unix_sockets: deprecated alias of sandbox.allow_unix_sockets
+confine.require_enforcement: deprecated alias of sandbox.require_enforcement
+confine.share_system_tmp: deprecated alias of sandbox.share_system_tmp
 correction_consolidation.enabled: bool?
 correction_consolidation.max_proposals_per_cycle: u32?
 correction_consolidation.min_corrections: f32?
@@ -307,7 +307,11 @@ routing.sensitive.tool_prefixes: [str]
 routing.tasks.*.strengths: [Strength]?
 routing.tasks.*.tier: Tier?
 routing.vram_bytes: u64?
+sandbox.allow_leaving_process_group: bool?
+sandbox.allow_unix_sockets: bool?
 sandbox.default_backend: str?
+sandbox.require_enforcement: bool?
+sandbox.share_system_tmp: bool?
 schedule[].cron: str
 schedule[].enabled: bool
 schedule[].name: str

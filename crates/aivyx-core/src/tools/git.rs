@@ -96,7 +96,7 @@ impl GitReadToolConfig {
         self
     }
 
-    /// The full aivyx-confine policy (`[confine]` in config): enforcement
+    /// The full aivyx-confine policy (`[sandbox]` in config): enforcement
     /// plus the `allow_unix_sockets` / `allow_leaving_process_group` /
     /// `share_system_tmp` opt-outs. Replaces whatever
     /// `with_require_enforcement` set.
@@ -170,7 +170,7 @@ impl GitWriteToolConfig {
         self
     }
 
-    /// The full aivyx-confine policy (`[confine]` in config): enforcement
+    /// The full aivyx-confine policy (`[sandbox]` in config): enforcement
     /// plus the `allow_unix_sockets` / `allow_leaving_process_group` /
     /// `share_system_tmp` opt-outs. Replaces whatever
     /// `with_require_enforcement` set.

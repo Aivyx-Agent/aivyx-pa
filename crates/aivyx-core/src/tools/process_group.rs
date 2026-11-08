@@ -2,7 +2,7 @@
 //!
 //! `aivyx-confine`'s `LandlockConfiner` makes every confined command the
 //! leader of a new process group and refuses `setsid`/`setpgid` inside
-//! the sandbox (unless `[confine] allow_leaving_process_group` is set),
+//! the sandbox (unless `[sandbox] allow_leaving_process_group` is set),
 //! so everything a command starts — a `cmd &` background job, a git hook's
 //! daemonised grandchild — stays in that group. The caller owns the
 //! group's lifetime: [`ProcessGroupGuard`] records the leader's pid right

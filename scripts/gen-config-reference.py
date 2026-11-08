@@ -60,7 +60,7 @@ GROUPS = [
         "agent", "anthropic", "openai", "ollama", "mistralrs", "broker", "kvcache",
         "providers", "routing", "embedding",
     ]),
-    ("Reach and safety", ["fs", "access", "autonomy", "confine", "sandbox", "git", "aivyx_pa", "storage"]),
+    ("Reach and safety", ["fs", "access", "autonomy", "sandbox", "git", "aivyx_pa", "storage"]),
     ("Identity and roles", ["profile", "persona_seed", "role", "team", "pack"]),
     ("Memory and learning", [
         "memory", "workspace", "recall_cluster", "wiki", "graph", "recall_judgment",
@@ -96,8 +96,7 @@ INTROS = {
               f"and private network addresses. See [Access and settings]({GUIDE}/08-access-and-settings.md).",
     "autonomy": "How much the agent may do without asking you, with per-domain exceptions. "
                 f"See [Autonomy and routines]({GUIDE}/15-autonomy-and-routines.md).",
-    "confine": "OS-level process confinement (Landlock + seccomp) for the commands the agent runs.",
-    "sandbox": "The default sandbox wrapped around tool processes that don't declare their own.",
+    "sandbox": "OS-level process confinement (Landlock + seccomp) for the commands the agent runs, and the default sandbox wrapped around tool processes that don't declare their own.",
     "git": "The repositories the `git.*` tools may read. Empty means the git tools are not offered.",
     "aivyx_pa": "The store passphrase. Prefer the OS keyring or `AIVYX_PA_PASSPHRASE` over writing it here.",
     "storage": "Where the encrypted store lives.",
@@ -231,9 +230,9 @@ MEANINGS = {
     "routing.endpoints.base_url": "The server's URL. Unset uses the kind's usual local address.",
     "routing.tasks.tier": "The tier this task prefers. Keyed by task name (`chat`, `code_edit`, `plan`, `judge`, `summarize`, `compact`, `classify`, `embed`).",
     "routing.tasks.strengths": "Strengths this task prefers in a model.",
-    "confine.allow_unix_sockets": "Let confined commands reach local daemons (Unix sockets). Any daemon that runs commands (D-Bus, docker) is then a way out of the sandbox.",
-    "confine.allow_leaving_process_group": "Allow `setsid`/`setpgid` (job control, some test runners). A process that leaves survives the call.",
-    "confine.share_system_tmp": "Give confined commands read and write on the shared `/tmp`, including other programs' temp files.",
+    "sandbox.allow_unix_sockets": "Let confined commands reach local daemons (Unix sockets). Any daemon that runs commands (D-Bus, docker) is then a way out of the sandbox.",
+    "sandbox.allow_leaving_process_group": "Allow `setsid`/`setpgid` (job control, some test runners). A process that leaves survives the call.",
+    "sandbox.share_system_tmp": "Give confined commands read and write on the shared `/tmp`, including other programs' temp files.",
     "persona_lifecycle.signal_consolidate": "Merge near-duplicate Persona facets.",
     "proactive.signal_ttl_expiry": "Surface a memory about to expire.",
     "skill_defaults.project_dir": "A directory holding one `<skill-name>/SKILL.md` per skill. A wrong layout gives zero skills, not an error.",
@@ -269,7 +268,7 @@ MEANINGS = {
     "routing.escalation.mode": "Whether a call may escalate to a cloud model: `never`, `ask` (default) or `auto`.",
     "routing.escalation.on_failure": "After a local failure, escalate the next turn (through the same `mode` gate; sensitive conversations never escalate).",
     "routing.sensitive.channels": "Channels whose conversations count as sensitive, e.g. `[\"telegram\"]`.",
-    "confine.require_enforcement": "Refuse to run a command when confinement can't be set up. On by default; off fails open.",
+    "sandbox.require_enforcement": "Refuse to run a command when confinement can't be set up. On by default; off fails open.",
     "role.name": "The role's unique name.",
     "role.system_prompt": "The role's system prompt. Unset uses the built-in default prompt.",
     "role.tool_allowlist": "Tools this role may call. Leave it out to allow every tool; an empty list allows none.",
@@ -755,6 +754,27 @@ the key is ignored.
 """
 
 
+def deprecated_section(out):
+    """Old spellings that still load, with a warning, from docs/stable/config.txt
+    (written by the `stable_config_keys` test from `deprecated_keys.rs`)."""
+    renamed, kept = [], []
+    for line in (ROOT / "docs" / "stable" / "config.txt").read_text().splitlines():
+        path, _, rest = line.partition(": ")
+        if rest.startswith("deprecated alias of "):
+            renamed.append((path, rest.removeprefix("deprecated alias of ")))
+        elif rest.endswith(" (deprecated)"):
+            kept.append(path)
+    if not renamed and not kept:
+        return
+    out.append("\n## Deprecated spellings\n")
+    out.append("These older spellings still load through 1.x, with one warning each at "
+               "startup (under \"config warnings\"). New configs "
+               "use the new spelling. When both are set, the new one wins.\n")
+    out.append("| Old spelling | Use instead |\n|---|---|")
+    out.extend(f"| `{old}` | `{new}` |" for old, new in renamed)
+    out.extend(f"| `{old}` | still read; see its row above |" for old in kept)
+
+
 def main():
     sections = {}
     fields, root_file = find_struct("RawToml")
@@ -776,6 +796,7 @@ def main():
             kind, inner = unwrap(type_name)
             h = {"array": f"[[{key}]]", "map": f"[{key}.<name>]"}.get(kind, f"[{key}]")
             emit_section(out, h, inner, sections[key]["docs"], where, intro=INTROS[key])
+    deprecated_section(out)
     if UNDOCUMENTED:
         sys.exit("no meaning for: " + ", ".join(UNDOCUMENTED)
                  + " — add a doc comment or a MEANINGS entry in this script")

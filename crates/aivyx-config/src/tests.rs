@@ -1921,7 +1921,7 @@ fn unknown_config_key_is_reported_in_loader_warnings() {
     let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
-        "[sandbox]\nallow_leaving_process_group = true\n[agent]\nmodel = \"m\"\n",
+        "[sandbox]\nallow_leaving_procss_group = true\n[agent]\nmodel = \"m\"\n",
     )
     .unwrap();
     let opts = LoadOptions {
@@ -1936,8 +1936,8 @@ fn unknown_config_key_is_reported_in_loader_warnings() {
     assert_eq!(
         cfg.warnings,
         vec![
-            "unknown config key `sandbox.allow_leaving_process_group` (ignored): \
-             did you mean `confine.allow_leaving_process_group`?"
+            "unknown config key `sandbox.allow_leaving_procss_group` (ignored): \
+             did you mean `sandbox.allow_leaving_process_group`?"
                 .to_string()
         ]
     );
@@ -12413,10 +12413,10 @@ fn access_confirm_destructive_explicit_override() {
 }
 
 // ------------------------------------------------------------------
-// `[confine]` section — OS-level process confinement enforcement
+// `[sandbox]` confinement keys — OS-level process confinement enforcement
 // ------------------------------------------------------------------
 
-/// No `[confine]` section ⇒ `require_enforcement` defaults to `true`
+/// No `[sandbox]` section ⇒ `require_enforcement` defaults to `true`
 /// (fail-closed).
 #[test]
 fn confine_require_enforcement_defaults_to_true_when_absent() {
@@ -12427,13 +12427,13 @@ fn confine_require_enforcement_defaults_to_true_when_absent() {
     drop(env);
 }
 
-/// An explicit `[confine] require_enforcement = false` overrides the
+/// An explicit `[sandbox] require_enforcement = false` overrides the
 /// fail-closed default.
 #[test]
 fn confine_require_enforcement_reads_an_explicit_false() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[confine]\nrequire_enforcement = false\n",
+        "\n[sandbox]\nrequire_enforcement = false\n",
         "confine-explicit-false",
     );
     assert!(!cfg.require_enforcement.value);
@@ -12441,7 +12441,7 @@ fn confine_require_enforcement_reads_an_explicit_false() {
     drop(env);
 }
 
-/// No `[confine]` section ⇒ the three aivyx-confine opt-outs
+/// No `[sandbox]` section ⇒ the three aivyx-confine opt-outs
 /// (`allow_unix_sockets`, `allow_leaving_process_group`,
 /// `share_system_tmp`) all default to `false` — the strict policy.
 #[test]
@@ -12457,12 +12457,12 @@ fn confine_opt_outs_default_to_false_when_absent() {
     drop(env);
 }
 
-/// Each `[confine]` opt-out is read independently from TOML.
+/// Each `[sandbox]` opt-out is read independently from TOML.
 #[test]
 fn confine_opt_outs_read_explicit_values() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[confine]\nallow_unix_sockets = true\nallow_leaving_process_group = true\n\
+        "\n[sandbox]\nallow_unix_sockets = true\nallow_leaving_process_group = true\n\
          share_system_tmp = false\n",
         "confine-opt-outs-explicit",
     );
@@ -12474,6 +12474,59 @@ fn confine_opt_outs_read_explicit_values() {
     assert_eq!(cfg.share_system_tmp.source, FieldSource::Toml);
     // Untouched: the opt-outs never relax enforcement itself.
     assert!(cfg.require_enforcement.value);
+    drop(env);
+}
+
+/// R7: each old `[confine]` key still loads into the same field, and warns
+/// once that `[sandbox]` is the spelling now.
+#[test]
+fn confine_keys_are_deprecated_aliases_of_the_sandbox_keys() {
+    let env = EnvScope::new();
+    type Field = fn(&AivyxConfig) -> &crate::Sourced<bool>;
+    let cases: [(&str, bool, Field); 4] = [
+        ("require_enforcement", false, |c| &c.require_enforcement),
+        ("allow_unix_sockets", true, |c| &c.allow_unix_sockets),
+        ("allow_leaving_process_group", true, |c| &c.allow_leaving_process_group),
+        ("share_system_tmp", true, |c| &c.share_system_tmp),
+    ];
+    for (key, value, field) in cases {
+        let cfg = load_with_toml(&format!("\n[confine]\n{key} = {value}\n"), "confine-alias");
+        assert_eq!(field(&cfg).value, value, "{key}");
+        assert_eq!(field(&cfg).source, FieldSource::Toml, "{key}");
+        assert_eq!(
+            cfg.warnings,
+            vec![format!("`confine.{key}` is deprecated; use `sandbox.{key}`")],
+            "{key}"
+        );
+    }
+    drop(env);
+}
+
+/// R7: when both spellings are set, `[sandbox]` wins and the warning says so.
+#[test]
+fn sandbox_key_wins_over_its_confine_alias() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[confine]\nshare_system_tmp = true\n[sandbox]\nshare_system_tmp = false\n",
+        "confine-both",
+    );
+    assert!(!cfg.share_system_tmp.value);
+    assert_eq!(cfg.warnings.len(), 1, "{:?}", cfg.warnings);
+    assert!(cfg.warnings[0].contains("`sandbox.share_system_tmp` wins"), "{:?}", cfg.warnings);
+    drop(env);
+}
+
+/// R7: coder's spelling (`[sandbox] allow_leaving_process_group`, from its
+/// troubleshooting page) works in pa without any warning.
+#[test]
+fn coders_sandbox_spelling_loads_without_a_warning() {
+    let env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[sandbox]\nallow_leaving_process_group = true\n",
+        "sandbox-coder-spelling",
+    );
+    assert!(cfg.allow_leaving_process_group.value);
+    assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
     drop(env);
 }
 
@@ -13161,7 +13214,6 @@ fn stable_config_keys() {
         signal,
         slack,
         git,
-        confine,
         team,
         pack,
         email,
@@ -13234,7 +13286,6 @@ fn stable_config_keys() {
         ("signal", plain("signal", &signal)),
         ("slack", plain("slack", &slack)),
         ("git", plain("git", &git)),
-        ("confine", plain("confine", &confine)),
         ("team", plain("team", &team)),
         ("pack", plain("pack", &pack)),
         ("email", plain("email", &email)),
@@ -13308,6 +13359,31 @@ fn stable_config_keys() {
         !out.iter().any(|l| l.contains("variable")),
         "a key's type was not resolved by serde-reflection: {out:#?}"
     );
+    // Deprecated spellings (`deprecated_keys`) are part of the surface too: a
+    // rename as `old: deprecated alias of new` (its new key must exist), and
+    // a key that only warns has `(deprecated)` on its own line.
+    for (old, change) in crate::deprecated_keys::DEPRECATED_KEYS {
+        match change {
+            crate::deprecated_keys::Change::Renamed(new) => {
+                assert!(
+                    out.iter().any(|l| l.starts_with(&format!("{new}: "))),
+                    "deprecated `{old}` is renamed to `{new}`, which is not a key"
+                );
+                assert!(
+                    !out.iter().any(|l| l.starts_with(&format!("{old}: "))),
+                    "deprecated `{old}` is still a field: drop it from the types"
+                );
+                out.push(format!("{old}: deprecated alias of {new}"));
+            }
+            crate::deprecated_keys::Change::Deprecated(_) => {
+                let line = out
+                    .iter_mut()
+                    .find(|l| l.starts_with(&format!("{old}: ")))
+                    .unwrap_or_else(|| panic!("deprecated `{old}` is not a key"));
+                line.push_str(" (deprecated)");
+            }
+        }
+    }
     out.sort();
     let text = out.join("\n") + "\n";
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/stable/config.txt");

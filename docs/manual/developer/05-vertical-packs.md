@@ -81,7 +81,7 @@ The template may only set `[agent]`, `[profile]`, `[persona_seed]`,
 `[[role]]`, `[autonomy]`, `[[schedule]]`, `[team]`, `[memory]` and
 `[skill_defaults]` — who the assistant is and what it does. Anything else
 is the operator's to set after install and fails the check: how far it
-reaches (`[access]`, `[fs]`, `[confine]`), whether its Studio is exposed
+reaches (`[access]`, `[fs]`, `[sandbox]`), whether its Studio is exposed
 (`[daemon]`), which programs it runs (`[[tool_process]]`,
 `[[mcp_server]]`), where its requests go (`[openai]`, `[providers]`, …)
 and whom it trusts (`[pack]`). In `[agent]`, `injection_scan_enabled` and

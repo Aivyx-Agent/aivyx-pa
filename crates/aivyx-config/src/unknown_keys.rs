@@ -39,7 +39,11 @@ impl fmt::Display for UnknownKey {
 fn known_paths() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for line in KNOWN_SNAPSHOT.lines() {
-        let Some((path, _)) = line.split_once(": ") else { continue };
+        let Some((path, ty)) = line.split_once(": ") else { continue };
+        // A deprecated spelling is never suggested; its new one is.
+        if ty.starts_with("deprecated alias of ") {
+            continue;
+        }
         let mut prefix = String::new();
         for seg in path.split('.') {
             if !prefix.is_empty() {
@@ -139,14 +143,34 @@ const PA_ROUTING_SUBTABLES: [&str; 3] = ["escalation", "sensitive", "classifier"
 /// So the main pass's `routing.*` reports are dropped and the `[routing]`
 /// table is checked on its own against `RoutingConfig`, skipping pa's
 /// sub-tables (which deny unknown keys themselves, as a hard error).
+///
+/// Deprecated spellings are moved to their new paths first
+/// ([`crate::deprecated_keys`]); the third value is one warning per
+/// deprecated spelling found.
 pub(crate) fn parse_reporting<T: serde::de::DeserializeOwned>(
     raw: &str,
-) -> Result<(T, Vec<UnknownKey>), toml::de::Error> {
+) -> Result<(T, Vec<UnknownKey>, Vec<String>), toml::de::Error> {
+    let mut table = raw.parse::<toml::Table>().ok();
+    let deprecated = table.as_mut().map(crate::deprecated_keys::rewrite).unwrap_or_default();
     let mut ignored = Vec::new();
-    let value: T = serde_ignored::deserialize(toml::Deserializer::new(raw), |p| {
-        ignored.push(clean(&p.to_string()));
-    })?;
-    let table = raw.parse::<toml::Table>().ok();
+    let value: T = if deprecated.is_empty() {
+        serde_ignored::deserialize(toml::Deserializer::new(raw), |p| {
+            ignored.push(clean(&p.to_string()));
+        })?
+    } else {
+        // The file as written is parsed first, so an error in it is reported
+        // with its real line and column (an old spelling is just ignored by
+        // this pass). Then the rewritten table is parsed for the values; an
+        // error now can only come from a moved value, so it is reported
+        // without the position, which would point into the rewritten text.
+        toml::from_str::<T>(raw)?;
+        let rewritten = toml::to_string(table.as_ref().expect("rewrite ran on a parsed table"))
+            .map_err(<toml::de::Error as serde::de::Error>::custom)?;
+        serde_ignored::deserialize(toml::Deserializer::new(&rewritten), |p| {
+            ignored.push(clean(&p.to_string()));
+        })
+        .map_err(|e| <toml::de::Error as serde::de::Error>::custom(e.message()))?
+    };
     ignored.retain(|p| p != "routing" && !p.starts_with("routing."));
     if let Some(routing) = table.as_ref().and_then(|t| t.get("routing")).cloned() {
         let mut second = Vec::new();
@@ -182,7 +206,7 @@ pub(crate) fn parse_reporting<T: serde::de::DeserializeOwned>(
             UnknownKey { path, suggestion }
         })
         .collect();
-    Ok((value, keys))
+    Ok((value, keys, deprecated))
 }
 
 #[cfg(test)]
@@ -220,28 +244,39 @@ mod tests {
     }
 
     #[test]
-    fn coders_sandbox_key_suggests_the_confine_section() {
-        let keys = unknown("[sandbox]\nallow_leaving_process_group = true\n");
+    fn coders_sandbox_key_is_known() {
+        // R7: coder's spelling, from its troubleshooting page, now works in pa.
+        assert!(unknown("[sandbox]\nallow_leaving_process_group = true\n").is_empty());
+    }
+
+    #[test]
+    fn a_deprecated_spelling_is_not_also_an_unknown_key() {
+        let (_, keys, deprecated) =
+            parse_reporting::<RawToml>("[confine]\nallow_unix_sockets = true\n").unwrap();
+        assert!(keys.is_empty(), "{keys:?}");
+        assert_eq!(deprecated.len(), 1);
+    }
+
+    #[test]
+    fn a_deprecated_spelling_is_never_suggested() {
+        let keys = unknown("[confine]\nrequire_enforcment = true\n");
         assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0].path, "sandbox.allow_leaving_process_group");
-        assert_eq!(
-            keys[0].suggestion.as_deref(),
-            Some("confine.allow_leaving_process_group")
-        );
+        assert_eq!(keys[0].path, "confine.require_enforcment");
+        assert_ne!(keys[0].suggestion.as_deref(), Some("confine.require_enforcement"));
     }
 
     #[test]
     fn misspelled_section_is_reported_once_with_a_suggestion() {
-        let keys = unknown("[confnie]\nrequire_enforcement = true\n");
+        let keys = unknown("[sandobx]\nrequire_enforcement = true\n");
         assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0].path, "confnie");
-        assert_eq!(keys[0].suggestion.as_deref(), Some("confine"));
+        assert_eq!(keys[0].path, "sandobx");
+        assert_eq!(keys[0].suggestion.as_deref(), Some("sandbox"));
     }
 
     #[test]
     fn valid_config_has_no_warnings() {
         let raw = "[agent]\nmodel = \"m\"\n[access]\nlevel = \"workspace\"\n\
-                   [confine]\nrequire_enforcement = true\n\
+                   [sandbox]\nrequire_enforcement = true\n\
                    [routing]\nenabled = true\n";
         assert!(unknown(raw).is_empty(), "{:?}", unknown(raw));
     }
@@ -281,7 +316,7 @@ mod tests {
     #[test]
     fn loaded_values_are_unchanged_by_the_warning_path() {
         let raw = "stray = 1\n[agent]\nmodel = \"m\"\nstray2 = 2\n[routing]\nenabled = true\nstray3 = 3\n";
-        let (with, keys) = parse_reporting::<RawToml>(raw).unwrap();
+        let (with, keys, _) = parse_reporting::<RawToml>(raw).unwrap();
         let plain: RawToml = toml::from_str(raw).unwrap();
         assert_eq!(keys.len(), 3);
         assert_eq!(format!("{with:?}"), format!("{plain:?}"));

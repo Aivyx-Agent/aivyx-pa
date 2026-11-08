@@ -2143,7 +2143,7 @@ parent_role = "researcher"
 # ]
 
 # ----------------------------------------------------------------
-# OS-level process confinement — [confine]
+# OS-level process confinement — [sandbox]
 # ----------------------------------------------------------------
 #
 # `shell.exec` and `git.rs`'s three tools (`git.status`/`git.diff`/
@@ -2155,7 +2155,8 @@ parent_role = "researcher"
 # level): `true` (default) fails the spawn closed; `false` lets it run
 # unconfined instead. Confinement itself is unaffected either way when
 # Landlock is working normally, and this section has no effect on
-# non-Linux builds (no confinement backend there at all).
+# non-Linux builds (no confinement backend there at all). These keys were
+# `[confine]` before 1.0; that spelling still loads, with a warning.
 #
 # Inside the sandbox a command also:
 #   - cannot open Unix sockets, so it cannot reach local daemons
@@ -2183,7 +2184,7 @@ parent_role = "researcher"
 #   share_system_tmp            — read+write on the shared /tmp again,
 #                                 including other programs' temp files.
 #
-# [confine]
+# [sandbox]
 # require_enforcement = true            # default; false = fail-open on setup failure
 # allow_unix_sockets = false            # default
 # allow_leaving_process_group = false   # default

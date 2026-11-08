@@ -126,7 +126,7 @@ pub fn grants_lines(summary: &PaPartSummary) -> String {
 /// `Err` lists every problem found, not just the first.
 /// The sections a pack's template may set: who the agent is and what it
 /// does. Everything else — how far it reaches (`[access]`, `[fs]`,
-/// `[confine]`), whether and where it's exposed (`[daemon]`), what
+/// `[sandbox]`), whether and where it's exposed (`[daemon]`), what
 /// programs it runs (`[[tool_process]]`, `[[mcp_server]]`), where its
 /// traffic goes (`[openai]`, `[providers]`, …) and whom it trusts
 /// (`[pack]`) — is the operator's, set after install. An allowlist, so a

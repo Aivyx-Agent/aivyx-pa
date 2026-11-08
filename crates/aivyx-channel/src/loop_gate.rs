@@ -144,7 +144,7 @@ impl ShellGateRunner {
         self
     }
 
-    /// The operator's `[confine]` posture.
+    /// The operator's `[sandbox]` posture.
     pub fn with_confine_options(mut self, options: aivyx_core::ConfineOptions) -> Self {
         self.confine_options = options;
         self

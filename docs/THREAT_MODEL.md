@@ -189,7 +189,7 @@ upstream MCP-server tool description steers the LLM into emitting
      `~/.cargo/credentials(.toml)`, `~/.config/git/credentials` and
      `~/.git-credentials` are unreadable at every level.
 
-   Each of the first three has an operator opt-out in `[confine]`
+   Each of the first three has an operator opt-out in `[sandbox]`
    (`allow_unix_sockets`, `share_system_tmp`,
    `allow_leaving_process_group`), all default `false`; turning
    `allow_unix_sockets` on means the sandbox no longer contains code
@@ -965,7 +965,7 @@ running Aivyx PA daemon":
    and `git.rs`'s three tools (`git.status`/`git.diff`/`git.commit`)
    confine every spawned child process with Landlock + seccomp-bpf
    (`aivyx-confine`, on by default — there is no config option to turn
-   confinement itself off; `[confine] require_enforcement`, default
+   confinement itself off; `[sandbox] require_enforcement`, default
    `true`, only governs whether a *failure* to establish the Landlock
    ruleset fails the spawn closed or lets it run unconfined; the
    `allow_unix_sockets` / `share_system_tmp` /

@@ -47,7 +47,7 @@ The model the agent uses and how a turn behaves. Pairs with one provider section
 | `turn_timeout_secs` | integer |  | Per-turn wall-clock deadline override (seconds). Unset → the built-in 120s default. |
 | `cycle_detection` | bool |  | Small-cycle breaker switch. `true` arms the loop's repeating-cycle detector (catches `A,B,A,B,…` that the consecutive-identical breaker misses) with the built-in defaults. |
 | `conversation_history_turns` | integer |  | Conversation-history replay depth in messages. Unset → `8`; `0` disables. |
-| `injection_scan_enabled` | bool |  | Global on/off for the active injection scan. Unset → `true` (fail-closed, matching `[confine] require_enforcement`'s posture). |
+| `injection_scan_enabled` | bool |  | Global on/off for the active injection scan. Unset → `true` (fail-closed, matching `[sandbox] require_enforcement`'s posture). |
 | `injection_scan_exempt` | list of string |  | Tool names exempted from the active injection scan even when `injection_scan_enabled` is `true`. Matched exactly against `Tool::name()`. |
 
 ### `[anthropic]`
@@ -254,24 +254,17 @@ How much the agent may do without asking you, with per-domain exceptions. See [A
 |---|---|---|---|
 | `scopes` | list of string |  | Reversible capability scopes that may run without asking. Never covers irreversible actions. |
 
-### `[confine]`
-
-OS-level process confinement (Landlock + seccomp) for the commands the agent runs.
-
-| Key | Type | Example | Meaning |
-|---|---|---|---|
-| `require_enforcement` | bool | `true` | Refuse to run a command when confinement can't be set up. On by default; off fails open. |
-| `allow_unix_sockets` | bool | `false` | Let confined commands reach local daemons (Unix sockets). Any daemon that runs commands (D-Bus, docker) is then a way out of the sandbox. |
-| `allow_leaving_process_group` | bool | `false` | Allow `setsid`/`setpgid` (job control, some test runners). A process that leaves survives the call. |
-| `share_system_tmp` | bool | `false` | Give confined commands read and write on the shared `/tmp`, including other programs' temp files. |
-
 ### `[sandbox]`
 
-The default sandbox wrapped around tool processes that don't declare their own.
+OS-level process confinement (Landlock + seccomp) for the commands the agent runs, and the default sandbox wrapped around tool processes that don't declare their own.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `default_backend` | string |  | `none` (no default sandbox), `auto` (bubblewrap, else firejail), `bubblewrap` or `firejail`. `aivyx-pa init` writes `auto`. |
+| `require_enforcement` | bool | `true` | Refuse to run a command when confinement can't be set up. On by default; off fails open. |
+| `allow_unix_sockets` | bool | `false` | Let confined commands reach local daemons (Unix sockets). Any daemon that runs commands (D-Bus, docker) is then a way out of the sandbox. |
+| `allow_leaving_process_group` | bool | `false` | Allow `setsid`/`setpgid` (job control, some test runners). A process that leaves survives the call. |
+| `share_system_tmp` | bool | `false` | Give confined commands read and write on the shared `/tmp`, including other programs' temp files. |
 
 ### `[git]`
 
@@ -987,3 +980,14 @@ The daemon's web listeners: the Studio and webhooks. See [Desktop app](../../gui
 | `web_ui_allowed_origins` | list of string |  | Extra WS Origin allowlist entries beyond the built-in loopback origins. Empty (default) keeps the localhost-only CSWSH posture. |
 | `web_ui_auth_token` | string | `"..."` | Your own Studio sign-in token. Unset means the automatic one, kept in a `studio-token` file next to the store. |
 | `web_ui_insecure_no_auth` | bool |  | Allow the Studio with no token at all — only for binding beyond loopback behind your own authenticating proxy. |
+
+## Deprecated spellings
+
+These older spellings still load through 1.x, with one warning each at startup (under "config warnings"). New configs use the new spelling. When both are set, the new one wins.
+
+| Old spelling | Use instead |
+|---|---|
+| `confine.allow_leaving_process_group` | `sandbox.allow_leaving_process_group` |
+| `confine.allow_unix_sockets` | `sandbox.allow_unix_sockets` |
+| `confine.require_enforcement` | `sandbox.require_enforcement` |
+| `confine.share_system_tmp` | `sandbox.share_system_tmp` |

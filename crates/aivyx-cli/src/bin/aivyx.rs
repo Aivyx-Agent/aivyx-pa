@@ -357,7 +357,7 @@ fn build_shell_exec_for_channel(
             let shell = ShellExecToolConfig::new(fs_root.to_path_buf())
                 // aivyx-confine — Landlock + seccomp-bpf process
                 // confinement for every spawned command, on by default.
-                // `confine_options` is the operator's `[confine]` posture
+                // `confine_options` is the operator's `[sandbox]` posture
                 // (fail-closed, every opt-out off unless explicitly set).
                 .with_confine_options(confine_options)
                 // Aivyx PA's own state, unreachable even when the root
@@ -7127,7 +7127,7 @@ async fn run_async(
         // assemble the operator grant set + the confirm-first posture.
         access_level: _access_level,
         confirm_destructive,
-        // aivyx-confine — the `[confine]` posture (enforcement plus the
+        // aivyx-confine — the `[sandbox]` posture (enforcement plus the
         // three opt-outs), threaded into `shell.exec`'s persistent
         // confiner and `git.rs`'s per-call confiners below.
         require_enforcement,
@@ -8245,7 +8245,7 @@ async fn run_async(
     );
     let confirm_destructive =
         area_confirm_destructive(&confirm_destructive, autonomy_level.value, &autonomy_overrides, "fs");
-    // aivyx-confine — the operator's `[confine]` posture, resolved once
+    // aivyx-confine — the operator's `[sandbox]` posture, resolved once
     // here into the `ConfineOptions` the shell.exec + git.rs
     // confiner-construction sites below share.
     let confine_options = aivyx_core::ConfineOptions::new()

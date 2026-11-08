@@ -493,7 +493,7 @@ pub struct DaemonConfig {
     /// `RejectAndAbort` (headless) records the refusal and finalizes without a
     /// gate. Per-run/per-driver overrides come later (H.4/H.5).
     pub gate_policy: GatePolicy,
-    /// The operator's `[confine]` posture, for the processes the daemon
+    /// The operator's `[sandbox]` posture, for the processes the daemon
     /// itself starts on the agent's behalf (the loop's gate command). `None`
     /// is the strict default.
     pub confine_options: Option<aivyx_core::ConfineOptions>,

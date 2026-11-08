@@ -99,6 +99,7 @@ use aivyx_storage::{KeyDomain, Storage};
 // `[access]` / `[budget]` rewriter used by both `aivyx-pa access set` and the
 // daemon's Settings IPC handlers).
 pub mod config_write;
+mod deprecated_keys;
 mod unknown_keys;
 pub use config_write::{
     write_access_section, write_agent_cycle_detection, write_autonomy_section,
@@ -918,22 +919,22 @@ pub struct AivyxConfig {
     /// gate for an operator confirmation (N.5). Defaults on for any level
     /// other than `sandbox`; `[access] confirm_destructive` overrides.
     pub confirm_destructive: Sourced<bool>,
-    /// `[confine] require_enforcement` — whether OS-level process
+    /// `[sandbox] require_enforcement` — whether OS-level process
     /// confinement (Landlock + seccomp-bpf) must succeed for
     /// `shell.exec`/`git.rs` to run a command at all. `true` (fail-closed)
     /// by default, matching `aivyx-coder`'s own `aivyx-confine` usage.
     pub require_enforcement: Sourced<bool>,
-    /// `[confine] allow_unix_sockets` — opt out of aivyx-confine's
+    /// `[sandbox] allow_unix_sockets` — opt out of aivyx-confine's
     /// `socket(AF_UNIX)` block so confined commands can reach local
     /// daemons (ssh-agent, gpg-agent, docker, the D-Bus session bus).
     /// `false` by default: with it on, a confined command can ask a local
     /// daemon to run code outside the sandbox (`systemd-run --user`).
     pub allow_unix_sockets: Sourced<bool>,
-    /// `[confine] allow_leaving_process_group` — opt out of aivyx-confine's
+    /// `[sandbox] allow_leaving_process_group` — opt out of aivyx-confine's
     /// `setsid`/`setpgid` block. `false` by default: with it on, a confined
     /// command can leave processes running after its tool call ends.
     pub allow_leaving_process_group: Sourced<bool>,
-    /// `[confine] share_system_tmp` — give confined commands read+write on
+    /// `[sandbox] share_system_tmp` — give confined commands read+write on
     /// the shared system temp dir instead of a private per-tool `TMPDIR`.
     /// `false` by default.
     pub share_system_tmp: Sourced<bool>,
@@ -4172,8 +4173,6 @@ struct RawToml {
     slack: RawSlack,
     #[serde(default)]
     git: RawGit,
-    #[serde(default)]
-    confine: RawConfine,
     /// `[team]` section. Chapter Roster — the operator's team-config file.
     #[serde(default)]
     team: RawTeam,
@@ -4589,11 +4588,25 @@ struct RawSandbox {
     args: Option<Vec<String>>,
 }
 
-/// `[sandbox]` section. Phase 180 — the bundled default sandbox.
+/// `[sandbox]` section. Phase 180 — the bundled default sandbox
+/// (`default_backend`), and the OS-level process confinement settings
+/// (Landlock + seccomp-bpf, via the `aivyx-confine` crate): whether it must
+/// succeed for `shell.exec`/`git.rs` to run a command at all, and its three
+/// opt-outs. The confinement keys were `[confine]` before R7 (1.0 readiness
+/// audit); that spelling is a deprecated alias (`deprecated_keys`), so pa and
+/// aivyx-coder now both say `[sandbox]`.
 #[derive(Debug, Default, Deserialize)]
 struct RawSandboxDefaults {
     #[serde(default)]
     default_backend: Option<String>,
+    #[serde(default)]
+    require_enforcement: Option<bool>,
+    #[serde(default)]
+    allow_unix_sockets: Option<bool>,
+    #[serde(default)]
+    allow_leaving_process_group: Option<bool>,
+    #[serde(default)]
+    share_system_tmp: Option<bool>,
 }
 
 fn default_stdio_transport() -> String {
@@ -4937,7 +4950,7 @@ struct RawAgent {
     conversation_history_turns: Option<usize>,
     /// Chapter Picket Finding 3 follow-up — global on/off for the active
     /// injection scan. Unset → `true` (fail-closed, matching
-    /// `[confine] require_enforcement`'s posture).
+    /// `[sandbox] require_enforcement`'s posture).
     #[serde(default)]
     injection_scan_enabled: Option<bool>,
     /// Chapter Picket Finding 3 follow-up — tool names exempted from the
@@ -5329,21 +5342,6 @@ struct RawSlack {
 struct RawGit {
     #[serde(default)]
     repos: Vec<String>,
-}
-
-/// `[confine]` section deserialize target — whether OS-level process
-/// confinement (Landlock + seccomp-bpf, via the `aivyx-confine` crate)
-/// must succeed for `shell.exec`/`git.rs` to run a command at all.
-#[derive(Debug, Default, Deserialize)]
-struct RawConfine {
-    #[serde(default)]
-    require_enforcement: Option<bool>,
-    #[serde(default)]
-    allow_unix_sockets: Option<bool>,
-    #[serde(default)]
-    allow_leaving_process_group: Option<bool>,
-    #[serde(default)]
-    share_system_tmp: Option<bool>,
 }
 
 /// Phase 68 — `[email]` section deserialize target.
@@ -6436,7 +6434,7 @@ impl AivyxConfig {
     /// missing required fields become errors only at
     /// [`AivyxConfig::validate`] time.
     pub fn load_from_env_and_toml(opts: &LoadOptions) -> Result<Self, ConfigError> {
-        let (toml, unknown) = load_toml(opts.toml_path.as_deref())?;
+        let (toml, unknown, deprecated) = load_toml(opts.toml_path.as_deref())?;
 
         // --- anthropic_api_key --------------------------------------
         // Secret; stays None if neither env nor TOML supplied one.
@@ -6602,13 +6600,13 @@ impl AivyxConfig {
             None => Sourced::new(access_level.value.is_expanded(), FieldSource::Default),
         };
 
-        // --- confine.require_enforcement -----------------------------
+        // --- sandbox.require_enforcement -----------------------------
         // Fail-closed by default: if Landlock can't be established at
         // runtime, refuse to run the command rather than running
-        // unconfined. An explicit `[confine] require_enforcement = false`
+        // unconfined. An explicit `[sandbox] require_enforcement = false`
         // opts into the opposite (log + run unconfined) for operators on
         // kernels/platforms where Landlock genuinely isn't available.
-        let require_enforcement = match toml.confine.require_enforcement {
+        let require_enforcement = match toml.sandbox.require_enforcement {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(true, FieldSource::Default),
         };
@@ -6618,10 +6616,10 @@ impl AivyxConfig {
             Some(b) => Sourced::new(b, FieldSource::Toml),
             None => Sourced::new(false, FieldSource::Default),
         };
-        let allow_unix_sockets = confine_opt_out(toml.confine.allow_unix_sockets);
+        let allow_unix_sockets = confine_opt_out(toml.sandbox.allow_unix_sockets);
         let allow_leaving_process_group =
-            confine_opt_out(toml.confine.allow_leaving_process_group);
-        let share_system_tmp = confine_opt_out(toml.confine.share_system_tmp);
+            confine_opt_out(toml.sandbox.allow_leaving_process_group);
+        let share_system_tmp = confine_opt_out(toml.sandbox.share_system_tmp);
 
         // --- agent.injection_scan_enabled / injection_scan_exempt -----
         // Chapter Picket Finding 3 follow-up. Fail-closed by default,
@@ -7607,6 +7605,10 @@ impl AivyxConfig {
                     .to_string(),
             );
         }
+
+        // An old spelling still works; say once that it is deprecated and
+        // what replaces it (1.0 readiness audit R7 and on).
+        warnings.extend(deprecated);
 
         // A key no section type reads is dropped; say so, once per key,
         // with the nearest known key (R8). The legacy `[aivyx]` table is
@@ -11016,19 +11018,19 @@ fn per_category_any_set(raw: &RawPersonaAutoPropose) -> bool {
 /// - `Some(path)` with parse failure → [`ConfigError::TomlParse`].
 fn load_toml(
     path: Option<&Path>,
-) -> Result<(RawToml, Vec<unknown_keys::UnknownKey>), ConfigError> {
+) -> Result<(RawToml, Vec<unknown_keys::UnknownKey>, Vec<String>), ConfigError> {
     let Some(path) = path else {
-        return Ok((RawToml::default(), Vec::new()));
+        return Ok((RawToml::default(), Vec::new(), Vec::new()));
     };
     if !path.exists() {
-        return Ok((RawToml::default(), Vec::new()));
+        return Ok((RawToml::default(), Vec::new(), Vec::new()));
     }
     let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::TomlIo {
         path: path.to_path_buf(),
         reason: e.to_string(),
     })?;
     // Parsed through `serde_ignored` so every key the types skip is reported
-    // (R8); the parsed value is exactly what `toml::from_str` would give.
+    // (R8), after deprecated spellings are moved to their new keys.
     unknown_keys::parse_reporting::<RawToml>(&contents).map_err(|e| ConfigError::TomlParse {
         path: path.to_path_buf(),
         reason: e.to_string(),

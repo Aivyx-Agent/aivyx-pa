@@ -168,7 +168,7 @@ impl ShellExecToolConfig {
     }
 
     /// The aivyx-confine policy for the confiner `build()` creates —
-    /// `[confine]` in config. Defaults to `ConfineOptions::new()`:
+    /// `[sandbox]` in config. Defaults to `ConfineOptions::new()`:
     /// enforcement required, every opt-out off.
     pub fn with_confine_options(mut self, options: ConfineOptions) -> Self {
         self.confine_options = options;
@@ -286,7 +286,7 @@ impl ShellExecTool {
     }
 
     /// Replace the confiner `build()` created. The binary sets its
-    /// `[confine]` policy through `ShellExecToolConfig::with_confine_options`
+    /// `[sandbox]` policy through `ShellExecToolConfig::with_confine_options`
     /// instead; this is for callers that build their own confiner. The
     /// process-group kill does not depend on it: `execute` puts the
     /// command in its own group itself.
@@ -1833,7 +1833,7 @@ mod tests {
     }
 
     /// Confined commands get a private, writable `TMPDIR`, and the shared
-    /// `/tmp` is not writable (aivyx-confine's default; `[confine]
+    /// `/tmp` is not writable (aivyx-confine's default; `[sandbox]
     /// share_system_tmp` opts out).
     #[cfg(target_os = "linux")]
     #[tokio::test]
