@@ -236,7 +236,9 @@ pub async fn run_create(name: &InstanceName) -> Result<(), String> {
 
     let paths = paths_for(name.clone());
     // R2: a new instance starts with its layout version recorded.
-    paths.ensure_layout_version()?;
+    if let Some(warning) = paths.ensure_layout_version()? {
+        eprintln!("aivyx-pa: warning: {warning}");
+    }
     let config = paths
         .config_file()
         .ok_or("can't resolve the new instance's config path (is HOME set?)")?;

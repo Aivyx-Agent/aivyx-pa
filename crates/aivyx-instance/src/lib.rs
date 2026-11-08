@@ -227,16 +227,57 @@ impl InstancePaths {
         self.data_dir().map(|d| d.join(LAYOUT_VERSION_FILE))
     }
 
-    /// Check the instance's layout version and record it (R2). Run when an
-    /// instance is created and each time one starts. An instance without
-    /// the file predates it and is version 1: the file is written then,
-    /// with the data directory if that does not exist yet. A version newer
-    /// than [`LAYOUT_VERSION`] is refused, naming the file.
-    pub fn ensure_layout_version(&self) -> Result<(), String> {
+    /// Check the instance's layout version without writing anything (R2):
+    /// for read-only runs such as `--verify-only`. A missing file means
+    /// version 1. A version newer than [`LAYOUT_VERSION`] is refused,
+    /// naming the file.
+    pub fn check_layout_version(&self) -> Result<(), String> {
         let path = self
             .layout_version_file()
             .ok_or("can't resolve the instance's data folder (is HOME set?)")?;
-        match std::fs::read_to_string(&path) {
+        self.read_layout_version(&path).map(|_| ())
+    }
+
+    /// [`check_layout_version`](Self::check_layout_version), then record the
+    /// version when the file is missing (R2). Run when an instance is
+    /// created and each time one starts. An instance without the file
+    /// predates it and is version 1; the file is written then (with the
+    /// data directory if needed), atomically: a temp file renamed into
+    /// place, so a process starting at the same moment never reads it
+    /// half-written. When it cannot be written (a read-only directory),
+    /// the instance is still version 1: `Ok(Some(warning))` says so, for
+    /// the caller to print once, and start goes on.
+    pub fn ensure_layout_version(&self) -> Result<Option<String>, String> {
+        let path = self
+            .layout_version_file()
+            .ok_or("can't resolve the instance's data folder (is HOME set?)")?;
+        if self.read_layout_version(&path)?.is_some() {
+            return Ok(None);
+        }
+        let write = || -> std::io::Result<()> {
+            let dir = path.parent().expect("the file is in the data directory");
+            std::fs::create_dir_all(dir)?;
+            // Unique per write (process and call), so writers never share one.
+            static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let tmp = dir.join(format!(".{LAYOUT_VERSION_FILE}.{}.{n}.tmp", std::process::id()));
+            std::fs::write(&tmp, format!("{LAYOUT_VERSION}\n"))?;
+            std::fs::rename(&tmp, &path).inspect_err(|_| {
+                let _ = std::fs::remove_file(&tmp);
+            })
+        };
+        Ok(write().err().map(|e| {
+            format!(
+                "could not record the instance layout version in {} ({e}); \
+                 going on as version {LAYOUT_VERSION}",
+                path.display()
+            )
+        }))
+    }
+
+    /// The recorded layout version, `None` when the file is missing.
+    fn read_layout_version(&self, path: &std::path::Path) -> Result<Option<u32>, String> {
+        match std::fs::read_to_string(path) {
             Ok(text) => {
                 let found: u32 = text.trim().parse().map_err(|_| {
                     format!("{} does not hold a layout version: {:?}", path.display(), text.trim())
@@ -250,16 +291,9 @@ impl InstancePaths {
                         path.display()
                     ));
                 }
-                Ok(())
+                Ok(Some(found))
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir)
-                        .map_err(|e| format!("create {}: {e}", dir.display()))?;
-                }
-                std::fs::write(&path, format!("{LAYOUT_VERSION}\n"))
-                    .map_err(|e| format!("write {}: {e}", path.display()))
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(format!("read {}: {e}", path.display())),
         }
     }
@@ -515,11 +549,13 @@ mod tests {
     #[test]
     fn a_new_instance_gets_the_layout_version_file() {
         let (_tmp, paths) = temp_instance("research");
-        paths.ensure_layout_version().unwrap();
+        assert_eq!(paths.ensure_layout_version().unwrap(), None);
         let file = paths.layout_version_file().unwrap();
         assert!(file.ends_with("aivyx-pa/instances/research/layout-version"), "{file:?}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "1\n");
-        paths.ensure_layout_version().unwrap(); // idempotent
+        assert_eq!(paths.ensure_layout_version().unwrap(), None); // idempotent
+        let names: Vec<_> = std::fs::read_dir(file.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("layout-version")], "no temp file left");
     }
 
     /// An instance set up before the file existed: its data directory holds
@@ -534,6 +570,61 @@ mod tests {
         paths.ensure_layout_version().unwrap();
         assert_eq!(std::fs::read_to_string(data.join("layout-version")).unwrap(), "1\n");
         assert_eq!(std::fs::read(data.join("store.redb")).unwrap(), b"old store");
+    }
+
+    /// Instances starting together: a reader never sees the file empty or
+    /// half-written, because it is renamed into place.
+    #[test]
+    fn concurrent_starts_never_read_a_partial_file() {
+        let (_tmp, paths) = temp_instance("research");
+        let file = paths.layout_version_file().unwrap();
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    for _ in 0..50 {
+                        assert_eq!(paths.ensure_layout_version().unwrap(), None);
+                        if let Ok(text) = std::fs::read_to_string(&file) {
+                            assert_eq!(text, "1\n");
+                        }
+                        let _ = std::fs::remove_file(&file); // make the next round write again
+                    }
+                });
+            }
+        });
+    }
+
+    /// A read-only data directory: start goes on as version 1, with one
+    /// warning, and nothing is written.
+    #[cfg(unix)]
+    #[test]
+    fn an_unwritable_directory_warns_and_goes_on() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, paths) = temp_instance("default");
+        let file = paths.layout_version_file().unwrap();
+        let dir = file.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let got = paths.ensure_layout_version();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if file.exists() {
+            return; // running as root: permissions don't stop the write
+        }
+        let warning = got.unwrap().expect("a warning");
+        assert!(warning.contains("going on as version 1"), "{warning}");
+        assert!(warning.contains("layout-version"), "{warning}");
+    }
+
+    /// `--verify-only` reads, never writes: a missing file is version 1.
+    #[test]
+    fn check_layout_version_never_writes() {
+        let (_tmp, paths) = temp_instance("default");
+        paths.check_layout_version().unwrap();
+        let file = paths.layout_version_file().unwrap();
+        assert!(!file.exists());
+        assert!(!file.parent().unwrap().exists(), "not even the directory");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "2\n").unwrap();
+        assert!(paths.check_layout_version().unwrap_err().contains("layout version 2"));
     }
 
     #[test]

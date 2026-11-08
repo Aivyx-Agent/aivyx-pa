@@ -24,8 +24,10 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
 - **The instance layout on disk.** Versioned by a `layout-version` file
   in each instance's data directory (`instance.layout_version` in
   `docs/stable/formats.txt`). An instance from before the file is
-  version 1; the file is written when the instance is created and the
-  first time an existing one starts. An instance whose layout is newer
+  version 1; the file is written (atomically) when the instance is
+  created and the first time an existing one starts, but not by
+  `--verify-only`. If it cannot be written, start warns once and goes on
+  as version 1. An instance whose layout is newer
   than the binary knows is refused, with a message naming the file.
 - **The data stores.** Any 1.x reads data written by 1.0. The snapshot
   records the store versions: the table names, the record version of

@@ -1439,10 +1439,15 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("failed to create storage parent directory {parent:?}: {e}"))?;
     }
     // R2: refuse an instance laid out by a newer aivyx-pa before touching
-    // its store, and record the layout version of one from before the file.
+    // its store, and record the layout version of one from before the file
+    // (`--verify-only` only reads: a missing file already means 1).
     if let Ok(paths) = aivyx_instance::InstancePaths::current() {
         if paths.layout_version_file().is_some() {
-            paths.ensure_layout_version()?;
+            if verify_only {
+                paths.check_layout_version()?;
+            } else if let Some(warning) = paths.ensure_layout_version()? {
+                eprintln!("aivyx-pa: warning: {warning}");
+            }
         }
     }
     let salt_path = salt_path_for(&storage_path);
