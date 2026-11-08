@@ -619,8 +619,8 @@ pub enum ToolOutcome {
 /// (see `TurnPlanner::reply_truncated`). Worded after aivyx-coder's "response
 /// was truncated (hit the model's output limit)" message.
 pub const REPLY_TRUNCATED_NOTE: &str = "The reply was cut off by the model server's \
-    output limit before it finished. Ask for the rest, or for a shorter answer. \
-    (A reasoning model's thinking counts toward that limit.)";
+    output limit before it finished. Ask for the rest or a shorter answer, or raise \
+    `[agent] max_reply_tokens` (a reasoning model's thinking counts toward the limit).";
 
 /// Return value of `Agent::turn`. Five variants — the four D1 termination
 /// conditions plus a `Failed` catch-all so `turn` can return `TurnOutcome`

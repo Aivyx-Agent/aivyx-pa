@@ -27,8 +27,10 @@ limit".**
 The model server stopped the reply at its limit on how much one reply may
 say, so the end is missing. Ask for the rest, or for a shorter answer. A
 reasoning model's thinking counts toward that limit, so a long think can
-use it up. If it happens early in replies with a local model, its context
-window is probably too small: run `aivyx-pa doctor`.
+use it up. To allow longer replies, raise `max_reply_tokens` under
+`[agent]` (default 4096); the model server's own limit still applies. If it
+happens early in replies with a local model, its context window is probably
+too small: run `aivyx-pa doctor`.
 
 **The Studio won't load / says disconnected.**
 The Studio is just a window onto the background daemon. If it can't connect, the

@@ -50,6 +50,7 @@ The model the agent uses and how a turn behaves. Pairs with one provider section
 | `injection_scan_enabled` | bool |  | Global on/off for the active injection scan. Unset → `true` (fail-closed, matching `[sandbox] require_enforcement`'s posture). |
 | `injection_scan_exempt` | list of string |  | Tool names exempted from the active injection scan even when `injection_scan_enabled` is `true`. Matched exactly against `Tool::name()`. |
 | `role` | string |  | The `[[role]]` to start in when neither `--role` nor `AIVYX_PA_ROLE` picks one. Default `default`. `aivyx-pa init` sets it for templates that have no `default` role. |
+| `max_reply_tokens` | integer |  | The most tokens the model may use for one reply (the request's `max_tokens`). Default 4096. The model server's own limit still applies; a server that refuses a larger value reports an error. A reasoning model's thinking counts toward it. |
 
 ### `[anthropic]`
 

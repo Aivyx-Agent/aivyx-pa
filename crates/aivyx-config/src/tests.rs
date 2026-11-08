@@ -13786,3 +13786,19 @@ fn agent_role_selects_the_active_role() {
         Err(ConfigError::UnknownRole { ref name, .. }) if name == "nope"
     ));
 }
+
+/// Task 5c part 3: `[agent] max_reply_tokens` defaults to 4096, takes an
+/// override, and refuses 0.
+#[test]
+fn max_reply_tokens_defaults_to_4096_and_takes_an_override() {
+    let _env = EnvScope::new();
+    assert_eq!(load_with_toml("\n[agent]\n", "reply-tokens-default").max_reply_tokens, 4096);
+    assert_eq!(crate::DEFAULT_MAX_REPLY_TOKENS, 4096);
+    let set = load_with_toml("\n[agent]\nmax_reply_tokens = 16384\n", "reply-tokens-set");
+    assert_eq!(set.max_reply_tokens, 16384);
+    assert!(set.warnings.is_empty(), "{:?}", set.warnings);
+    assert!(matches!(
+        load_with_toml_result("\n[agent]\nmax_reply_tokens = 0\n", "reply-tokens-zero"),
+        Err(ConfigError::Invalid { field: "agent.max_reply_tokens", .. })
+    ));
+}

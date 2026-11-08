@@ -364,9 +364,10 @@ parent_role = "researcher"
 #
 # API keys can come from the environment instead:
 # `AIVYX_PA_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`) for Anthropic,
-# `AIVYX_PA_OPENAI_API_KEY` for "openai". The OpenAI one is deliberately not `OPENAI_API_KEY`: this
-# provider also talks to other servers (base_url), and a key your
-# shell exports for OpenAI must never be sent to them.
+# `AIVYX_PA_OPENAI_API_KEY` for "openai". The OpenAI one is deliberately
+# not `OPENAI_API_KEY`: this provider also talks to other servers
+# (base_url), and a key your shell exports for OpenAI must never be sent
+# to them.
 
 # ----------------------------------------------------------------
 # The Studio web UI

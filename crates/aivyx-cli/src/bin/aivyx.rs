@@ -245,7 +245,6 @@ use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
 use aivyx_telegram::transport::ReqwestTransport;
 use aivyx_telegram::{TelegramSessionConfig, run_telegram_multi_session};
 
-const DEFAULT_MAX_TOKENS: u32 = 1024;
 const PROMPT: &str = "> ";
 
 /// Global static for CLI args after the --instance flag has been stripped.
@@ -7407,6 +7406,9 @@ async fn run_async(
         // Chapter Bridle (BR.4) — `[agent] turn_timeout_secs` override,
         // passed to the SessionConfig below (slow local backends).
         turn_timeout_secs,
+        // `[agent] max_reply_tokens` — every turn's reply limit (was a fixed
+        // 1024), and the budget gate's worst-case estimate.
+        max_reply_tokens,
         // `[agent] cycle_detection` — arm the small-cycle breaker; mapped to
         // an `Option<CycleConfig>` at each agent-construction site below.
         cycle_detection,
@@ -10071,7 +10073,7 @@ async fn run_async(
         return team::run_mission(
             Arc::clone(&provider),
             &model,
-            DEFAULT_MAX_TOKENS,
+            max_reply_tokens,
             Arc::clone(&audit),
             checkpointer.clone(),
             &cli_lead_scopes,
@@ -10308,7 +10310,7 @@ async fn run_async(
     let roles_for_factory = roles.clone();
     let backcompat_floor_for_factory = backcompat_floor.clone();
     let model_for_factory = model.clone();
-    let max_tokens_for_factory: u32 = DEFAULT_MAX_TOKENS;
+    let max_tokens_for_factory: u32 = max_reply_tokens;
     let memory_for_factory = Arc::clone(&memory);
     // Phase 57 Task 3 — Profile flavors every turn's system prompt,
     // including turns running inside a role-switch sub-session.
@@ -10790,7 +10792,7 @@ async fn run_async(
         let daemon_tool_allowlist = tool_allowlist.clone();
         let mut planner_config = LlmPlannerConfig::new(model.clone())
             .with_system_prompt(system_prompt)
-            .with_max_tokens(DEFAULT_MAX_TOKENS)
+            .with_max_tokens(max_reply_tokens)
             .with_tool_allowlist(tool_allowlist)
             .with_context_window(planner_context_window)
             .with_prune_sink(Arc::new(aivyx_channel::prune_sink::MemoryPruneSink::new(
@@ -10926,7 +10928,7 @@ async fn run_async(
                 config_budget.clone(),
                 Arc::clone(&persistent_audit_for_query),
                 aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
-                DEFAULT_MAX_TOKENS,
+                max_reply_tokens,
             );
 
         // Chapter Throttle (TH.3) — the shared per-tool-call rate gate, attached
@@ -10983,7 +10985,7 @@ async fn run_async(
             let deps = aivyx_channel::team_mission_driver::TeamRunDeps {
                 provider: Arc::clone(&provider),
                 model: model.clone(),
-                max_tokens: DEFAULT_MAX_TOKENS,
+                max_tokens: max_reply_tokens,
                 audit: Arc::clone(&audit),
                 base_tools: tools.snapshot(),
                 // Chapter Ballast (Opp D) — price + cap loop-delegated team
@@ -11850,7 +11852,7 @@ async fn run_async(
             let session_config = SessionConfig {
                 model,
                 system_prompt,
-                max_tokens: DEFAULT_MAX_TOKENS,
+                max_tokens: max_reply_tokens,
                 capabilities,
                 tools,
                 storage,
@@ -11905,7 +11907,7 @@ async fn run_async(
                     config_budget.clone(),
                     Arc::clone(&persistent_audit_for_query),
                     aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
-                    DEFAULT_MAX_TOKENS,
+                    max_reply_tokens,
                 ),
                 rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
@@ -12014,7 +12016,7 @@ async fn run_async(
             let telegram_config = TelegramSessionConfig {
                 model,
                 system_prompt,
-                max_tokens: DEFAULT_MAX_TOKENS,
+                max_tokens: max_reply_tokens,
                 capabilities,
                 tools,
                 storage,
@@ -12035,7 +12037,7 @@ async fn run_async(
                     config_budget.clone(),
                     Arc::clone(&persistent_audit_for_query),
                     aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
-                    DEFAULT_MAX_TOKENS,
+                    max_reply_tokens,
                 ),
                 rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
@@ -12150,7 +12152,7 @@ async fn run_async(
             let discord_config = aivyx_discord::DiscordSessionConfig {
                 model,
                 system_prompt,
-                max_tokens: DEFAULT_MAX_TOKENS,
+                max_tokens: max_reply_tokens,
                 capabilities,
                 tools,
                 storage,
@@ -12171,7 +12173,7 @@ async fn run_async(
                     config_budget.clone(),
                     Arc::clone(&persistent_audit_for_query),
                     aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
-                    DEFAULT_MAX_TOKENS,
+                    max_reply_tokens,
                 ),
                 rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
@@ -12254,7 +12256,7 @@ async fn run_async(
             let matrix_config = aivyx_matrix::MatrixSessionConfig {
                 model,
                 system_prompt,
-                max_tokens: DEFAULT_MAX_TOKENS,
+                max_tokens: max_reply_tokens,
                 capabilities,
                 tools,
                 storage,
@@ -12270,7 +12272,7 @@ async fn run_async(
                     config_budget.clone(),
                     Arc::clone(&persistent_audit_for_query),
                     aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
-                    DEFAULT_MAX_TOKENS,
+                    max_reply_tokens,
                 ),
                 rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
@@ -12338,7 +12340,7 @@ async fn run_async(
             let signal_config = aivyx_signal::SignalSessionConfig {
                 model,
                 system_prompt,
-                max_tokens: DEFAULT_MAX_TOKENS,
+                max_tokens: max_reply_tokens,
                 capabilities,
                 tools,
                 storage,
@@ -12354,7 +12356,7 @@ async fn run_async(
                     config_budget.clone(),
                     Arc::clone(&persistent_audit_for_query),
                     aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
-                    DEFAULT_MAX_TOKENS,
+                    max_reply_tokens,
                 ),
                 rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
@@ -12433,7 +12435,7 @@ async fn run_async(
             let proton_config = aivyx_proton::ProtonSessionConfig {
                 model,
                 system_prompt,
-                max_tokens: DEFAULT_MAX_TOKENS,
+                max_tokens: max_reply_tokens,
                 capabilities,
                 tools,
                 storage,
@@ -12449,7 +12451,7 @@ async fn run_async(
                     config_budget.clone(),
                     Arc::clone(&persistent_audit_for_query),
                     aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
-                    DEFAULT_MAX_TOKENS,
+                    max_reply_tokens,
                 ),
                 rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
@@ -12594,7 +12596,7 @@ async fn run_async(
             let slack_config = aivyx_slack::SlackSessionConfig {
                 model,
                 system_prompt,
-                max_tokens: DEFAULT_MAX_TOKENS,
+                max_tokens: max_reply_tokens,
                 capabilities,
                 tools,
                 storage,
@@ -12615,7 +12617,7 @@ async fn run_async(
                     config_budget.clone(),
                     Arc::clone(&persistent_audit_for_query),
                     aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
-                    DEFAULT_MAX_TOKENS,
+                    max_reply_tokens,
                 ),
                 rate_gate: aivyx_channel::rate_gate::ChannelRateGate::new_gate(config_rate_limit.clone()),
             };
@@ -12722,7 +12724,7 @@ async fn run_async(
                 let agent_spec = aivyx_channel::AgentStackSpec {
                     model: model.clone(),
                     system_prompt: system_prompt.clone(),
-                    max_tokens: DEFAULT_MAX_TOKENS,
+                    max_tokens: max_reply_tokens,
                     capabilities,
                     tools,
                     tool_allowlist,
@@ -12743,7 +12745,7 @@ async fn run_async(
                         config_budget.clone(),
                         Arc::clone(&persistent_audit_for_query),
                         aivyx_cost::Pricing::with_overrides(config_pricing.clone()),
-                        DEFAULT_MAX_TOKENS,
+                        max_reply_tokens,
                     ),
                     // Chapter Throttle (TH.3) — voice tool calls are bounded by
                     // the same `[rate_limit]` caps as every other turn.

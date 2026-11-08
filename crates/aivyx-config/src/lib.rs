@@ -1261,6 +1261,12 @@ pub struct AivyxConfig {
     /// default. Raised for slow local backends; the binary passes it to
     /// `ConcreteAgent::with_turn_timeout`.
     pub turn_timeout_secs: Option<u64>,
+    /// Task 5c part 3 — `[agent] max_reply_tokens`: the most tokens pa asks
+    /// the model for in one reply of a turn (the request's `max_tokens`).
+    /// Default [`DEFAULT_MAX_REPLY_TOKENS`]. The model server's own limit
+    /// still applies; a server that refuses a larger value says so as a
+    /// provider error.
+    pub max_reply_tokens: u32,
     /// `[agent] cycle_detection` — arm the loop's small-cycle breaker
     /// (`A,B,A,B,…`). `None`/`Some(false)` → off (byte-identical loop). The
     /// binary maps `Some(true)` to `ConcreteAgent::with_cycle_detection`.
@@ -2620,6 +2626,10 @@ pub const DEFAULT_RECALL_GATE_MIN_CHARS: usize = 0;
 /// so the behaviour-change-is-opt-in discipline is deliberately
 /// overridden here. `0` restores fresh-context turns exactly.
 pub const DEFAULT_CONVERSATION_HISTORY_TURNS: usize = 8;
+
+/// Task 5c part 3 — default for `[agent] max_reply_tokens`. Was a fixed
+/// 1024, which a reasoning model's thinking alone could use up.
+pub const DEFAULT_MAX_REPLY_TOKENS: u32 = 4096;
 
 /// Phase 96 — default ANN rebuild threshold (number of new
 /// vector writes that mark the index stale and trigger a
@@ -4994,6 +5004,10 @@ struct RawAgent {
     /// writes it for templates whose one role is not named `default`.
     #[serde(default)]
     role: Option<String>,
+    /// Task 5c part 3 — the most tokens one reply may use. Unset →
+    /// [`DEFAULT_MAX_REPLY_TOKENS`]; `0` is refused.
+    #[serde(default)]
+    max_reply_tokens: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -7916,6 +7930,18 @@ impl AivyxConfig {
         // display differently in the banner it can either add a
         // `FieldSource::Cli` variant then, or leave this as-is. The
         // env-var branch below is tagged `Env` unambiguously.
+        // --- max_reply_tokens -------------------------------------
+        let max_reply_tokens = match toml.agent.max_reply_tokens {
+            Some(0) => {
+                return Err(ConfigError::Invalid {
+                    field: "agent.max_reply_tokens",
+                    reason: "must be at least 1 (unset it for the default, 4096)".to_string(),
+                });
+            }
+            Some(n) => n,
+            None => DEFAULT_MAX_REPLY_TOKENS,
+        };
+
         let active_role = if let Some(name) = opts.role_override.clone() {
             Sourced::new(name, FieldSource::Env)
         } else if let Some(name) = env_string(ENV_ROLE) {
@@ -8875,6 +8901,7 @@ impl AivyxConfig {
             mistralrs_options,
             broker_base_url,
             turn_timeout_secs: toml.agent.turn_timeout_secs,
+            max_reply_tokens,
             cycle_detection: toml.agent.cycle_detection,
             injection_scan_enabled,
             injection_scan_exempt,

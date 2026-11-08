@@ -10,6 +10,7 @@ agent.conversation_history_turns: deprecated alias of agent.conversation_history
 agent.cycle_detection: bool?
 agent.injection_scan_enabled: bool?
 agent.injection_scan_exempt: [str]
+agent.max_reply_tokens: u32?
 agent.model: str?
 agent.provider: ProviderKind?
 agent.role: str?
