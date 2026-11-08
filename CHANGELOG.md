@@ -39,6 +39,11 @@ All notable changes to Aivyx are recorded here. This project adheres to
 - **A reply the model server cut off says so.** It ends with "⚠ The reply
   was cut off by the model server's output limit…" instead of passing for
   a finished reply.
+- **A trigger with no `role` follows `--role`.** With `--role X` or
+  `AIVYX_PA_ROLE=X`, a trigger with no `role` is now checked (notify
+  scopes) and listed as role X instead of `default`, so an old config
+  whose role X lacks a trigger's notify scope now fails to load, with a
+  message.
 - **`--headless` prints a turn's notes on stdout**, after the reply (the
   cut-off note, for example), and prints a reply that wasn't streamed.
 
