@@ -117,6 +117,10 @@ pub const NOT_STABLE: &[NotStable] = &[
     entry(Cli, "--channel matrix", PREVIEW),
     entry(Cli, "--channel proton", PREVIEW),
     entry(Cli, "--channel signal", PREVIEW),
+    // R26: the help's Developer group, and a debugging flag.
+    // `--verify-only` (forensics) stays stable.
+    entry(Cli, "aivyx-pa tool-relevance", Tag::Developer),
+    entry(Cli, "--print-role", Tag::Developer),
 ];
 
 /// The tag of the snapshot line whose key (see [`Snapshot`]) is `key`.

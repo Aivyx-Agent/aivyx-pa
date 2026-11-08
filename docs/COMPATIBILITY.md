@@ -62,6 +62,9 @@ one list of tagged entries is `NOT_STABLE` in
   verify`, `aivyx-pa signal verify` and their `--channel` values. A
   preview can change or be removed in any release. A channel's tag comes
   off when it has been tested with a real client.
+- **Developer commands**, tagged `(developer)`: the help's Developer
+  group (`aivyx-pa tool-relevance`) and `--print-role`. (`--verify-only`,
+  the forensic check, is stable.)
 - **The terminal chat's look**, and keys beyond the documented ones.
 - **Internal crates.** The crates in this repository are not a public API.
 - **The Studio's HTTP API.** It belongs to the bundled Studio and changes

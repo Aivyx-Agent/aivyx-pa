@@ -17,7 +17,7 @@ These work with any command.
 | `--verify-only` | Verify the audit chain and exit (forensic check; no session). |
 | `--channel <kind>` | Run the session on a channel instead of the terminal: `local`, `telegram`, `discord`, `slack`, `matrix`, `proton`, `signal` or `voice`. `voice` needs a build with the `channel-voice` feature, which release binaries don't have. |
 | `--role <name>` | Use a named role (from `[[role]]` in your config) for this session. |
-| `--print-role <name>` | Print a role's full capability envelope and exit. |
+| `--print-role <name>` | Print a role's full capability envelope and exit. A debugging aid, not covered by the 1.x compatibility promise. |
 | `--no-daemon` | Chat in-process: don't connect to a running daemon or start one. |
 | `--provider <kind>` | Override the configured model provider for this run: `anthropic`, `openai`, `ollama`, `llamacpp`, `jan`, `mistralrs`, `broker` or `lemonade`. `mistralrs` needs a build with the `provider-mistral-rs` feature, which release binaries don't have. |
 | `--mcp <name:command[:arg1,arg2,…]>` | Attach a stdio MCP server for this session. `--mcp-server` is the old spelling: it still works, with a warning (in aivyx-coder, `--mcp-server` means the opposite: run coder as a server). |
@@ -542,8 +542,13 @@ aivyx-pa notify history [--target <name>] [--limit <N>]
 Export the tamper-evident audit log.
 
 ```
-aivyx-pa audit export [--from <seq>] [--limit <N>]
+aivyx-pa audit export [--from <seq>] [--limit <N>] [--event-type <type>]
 ```
+
+`--event-type` keeps one kind of event: `tool_call`, `scope_denied`,
+`turn_started`, `turn_ended`, `memory_access`, `auto_notify_dispatched`,
+`skill_auto_proposal` or `skill_invocation` (the older CamelCase names,
+such as `ToolCall`, still work).
 
 To verify the chain instead, run `aivyx-pa --verify-only`.
 
@@ -595,7 +600,8 @@ slot (you'll be asked to type the card's serial to confirm).
 
 ### `aivyx-pa tool-relevance`
 
-Debugging aid: dump the keyword scores used to suggest tools.
+Debugging aid: dump the keyword scores used to suggest tools. A developer
+command: not covered by the 1.x compatibility promise.
 
 ```
 aivyx-pa tool-relevance dump [--keyword-key <key>]

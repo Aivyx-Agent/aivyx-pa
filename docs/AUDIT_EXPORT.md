@@ -88,6 +88,17 @@ Flag order does not matter:
 aivyx-pa audit export --limit 100 --from 1000   # equivalent to above
 ```
 
+### `--event-type <type>`
+
+Emit only one kind of event: `tool_call`, `scope_denied`, `turn_started`,
+`turn_ended`, `memory_access`, `auto_notify_dispatched`,
+`skill_auto_proposal` or `skill_invocation`. The older spellings, the
+event's `kind` (`ToolCall`, ...), still work.
+
+```bash
+aivyx-pa audit export --event-type tool_call > tool-calls.jsonl
+```
+
 ### Time-range and correlation filters
 
 Not in v1 (Phase 105 Q2a sign-off). Operators wanting time-windowed or

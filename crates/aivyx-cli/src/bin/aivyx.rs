@@ -4729,28 +4729,24 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                             // against the known set so a typo errors
                             // out before opening storage.
                             let val = args.get(i + 1).ok_or_else(|| {
-                                "`--event-type` requires a variant name (e.g. \
-                                 SkillAutoProposal)"
+                                "`--event-type` requires an event type (e.g. \
+                                 skill_auto_proposal)"
                                     .to_string()
                             })?;
-                            const KNOWN: &[&str] = &[
-                                "ToolCall",
-                                "ScopeDenied",
-                                "TurnStarted",
-                                "TurnEnded",
-                                "MemoryAccess",
-                                "AutoNotifyDispatched",
-                                "SkillAutoProposal",
-                                "SkillInvocation",
-                            ];
-                            if !KNOWN.contains(&val.as_str()) {
+                            // R26: snake_case like every other CLI value; the
+                            // older CamelCase variant names still work.
+                            let Some(label) = audit_export::event_type_filter(val) else {
                                 return Err(format!(
                                     "unrecognized `--event-type` value `{val}`. \
                                      Supported: {}",
-                                    KNOWN.join(", ")
+                                    audit_export::EVENT_TYPE_FILTERS
+                                        .iter()
+                                        .map(|(snake, _)| *snake)
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
                                 ));
-                            }
-                            event_type = Some(val.clone());
+                            };
+                            event_type = Some(label.to_string());
                             i += 2;
                         }
                         other => {
@@ -13490,6 +13486,25 @@ mod tests {
                 event_type: None,
             })
         ));
+    }
+
+    /// R26: `--event-type` takes snake_case; the CamelCase label still works,
+    /// and both select the same filter.
+    #[test]
+    fn audit_export_event_type_takes_both_spellings() {
+        for value in ["tool_call", "ToolCall"] {
+            let parsed = parse_cli_args_from(&argv(&["audit", "export", "--event-type", value]))
+                .expect("must parse");
+            match parsed.mode {
+                CliMode::Audit(AuditSubcommand::Export { event_type, .. }) => {
+                    assert_eq!(event_type.as_deref(), Some("ToolCall"), "{value}");
+                }
+                other => panic!("expected Audit(Export), got {other:?}"),
+            }
+        }
+        let err = parse_cli_args_from(&argv(&["audit", "export", "--event-type", "toolcall"]))
+            .expect_err("unknown");
+        assert!(err.contains("tool_call, scope_denied"), "{err}");
     }
 
     #[test]

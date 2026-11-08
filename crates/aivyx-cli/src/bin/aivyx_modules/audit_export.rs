@@ -204,6 +204,28 @@ pub async fn export_chain(
     Ok(emitted)
 }
 
+/// The `--event-type` values `audit export` accepts: the snake_case name
+/// (R26, the documented form) and the event's label, which the filter
+/// compares. The label (`ToolCall`, the older spelling) is accepted too.
+pub const EVENT_TYPE_FILTERS: &[(&str, &str)] = &[
+    ("tool_call", "ToolCall"),
+    ("scope_denied", "ScopeDenied"),
+    ("turn_started", "TurnStarted"),
+    ("turn_ended", "TurnEnded"),
+    ("memory_access", "MemoryAccess"),
+    ("auto_notify_dispatched", "AutoNotifyDispatched"),
+    ("skill_auto_proposal", "SkillAutoProposal"),
+    ("skill_invocation", "SkillInvocation"),
+];
+
+/// The event label an `--event-type` value selects, from either spelling.
+pub fn event_type_filter(value: &str) -> Option<&'static str> {
+    EVENT_TYPE_FILTERS
+        .iter()
+        .find(|(snake, label)| *snake == value || *label == value)
+        .map(|(_, label)| *label)
+}
+
 /// Phase 113 — return the stable string label for an
 /// `AuditEvent` variant, mirroring the labelling switch the
 /// daemon uses for the `event_type` field of the
@@ -418,6 +440,37 @@ mod tests {
         // Pin the constant — page-size regression here would
         // change the chunk shape downstream tools observe.
         assert_eq!(DEFAULT_PAGE_SIZE, 1024);
+    }
+
+    // -- R26 — `--event-type` spellings ----------------------------------
+
+    #[test]
+    fn event_type_filter_takes_snake_case_and_the_older_camel_case() {
+        assert_eq!(event_type_filter("tool_call"), Some("ToolCall"));
+        assert_eq!(event_type_filter("ToolCall"), Some("ToolCall"));
+        assert_eq!(event_type_filter("skill_auto_proposal"), Some("SkillAutoProposal"));
+        assert_eq!(event_type_filter("toolcall"), None);
+        for (snake, label) in EVENT_TYPE_FILTERS {
+            // The snake_case name is the label's own words.
+            let words: String = label
+                .chars()
+                .enumerate()
+                .flat_map(|(i, c)| {
+                    let sep = (i > 0 && c.is_ascii_uppercase()).then_some('_');
+                    sep.into_iter().chain(c.to_lowercase())
+                })
+                .collect();
+            assert_eq!(*snake, words);
+        }
+    }
+
+    #[test]
+    fn audit_help_lists_the_snake_case_event_types() {
+        let help = crate::help::command_help("audit").unwrap().usage.join(" ");
+        for (snake, label) in EVENT_TYPE_FILTERS {
+            assert!(help.contains(snake), "{help}");
+            assert!(!help.contains(label), "{help}");
+        }
     }
 
     // -- Phase 113 — event_type_label ------------------------------------
