@@ -51,7 +51,7 @@ impl Tool for GenerateImageTool {
          reference_image?: string}`. `reference_image` must be a bare \
          filename previously returned by this same tool (image-to-image) \
          -- arbitrary filesystem paths are rejected. Returns `{path: \
-         string, backend: string, seed_used: integer|null}`. Scope: \
+         string, backend: string, seed_used: integer|null, warnings: [string]}`. Scope: \
          `vision.generate`."
     }
     fn input_schema(&self) -> &Value {
@@ -122,7 +122,7 @@ impl Tool for GenerateThreeDTool {
     fn description(&self) -> &str {
         "Generate a 3D model from a text prompt via a local generation \
          backend. Input: `{prompt: string (required)}`. Returns `{path: \
-         string, backend: string, seed_used: integer|null}`. **Not yet \
+         string, backend: string, seed_used: integer|null, warnings: [string]}`. **Not yet \
          implemented** -- every call currently fails with a clear error; \
          the tool exists now so it's discoverable ahead of a future \
          backend that implements it. Scope: `vision.generate`."
@@ -159,6 +159,9 @@ fn asset_to_json(asset: &GeneratedAsset) -> Value {
         "path": asset.path.display().to_string(),
         "backend": asset.backend,
         "seed_used": asset.seed_used,
+        // The backend's advisories (for example a size it adjusted), so the
+        // agent reports what it got rather than what it asked for.
+        "warnings": asset.warnings,
     })
 }
 
@@ -272,6 +275,7 @@ mod tests {
             backend: "mold".to_string(),
             seed_used: Some(42),
             generated_at: std::time::SystemTime::now(),
+            warnings: Vec::new(),
         }
     }
 

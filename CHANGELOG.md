@@ -46,6 +46,33 @@ All notable changes to Aivyx are recorded here. This project adheres to
   message.
 - **`--headless` prints a turn's notes on stdout**, after the reply (the
   cut-off note, for example), and prints a reply that wasn't streamed.
+- **Image generation reports the backend's notes.** `vision.generate_image`
+  output gains `warnings`, for example when mold adjusted the requested
+  size.
+
+### Security
+
+- **Local traffic no longer goes through a proxy.** With `HTTP_PROXY`,
+  `HTTPS_PROXY` or `ALL_PROXY` set, requests to local services (Ollama,
+  llama.cpp, Lemonade, the broker, mold, a self-hosted n8n or MCP server,
+  a local webhook) went through the proxy, prompts and keys included.
+  Requests to a local address now always go direct. Cloud providers and
+  internet services still use the configured proxy.
+- **Generated images are owner-only.** A new `vision` output directory is
+  created `0700` and each image `0600`.
+
+### Fixed
+
+- **Studio text is readable in both themes.** Links and brass text in the
+  light theme were 3.09:1 and are now 4.98:1. Error, success, info and
+  warning text and their chips, notices and the "forget skill" button now pass
+  WCAG AA (4.5:1). Rust-coloured text uses a lighter shade in the dark
+  theme.
+- **Image generation errors say what went wrong.** A busy GPU is reported
+  only when the broker says so (a proxy's or another service's 503 no
+  longer reads as "GPU busy"), an unknown mold model and a rejected mold
+  API key get their own messages, and an unreadable reference image fails
+  before the GPU is reserved.
 
 ## [0.20.1] — 2026-11-08
 
@@ -63,11 +90,6 @@ build machine its release used. This release ships everything in v0.20.0
 
 - **Release builds** for Apple Silicon and the macOS desktop app use the
   macOS 15 build machine.
-- **Studio text is readable in both themes.** Links and brass text in the
-  light theme were 3.09:1 and are now 4.98:1. Error, success, info and
-  warning text and their chips, notices and the "forget skill" button now pass
-  WCAG AA (4.5:1). Rust-coloured text uses a lighter shade in the dark
-  theme.
 
 ## [0.20.0] — 2026-11-05
 

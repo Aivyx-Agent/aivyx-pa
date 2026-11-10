@@ -586,12 +586,22 @@ impl ResidencySources {
 /// gone. Returns the task's `JoinHandle` so the exit is observable (Final
 /// review M1) — production callers detach it (a regression that held a
 /// strong `Arc` instead of `Weak` would otherwise pass unnoticed).
+/// The client for discovery, residency and `doctor`'s Lemonade check:
+/// aivyx-route's, which follows no redirects and never uses a proxy
+/// (these only ask local servers; aivyx-vision audit 2026-11-11, X1). If
+/// building it fails (a TLS-init failure), the plain client is the
+/// fallback, which is what these call sites used before.
+pub(crate) fn discovery_client() -> aivyx_route::discovery::reqwest::Client {
+    aivyx_route::discovery::client()
+        .unwrap_or_else(|_| aivyx_route::discovery::reqwest::Client::new())
+}
+
 pub(crate) fn spawn_residency_refresh(
     routed: Weak<RoutedProvider>,
     sources: ResidencySources,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let client = aivyx_route::discovery::reqwest::Client::new();
+        let client = crate::routing::discovery_client();
         let mut tick = tokio::time::interval(RESIDENCY_REFRESH);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -652,7 +662,7 @@ async fn prepare(
     let refresher = Arc::new(DiscoveryRefresher {
         config: config.clone(),
         default_endpoint: default.clone(),
-        client: aivyx_route::discovery::reqwest::Client::new(),
+        client: crate::routing::discovery_client(),
     });
     let profiles = refresher.refresh().await;
     let default_key = ModelKey {
@@ -931,7 +941,7 @@ pub(crate) async fn run_routing_status(
     // process exits right after), only when there's a source to read.
     let residency = ResidencySources::new(&prepared.config, default_residency);
     if residency.is_active() {
-        let client = aivyx_route::discovery::reqwest::Client::new();
+        let client = crate::routing::discovery_client();
         let snapshot = residency.poll(&client).await;
         print!("{}", render_residency(&snapshot, &prepared.profiles));
     }
@@ -2475,7 +2485,7 @@ mod tests {
             )]
         );
         assert!(s.is_active());
-        let snap = s.poll(&aivyx_route::discovery::reqwest::Client::new()).await;
+        let snap = s.poll(&crate::routing::discovery_client()).await;
         assert!(!snap.resident_endpoints.contains(&EndpointRef::new(DEFAULT_ENDPOINT)));
         // A Lemonade routing endpoint is a residency source too.
         let mut npu = RoutingConfig::default();
@@ -2486,7 +2496,7 @@ mod tests {
     #[tokio::test]
     async fn a_single_model_default_is_marked_resident_without_any_network() {
         let s = ResidencySources::new(&RoutingConfig::default(), DefaultResidency::Resident);
-        let snap = s.poll(&aivyx_route::discovery::reqwest::Client::new()).await;
+        let snap = s.poll(&crate::routing::discovery_client()).await;
         assert!(snap.resident_endpoints.contains(&EndpointRef::new(DEFAULT_ENDPOINT)));
         assert!(snap.models.is_empty());
     }

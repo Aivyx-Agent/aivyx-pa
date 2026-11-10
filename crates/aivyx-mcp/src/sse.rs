@@ -105,7 +105,9 @@ impl SseTransport {
     /// GET, waits for the `endpoint` event, and spawns a background
     /// task to feed subsequent `message` events into a channel.
     pub async fn connect(sse_url: &str, headers: &[(String, String)]) -> Result<Self, String> {
-        let client = reqwest::Client::new();
+        let client = crate::client_for(sse_url)
+            .build()
+            .map_err(|e| format!("sse client: {e}"))?;
 
         // Chapter Conduit (CD.2) — operator headers (e.g. Authorization)
         // on the initial GET; `Accept` is protocol-reserved.

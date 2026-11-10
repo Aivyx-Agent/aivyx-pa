@@ -47,7 +47,7 @@ impl StreamableHttpTransport {
         if endpoint.trim().is_empty() {
             return Err("streamable-http: empty endpoint URL".into());
         }
-        let client = reqwest::Client::builder()
+        let client = crate::client_for(endpoint)
             .build()
             .map_err(|e| format!("streamable-http client: {e}"))?;
         Ok(StreamableHttpTransport {

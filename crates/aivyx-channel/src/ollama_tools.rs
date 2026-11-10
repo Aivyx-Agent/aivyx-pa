@@ -49,7 +49,7 @@ pub struct OllamaListTool {
 
 impl OllamaListTool {
     pub fn new(base_url: &str) -> Result<Self, AivyxError> {
-        let client = reqwest::Client::builder()
+        let client = aivyx_llm::transport::client_builder_for(base_url)
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(READ_TIMEOUT)
             .build()
@@ -165,7 +165,7 @@ pub struct OllamaShowTool {
 
 impl OllamaShowTool {
     pub fn new(base_url: &str) -> Result<Self, AivyxError> {
-        let client = reqwest::Client::builder()
+        let client = aivyx_llm::transport::client_builder_for(base_url)
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(READ_TIMEOUT)
             .build()
@@ -303,7 +303,7 @@ pub struct OllamaPullTool {
 
 impl OllamaPullTool {
     pub fn new(base_url: &str) -> Result<Self, AivyxError> {
-        let client = reqwest::Client::builder()
+        let client = aivyx_llm::transport::client_builder_for(base_url)
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(PULL_TIMEOUT)
             .build()

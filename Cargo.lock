@@ -603,7 +603,7 @@ dependencies = [
 [[package]]
 name = "aivyx-kvcache"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-kvcache?rev=4ec85e4d887a6f0de2318baf1fa4d7e9023a1ffc#4ec85e4d887a6f0de2318baf1fa4d7e9023a1ffc"
+source = "git+https://github.com/Aivyx-Agent/aivyx-kvcache?rev=dd6adc85bf94bdefabdb79f4d60e54c61a190d30#dd6adc85bf94bdefabdb79f4d60e54c61a190d30"
 dependencies = [
  "async-trait",
  "clap",
@@ -667,6 +667,7 @@ version = "0.20.1"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
+ "aivyx-route",
  "async-trait",
  "bytes",
  "futures-util",
@@ -700,6 +701,7 @@ dependencies = [
  "aivyx-capability",
  "aivyx-core",
  "aivyx-instance",
+ "aivyx-route",
  "aivyx-tool",
  "async-trait",
  "reqwest 0.12.28",
@@ -794,7 +796,7 @@ dependencies = [
 [[package]]
 name = "aivyx-route"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=1ab893732e07daca13d37ea2a1695b229c058a20#1ab893732e07daca13d37ea2a1695b229c058a20"
+source = "git+https://github.com/Aivyx-Agent/aivyx-route?rev=d1089d024a735a888e7ffa0669bddada03532542#d1089d024a735a888e7ffa0669bddada03532542"
 dependencies = [
  "futures-util",
  "reqwest 0.13.5",
@@ -1014,7 +1016,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-core"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=070189478d27bc4a04210d9c850c72fab02d8a6a#070189478d27bc4a04210d9c850c72fab02d8a6a"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=d138825efd1c5766cb9e41692a36dd287a2a1dbd#d138825efd1c5766cb9e41692a36dd287a2a1dbd"
 dependencies = [
  "async-trait",
  "thiserror 2.0.21",
@@ -1023,7 +1025,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-mold"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=070189478d27bc4a04210d9c850c72fab02d8a6a#070189478d27bc4a04210d9c850c72fab02d8a6a"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=d138825efd1c5766cb9e41692a36dd287a2a1dbd#d138825efd1c5766cb9e41692a36dd287a2a1dbd"
 dependencies = [
  "aivyx-vision-core",
  "async-trait",
@@ -1040,7 +1042,7 @@ dependencies = [
 [[package]]
 name = "aivyx-vision-svg"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=070189478d27bc4a04210d9c850c72fab02d8a6a#070189478d27bc4a04210d9c850c72fab02d8a6a"
+source = "git+https://github.com/Aivyx-Agent/aivyx-vision?rev=d138825efd1c5766cb9e41692a36dd287a2a1dbd#d138825efd1c5766cb9e41692a36dd287a2a1dbd"
 dependencies = [
  "async-trait",
  "svg-hush",
@@ -4030,7 +4032,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4424,7 +4426,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8353,7 +8355,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9851,7 +9853,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10796,7 +10798,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10876,7 +10878,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 1.0.11",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -12127,7 +12129,7 @@ version = "0.9.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e690409a034dc81758d2986dcc0e01ffe4a77c65902a120777f5182dd40b1f7f"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "data-url",
  "quick-error",
  "url",
@@ -12470,10 +12472,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -12504,7 +12506,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -14386,7 +14388,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

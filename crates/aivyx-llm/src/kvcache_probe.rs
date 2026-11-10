@@ -40,7 +40,7 @@ pub fn parse_llama_slots_info(json: &serde_json::Value) -> Option<LlamaSlotsInfo
 /// Requires the `provider-openai` feature (which gates reqwest availability).
 #[cfg(feature = "provider-openai")]
 pub async fn fetch_llama_slots_info(base_url: &str) -> Option<LlamaSlotsInfo> {
-    let client = reqwest::Client::builder()
+    let client = crate::transport::client_builder_for(base_url)
         .timeout(KVCACHE_PROBE_TIMEOUT)
         .build()
         .ok()?;

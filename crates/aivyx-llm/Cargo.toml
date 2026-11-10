@@ -106,7 +106,7 @@ bytes = { workspace = true, optional = true }
 mistralrs = { version = "=0.8.*", default-features = false, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "time"] }
 # Chapter Stencil (ST.1) — validate the generated tool-call grammar
 # admits valid calls and rejects hallucinated names / bad arguments.
 # Already a vetted workspace dependency (aivyx-core); test-only here.

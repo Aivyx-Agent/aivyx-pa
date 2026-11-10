@@ -74,22 +74,69 @@ pub trait HttpTransport: Send + Sync {
 // Real implementation: reqwest
 // ---------------------------------------------------------------------------
 
-/// Production transport: a `reqwest::Client` with rustls.
+/// A client builder that never uses a proxy, for services that are always
+/// on this machine or network (setup and doctor probes, discovery).
+///
+/// reqwest otherwise sends even loopback requests -- prompts, keys -- to
+/// `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` when one is set (aivyx-vision
+/// audit 2026-11-11, X1).
+pub fn direct_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder().no_proxy()
+}
+
+/// A client builder for `url`: direct when `url` is a local address
+/// (aivyx-route's `url_locality`, the rule routing uses), otherwise
+/// honouring a configured proxy, which people behind a corporate proxy
+/// need for cloud APIs.
+pub fn client_builder_for(url: &str) -> reqwest::ClientBuilder {
+    if is_local_url(url) {
+        direct_client_builder()
+    } else {
+        reqwest::Client::builder()
+    }
+}
+
+fn is_local_url(url: &str) -> bool {
+    aivyx_route::url_locality(url) == aivyx_route::Locality::Local
+}
+
+/// Production transport: a `reqwest::Client` with rustls. It holds two
+/// clients and picks one per request: `direct` (no proxy) for a local
+/// address, `client` (honouring a configured proxy) for anything else --
+/// see [`client_builder_for`].
 pub struct ReqwestTransport {
     client: reqwest::Client,
+    direct: reqwest::Client,
 }
 
 impl ReqwestTransport {
     pub fn new() -> Result<Self, LlmError> {
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("aivyx-llm/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|e| LlmError::Config(format!("reqwest client build failed: {e}")))?;
-        Ok(ReqwestTransport { client })
+        let build = |builder: reqwest::ClientBuilder| {
+            builder
+                .user_agent(concat!("aivyx-llm/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .map_err(|e| LlmError::Config(format!("reqwest client build failed: {e}")))
+        };
+        Ok(ReqwestTransport {
+            client: build(reqwest::Client::builder())?,
+            direct: build(direct_client_builder())?,
+        })
     }
 
+    /// Uses `client` for every request, local or not.
     pub fn from_client(client: reqwest::Client) -> Self {
-        ReqwestTransport { client }
+        ReqwestTransport {
+            direct: client.clone(),
+            client,
+        }
+    }
+
+    fn client_for(&self, url: &str) -> &reqwest::Client {
+        if is_local_url(url) {
+            &self.direct
+        } else {
+            &self.client
+        }
     }
 }
 
@@ -97,7 +144,7 @@ impl ReqwestTransport {
 impl HttpTransport for ReqwestTransport {
     async fn get_text(&self, url: &str) -> Result<String, LlmError> {
         let response = self
-            .client
+            .client_for(url)
             .get(url)
             .send()
             .await
@@ -134,7 +181,7 @@ impl HttpTransport for ReqwestTransport {
             return Err(LlmError::Cancelled);
         }
 
-        let mut request = self.client.post(url).body(body);
+        let mut request = self.client_for(url).post(url).body(body);
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -177,7 +224,7 @@ impl HttpTransport for ReqwestTransport {
         if cancellation.is_cancelled() {
             return Err(LlmError::Cancelled);
         }
-        let mut request = self.client.post(url).body(body);
+        let mut request = self.client_for(url).post(url).body(body);
         for (name, value) in headers {
             request = request.header(*name, *value);
         }

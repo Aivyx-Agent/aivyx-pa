@@ -76,7 +76,7 @@ async fn run_check_cmd() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let client = N8nClient::new(reqwest::Client::new(), config);
+    let client = N8nClient::new(http_client_for(&config.n8n_base_url), config);
     let report = run_auth_check(&client).await;
     let ok = report.ok;
     print!("{report}");
@@ -102,7 +102,7 @@ async fn run_ipc_loop() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let client = Arc::new(N8nClient::new(reqwest::Client::new(), config));
+    let client = Arc::new(N8nClient::new(http_client_for(&config.n8n_base_url), config));
 
     // Phase 131 Q1c — 10-tool surface. Tasks 3-12 populate
     // this incrementally; Tasks 3-4 wire the first two
@@ -126,4 +126,18 @@ async fn run_ipc_loop() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// The client for the operator's n8n: direct (no proxy) when it is on a
+/// local address, as a self-hosted n8n usually is; otherwise honouring a
+/// configured proxy. reqwest would send even loopback requests -- with the
+/// n8n API key -- to `HTTP_PROXY`/`ALL_PROXY` (aivyx-vision audit
+/// 2026-11-11, X1).
+fn http_client_for(base_url: &str) -> reqwest::Client {
+    let builder = if aivyx_route::url_locality(base_url) == aivyx_route::Locality::Local {
+        reqwest::Client::builder().no_proxy()
+    } else {
+        reqwest::Client::builder()
+    };
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }

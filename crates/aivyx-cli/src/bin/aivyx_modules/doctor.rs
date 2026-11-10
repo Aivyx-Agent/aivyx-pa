@@ -732,7 +732,7 @@ async fn check_lemonade(cfg: &AivyxConfig) -> bool {
 }
 
 async fn check_lemonade_at(base_url: &str, model: &str) -> bool {
-    let client = aivyx_route::discovery::reqwest::Client::new();
+    let client = crate::routing::discovery_client();
     let endpoint = aivyx_route::EndpointRef::new("default");
     let config = crate::routing::operator_backend(
         aivyx_route::EndpointKind::Lemonade,
@@ -858,7 +858,10 @@ async fn check_local_openai_server_at(
     // Same joining the OpenAI provider uses for chat: `{base}/v1/...`.
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
     let models: Result<Vec<String>, ProbeError> = async {
-        let mut request = reqwest::Client::new().get(&url).timeout(LOCAL_PROBE_TIMEOUT);
+        let mut request = aivyx_llm::transport::client_builder_for(&url)
+            .build()
+            .unwrap_or_default()
+            .get(&url).timeout(LOCAL_PROBE_TIMEOUT);
         if let Some(key) = api_key {
             request = request.bearer_auth(key);
         }
@@ -926,7 +929,9 @@ async fn check_broker(cfg: &AivyxConfig) -> bool {
 }
 
 async fn check_broker_at(base_url: &str) -> bool {
-    let client = reqwest::Client::new();
+    let client = aivyx_llm::transport::client_builder_for(base_url)
+        .build()
+        .unwrap_or_default();
     let base = base_url.trim_end_matches('/');
     let status: Result<serde_json::Value, String> = async {
         client

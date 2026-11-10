@@ -70,7 +70,7 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Check whether Ollama is reachable at the given base URL.
 /// Returns `true` on any 2xx response, `false` on error.
 pub(crate) async fn detect_ollama(base_url: &str) -> bool {
-    let client = match reqwest::Client::builder()
+    let client = match aivyx_llm::transport::client_builder_for(base_url)
         .connect_timeout(DETECT_TIMEOUT)
         .timeout(DETECT_TIMEOUT)
         .build()
@@ -88,7 +88,7 @@ pub(crate) async fn detect_ollama(base_url: &str) -> bool {
 /// Fetch the list of locally available model names from Ollama's
 /// `GET /api/tags` endpoint. Returns model names sorted alphabetically.
 pub(crate) async fn list_ollama_models(base_url: &str) -> Result<Vec<String>, String> {
-    let client = reqwest::Client::builder()
+    let client = aivyx_llm::transport::client_builder_for(base_url)
         .connect_timeout(DETECT_TIMEOUT)
         .timeout(LIST_TIMEOUT)
         .build()
@@ -124,7 +124,7 @@ async fn pull_ollama_model(
 ) -> Result<(), String> {
     use futures_util::StreamExt;
 
-    let client = reqwest::Client::builder()
+    let client = aivyx_llm::transport::client_builder_for(base_url)
         .connect_timeout(DETECT_TIMEOUT)
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;

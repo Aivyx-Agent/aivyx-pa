@@ -142,10 +142,13 @@ pub trait WebhookSender: Send + Sync {
     async fn post_json(&self, url: &str, body: Vec<u8>) -> Result<(), NotifyError>;
 }
 
-/// Production HTTP sender wrapping a `reqwest::Client` with a
-/// fixed 5-second total timeout.
+/// Production HTTP sender with a fixed 5-second total timeout. A webhook on
+/// a local address (a self-hosted service) is posted directly, never
+/// through a configured proxy; anything else honours the proxy
+/// (aivyx-vision audit 2026-11-11, X1).
 pub struct ReqwestWebhookSender {
     client: reqwest::Client,
+    direct: reqwest::Client,
 }
 
 impl ReqwestWebhookSender {
@@ -154,12 +157,27 @@ impl ReqwestWebhookSender {
     /// workspace default for reqwest); no system openssl
     /// dependency.
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(5))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        Self { client }
+        let build = |builder: reqwest::ClientBuilder| {
+            builder
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        };
+        Self {
+            client: build(reqwest::Client::builder()),
+            direct: build(aivyx_llm::transport::direct_client_builder()),
+        }
+    }
+}
+
+impl ReqwestWebhookSender {
+    fn client_for(&self, url: &str) -> &reqwest::Client {
+        if aivyx_route::url_locality(url) == aivyx_route::Locality::Local {
+            &self.direct
+        } else {
+            &self.client
+        }
     }
 }
 
@@ -173,7 +191,7 @@ impl Default for ReqwestWebhookSender {
 impl WebhookSender for ReqwestWebhookSender {
     async fn post_json(&self, url: &str, body: Vec<u8>) -> Result<(), NotifyError> {
         let resp = self
-            .client
+            .client_for(url)
             .post(url)
             .header("Content-Type", "application/json")
             .body(body)
