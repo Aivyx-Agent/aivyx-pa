@@ -131,6 +131,21 @@ ignore = [
     # extraction; transitive, not a direct dep, and unmaintained (not
     # vulnerable). Removable only when pdf-extract drops/replaces it.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained, not vulnerable; transitive under pdf-extract (data.pdf); arrived with the lopdf-DoS fix; awaiting upstream" },
+
+    # libsqlite3-sys — RUSTSEC-2026-0459 (CVE-2026-119375, accepted
+    # 2026-11-11). The bundled SQLite before 3.54.0 can return stale
+    # page-cache memory when a database is opened with a crafted `-wal` file
+    # of a different page size. The fix (libsqlite3-sys 0.39 / rusqlite
+    # 0.41) is unreachable here: matrix-sdk-sqlite 0.19.1 (aivyx-matrix's
+    # crypto store, the latest release) requires rusqlite ^0.40.2, and only
+    # one libsqlite3-sys may be linked (`links = "sqlite3"`). For the same
+    # reason aivyx-kvcache stays pinned at 4ec85e4 (rusqlite 0.40); its
+    # 7c1e9fb moved to 0.41. Exposure: pa opens only its own SQLite files
+    # (the kvcache manifest, the Matrix crypto store) inside its private
+    # data directory; planting a crafted -wal there already needs write
+    # access to pa's state. Remove this entry, and bump aivyx-kvcache, when
+    # matrix-sdk-sqlite accepts rusqlite 0.41.
+    { id = "RUSTSEC-2026-0459", reason = "bundled SQLite -wal memory exposure; fix blocked by matrix-sdk-sqlite 0.19.1 (rusqlite ^0.40.2); pa opens only its own DB files in its data dir; revisit on the next matrix-sdk release" },
     # NOTE: glib RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g, GitHub Dependabot
     # alert #6) — a `glib::VariantStrIter` Iterator/DoubleEndedIterator
     # *unsoundness*, same aivyx-desktop GTK3 root cause (glib 0.18, patched
