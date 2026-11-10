@@ -63,6 +63,11 @@ build machine its release used. This release ships everything in v0.20.0
 
 - **Release builds** for Apple Silicon and the macOS desktop app use the
   macOS 15 build machine.
+- **Studio text is readable in both themes.** Links and brass text in the
+  light theme were 3.09:1 and are now 4.98:1. Error, success, info and
+  warning text and their chips, notices and the "forget skill" button now pass
+  WCAG AA (4.5:1). Rust-coloured text uses a lighter shade in the dark
+  theme.
 
 ## [0.20.0] — 2026-11-05
 
