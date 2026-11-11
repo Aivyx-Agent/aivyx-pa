@@ -52,12 +52,15 @@ registered — this is fully backward compatible with an existing install.
 
 `vision.generate_image` takes
 `{"prompt": "...", "width"?: int, "height"?: int, "seed"?: int,
-"style_hint"?: string, "reference_image"?: string}` and returns
-`{"path": "...", "backend": "mold", "seed_used": int|null}`.
+"style_hint"?: string, "reference_image"?: string, "strength"?: number}`
+and returns
+`{"path": "...", "backend": "mold", "seed_used": int|null, "warnings": [string]}`.
 `reference_image`, if given, must be a **bare filename** (no path
 separators) previously returned by this same tool — arbitrary filesystem
 paths are rejected, since this tool process has no access to the daemon's
-own fs sandbox.
+own fs sandbox. Without `width`/`height`, an image-to-image result keeps
+the reference's size. `strength` (0.0–1.0, image-to-image only; mold's
+default 0.75) is how far the result may move from the reference.
 
 `vision.generate_3d` takes `{"prompt": "..."}` and returns the same shape
 on success — but every call fails today with a clear error message; mold's

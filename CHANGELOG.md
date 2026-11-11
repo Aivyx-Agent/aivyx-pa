@@ -18,6 +18,9 @@ All notable changes to Aivyx are recorded here. This project adheres to
   config made from them starts without `--role`. A schedule, webhook or
   file watch with no `role` now runs as this role. For a config made
   earlier, `aivyx-pa doctor` names the line to add.
+- **`vision.generate_image` takes `strength`** (0.0–1.0, image-to-image
+  only): how far the result may move from `reference_image`. Low keeps
+  the picture, high changes more; mold's default is 0.75.
 - **Notify webhooks carry a version.** The JSON a `kind = "webhook"`
   notify target receives has `"version": 1`. Receivers that ignore
   fields they don't know need no change.
@@ -62,6 +65,12 @@ All notable changes to Aivyx are recorded here. This project adheres to
   created `0700` and each image `0600`.
 
 ### Fixed
+
+- **Image-to-image keeps the picture's shape.** With a `reference_image`
+  and no size, the result came out at the model's default size (a
+  1024x768 picture came back square, its layout lost). It now keeps the
+  reference's size. A size over the model's pixel limit, such as a phone
+  photo used as a reference, is scaled down to fit instead of refused.
 
 - **Studio text is readable in both themes.** Links and brass text in the
   light theme were 3.09:1 and are now 4.98:1. Error, success, info and

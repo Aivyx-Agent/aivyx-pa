@@ -48,9 +48,12 @@ impl Tool for GenerateImageTool {
         "Generate an image from a text prompt via a local image-generation \
          backend. Input: `{prompt: string (required), width?: integer, \
          height?: integer, seed?: integer, style_hint?: string, \
-         reference_image?: string}`. `reference_image` must be a bare \
-         filename previously returned by this same tool (image-to-image) \
-         -- arbitrary filesystem paths are rejected. Returns `{path: \
+         reference_image?: string, strength?: number}`. `reference_image` \
+         must be a bare filename previously returned by this same tool \
+         (image-to-image) -- arbitrary filesystem paths are rejected; \
+         without width/height the result keeps the reference's size. \
+         `strength` (0.0-1.0, image-to-image only) is how far the result \
+         may move from the reference: low keeps it, high changes more. Returns `{path: \
          string, backend: string, seed_used: integer|null, warnings: [string]}`. Scope: \
          `vision.generate`."
     }
@@ -80,6 +83,7 @@ impl Tool for GenerateImageTool {
             height: optional_u32(&input, "height"),
             seed: optional_u64(&input, "seed"),
             style_hint: optional_string(&input, "style_hint"),
+            strength: optional_f32(&input, "strength"),
         };
         match self.provider.generate_image(req).await {
             Ok(asset) => ToolOutcome::Completed {
@@ -176,6 +180,10 @@ fn optional_u64(input: &Value, field: &str) -> Option<u64> {
     input.get(field).and_then(|v| v.as_u64())
 }
 
+fn optional_f32(input: &Value, field: &str) -> Option<f32> {
+    input.get(field).and_then(|v| v.as_f64()).map(|v| v as f32)
+}
+
 fn optional_string(input: &Value, field: &str) -> Option<String> {
     input
         .get(field)
@@ -235,7 +243,16 @@ fn image_input_schema() -> Value {
                 "type": "string",
                 "description": "Bare filename (no path separators) of a \
                                 file this tool itself previously \
-                                generated, for image-to-image generation."
+                                generated, for image-to-image generation. \
+                                Without width/height the result keeps its size."
+            },
+            "strength": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Image-to-image only: how far the result may \
+                                move from reference_image, from 0 (keep it) \
+                                to 1 (ignore it). Default 0.75."
             }
         },
         "required": ["prompt"],
@@ -313,7 +330,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_image_passes_width_height_seed_style_hint_through() {
+    async fn generate_image_passes_its_optional_fields_through() {
         let dir = tempfile::tempdir().unwrap();
         let provider = FakeGenerationProvider::with_image_result(Ok(sample_asset("/tmp/x.png")));
         let provider = Arc::new(provider);
@@ -324,7 +341,8 @@ mod tests {
                 "width": 512,
                 "height": 768,
                 "seed": 7,
-                "style_hint": "watercolor"
+                "style_hint": "watercolor",
+                "strength": 0.5
             }),
             &dummy_context(),
         )
@@ -337,6 +355,7 @@ mod tests {
         assert_eq!(captured.height, Some(768));
         assert_eq!(captured.seed, Some(7));
         assert_eq!(captured.style_hint.as_deref(), Some("watercolor"));
+        assert_eq!(captured.strength, Some(0.5));
     }
 
     #[tokio::test]
