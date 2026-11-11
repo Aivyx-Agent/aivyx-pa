@@ -141,6 +141,11 @@ impl AnthropicProvider {
 
 #[async_trait]
 impl LlmProvider for AnthropicProvider {
+    /// Every current Claude model takes images.
+    async fn sees_images(&self, _model: &str) -> Option<bool> {
+        Some(true)
+    }
+
     async fn chat_stream(
         &self,
         request: LlmRequest<'_>,

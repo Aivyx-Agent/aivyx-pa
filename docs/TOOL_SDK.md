@@ -176,6 +176,28 @@ before that, a tool process requesting escalation was flattened into
 `ToolError { code: "requires_escalation", .. }`, which meant it reached the
 daemon as a generic failure instead of a real escalation.
 
+### Showing the model an image
+
+A `ToolResult`'s `output` may carry images for the model to look at
+under the reserved top-level key `_images` (`aivyx_core::TOOL_IMAGES_KEY`):
+
+```json
+{"path": "/…/a.png", "_images": [{"media_type": "image/jpeg", "data": "<base64>"}]}
+```
+
+The daemon removes `_images` from the text the model reads. When the
+model in use can take images (`LlmProvider::sees_images`: Claude,
+OpenAI, a `llama-server` started with `--mmproj`, an Ollama model with the
+`vision` capability, or a routing setup with a route that has tools and
+vision), the images are shown right after the step's tool results.
+Otherwise the result says how many weren't shown. Send small previews:
+at most 4 images per step, each at most 1 MiB and a PNG, JPEG or WebP by
+its bytes (anything else is dropped). A tool process's output is
+untrusted, so its images carry the same warning as fenced text: the
+model is told to treat them as data and not follow instructions written
+in them. `aivyx-vision` attaches 768 px JPEG previews unless its `[mold]
+show_model_previews = false`.
+
 ### `ToolDescriptor` shape
 
 ```text

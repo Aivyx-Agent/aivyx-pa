@@ -183,6 +183,20 @@ impl OpenAiProvider {
 
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
+    /// OpenAI's own API: its current chat models take images. Any other
+    /// server: llama.cpp's `llama-server` says in `GET /props`
+    /// (`modalities.vision`, true when started with `--mmproj`); a server
+    /// without that endpoint can't tell.
+    async fn sees_images(&self, _model: &str) -> Option<bool> {
+        if self.base_url() == DEFAULT_BASE_URL {
+            return Some(true);
+        }
+        let url = format!("{}/props", self.base_url().trim_end_matches('/'));
+        let body = self.transport.get_text(&url).await.ok()?;
+        let props: serde_json::Value = serde_json::from_str(&body).ok()?;
+        props.get("modalities")?.get("vision")?.as_bool()
+    }
+
     async fn chat_stream(
         &self,
         request: LlmRequest<'_>,
@@ -1398,6 +1412,54 @@ data: [DONE]\n\n";
                 "connection refused".to_string(),
             ))
         }
+    }
+
+    /// `GET /props` as llama-server b11429 answers it (2026-11-12), with
+    /// and without `--mmproj`.
+    struct PropsTransport(&'static str);
+
+    #[async_trait]
+    impl HttpTransport for PropsTransport {
+        async fn post_sse(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: Vec<u8>,
+            _cancellation: &CancellationToken,
+        ) -> Result<ByteStream, LlmError> {
+            unreachable!();
+        }
+
+        async fn get_text(&self, url: &str) -> Result<String, LlmError> {
+            assert_eq!(url, "http://127.0.0.1:8090/props");
+            Ok(self.0.to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn sees_images_asks_llama_server_and_trusts_openai() {
+        let local = |props: &'static str| {
+            OpenAiProvider::with_transport(
+                OpenAiConfig::without_api_key().with_base_url("http://127.0.0.1:8090/"),
+                Box::new(PropsTransport(props)),
+            )
+        };
+        let with_mmproj = r#"{"modalities":{"vision":true,"video":true,"audio":false}}"#;
+        let without = r#"{"modalities":{"vision":false,"video":false,"audio":false}}"#;
+        assert_eq!(local(with_mmproj).sees_images("m").await, Some(true));
+        assert_eq!(local(without).sees_images("m").await, Some(false));
+        assert_eq!(local("{}").sees_images("m").await, None);
+
+        let unreachable = OpenAiProvider::with_transport(
+            OpenAiConfig::without_api_key().with_base_url("http://127.0.0.1:9"),
+            Box::new(UnreachableTransport),
+        );
+        assert_eq!(unreachable.sees_images("m").await, None);
+        let openai = OpenAiProvider::with_transport(
+            OpenAiConfig::new("sk-test"),
+            Box::new(UnreachableTransport),
+        );
+        assert_eq!(openai.sees_images("gpt-5").await, Some(true));
     }
 
     #[tokio::test]

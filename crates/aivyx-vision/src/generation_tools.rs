@@ -26,6 +26,7 @@ pub struct GenerateImageTool {
     schema: Value,
     provider: Arc<dyn GenerationProvider>,
     output_dir: PathBuf,
+    previews: bool,
 }
 
 impl GenerateImageTool {
@@ -35,7 +36,15 @@ impl GenerateImageTool {
             schema: image_input_schema(),
             provider,
             output_dir,
+            previews: true,
         }
+    }
+
+    /// `[mold] show_model_previews` (default on): attach a small preview
+    /// of each image for a model that can see images.
+    pub fn with_model_previews(mut self, on: bool) -> Self {
+        self.previews = on;
+        self
     }
 }
 
@@ -110,15 +119,18 @@ impl Tool for GenerateImageTool {
                             ),
                         );
                     }
+                    let assets: Vec<GeneratedAsset> = images.into_iter().flatten().collect();
+                    let output = json!({
+                        "images": assets.iter().map(asset_to_json).collect::<Vec<_>>(),
+                        "failed": errors
+                            .into_iter()
+                            .filter_map(|r| r.err())
+                            .map(|e| e.to_string())
+                            .collect::<Vec<_>>(),
+                    });
                     ToolOutcome::Completed {
-                        output: json!({
-                            "images": images.iter().flatten().map(asset_to_json).collect::<Vec<_>>(),
-                            "failed": errors
-                                .into_iter()
-                                .filter_map(|r| r.err())
-                                .map(|e| e.to_string())
-                                .collect::<Vec<_>>(),
-                        }),
+                        output: with_previews(output, self.previews, assets.iter().map(|a| a.path.clone()))
+                            .await,
                         verified: Verification::NotApplicable,
                     }
                 }
@@ -126,7 +138,7 @@ impl Tool for GenerateImageTool {
         }
         match self.provider.generate_image(req).await {
             Ok(asset) => ToolOutcome::Completed {
-                output: asset_to_json(&asset),
+                output: with_previews(asset_to_json(&asset), self.previews, [asset.path.clone()]).await,
                 // Generation already happened and the file is on disk;
                 // there is nothing further to verify against an external
                 // source of truth, same reasoning as vision.generate_svg's
@@ -143,6 +155,7 @@ pub struct UpscaleImageTool {
     schema: Value,
     provider: Arc<dyn GenerationProvider>,
     output_dir: PathBuf,
+    previews: bool,
 }
 
 impl UpscaleImageTool {
@@ -152,7 +165,15 @@ impl UpscaleImageTool {
             schema: upscale_input_schema(),
             provider,
             output_dir,
+            previews: true,
         }
+    }
+
+    /// `[mold] show_model_previews` (default on): attach a small preview
+    /// of each image for a model that can see images.
+    pub fn with_model_previews(mut self, on: bool) -> Self {
+        self.previews = on;
+        self
     }
 }
 
@@ -190,7 +211,7 @@ impl Tool for UpscaleImageTool {
         };
         match self.provider.upscale_image(UpscaleRequest { image }).await {
             Ok(asset) => ToolOutcome::Completed {
-                output: asset_to_json(&asset),
+                output: with_previews(asset_to_json(&asset), self.previews, [asset.path.clone()]).await,
                 verified: Verification::NotApplicable,
             },
             Err(e) => failed(self.id, format!("vision.upscale_image: {e}")),
@@ -271,6 +292,41 @@ impl Tool for GenerateThreeDTool {
             Err(e) => failed(self.id, format!("vision.generate_3d: {e}")),
         }
     }
+}
+
+/// Adds a small JPEG of each image under `aivyx_core::TOOL_IMAGES_KEY`, so
+/// a model that can see images is shown what it made. An image that can't
+/// be previewed is left out; the result still names its file.
+async fn with_previews(
+    mut output: Value,
+    on: bool,
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> Value {
+    use base64::Engine;
+    if !on {
+        return output;
+    }
+    let paths: Vec<PathBuf> = paths.into_iter().take(aivyx_core::MAX_TOOL_IMAGES).collect();
+    let previews = tokio::task::spawn_blocking(move || {
+        paths
+            .iter()
+            .filter_map(|path| aivyx_vision_mold::preview::model_preview(path).ok())
+            .map(|(media_type, jpeg)| {
+                json!({
+                    "media_type": media_type,
+                    "data": base64::engine::general_purpose::STANDARD.encode(jpeg),
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    if !previews.is_empty()
+        && let Some(object) = output.as_object_mut()
+    {
+        object.insert(aivyx_core::TOOL_IMAGES_KEY.to_string(), Value::Array(previews));
+    }
+    output
 }
 
 fn asset_to_json(asset: &GeneratedAsset) -> Value {
@@ -564,6 +620,67 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn generated_images_carry_a_preview_for_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("a.png");
+        let mut bytes = Vec::new();
+        image::RgbImage::from_pixel(1024, 512, image::Rgb([10, 20, 30]))
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(&png, bytes).unwrap();
+        let provider = FakeGenerationProvider::with_image_result(Ok(sample_asset(
+            png.to_str().unwrap(),
+        )));
+        let tool = GenerateImageTool::new(Arc::new(provider), dir.path().to_path_buf());
+        let outcome = tool
+            .execute(json!({"prompt": "a dark band"}), &dummy_context())
+            .await;
+        let ToolOutcome::Completed { output, .. } = outcome else {
+            panic!("expected Completed, got {outcome:?}")
+        };
+        let previews = output[aivyx_core::TOOL_IMAGES_KEY].as_array().unwrap();
+        assert_eq!(previews.len(), 1);
+        assert_eq!(previews[0]["media_type"], "image/jpeg");
+        use base64::Engine;
+        let jpeg = base64::engine::general_purpose::STANDARD
+            .decode(previews[0]["data"].as_str().unwrap())
+            .unwrap();
+        let preview = image::load_from_memory(&jpeg).unwrap();
+        assert_eq!((preview.width(), preview.height()), (768, 384));
+    }
+
+    #[tokio::test]
+    async fn previews_switched_off_are_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("a.png");
+        image::RgbImage::from_pixel(8, 8, image::Rgb([1, 2, 3])).save(&png).unwrap();
+        let provider = FakeGenerationProvider::with_image_result(Ok(sample_asset(
+            png.to_str().unwrap(),
+        )));
+        let tool = GenerateImageTool::new(Arc::new(provider), dir.path().to_path_buf())
+            .with_model_previews(false);
+        let outcome = tool.execute(json!({"prompt": "x"}), &dummy_context()).await;
+        let ToolOutcome::Completed { output, .. } = outcome else {
+            panic!("expected Completed, got {outcome:?}")
+        };
+        assert!(output.get(aivyx_core::TOOL_IMAGES_KEY).is_none(), "{output}");
+    }
+
+    #[tokio::test]
+    async fn a_result_without_a_readable_image_has_no_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = FakeGenerationProvider::with_image_result(Ok(sample_asset("/tmp/missing.png")));
+        let tool = GenerateImageTool::new(Arc::new(provider), dir.path().to_path_buf());
+        let outcome = tool
+            .execute(json!({"prompt": "x"}), &dummy_context())
+            .await;
+        let ToolOutcome::Completed { output, .. } = outcome else {
+            panic!("expected Completed, got {outcome:?}")
+        };
+        assert!(output.get(aivyx_core::TOOL_IMAGES_KEY).is_none(), "{output}");
     }
 
     #[tokio::test]

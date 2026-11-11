@@ -432,6 +432,22 @@ impl OllamaProvider {
 
 #[async_trait::async_trait]
 impl crate::LlmProvider for OllamaProvider {
+    /// `/api/show` lists `vision` among a model's capabilities when it
+    /// takes images.
+    async fn sees_images(&self, model: &str) -> Option<bool> {
+        let url = format!("{}/api/show", self.base_url());
+        let body = serde_json::to_vec(&json!({ "name": model })).ok()?;
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let bytes = self
+            .transport
+            .post_json(&url, &[("content-type", "application/json")], body, &cancellation)
+            .await
+            .ok()?;
+        let value: Value = serde_json::from_slice(&bytes).ok()?;
+        let caps = value.get("capabilities")?.as_array()?;
+        Some(caps.iter().any(|c| c.as_str() == Some("vision")))
+    }
+
     async fn chat_stream(
         &self,
         request: crate::LlmRequest<'_>,

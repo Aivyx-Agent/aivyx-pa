@@ -18,6 +18,15 @@ All notable changes to Aivyx are recorded here. This project adheres to
   config made from them starts without `--role`. A schedule, webhook or
   file watch with no `role` now runs as this role. For a config made
   earlier, `aivyx-pa doctor` names the line to add.
+- **The agent sees the images it makes.** `vision.generate_image` and
+  `vision.upscale_image` attach a small preview, and when the model in use
+  can take images (Claude, OpenAI, `llama-server` with `--mmproj`, an
+  Ollama vision model, or a routing setup with a vision route) it is
+  shown after the tool result, so the agent can check its work and try
+  again. Otherwise the result says the image wasn't shown. Turn previews
+  off with `show_model_previews = false` under the vision tool's `[mold]`.
+  Tool processes can show images the same way (`_images`; see
+  `docs/TOOL_SDK.md`).
 - **`vision.generate_3d` works.** It makes a `.glb` mesh of one object,
   from a prompt (an image of the object is generated first and kept) or
   from an image `vision.generate_image` made, with mold's Hunyuan3D model

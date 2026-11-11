@@ -685,6 +685,16 @@ pub trait LlmProvider: Send + Sync {
     async fn tool_call_family_hint(&self, _model: &str) -> Option<String> {
         None
     }
+
+    /// Whether `model` can take images as input: `Some(true)` or
+    /// `Some(false)` when the provider knows, `None` when it can't tell.
+    /// The planner only shows a model images (tool results, for example)
+    /// on `Some(true)`, so the default, `None`, is the safe answer.
+    /// Called about once per conversation; implementations may query the
+    /// server.
+    async fn sees_images(&self, _model: &str) -> Option<bool> {
+        None
+    }
 }
 
 /// A live LLM response stream. Yields [`LlmStreamEvent`]s via

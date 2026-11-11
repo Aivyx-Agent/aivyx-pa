@@ -25,6 +25,7 @@ aivyx-instance = { path = "../aivyx-instance" }
 # in this workspace (see e.g. aivyx-toolkit's own Cargo.toml).
 aivyx-capability = { path = "../aivyx-capability" }
 aivyx-core = { path = "../aivyx-core" }
+base64 = { workspace = true }
 aivyx-tool = { path = "../aivyx-tool" }
 # text_completer::build_provider wires a real LlmProvider from this
 # crate's own config, so all three concrete providers' feature gates need to
@@ -61,6 +62,8 @@ toml = "0.8"
 # Not a workspace dependency — pinned directly per-crate, matching
 # aivyx-core/aivyx-team's own dev-dependency version.
 tempfile = "3.27.0"
+# Makes a real PNG to check the previews the tools attach.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # aivyx-vision-core's `FakeGenerationProvider` test double is gated behind
 # its own `testing` Cargo feature (`#[cfg(any(test, feature = "testing"))]`

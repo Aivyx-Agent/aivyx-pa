@@ -601,6 +601,21 @@ fn is_retryable(err: &LlmError) -> bool {
 
 #[async_trait]
 impl LlmProvider for RoutedProvider {
+    /// Whether any route can serve a chat step with an image. A routed
+    /// request carrying an image needs a vision route (or it fails with
+    /// "no model has vision"), so the default provider doesn't count.
+    async fn sees_images(&self, _model: &str) -> Option<bool> {
+        let query = RouteQuery {
+            task: aivyx_route::TaskKind::Chat,
+            session: None,
+            tools: true,
+            vision: true,
+            estimated_prompt_tokens: 0,
+            tier: None,
+        };
+        Some(self.router.plan(&query, Instant::now()).is_ok())
+    }
+
     async fn chat_stream(
         &self,
         request: LlmRequest<'_>,
@@ -1130,6 +1145,30 @@ mod tests {
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].model, "big");
         assert!(f.default.seen().is_empty());
+    }
+
+    /// An agent step needs tools and, with an image, vision: one model
+    /// with both, not one of each.
+    #[tokio::test]
+    async fn sees_images_needs_a_route_with_tools_and_vision() {
+        let gpu = Scripted::ok();
+        let split = fixture(
+            vec![
+                default_profile(),
+                profile("gpu", "caller", Tier::Medium, &[Capability::Tools]),
+                profile("gpu", "seer", Tier::Medium, &[Capability::Vision]),
+            ],
+            vec![("gpu", Arc::clone(&gpu))],
+        );
+        assert_eq!(split.routed.sees_images("any").await, Some(false));
+        let both = fixture(
+            vec![
+                default_profile(),
+                profile("gpu", "seer", Tier::Medium, &[Capability::Tools, Capability::Vision]),
+            ],
+            vec![("gpu", gpu)],
+        );
+        assert_eq!(both.routed.sees_images("any").await, Some(true));
     }
 
     #[tokio::test]

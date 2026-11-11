@@ -86,6 +86,9 @@ struct RawMoldConfig {
     /// The mold model, for example `flux2-klein:q8`; unset uses the image
     /// model downloaded on the mold server.
     model: Option<String>,
+    /// Attach a small preview of each image to the result, so a model that
+    /// can see images is shown what it made. Default on.
+    show_model_previews: Option<bool>,
 }
 
 // Hand-written so a stray `{:?}` never prints the secret (audit P14).
@@ -97,6 +100,7 @@ impl std::fmt::Debug for RawMoldConfig {
             .field("api_key", &"<redacted>")
             .field("output_dir", &self.output_dir)
             .field("model", &self.model)
+            .field("show_model_previews", &self.show_model_previews)
             .finish()
     }
 }
@@ -121,6 +125,7 @@ pub struct MoldSettings {
     pub api_key: Option<String>,
     pub output_dir: PathBuf,
     pub model: Option<String>,
+    pub show_model_previews: bool,
 }
 
 // Hand-written: the derived `Debug` would print the key (audit P14).
@@ -132,6 +137,7 @@ impl std::fmt::Debug for MoldSettings {
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("output_dir", &self.output_dir)
             .field("model", &self.model)
+            .field("show_model_previews", &self.show_model_previews)
             .finish()
     }
 }
@@ -221,6 +227,7 @@ pub fn load_config(path: &Path) -> Result<VisionConfig, ConfigFileError> {
                 api_key: m.api_key,
                 output_dir,
                 model: m.model,
+                show_model_previews: m.show_model_previews.unwrap_or(true),
             })
         })
         .transpose()?;
@@ -243,6 +250,7 @@ mod tests {
             api_key: Some("MOLD-SECRET-KEY".into()),
             output_dir: std::path::PathBuf::from("/tmp/x"),
             model: None,
+            show_model_previews: true,
         };
         let shown = format!("{m:?}");
         assert!(!shown.contains("MOLD-SECRET-KEY") && shown.contains("<redacted>"), "{shown}");

@@ -69,6 +69,12 @@ process generated (up to 1 megapixel), enlarges it 4x with mold's
 `real-esrgan-x4plus` upscaler (`mold pull real-esrgan-x4plus:fp16`, 31 MB)
 and returns the same shape as `vision.generate_image`.
 
+Image results also carry a small JPEG preview of each image (at most
+768 px) under the reserved `_images` key, so a model that can see images
+is shown what it made and can check it; the daemon removes the preview
+from the text. Set `show_model_previews = false` under `[mold]` to leave
+them out (each image shown costs roughly 600 tokens on a local model).
+
 Generated files carry no prompt: mold is asked not to embed it, and any
 embedded text is stripped before the file is written. mold itself still
 keeps image-to-image results and every prompt on its own machine; see

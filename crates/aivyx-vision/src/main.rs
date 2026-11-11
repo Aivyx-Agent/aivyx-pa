@@ -58,14 +58,15 @@ async fn main() -> ExitCode {
         match aivyx_vision_mold::MoldProvider::new(mold_config) {
             Ok(provider) => {
                 let provider: Arc<dyn aivyx_vision_core::GenerationProvider> = Arc::new(provider);
-                tools.push(Arc::new(GenerateImageTool::new(
-                    provider.clone(),
-                    mold_settings.output_dir.clone(),
-                )));
-                tools.push(Arc::new(UpscaleImageTool::new(
-                    provider.clone(),
-                    mold_settings.output_dir.clone(),
-                )));
+                let previews = mold_settings.show_model_previews;
+                tools.push(Arc::new(
+                    GenerateImageTool::new(provider.clone(), mold_settings.output_dir.clone())
+                        .with_model_previews(previews),
+                ));
+                tools.push(Arc::new(
+                    UpscaleImageTool::new(provider.clone(), mold_settings.output_dir.clone())
+                        .with_model_previews(previews),
+                ));
                 tools.push(Arc::new(GenerateThreeDTool::new(
                     provider,
                     mold_settings.output_dir.clone(),

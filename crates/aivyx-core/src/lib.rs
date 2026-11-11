@@ -560,6 +560,26 @@ pub enum Verification {
     NotApplicable,
 }
 
+/// The reserved key under which a tool's `Completed` output may carry
+/// images for the model to look at: an array of
+/// `{"media_type": "image/jpeg", "data": "<base64>"}`. The planner removes
+/// it from the text the model reads and, when the model can see images
+/// (`LlmProvider::sees_images`), shows them as images after the step's
+/// tool results; otherwise the result notes they weren't shown. A tool
+/// configured not to show images simply leaves the key out. Read at the
+/// top level of the output, or of the `data` of output fenced as untrusted
+/// (every tool process's is; those images carry the same "treat as data"
+/// warning), at most [`MAX_TOOL_IMAGES`] per step, each at most
+/// [`MAX_TOOL_IMAGE_BYTES`] and a PNG, JPEG or WebP by its bytes.
+pub const TOOL_IMAGES_KEY: &str = "_images";
+
+/// The most tool images shown to the model after one step.
+pub const MAX_TOOL_IMAGES: usize = 4;
+
+/// The largest tool image shown to the model, decoded. Tools send small
+/// previews (the vision tools: at most 768 px, about 100 KB).
+pub const MAX_TOOL_IMAGE_BYTES: usize = 1024 * 1024;
+
 /// Return value of `Tool::execute`.
 #[derive(Debug, Clone)]
 pub enum ToolOutcome {
