@@ -5,7 +5,24 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-11-12
+
+Images, 3D and an agent that checks what it made; and the configuration
+settles ahead of 1.0: every key pa doesn't know, and every old spelling,
+now gets a warning. See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
+for what 1.0 will promise.
+
 ### Added
+
+- **Warnings for config keys pa doesn't read.** Each unknown key gets one
+  warning at start, with its full path and a "did you mean" hint, so a
+  typo no longer silently does nothing. `aivyx-pa doctor` lists every
+  config warning first, under "Config:", with where to fix it.
+- **`AIVYX_PA_ANTHROPIC_API_KEY`** sets the Anthropic key, like the other
+  `AIVYX_PA_*` variables; the bare `ANTHROPIC_API_KEY` still works.
+- **`docs/COMPATIBILITY.md`**: what the 1.0 stability promise will cover
+  (config keys, CLI, file formats, stores) and what it won't (preview
+  channels, build-time features, developer commands).
 
 - **`[agent] max_reply_tokens`**: the most tokens one reply may use.
   Default 4096 (it was a fixed 1024). The model server's own limit still
@@ -54,8 +71,44 @@ All notable changes to Aivyx are recorded here. This project adheres to
   recorded as such the first time this release opens it; nothing to do.
   A newer release's data is refused with a message instead of misread.
 
+### Deprecated
+
+Old spellings keep working and warn once; when both are set, the new one
+wins.
+
+- **`[confine]` keys move to `[sandbox]`**: `require_enforcement`,
+  `allow_unix_sockets`, `allow_leaving_process_group`, `share_system_tmp`.
+- **`[daemon] web_ui*` become `[studio]`**: `enabled`, `port`, `host`,
+  `allowed_origins`, `auth_token`, `insecure_no_auth`; the flags
+  `--web-ui` / `--web-ui-port` become `--studio` / `--studio-port`.
+- **`--mcp-server <name:command>` becomes `--mcp`** (coder's
+  `--mcp-server` means the opposite: running as a server). The
+  `mcp-server` subcommand is unchanged.
+- **`[aivyx_pa] passphrase` becomes `[storage] passphrase`.** A
+  passphrase read from the config file now warns, naming
+  `aivyx-pa keyring set` and `AIVYX_PA_PASSPHRASE`.
+- **`[team] config_path` becomes `roster_path`;
+  `agent.conversation_history_turns` becomes
+  `conversation_history_messages`** (it always counted messages).
+- **Chat apps name their allowlisted chat `*_id`**:
+  `discord.channel_filter` → `channel_id`, `slack.channel_filter` →
+  `channel_id`, `matrix.room_filter` → `room_id`, `telegram.chat_filter`
+  → `chat_id`.
+- **The singular `notify_target`** on `[[schedule]]`, `[[webhook]]` and
+  `[[file_watch]]` warns; use `notify_targets`.
+
 ### Changed
 
+- **A config naming both `[fs] root` and a different `[access] root`
+  warns** that `[fs] root` wins.
+- **A deprecated spelling with a bad value names both keys** in the error
+  (`invalid value for studio.port (set as daemon.web_ui_port)`).
+- **What pa stores is versioned**: the instance layout, the audit chain,
+  the store's tables and exports carry a version (missing means 1), so a
+  later release can refuse, rather than misread, data it doesn't know.
+- **The `init` templates name the Ollama URL by its real key**,
+  `[openai] base_url` (they wrote `[ollama] base_url`, which pa never
+  read).
 - **`aivyx-pa audit export --event-type` takes snake_case**
   (`tool_call`, `scope_denied`, ...), like every other CLI value. The
   CamelCase names (`ToolCall`) still work.
