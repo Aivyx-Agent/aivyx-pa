@@ -294,7 +294,7 @@ A tool process: add `aivyx-vision` as a `[[tool_process]]`. `vision.generate_ima
 
 | Tool | What it does |
 |---|---|
-| `vision.generate_3d` | Generate a 3D model from a text prompt via a local generation backend. **Not built yet** — every call fails for now. |
+| `vision.generate_3d` | Generate a 3D model (a .glb mesh, untextured) of one object via a local generation backend; takes about half a minute. |
 | `vision.generate_image` | Generate an image from a text prompt via a local image-generation backend. |
 | `vision.generate_svg` | Generate a sanitized SVG image from a text prompt. |
 | `vision.upscale_image` | Enlarge an image made by vision.generate_image four times with the local backend's upscaler, saving it as a new file. |

@@ -293,7 +293,7 @@ SemiTrusted-reachable.
 | `vision.generate_svg` | `vision.generate` | SemiTrusted | LLM-generated SVG from a text prompt (constrained prompt, sanitized output) |
 | `vision.generate_image` | `vision.generate` | SemiTrusted | Local image generation via `mold serve` (requires `[mold]` config; writes a file under `output_dir`, returns its path) |
 | `vision.upscale_image` | `vision.generate` | SemiTrusted | Enlarge an image `vision.generate_image` made, 4x, via `mold serve`'s upscaler (requires `[mold]` config; writes a new file under `output_dir`) |
-| `vision.generate_3d` | `vision.generate` | SemiTrusted | Local 3D model generation — **not yet implemented** (mold's Pass B); always fails today with a clear error |
+| `vision.generate_3d` | `vision.generate` | SemiTrusted | A `.glb` mesh of one object from a prompt or a generated image, via `mold serve`'s Hunyuan3D model (requires `[mold]` config and a 3D model on mold; Tencent's licence excludes the EU, UK and South Korea) |
 
 ---
 

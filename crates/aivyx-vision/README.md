@@ -74,11 +74,18 @@ embedded text is stripped before the file is written. mold itself still
 keeps image-to-image results and every prompt on its own machine; see
 `aivyx-vision-mold`'s README.
 
-`vision.generate_3d` takes `{"prompt": "..."}` and returns the same shape
-on success — but every call fails today with a clear error message; mold's
-3D generation ("Pass B") isn't built yet.
+`vision.generate_3d` takes `{"prompt": "...", "reference_image"?: string,
+"style_hint"?: string, "seed"?: int}` and returns the same shape, with a
+`.glb` mesh (about 40,000 faces, untextured; about half a minute). Without
+`reference_image`, an image of the object is generated first and kept.
+A reference should show one whole object on a plain background. It needs
+a Hunyuan3D model on mold (`mold pull hunyuan3d-mini-turbo:fp16`, 3.8 GB).
+**Licence:** Hunyuan3D's weights are Tencent's, under the Tencent Hunyuan
+3D 2.0 Community License, which does not apply in the EU, the UK or South
+Korea and needs a separate Tencent licence above 1 million monthly active
+users. mold asks you to accept it before downloading.
 
-Both gated by the same `vision.generate` capability (`SemiTrusted`-and-above)
+All gated by the same `vision.generate` capability (`SemiTrusted`-and-above)
 as `vision.generate_svg`.
 
 See `aivyx-ecosystem/docs/superpowers/specs/2026-09-18-aivyx-vision-v1-design.md`

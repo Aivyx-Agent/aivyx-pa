@@ -66,7 +66,10 @@ async fn main() -> ExitCode {
                     provider.clone(),
                     mold_settings.output_dir.clone(),
                 )));
-                tools.push(Arc::new(GenerateThreeDTool::new(provider)));
+                tools.push(Arc::new(GenerateThreeDTool::new(
+                    provider,
+                    mold_settings.output_dir.clone(),
+                )));
             }
             Err(e) => {
                 // [mold] is present but the provider failed to construct

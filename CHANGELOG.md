@@ -18,6 +18,12 @@ All notable changes to Aivyx are recorded here. This project adheres to
   config made from them starts without `--role`. A schedule, webhook or
   file watch with no `role` now runs as this role. For a config made
   earlier, `aivyx-pa doctor` names the line to add.
+- **`vision.generate_3d` works.** It makes a `.glb` mesh of one object,
+  from a prompt (an image of the object is generated first and kept) or
+  from an image `vision.generate_image` made, with mold's Hunyuan3D model
+  (`mold pull hunyuan3d-mini-turbo:fp16`). About half a minute per mesh,
+  untextured. Hunyuan3D's licence does not apply in the EU, the UK or
+  South Korea.
 - **`vision.upscale_image`**: enlarges an image `vision.generate_image`
   made 4x with mold's upscaler (`mold pull real-esrgan-x4plus:fp16`).
 - **`vision.generate_image` takes `count`** (1–4): that many variations

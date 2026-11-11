@@ -202,14 +202,16 @@ pub struct GenerateThreeDTool {
     id: ToolId,
     schema: Value,
     provider: Arc<dyn GenerationProvider>,
+    output_dir: PathBuf,
 }
 
 impl GenerateThreeDTool {
-    pub fn new(provider: Arc<dyn GenerationProvider>) -> Self {
+    pub fn new(provider: Arc<dyn GenerationProvider>, output_dir: PathBuf) -> Self {
         Self {
             id: ToolId::new(),
             schema: threed_input_schema(),
             provider,
+            output_dir,
         }
     }
 }
@@ -223,12 +225,16 @@ impl Tool for GenerateThreeDTool {
         "vision.generate_3d"
     }
     fn description(&self) -> &str {
-        "Generate a 3D model from a text prompt via a local generation \
-         backend. Input: `{prompt: string (required)}`. Returns `{path: \
-         string, backend: string, seed_used: integer|null, warnings: [string]}`. **Not yet \
-         implemented** -- every call currently fails with a clear error; \
-         the tool exists now so it's discoverable ahead of a future \
-         backend that implements it. Scope: `vision.generate`."
+        "Generate a 3D model (a .glb mesh, untextured) of one object via a \
+         local generation backend; takes about half a minute. Input: \
+         `{prompt: string (required), reference_image?: string, \
+         style_hint?: string, seed?: integer}`. Without `reference_image` \
+         an image of the object is generated first and kept (its path is \
+         in `warnings`). `reference_image` must be a bare filename \
+         vision.generate_image returned, showing one whole object on a \
+         plain background (a busy background becomes stray fragments). \
+         Returns `{path: string, backend: string, seed_used: integer|null, \
+         warnings: [string]}`. Scope: `vision.generate`."
     }
     fn input_schema(&self) -> &Value {
         &self.schema
@@ -242,10 +248,20 @@ impl Tool for GenerateThreeDTool {
             Ok(s) => s,
             Err(e) => return failed(self.id, format!("vision.generate_3d: {e}")),
         };
+        let reference_image = match input.get("reference_image").and_then(|v| v.as_str()) {
+            Some(filename) => {
+                match resolve_generated_file(&self.output_dir, "reference_image", filename) {
+                    Ok(path) => Some(path),
+                    Err(e) => return failed(self.id, format!("vision.generate_3d: {e}")),
+                }
+            }
+            None => None,
+        };
         let req = ThreeDRequest {
             prompt,
-            reference_image: None,
-            style_hint: None,
+            reference_image,
+            style_hint: optional_string(&input, "style_hint"),
+            seed: optional_u64(&input, "seed"),
         };
         match self.provider.generate_3d(req).await {
             Ok(asset) => ToolOutcome::Completed {
@@ -393,8 +409,20 @@ fn threed_input_schema() -> Value {
             "prompt": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Description of the 3D model to generate."
-            }
+                "description": "Description of the object to model."
+            },
+            "reference_image": {
+                "type": "string",
+                "description": "Bare filename (no path separators) of an \
+                                image vision.generate_image made, showing one \
+                                whole object on a plain background."
+            },
+            "style_hint": {
+                "type": "string",
+                "description": "A style nudge for the generated image, e.g. \
+                                \"low poly\"."
+            },
+            "seed": {"type": "integer", "minimum": 0}
         },
         "required": ["prompt"],
         "additionalProperties": false
@@ -654,7 +682,7 @@ mod tests {
     #[tokio::test]
     async fn generate_3d_tool_metadata_is_sound() {
         let provider = FakeGenerationProvider::with_3d_result(Ok(sample_asset("/tmp/x.glb")));
-        let tool = GenerateThreeDTool::new(Arc::new(provider));
+        let tool = GenerateThreeDTool::new(Arc::new(provider), std::env::temp_dir());
         assert_eq!(tool.name(), "vision.generate_3d");
         assert!(!tool.description().is_empty());
         assert_eq!(
@@ -666,7 +694,7 @@ mod tests {
     #[tokio::test]
     async fn generate_3d_returns_the_generated_asset_on_success() {
         let provider = FakeGenerationProvider::with_3d_result(Ok(sample_asset("/tmp/out/x.glb")));
-        let tool = GenerateThreeDTool::new(Arc::new(provider));
+        let tool = GenerateThreeDTool::new(Arc::new(provider), std::env::temp_dir());
         let outcome = tool
             .execute(json!({"prompt": "a small statue"}), &dummy_context())
             .await;
@@ -679,11 +707,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generate_3d_passes_a_generated_reference_and_refuses_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("lantern.png"), b"x").unwrap();
+        let provider = Arc::new(FakeGenerationProvider::with_3d_result(Ok(sample_asset(
+            "/tmp/out/x.glb",
+        ))));
+        let tool = GenerateThreeDTool::new(provider.clone(), dir.path().to_path_buf());
+        let outcome = tool
+            .execute(
+                json!({"prompt": "a lantern", "reference_image": "lantern.png", "seed": 3}),
+                &dummy_context(),
+            )
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "{outcome:?}"
+        );
+        let captured = provider.captured_3d_request().unwrap();
+        assert_eq!(
+            captured.reference_image,
+            Some(dir.path().join("lantern.png").canonicalize().unwrap())
+        );
+        assert_eq!(captured.seed, Some(3));
+
+        let outcome = tool
+            .execute(
+                json!({"prompt": "a lantern", "reference_image": "/etc/passwd"}),
+                &dummy_context(),
+            )
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Failed(_)), "{outcome:?}");
+    }
+
+    #[tokio::test]
     async fn generate_3d_fails_clearly_when_unsupported() {
         let provider = FakeGenerationProvider::with_3d_result(Err(VisionError::Unsupported(
             "3D generation via mold (Pass B is not yet implemented)",
         )));
-        let tool = GenerateThreeDTool::new(Arc::new(provider));
+        let tool = GenerateThreeDTool::new(Arc::new(provider), std::env::temp_dir());
         let outcome = tool
             .execute(json!({"prompt": "a small statue"}), &dummy_context())
             .await;

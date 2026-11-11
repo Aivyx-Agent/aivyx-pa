@@ -1,6 +1,6 @@
 //! `aivyx-vision` — the aivyx-pa tool process exposing
 //! `vision.generate_svg` (Milestone 1) and
-//! `vision.generate_image`/`vision.generate_3d` (Milestone 2 Pass A),
+//! `vision.generate_image`/`vision.upscale_image`/`vision.generate_3d`,
 //! backed by the standalone `aivyx-vision-svg`/`aivyx-vision-core`/
 //! `aivyx-vision-mold` crates. See `README.md` and
 //! `docs/superpowers/specs/2026-09-18-vision-image-3d-adoption-design.md`
