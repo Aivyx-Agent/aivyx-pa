@@ -53,6 +53,7 @@ async fn main() -> ExitCode {
             mold_url: mold_settings.mold_url.clone(),
             api_key: mold_settings.api_key.clone(),
             output_dir: mold_settings.output_dir.clone(),
+            model: mold_settings.model.clone(),
         };
         match aivyx_vision_mold::MoldProvider::new(mold_config) {
             Ok(provider) => {

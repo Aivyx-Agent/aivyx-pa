@@ -83,6 +83,9 @@ struct RawMoldConfig {
     mold_url: String,
     api_key: Option<String>,
     output_dir: Option<String>,
+    /// The mold model, for example `flux2-klein:q8`; unset uses the image
+    /// model downloaded on the mold server.
+    model: Option<String>,
 }
 
 // Hand-written so a stray `{:?}` never prints the secret (audit P14).
@@ -93,6 +96,7 @@ impl std::fmt::Debug for RawMoldConfig {
             .field("mold_url", &self.mold_url)
             .field("api_key", &"<redacted>")
             .field("output_dir", &self.output_dir)
+            .field("model", &self.model)
             .finish()
     }
 }
@@ -116,6 +120,7 @@ pub struct MoldSettings {
     pub mold_url: String,
     pub api_key: Option<String>,
     pub output_dir: PathBuf,
+    pub model: Option<String>,
 }
 
 // Hand-written: the derived `Debug` would print the key (audit P14).
@@ -126,6 +131,7 @@ impl std::fmt::Debug for MoldSettings {
             .field("mold_url", &self.mold_url)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("output_dir", &self.output_dir)
+            .field("model", &self.model)
             .finish()
     }
 }
@@ -214,6 +220,7 @@ pub fn load_config(path: &Path) -> Result<VisionConfig, ConfigFileError> {
                 mold_url: m.mold_url,
                 api_key: m.api_key,
                 output_dir,
+                model: m.model,
             })
         })
         .transpose()?;
@@ -235,6 +242,7 @@ mod tests {
             mold_url: "http://127.0.0.1:2".into(),
             api_key: Some("MOLD-SECRET-KEY".into()),
             output_dir: std::path::PathBuf::from("/tmp/x"),
+            model: None,
         };
         let shown = format!("{m:?}");
         assert!(!shown.contains("MOLD-SECRET-KEY") && shown.contains("<redacted>"), "{shown}");
@@ -344,7 +352,8 @@ mod tests {
              broker_url = \"http://127.0.0.1:8899\"\n\
              mold_url = \"http://127.0.0.1:7680\"\n\
              api_key = \"secret\"\n\
-             output_dir = \"/tmp/vision-out\"\n",
+             output_dir = \"/tmp/vision-out\"\n\
+             model = \"flux2-klein:q8\"\n",
         )
         .unwrap();
         let config = load_config(&path).unwrap();
@@ -353,6 +362,7 @@ mod tests {
         assert_eq!(mold.mold_url, "http://127.0.0.1:7680");
         assert_eq!(mold.api_key.as_deref(), Some("secret"));
         assert_eq!(mold.output_dir, PathBuf::from("/tmp/vision-out"));
+        assert_eq!(mold.model.as_deref(), Some("flux2-klein:q8"));
     }
 
     #[test]

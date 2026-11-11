@@ -40,7 +40,12 @@ broker_url = "http://127.0.0.1:8899"    # aivyx-broker
 mold_url = "http://127.0.0.1:7680"      # mold serve
 # api_key = "..."                        # optional, only if mold serve sets MOLD_API_KEY
 # output_dir = "..."                     # optional, defaults to ~/.local/share/aivyx-pa/vision/
+# model = "flux2-klein:q8"               # optional, defaults to the image model downloaded on mold serve
 ```
+
+Tested against mold 0.37. A mold in Docker or on another machine must be
+started with `--allow-direct-api` (`MOLD_ALLOW_DIRECT_API=1`); otherwise it
+refuses plain-HTTP API calls with a 426, which the tool explains.
 
 Without `[mold]`, the process still starts with just `vision.generate_svg`
 registered — this is fully backward compatible with an existing install.

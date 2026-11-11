@@ -68,6 +68,14 @@ All notable changes to Aivyx are recorded here. This project adheres to
   warning text and their chips, notices and the "forget skill" button now pass
   WCAG AA (4.5:1). Rust-coloured text uses a lighter shade in the dark
   theme.
+- **Image generation works with mold 0.37.** mold now requires the model,
+  size and step count on every request, so every `vision.generate_image`
+  call failed. They're now filled from the model's own defaults, a size
+  off the model's grid is rounded (with a note), and the vision tool's
+  `[mold]` section takes an optional `model` (unset: the image model
+  downloaded on mold). Tested against a real mold 0.37 on an RTX 4090.
+  A mold in Docker or on another machine must run with
+  `--allow-direct-api`; the error now says so.
 - **Image generation errors say what went wrong.** A busy GPU is reported
   only when the broker says so (a proxy's or another service's 503 no
   longer reads as "GPU busy"), an unknown mold model and a rejected mold
