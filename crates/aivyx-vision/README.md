@@ -61,6 +61,18 @@ paths are rejected, since this tool process has no access to the daemon's
 own fs sandbox. Without `width`/`height`, an image-to-image result keeps
 the reference's size. `strength` (0.0–1.0, image-to-image only; mold's
 default 0.75) is how far the result may move from the reference.
+`count` (1–4) makes that many variations with consecutive seeds and
+returns `{"images": [...], "failed": [string]}` instead.
+
+`vision.upscale_image` takes `{"image": "..."}`, a bare filename this
+process generated (up to 1 megapixel), enlarges it 4x with mold's
+`real-esrgan-x4plus` upscaler (`mold pull real-esrgan-x4plus:fp16`, 31 MB)
+and returns the same shape as `vision.generate_image`.
+
+Generated files carry no prompt: mold is asked not to embed it, and any
+embedded text is stripped before the file is written. mold itself still
+keeps image-to-image results and every prompt on its own machine; see
+`aivyx-vision-mold`'s README.
 
 `vision.generate_3d` takes `{"prompt": "..."}` and returns the same shape
 on success — but every call fails today with a clear error message; mold's

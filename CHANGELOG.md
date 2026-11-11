@@ -18,6 +18,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
   config made from them starts without `--role`. A schedule, webhook or
   file watch with no `role` now runs as this role. For a config made
   earlier, `aivyx-pa doctor` names the line to add.
+- **`vision.upscale_image`**: enlarges an image `vision.generate_image`
+  made 4x with mold's upscaler (`mold pull real-esrgan-x4plus:fp16`).
+- **`vision.generate_image` takes `count`** (1–4): that many variations
+  with consecutive seeds, returned as `{images, failed}`.
 - **`vision.generate_image` takes `strength`** (0.0–1.0, image-to-image
   only): how far the result may move from `reference_image`. Low keeps
   the picture, high changes more; mold's default is 0.75.
@@ -66,6 +70,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
+- **Generated images no longer carry their prompt.** mold writes the
+  prompt and settings into each image by default; pa now asks it not to
+  and strips any that arrive. Text-to-image results also no longer stay in
+  mold's own gallery (they go to its trash).
 - **Image-to-image keeps the picture's shape.** With a `reference_image`
   and no size, the result came out at the model's default size (a
   1024x768 picture came back square, its layout lost). It now keeps the

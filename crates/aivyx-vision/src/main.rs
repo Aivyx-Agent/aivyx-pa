@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use aivyx_core::Tool;
 use aivyx_vision::config::{default_config_path, load_config};
-use aivyx_vision::generation_tools::{GenerateImageTool, GenerateThreeDTool};
+use aivyx_vision::generation_tools::{GenerateImageTool, GenerateThreeDTool, UpscaleImageTool};
 use aivyx_vision::text_completer::{LlmTextCompleter, build_provider};
 use aivyx_vision::tools::GenerateSvgTool;
 
@@ -62,6 +62,10 @@ async fn main() -> ExitCode {
                     provider.clone(),
                     mold_settings.output_dir.clone(),
                 )));
+                tools.push(Arc::new(UpscaleImageTool::new(
+                    provider.clone(),
+                    mold_settings.output_dir.clone(),
+                )));
                 tools.push(Arc::new(GenerateThreeDTool::new(provider)));
             }
             Err(e) => {
@@ -71,7 +75,7 @@ async fn main() -> ExitCode {
                 // whole process over an optional capability.
                 eprintln!(
                     "aivyx-vision: failed to construct the mold provider, \
-                     vision.generate_image/vision.generate_3d will be \
+                     vision.generate_image/vision.upscale_image/vision.generate_3d will be \
                      unavailable: {e}"
                 );
             }

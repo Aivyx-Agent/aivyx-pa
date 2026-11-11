@@ -14,7 +14,10 @@ use serde_json::{Value, json};
 
 use aivyx_capability::Scope;
 use aivyx_core::{Tool, ToolContext, ToolId, ToolOutcome, Verification};
-use aivyx_vision_core::{GeneratedAsset, GenerationProvider, ImageRequest, ThreeDRequest};
+use aivyx_vision_core::{
+    GeneratedAsset, GenerationProvider, ImageRequest, MAX_VARIATIONS, ThreeDRequest,
+    UpscaleRequest, generate_variations,
+};
 
 use crate::tools::{failed, required_string};
 
@@ -48,12 +51,14 @@ impl Tool for GenerateImageTool {
         "Generate an image from a text prompt via a local image-generation \
          backend. Input: `{prompt: string (required), width?: integer, \
          height?: integer, seed?: integer, style_hint?: string, \
-         reference_image?: string, strength?: number}`. `reference_image` \
+         reference_image?: string, strength?: number, count?: integer}`. `reference_image` \
          must be a bare filename previously returned by this same tool \
          (image-to-image) -- arbitrary filesystem paths are rejected; \
          without width/height the result keeps the reference's size. \
          `strength` (0.0-1.0, image-to-image only) is how far the result \
-         may move from the reference: low keeps it, high changes more. Returns `{path: \
+         may move from the reference: low keeps it, high changes more. \
+         `count` (1-4) makes that many variations with consecutive seeds \
+         and returns `{images: [...], failed: [string]}` instead. Returns `{path: \
          string, backend: string, seed_used: integer|null, warnings: [string]}`. Scope: \
          `vision.generate`."
     }
@@ -70,10 +75,12 @@ impl Tool for GenerateImageTool {
             Err(e) => return failed(self.id, format!("vision.generate_image: {e}")),
         };
         let reference_image = match input.get("reference_image").and_then(|v| v.as_str()) {
-            Some(filename) => match resolve_reference_image(&self.output_dir, filename) {
-                Ok(path) => Some(path),
-                Err(e) => return failed(self.id, format!("vision.generate_image: {e}")),
-            },
+            Some(filename) => {
+                match resolve_generated_file(&self.output_dir, "reference_image", filename) {
+                    Ok(path) => Some(path),
+                    Err(e) => return failed(self.id, format!("vision.generate_image: {e}")),
+                }
+            }
             None => None,
         };
         let req = ImageRequest {
@@ -84,7 +91,39 @@ impl Tool for GenerateImageTool {
             seed: optional_u64(&input, "seed"),
             style_hint: optional_string(&input, "style_hint"),
             strength: optional_f32(&input, "strength"),
+            ..Default::default()
         };
+        let count = optional_u32(&input, "count").unwrap_or(1) as usize;
+        if count != 1 {
+            return match generate_variations(self.provider.as_ref(), req, count).await {
+                Err(e) => failed(self.id, format!("vision.generate_image: {e}")),
+                Ok(results) => {
+                    let (images, errors): (Vec<_>, Vec<_>) =
+                        results.into_iter().partition(|r| r.is_ok());
+                    if images.is_empty() {
+                        let first = errors.into_iter().find_map(|r| r.err());
+                        return failed(
+                            self.id,
+                            format!(
+                                "vision.generate_image: every variation failed: {}",
+                                first.map(|e| e.to_string()).unwrap_or_default()
+                            ),
+                        );
+                    }
+                    ToolOutcome::Completed {
+                        output: json!({
+                            "images": images.iter().flatten().map(asset_to_json).collect::<Vec<_>>(),
+                            "failed": errors
+                                .into_iter()
+                                .filter_map(|r| r.err())
+                                .map(|e| e.to_string())
+                                .collect::<Vec<_>>(),
+                        }),
+                        verified: Verification::NotApplicable,
+                    }
+                }
+            };
+        }
         match self.provider.generate_image(req).await {
             Ok(asset) => ToolOutcome::Completed {
                 output: asset_to_json(&asset),
@@ -95,6 +134,66 @@ impl Tool for GenerateImageTool {
                 verified: Verification::NotApplicable,
             },
             Err(e) => failed(self.id, format!("vision.generate_image: {e}")),
+        }
+    }
+}
+
+pub struct UpscaleImageTool {
+    id: ToolId,
+    schema: Value,
+    provider: Arc<dyn GenerationProvider>,
+    output_dir: PathBuf,
+}
+
+impl UpscaleImageTool {
+    pub fn new(provider: Arc<dyn GenerationProvider>, output_dir: PathBuf) -> Self {
+        Self {
+            id: ToolId::new(),
+            schema: upscale_input_schema(),
+            provider,
+            output_dir,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for UpscaleImageTool {
+    fn id(&self) -> ToolId {
+        self.id
+    }
+    fn name(&self) -> &str {
+        "vision.upscale_image"
+    }
+    fn description(&self) -> &str {
+        "Enlarge an image made by vision.generate_image four times with the \
+         local backend's upscaler, saving it as a new file. Input: `{image: \
+         string (required)}`, a bare filename previously returned by \
+         vision.generate_image, up to 1 megapixel (for example 1024x1024). \
+         Returns `{path: string, backend: string, seed_used: null, warnings: \
+         [string]}`. Scope: `vision.generate`."
+    }
+    fn input_schema(&self) -> &Value {
+        &self.schema
+    }
+    fn required_scope(&self, _input: &Value) -> Scope {
+        Scope::parse("vision.generate")
+            .expect("vision.generate must parse -- it is in aivyx-capability's KNOWN_BASES")
+    }
+    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+        let filename = match required_string(&input, "image") {
+            Ok(s) => s,
+            Err(e) => return failed(self.id, format!("vision.upscale_image: {e}")),
+        };
+        let image = match resolve_generated_file(&self.output_dir, "image", &filename) {
+            Ok(path) => path,
+            Err(e) => return failed(self.id, format!("vision.upscale_image: {e}")),
+        };
+        match self.provider.upscale_image(UpscaleRequest { image }).await {
+            Ok(asset) => ToolOutcome::Completed {
+                output: asset_to_json(&asset),
+                verified: Verification::NotApplicable,
+            },
+            Err(e) => failed(self.id, format!("vision.upscale_image: {e}")),
         }
     }
 }
@@ -198,26 +297,29 @@ fn optional_string(input: &Value, field: &str) -> Option<String> {
 /// design doc for why: this tool process has no access to the daemon's
 /// fs sandbox, so `reference_image` must never resolve outside
 /// `output_dir`.
-fn resolve_reference_image(output_dir: &Path, filename: &str) -> Result<PathBuf, String> {
+/// A bare filename this tool process generated earlier, resolved inside
+/// `output_dir`; `field` names the input it came from in errors.
+fn resolve_generated_file(
+    output_dir: &Path,
+    field: &str,
+    filename: &str,
+) -> Result<PathBuf, String> {
     if filename.is_empty() {
-        return Err("reference_image must not be empty".to_string());
+        return Err(format!("{field} must not be empty"));
     }
     if filename.contains('/') || filename.contains('\\') || filename == ".." {
-        return Err(
-            "reference_image must be a bare filename (no path separators), \
-             referencing a file this tool itself previously generated"
-                .to_string(),
-        );
+        return Err(format!(
+            "{field} must be a bare filename (no path separators), \
+                 referencing a file this tool itself previously generated"
+        ));
     }
     let canonical_output_dir = std::fs::canonicalize(output_dir)
         .map_err(|e| format!("cannot canonicalize output_dir {output_dir:?}: {e}"))?;
     let candidate = output_dir.join(filename);
     let canonical_candidate = std::fs::canonicalize(&candidate)
-        .map_err(|e| format!("reference_image {filename:?} not found in output_dir: {e}"))?;
+        .map_err(|e| format!("{field} {filename:?} not found in output_dir: {e}"))?;
     if !canonical_candidate.starts_with(&canonical_output_dir) {
-        return Err(format!(
-            "reference_image {filename:?} resolved outside output_dir"
-        ));
+        return Err(format!("{field} {filename:?} resolved outside output_dir"));
     }
     Ok(canonical_candidate)
 }
@@ -253,9 +355,33 @@ fn image_input_schema() -> Value {
                 "description": "Image-to-image only: how far the result may \
                                 move from reference_image, from 0 (keep it) \
                                 to 1 (ignore it). Default 0.75."
+            },
+            "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_VARIATIONS,
+                "description": "How many variations to make, with consecutive \
+                                seeds. Default 1."
             }
         },
         "required": ["prompt"],
+        "additionalProperties": false
+    })
+}
+
+fn upscale_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "image": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Bare filename (no path separators) of an \
+                                image vision.generate_image made, up to 1 \
+                                megapixel."
+            }
+        },
+        "required": ["image"],
         "additionalProperties": false
     })
 }
@@ -356,6 +482,104 @@ mod tests {
         assert_eq!(captured.seed, Some(7));
         assert_eq!(captured.style_hint.as_deref(), Some("watercolor"));
         assert_eq!(captured.strength, Some(0.5));
+    }
+
+    /// Answers every call with the seed it was asked for, failing the
+    /// call numbered `fail`.
+    struct Seeds {
+        calls: std::sync::Mutex<u64>,
+        fail: Option<u64>,
+    }
+
+    #[async_trait]
+    impl GenerationProvider for Seeds {
+        async fn generate_image(&self, req: ImageRequest) -> Result<GeneratedAsset, VisionError> {
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            if self.fail == Some(*calls) {
+                return Err(VisionError::GenerationTimeout);
+            }
+            Ok(GeneratedAsset {
+                seed_used: req.seed,
+                ..sample_asset(&format!("/out/{calls}.png"))
+            })
+        }
+        async fn generate_3d(&self, _: ThreeDRequest) -> Result<GeneratedAsset, VisionError> {
+            Err(VisionError::Unsupported("3D"))
+        }
+    }
+
+    #[tokio::test]
+    async fn generate_image_with_count_returns_every_variation_and_each_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Arc::new(Seeds {
+            calls: std::sync::Mutex::new(0),
+            fail: Some(2),
+        });
+        let tool = GenerateImageTool::new(provider, dir.path().to_path_buf());
+        let outcome = tool
+            .execute(
+                json!({"prompt": "a cat", "seed": 5, "count": 3}),
+                &dummy_context(),
+            )
+            .await;
+        match outcome {
+            ToolOutcome::Completed { output, .. } => {
+                let seeds: Vec<_> = output["images"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|i| i["seed_used"].clone())
+                    .collect();
+                assert_eq!(seeds, [json!(5), json!(7)]);
+                assert_eq!(output["failed"].as_array().unwrap().len(), 1);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn generate_image_refuses_a_count_over_four() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Arc::new(Seeds {
+            calls: std::sync::Mutex::new(0),
+            fail: None,
+        });
+        let tool = GenerateImageTool::new(provider, dir.path().to_path_buf());
+        let outcome = tool
+            .execute(json!({"prompt": "a cat", "count": 9}), &dummy_context())
+            .await;
+        assert!(matches!(outcome, ToolOutcome::Failed(_)), "{outcome:?}");
+    }
+
+    #[tokio::test]
+    async fn upscale_image_takes_a_generated_file_and_refuses_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.png"), b"x").unwrap();
+        let provider = Arc::new(FakeGenerationProvider::with_upscale_result(Ok(
+            sample_asset("/tmp/out/big.png"),
+        )));
+        let tool = UpscaleImageTool::new(provider.clone(), dir.path().to_path_buf());
+        assert_eq!(tool.name(), "vision.upscale_image");
+        let outcome = tool
+            .execute(json!({"image": "a.png"}), &dummy_context())
+            .await;
+        assert!(
+            matches!(outcome, ToolOutcome::Completed { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(
+            provider.captured_upscale_request().unwrap().image,
+            dir.path().join("a.png").canonicalize().unwrap()
+        );
+
+        let outcome = tool
+            .execute(json!({"image": "../secret.png"}), &dummy_context())
+            .await;
+        match outcome {
+            ToolOutcome::Failed(e) => assert!(e.to_string().contains("bare filename"), "{e}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -470,37 +694,37 @@ mod tests {
     fn resolve_reference_image_accepts_a_bare_filename_that_exists() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.png"), b"x").unwrap();
-        let resolved = resolve_reference_image(dir.path(), "a.png").unwrap();
+        let resolved = resolve_generated_file(dir.path(), "reference_image", "a.png").unwrap();
         assert_eq!(resolved, dir.path().join("a.png").canonicalize().unwrap());
     }
 
     #[test]
     fn resolve_reference_image_rejects_a_forward_slash() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(resolve_reference_image(dir.path(), "sub/a.png").is_err());
+        assert!(resolve_generated_file(dir.path(), "reference_image", "sub/a.png").is_err());
     }
 
     #[test]
     fn resolve_reference_image_rejects_a_backslash() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(resolve_reference_image(dir.path(), "sub\\a.png").is_err());
+        assert!(resolve_generated_file(dir.path(), "reference_image", "sub\\a.png").is_err());
     }
 
     #[test]
     fn resolve_reference_image_rejects_bare_dotdot() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(resolve_reference_image(dir.path(), "..").is_err());
+        assert!(resolve_generated_file(dir.path(), "reference_image", "..").is_err());
     }
 
     #[test]
     fn resolve_reference_image_rejects_an_empty_filename() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(resolve_reference_image(dir.path(), "").is_err());
+        assert!(resolve_generated_file(dir.path(), "reference_image", "").is_err());
     }
 
     #[test]
     fn resolve_reference_image_rejects_a_filename_that_does_not_exist() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(resolve_reference_image(dir.path(), "missing.png").is_err());
+        assert!(resolve_generated_file(dir.path(), "reference_image", "missing.png").is_err());
     }
 }
