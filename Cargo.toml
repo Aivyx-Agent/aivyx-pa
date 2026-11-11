@@ -365,9 +365,9 @@ aivyx-stencil = { git = "https://github.com/Aivyx-Agent/aivyx-toolbench", rev = 
 # out of lockstep with each other. No platform-specific backend, so no
 # target-gating needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "db7db07e7ac4027564ce018c454daf818e7f4768" }
-aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "db7db07e7ac4027564ce018c454daf818e7f4768" }
-aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "db7db07e7ac4027564ce018c454daf818e7f4768" }
+aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "37e35f355954f89237871f8be1704beac6b2c7d0" }
+aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "37e35f355954f89237871f8be1704beac6b2c7d0" }
+aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "37e35f355954f89237871f8be1704beac6b2c7d0" }
 
 # The profile that 'dist' will build with
 [profile.dist]

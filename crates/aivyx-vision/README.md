@@ -70,7 +70,8 @@ process generated (up to 1 megapixel), enlarges it 4x with mold's
 and returns the same shape as `vision.generate_image`.
 
 Image results also carry a small JPEG preview of each image (at most
-768 px) under the reserved `_images` key, so a model that can see images
+768 px; for `vision.generate_3d`, a render of the mesh from two angles)
+under the reserved `_images` key, so a model that can see images
 is shown what it made and can check it; the daemon removes the preview
 from the text. Set `show_model_previews = false` under `[mold]` to leave
 them out (each image shown costs roughly 600 tokens on a local model).

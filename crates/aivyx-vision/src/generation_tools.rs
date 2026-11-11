@@ -224,6 +224,7 @@ pub struct GenerateThreeDTool {
     schema: Value,
     provider: Arc<dyn GenerationProvider>,
     output_dir: PathBuf,
+    previews: bool,
 }
 
 impl GenerateThreeDTool {
@@ -233,7 +234,15 @@ impl GenerateThreeDTool {
             schema: threed_input_schema(),
             provider,
             output_dir,
+            previews: true,
         }
+    }
+
+    /// `[mold] show_model_previews` (default on): attach a render of the
+    /// mesh for a model that can see images.
+    pub fn with_model_previews(mut self, on: bool) -> Self {
+        self.previews = on;
+        self
     }
 }
 
@@ -286,7 +295,8 @@ impl Tool for GenerateThreeDTool {
         };
         match self.provider.generate_3d(req).await {
             Ok(asset) => ToolOutcome::Completed {
-                output: asset_to_json(&asset),
+                output: with_previews(asset_to_json(&asset), self.previews, [asset.path.clone()])
+                    .await,
                 verified: Verification::NotApplicable,
             },
             Err(e) => failed(self.id, format!("vision.generate_3d: {e}")),

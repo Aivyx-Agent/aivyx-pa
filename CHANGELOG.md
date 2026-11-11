@@ -23,7 +23,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
   can take images (Claude, OpenAI, `llama-server` with `--mmproj`, an
   Ollama vision model, or a routing setup with a vision route) it is
   shown after the tool result, so the agent can check its work and try
-  again. Otherwise the result says the image wasn't shown. Turn previews
+  again. For `vision.generate_3d` it sees a render of the mesh from two
+  angles. Otherwise the result says the image wasn't shown. Turn previews
   off with `show_model_previews = false` under the vision tool's `[mold]`.
   Tool processes can show images the same way (`_images`; see
   `docs/TOOL_SDK.md`).

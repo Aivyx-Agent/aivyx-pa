@@ -67,10 +67,10 @@ async fn main() -> ExitCode {
                     UpscaleImageTool::new(provider.clone(), mold_settings.output_dir.clone())
                         .with_model_previews(previews),
                 ));
-                tools.push(Arc::new(GenerateThreeDTool::new(
-                    provider,
-                    mold_settings.output_dir.clone(),
-                )));
+                tools.push(Arc::new(
+                    GenerateThreeDTool::new(provider, mold_settings.output_dir.clone())
+                        .with_model_previews(previews),
+                ));
             }
             Err(e) => {
                 // [mold] is present but the provider failed to construct
