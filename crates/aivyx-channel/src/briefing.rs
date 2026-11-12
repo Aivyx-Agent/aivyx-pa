@@ -22,6 +22,31 @@ pub const REMINDER_LOOKAHEAD_SECS: i64 = 2 * 3600;
 const DUPLICATE_RUN_SECS: i64 = 120;
 /// How many pieces of work in progress "Coming up" names.
 const IN_PROGRESS_CAP: usize = 3;
+
+/// How many scheduled runs "Coming up" lists: room for every starter
+/// routine, so the weekly digest isn't crowded out by the frequent ones
+/// (onboarding audit 3, L1).
+const UPCOMING_CAP: usize = 5;
+
+/// A routine's name as a person reads it (onboarding audit 3, L2): the
+/// starter routines in words, any other name with its dashes as spaces.
+fn routine_sentence(name: &str) -> String {
+    match name {
+        "environment-review" => "A look over its workspace".into(),
+        "nightly-reflection" => "Tidying up its memory".into(),
+        "health-check" => "A quick check that it's working".into(),
+        "weekly-digest" => "Your weekly digest".into(),
+        "trend-scan" => "A web scan for news you care about".into(),
+        other => {
+            let spaced = other.replace(['-', '_'], " ");
+            let mut chars = spaced.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => spaced,
+            }
+        }
+    }
+}
 /// Tool bases whose completed calls aren't "changes" for the log, beside
 /// read-only bases and `memory.*` (which gets its own line).
 /// - `workspace`: the assistant's own notebook; every op (read or write)
@@ -346,8 +371,12 @@ pub fn compose(f: &Facts, now: i64) -> Briefing {
     upcoming.sort_by_key(|u| u.at_unix);
     let mut coming_up: Vec<UpcomingItem> = upcoming
         .into_iter()
-        .take(3)
-        .map(|u| UpcomingItem { at_unix: Some(u.at_unix), sentence: u.name.clone(), link: "schedules".into() })
+        .take(UPCOMING_CAP)
+        .map(|u| UpcomingItem {
+            at_unix: Some(u.at_unix),
+            sentence: routine_sentence(&u.name),
+            link: "schedules".into(),
+        })
         .collect();
     coming_up.extend(f.in_progress.iter().take(IN_PROGRESS_CAP).map(|goal| UpcomingItem {
         at_unix: None,
@@ -974,11 +1003,13 @@ mod tests {
     }
 
     #[test]
-    fn coming_up_is_the_next_three_routines_then_work_in_progress() {
+    fn coming_up_is_the_next_five_routines_then_work_in_progress() {
         let mut f = base();
         f.upcoming = vec![
             UpcomingFact { name: "c".into(), at_unix: NOW + 300 },
             UpcomingFact { name: "a".into(), at_unix: NOW + 100 },
+            UpcomingFact { name: "f".into(), at_unix: NOW + 600 },
+            UpcomingFact { name: "e".into(), at_unix: NOW + 500 },
             UpcomingFact { name: "d".into(), at_unix: NOW + 400 },
             UpcomingFact { name: "b".into(), at_unix: NOW + 200 },
         ];
@@ -989,14 +1020,25 @@ mod tests {
         assert_eq!(
             s,
             vec![
-                (Some(100), "a"),
-                (Some(200), "b"),
-                (Some(300), "c"),
+                (Some(100), "A"),
+                (Some(200), "B"),
+                (Some(300), "C"),
+                (Some(400), "D"),
+                (Some(500), "E"),
                 (None, "Working on \u{201c}ship the note\u{201d}."),
             ]
         );
         assert_eq!(b.coming_up[0].link, "schedules");
-        assert_eq!(b.coming_up[3].link, "mission-control");
+        assert_eq!(b.coming_up[5].link, "mission-control");
+    }
+
+    /// Onboarding audit 3 (L2): routines read as words, not their names.
+    #[test]
+    fn routines_read_in_plain_words() {
+        assert_eq!(routine_sentence("health-check"), "A quick check that it's working");
+        assert_eq!(routine_sentence("weekly-digest"), "Your weekly digest");
+        assert_eq!(routine_sentence("water-the-plants"), "Water the plants");
+        assert_eq!(routine_sentence(""), "");
     }
 
     #[test]

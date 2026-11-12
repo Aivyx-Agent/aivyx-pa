@@ -1240,9 +1240,16 @@ fn default_charter_carries_its_invariant_pillars() {
     // untrusted data, not instructions") — a deliberate safety addition, not
     // drift. Raised again to 2150 for POLISH_WAVES.md sub-project 4's
     // one-sentence source-currency addition (measured 2091 bytes) — still a
-    // single added sentence, not renewed drift.
+    // single added sentence, not renewed drift. Raised to 2300 for
+    // onboarding audit 3 (L3): two sentences so the agent says "you" (not
+    // "the operator's files") and describes itself without tool names
+    // (its first reply listed "cron triggers, webhooks, file watches").
     assert!(
-        DEFAULT_SYSTEM_PROMPT.len() < 2150,
+        DEFAULT_SYSTEM_PROMPT.contains("never \"the operator\""),
+        "the charter says how to address the person"
+    );
+    assert!(
+        DEFAULT_SYSTEM_PROMPT.len() < 2300,
         "charter grew to {} bytes — keep the always-on base layer compact",
         DEFAULT_SYSTEM_PROMPT.len()
     );

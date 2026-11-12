@@ -6055,7 +6055,12 @@ fn select_passphrase_source(
         // First-run D5 — at a terminal a prompt follows, so say it plainly;
         // without one, keep the detail for the log.
         if io::stdin().is_terminal() {
-            eprintln!("aivyx-pa: couldn't read the OS keyring, so asking for the passphrase.");
+            // Onboarding audit 3 (L5): normal on a machine without a
+            // keyring, so say it as a fact with the way to stop being asked.
+            eprintln!(
+                "No OS keyring here, so aivyx-pa asks for your passphrase \
+                 (`aivyx-pa keyring set` saves it so you aren't asked)."
+            );
         } else {
             eprintln!("aivyx-pa: OS keyring not usable ({e}); trying other passphrase sources");
         }
@@ -11801,6 +11806,13 @@ async fn run_async(
 
             // In-process fallback (original Phase 3 path).
             let channel = LocalChannel::new("aivyx-cli", io::stdout());
+            // A person at the terminal doesn't need `[turn completed]`;
+            // piped runs keep it (scripts find a turn's end by it).
+            let channel = if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                channel.without_completion_marker()
+            } else {
+                channel
+            };
             // Chat approvals — on a terminal, a paused tool call asks here
             // (read from /dev/tty: the chat loop owns stdin). Piped input
             // can't be asked, so it keeps "reply to approve".

@@ -19,6 +19,7 @@ use aivyx_llm::ollama::{
     AUTO_NUM_CTX_CAP, DEFAULT_OLLAMA_BASE_URL, OllamaConfig, OllamaOptions, OllamaProvider,
     RECOMMENDED_LOCAL_MODEL,
 };
+use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
 use aivyx_llm::{LlmMessage, LlmProvider, LlmRequest, LlmStreamEvent, LlmToolDescriptor};
 
 /// The operator's `aivyx-pa.toml` — see `aivyx_config::resolve_config_path`.
@@ -643,7 +644,61 @@ async fn test_generation(base_url: &str, model: &str) -> Result<String, String> 
             .with_options(OllamaOptions::default()),
     )
     .map_err(|e| format!("build provider: {e}"))?;
+    reply_from(&provider, model, false).await
+}
 
+/// Onboarding audit 3 (L6) — one real reply from a local OpenAI-compatible
+/// server (llama.cpp, Jan, Lemonade, Docker Model Runner) through the
+/// provider a turn uses, so "ready" means the model answers, not only that
+/// the server is up. Asked to answer without reasoning first, so a thinking
+/// model's reply fits the small budget.
+async fn openai_test_generation(
+    base_url: &str,
+    model: &str,
+    api_key: Option<&str>,
+) -> Result<String, String> {
+    let config = match api_key {
+        Some(key) => OpenAiConfig::new(key.to_string()),
+        None => OpenAiConfig::without_api_key(),
+    }
+    .with_base_url(base_url.to_string());
+    let provider = OpenAiProvider::new(config).map_err(|e| format!("build provider: {e}"))?;
+    reply_from(&provider, model, true).await
+}
+
+/// Report an OpenAI-compatible server's test reply; true when it answered.
+fn report_test_reply(reply: Result<String, String>) -> bool {
+    match reply {
+        Ok(text) if !text.trim().is_empty() => {
+            pass(&format!("the model answers: \"{}\"", truncate(&text, 60)));
+            true
+        }
+        Ok(_) => {
+            fail(
+                "the model returned an EMPTY reply",
+                "The server is up but the model said nothing: try another model, or see \
+                 the server's log.",
+            );
+            false
+        }
+        Err(e) => {
+            fail(
+                &format!("the model didn't answer: {e}"),
+                "The server is up but the model didn't reply: check that it loads (the \
+                 server's log says why).",
+            );
+            false
+        }
+    }
+}
+
+/// The test request every check sends: one short user message, with a
+/// dummy tool so the request has a real turn's shape.
+async fn reply_from(
+    provider: &dyn LlmProvider,
+    model: &str,
+    no_thinking: bool,
+) -> Result<String, String> {
     // A dummy tool makes the request shape match a real agent turn (the
     // empty-content bug only shows when `tools` is present).
     let tools = vec![LlmToolDescriptor {
@@ -662,7 +717,7 @@ async fn test_generation(base_url: &str, model: &str) -> Result<String, String> 
         id_slot: None,
         slot_hint: None,
         route: None,
-        no_thinking: false,
+        no_thinking,
     };
 
     let token = aivyx_core::CancellationToken::new();
@@ -773,9 +828,9 @@ async fn check_lemonade_at(base_url: &str, model: &str) -> bool {
                     "  loaded now: `{id}` — Lemonade holds one LLM at a time, so the \
                      first turn swaps to `{model}`"
                 ),
-                None => println!("  no model loaded yet — the first turn loads `{model}`"),
+                None => println!("  no model loaded yet — loading `{model}` for a test reply"),
             }
-            true
+            report_test_reply(openai_test_generation(base_url, model, None).await)
         }
     }
 }
@@ -911,7 +966,7 @@ async fn check_local_openai_server_at(
             if let Some(note) = note {
                 println!("  {note}");
             }
-            true
+            report_test_reply(openai_test_generation(base_url, model, api_key).await)
         }
     }
 }
@@ -1752,6 +1807,26 @@ mod tests {
             }
         });
         format!("http://{addr}")
+    }
+
+    /// Onboarding audit 3 (L6): a server that lists the model but whose
+    /// model doesn't answer is not "ready"; one that answers is.
+    #[tokio::test]
+    async fn a_local_server_is_ready_only_when_its_model_answers() {
+        let models = r#"{"data":[{"id":"m"}]}"#.to_string();
+        let sse = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"}}]}\n\n\
+                   data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+                   data: [DONE]\n\n"
+            .to_string();
+        let answers = serve_canned(vec![("200 OK", models.clone()), ("200 OK", sse)]).await;
+        assert!(check_local_openai_server_at(ProviderKind::LlamaCpp, &answers, "m", None).await);
+
+        let broken = serve_canned(vec![
+            ("200 OK", models),
+            ("500 Internal Server Error", r#"{"error":"failed to load model"}"#.to_string()),
+        ])
+        .await;
+        assert!(!check_local_openai_server_at(ProviderKind::LlamaCpp, &broken, "m", None).await);
     }
 
     #[tokio::test]

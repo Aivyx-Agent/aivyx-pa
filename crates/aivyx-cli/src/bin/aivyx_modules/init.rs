@@ -1842,7 +1842,7 @@ fn routines_question_intro(web_search: bool) -> String {
          \x20 • on Mondays, a short digest of the week",
     );
     if web_search {
-        text.push_str("\n  • each morning, a web scan of your interests");
+        text.push_str("\n  • each morning, a web scan for news on what you've said you use it for");
     }
     text.push_str("\nYou can change or turn off any of them later in aivyx-pa.toml.");
     text
@@ -3153,8 +3153,11 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
 
     // 3b. Where a local server lives: the probed address when it answered,
     // otherwise ask (it may run elsewhere, or not be started yet).
+    // Docker Model Runner stands in for llama.cpp, but a llama-server on
+    // another port may be the one meant: ask, with DMR's address as the
+    // default.
     let server_base = if provider.is_local_server() {
-        Some(if detected.contains(&provider) {
+        Some(if detected.contains(&provider) && !(via_dmr && provider == Provider::LlamaCpp) {
             normalize_server_base(probes.base_for(provider).unwrap_or_default())
         } else {
             prompt_server_base_url(provider, &probes, &mut reader, &mut writer)?
@@ -3250,6 +3253,35 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
             .await?
         }
     };
+
+    // 4b. Who it's for, asked right after the model (onboarding audit 3,
+    // L1): before the paths and routines, so setup starts with the person
+    // and the routines' "your interests" come after they've been asked.
+    // Profile bootstrap (Phase 57, PRODUCT.md P13). Q4(c)
+    // resolution at sign-off: three short prompts seeding the
+    // operator's identity layer with a usable starting point.
+    // Each prompt is **opt-in** — blank input means "skip, leave
+    // this field unset" when no template is supplied, or "keep
+    // the template's default" when one is.
+    // Phase 181 — the guided identity builder. A provider is
+    // constructed for the optional LLM-assisted draft; `None`
+    // falls back to the guided manual prompts (local-first — the
+    // builder never requires an LLM).
+    let draft_provider =
+        build_wizard_provider(provider, api_key.as_deref(), server_base.as_deref());
+    let identity = confirm_identity(
+        &mut reader,
+        &mut writer,
+        draft_provider.as_ref(),
+        &model,
+        &template_defaults,
+    )
+    .await?;
+
+    // Chapter W — optionally seed a starting Persona/Skills set. X.4 — the same
+    // wizard provider that drafts the identity can draft the seed.
+    let persona_seed =
+        collect_persona_seed(&mut reader, &mut writer, draft_provider.as_ref(), &model).await?;
 
     // 5. Paths — show defaults, allow overrides. Phase 66:
     // template-supplied paths take precedence over the
@@ -3386,32 +3418,6 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     } else {
         false
     };
-
-    // 5c. Profile bootstrap (Phase 57, PRODUCT.md P13). Q4(c)
-    // resolution at sign-off: three short prompts seeding the
-    // operator's identity layer with a usable starting point.
-    // Each prompt is **opt-in** — blank input means "skip, leave
-    // this field unset" when no template is supplied, or "keep
-    // the template's default" when one is.
-    // Phase 181 — the guided identity builder. A provider is
-    // constructed for the optional LLM-assisted draft; `None`
-    // falls back to the guided manual prompts (local-first — the
-    // builder never requires an LLM).
-    let draft_provider =
-        build_wizard_provider(provider, api_key.as_deref(), server_base.as_deref());
-    let identity = confirm_identity(
-        &mut reader,
-        &mut writer,
-        draft_provider.as_ref(),
-        &model,
-        &template_defaults,
-    )
-    .await?;
-
-    // Chapter W — optionally seed a starting Persona/Skills set. X.4 — the same
-    // wizard provider that drafts the identity can draft the seed.
-    let persona_seed =
-        collect_persona_seed(&mut reader, &mut writer, draft_provider.as_ref(), &model).await?;
 
     // Chapter Engram — set up the embedding provider so semantic memory works
     // from first boot (pulls the local embedding model on the Ollama path).
@@ -4567,7 +4573,7 @@ email customers without asking
         let with = routines_question_intro(true);
         let without = routines_question_intro(false);
         assert!(with.contains("  • each night, tidying up its memory"), "{with}");
-        assert!(with.contains("web scan of your interests"), "{with}");
+        assert!(with.contains("web scan for news on what you've said you use it for"), "{with}");
         assert!(!without.contains("web scan"), "{without}");
     }
 

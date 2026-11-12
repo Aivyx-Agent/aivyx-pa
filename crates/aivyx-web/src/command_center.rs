@@ -67,6 +67,43 @@ pub fn empty_log_line(b: &Briefing) -> &'static str {
 /// The spend instrument and whether it should warn (≥ 80 % of the day cap).
 /// `untracked`: some model used in the window has no known price, so `spend`
 /// is a lower bound — shown as `$0.42+` rather than `$0.42`.
+/// The model's context window in the strip: words, not "ctx" (onboarding
+/// audit 3, L2); nothing when it's the server's own default.
+pub fn context_reading(num_ctx: Option<u32>) -> String {
+    num_ctx
+        .map(|n| format!(" · {}k context", n / 1024))
+        .unwrap_or_default()
+}
+
+/// What it remembers, in the strip: "nothing remembered yet" rather
+/// than "0 topics".
+pub fn memory_reading(topics: Option<u64>) -> String {
+    match topics {
+        None => "memory —".into(),
+        Some(0) => "nothing remembered yet".into(),
+        Some(1) => "remembers 1 topic".into(),
+        Some(n) => format!("remembers {n} topics"),
+    }
+}
+
+/// The audit log's state in the strip, with a tooltip saying what it
+/// means: (label, bad, title).
+pub fn log_reading(chain_ok: Option<bool>) -> (&'static str, bool, &'static str) {
+    match chain_ok {
+        Some(true) => (
+            "◆ record intact",
+            false,
+            "The record of everything your assistant does is complete and unaltered.",
+        ),
+        Some(false) => (
+            "◆ record altered",
+            true,
+            "The record of what your assistant did doesn't check out: something changed it.",
+        ),
+        None => ("◆ record …", false, "Checking the record of what your assistant did."),
+    }
+}
+
 pub fn spend_reading(spend: Option<f64>, per_day: Option<f64>, untracked: bool) -> (String, bool) {
     let plus = if untracked { "+" } else { "" };
     match (spend, per_day) {
@@ -221,11 +258,7 @@ fn InstrumentStrip(
     // The model reads as its short name (file stem); the full id is the tooltip.
     let (model, ctx, model_title) = match &dashboard.settings {
         Some(s) => {
-            let ctx = s
-                .num_ctx
-                .map(|n| format!("{}k ctx", n / 1024))
-                .unwrap_or_else(|| "default ctx".into());
-            (crate::routing::short_model_name(&s.model), format!(" · {ctx}"), s.model.clone())
+            (crate::routing::short_model_name(&s.model), context_reading(s.num_ctx), s.model.clone())
         }
         None => ("model —".to_string(), String::new(), String::new()),
     };
@@ -238,16 +271,8 @@ fn InstrumentStrip(
     } else {
         ""
     };
-    let memory = briefing
-        .as_ref()
-        .and_then(|b| b.memory_topics)
-        .map(|n| format!("{n} topics"))
-        .unwrap_or_else(|| "memory —".into());
-    let (chain, chain_bad) = match dashboard.chain_ok {
-        Some(true) => ("◆ chain sealed", false),
-        Some(false) => ("◆ chain broken", true),
-        None => ("◆ chain …", false),
-    };
+    let memory = memory_reading(briefing.as_ref().and_then(|b| b.memory_topics));
+    let (chain, chain_bad, chain_title) = log_reading(dashboard.chain_ok);
     rsx! {
         div { class: "cc-strip",
             button {
@@ -268,6 +293,7 @@ fn InstrumentStrip(
             button { class: "cc-reading", onclick: move |_| go(view, "memory"), "{memory}" }
             button {
                 class: if chain_bad { "cc-reading bad" } else { "cc-reading" },
+                title: "{chain_title}",
                 onclick: move |_| go(view, "audit"),
                 "{chain}"
             }
@@ -626,6 +652,17 @@ mod tests {
             ("$0.42 of $2.00 · 24 h".to_string(), false)
         );
         assert!(spend_reading(Some(1.6), Some(2.0), false).1);
+    }
+
+    #[test]
+    fn the_strip_reads_in_plain_words() {
+        assert_eq!(context_reading(None), "");
+        assert_eq!(context_reading(Some(32768)), " · 32k context");
+        assert_eq!(memory_reading(Some(0)), "nothing remembered yet");
+        assert_eq!(memory_reading(Some(1)), "remembers 1 topic");
+        assert_eq!(memory_reading(Some(7)), "remembers 7 topics");
+        assert_eq!(log_reading(Some(true)).0, "◆ record intact");
+        assert!(log_reading(Some(false)).1);
     }
 
     #[test]

@@ -72,6 +72,10 @@ pub struct LocalChannel<W: Write + Send + 'static> {
     /// final message adds (notes the agent appends after the model's
     /// reply, a message no stream carried) without repeating the rest.
     streamed: Arc<Mutex<String>>,
+    /// Print `[turn completed]` after a reply. Scripts reading piped
+    /// output use it to find a turn's end; a person at a terminal doesn't
+    /// need it (onboarding audit 3, L3). Other outcomes always say so.
+    completion_marker: bool,
 }
 
 /// Answers an approval prompt for [`LocalChannel`].
@@ -91,7 +95,15 @@ impl<W: Write + Send + 'static> LocalChannel<W> {
             writer: Arc::new(Mutex::new(writer)),
             approver: None,
             streamed: Arc::default(),
+            completion_marker: true,
         }
+    }
+
+    /// Leave out the `[turn completed]` line after a reply (a person is
+    /// reading, not a script); a blank line separates turns instead.
+    pub fn without_completion_marker(mut self) -> Self {
+        self.completion_marker = false;
+        self
     }
 
     /// Let this channel ask the operator to approve paused tool calls.
@@ -184,8 +196,12 @@ impl<W: Write + Send + 'static> ChannelContext for LocalChannel<W> {
             writeln!(writer, "\n{rest}")
                 .map_err(|e| ChannelError::Send(format!("LocalChannel finalize failed: {e}")))?;
         }
-        render_finalize(RenderMode::Human, &mut *writer, outcome)
-            .map_err(|e| ChannelError::Send(format!("LocalChannel finalize failed: {e}")))?;
+        if !self.completion_marker && matches!(outcome, TurnOutcome::Completed { .. }) {
+            writeln!(writer)
+        } else {
+            render_finalize(RenderMode::Human, &mut *writer, outcome)
+        }
+        .map_err(|e| ChannelError::Send(format!("LocalChannel finalize failed: {e}")))?;
         writer
             .flush()
             .map_err(|e| ChannelError::Send(format!("LocalChannel flush failed: {e}")))?;
@@ -394,6 +410,30 @@ mod tests {
         channel.stream_event(StreamEvent::Text("All streamed.")).await.unwrap();
         channel.finalize(&completed("All streamed.")).await.unwrap();
         assert_eq!(read_output(&handle).matches("All streamed.").count(), 1);
+    }
+
+    /// Onboarding audit 3 (L3): at a terminal a reply ends without the
+    /// `[turn completed]` line; other outcomes still say what happened.
+    #[tokio::test]
+    async fn a_terminal_chat_has_no_completed_marker() {
+        let (channel, handle) = mem_channel();
+        let channel = channel.without_completion_marker();
+        channel.stream_event(StreamEvent::Text("hi")).await.unwrap();
+        channel
+            .finalize(&TurnOutcome::Completed {
+                final_message: "hi".into(),
+                tool_calls_made: 0,
+                duration: std::time::Duration::from_millis(1),
+            })
+            .await
+            .unwrap();
+        channel
+            .finalize(&TurnOutcome::Cancelled { tool_calls_made: 0 })
+            .await
+            .unwrap();
+        let out = read_output(&handle);
+        assert!(!out.contains("[turn completed]"), "{out:?}");
+        assert!(out.contains("[turn cancelled]"), "{out:?}");
     }
 
     #[tokio::test]

@@ -46,6 +46,29 @@ All notable changes to Aivyx are recorded here. This project adheres to
 - **INSTALL.md no longer recommends `cargo install aivyx-channel`**, which
   can't work (no Aivyx crate is on crates.io); the embedded-provider and
   voice builds install from a clone.
+- **Setup starts with you.** `aivyx-pa init` asks who the assistant is
+  for right after the model, before the access level, folders and
+  routines, so the routines' morning web scan comes after you've said
+  what you use it for.
+- **"Ready" means the model answers.** For llama.cpp, Jan, Lemonade and
+  Docker Model Runner, setup's closing check and `aivyx-pa doctor` now
+  ask the model for a short reply instead of only checking that the
+  server is up (Ollama's check already did).
+- **The assistant talks to you as "you".** Its charter used to call you
+  "the operator", and its replies did too ("the operator's files"); it
+  now says "you" and describes what it can do in everyday words rather
+  than tool names.
+- **No `[turn completed]` line after each reply in a terminal chat.**
+  Piped and scripted runs keep it, since scripts use it to find the end
+  of a turn; other outcomes (cancelled, failed, timed out) still say so.
+- **The Studio's first screen reads in plain words**: "32k context"
+  (nothing for the server's default), "nothing remembered yet" /
+  "remembers 7 topics", and "record intact" for the audit log, with a
+  tooltip. "Coming up" lists up to five runs, with the starter routines
+  in words ("Your weekly digest") instead of their names.
+- **A calmer message without a keyring**: "No OS keyring here, so
+  aivyx-pa asks for your passphrase" with how to store it, instead of
+  "couldn't read the OS keyring".
 - **The installer says what to do when `aivyx-pa` isn't found yet**
   (open a new terminal), since its "Next" line comes before the PATH
   note.
