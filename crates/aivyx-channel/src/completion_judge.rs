@@ -194,6 +194,7 @@ impl CompletionJudge {
         id_slot: None,
         slot_hint: None,
         route,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let text = match self.provider.chat_stream(request, &cancel).await {

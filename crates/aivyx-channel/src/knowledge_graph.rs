@@ -609,6 +609,7 @@ impl GraphExtractor {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let token = CancellationToken::new();
         let Ok(mut stream) = self.provider.chat_stream(request, &token).await else {

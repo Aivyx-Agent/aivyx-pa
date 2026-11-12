@@ -65,7 +65,10 @@ pub struct DraftedProfile {
     pub behavioral_constraints: Vec<String>,
 }
 
-const DRAFT_MAX_TOKENS: u32 = 1024;
+/// Room for the draft. A thinking model reasons before it answers, inside
+/// this same budget: at 1024 Qwen3.5-9B was cut off before writing a word
+/// (onboarding audit 3, 2026-11-12).
+const DRAFT_MAX_TOKENS: u32 = 4096;
 
 /// The system prompt. Conservative + format-pinned so the parser
 /// has a deterministic shape to read. The model drafts; it never
@@ -182,6 +185,7 @@ pub async fn draft_identity(
     id_slot: None,
     slot_hint: None,
     route: None,
+    no_thinking: true,
     };
     let cancel = CancellationToken::new();
     let mut stream = provider.chat_stream(request, &cancel).await.ok()?;

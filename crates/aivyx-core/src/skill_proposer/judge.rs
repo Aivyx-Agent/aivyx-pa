@@ -828,6 +828,7 @@ pub async fn judge(
         id_slot: None,
         slot_hint: None,
         route,
+        no_thinking: false,
     };
 
     let mut stream = provider.chat_stream(llm_request, cancellation).await?;

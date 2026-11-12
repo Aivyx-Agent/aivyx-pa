@@ -805,6 +805,7 @@ mod tests {
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         }
     }
 
@@ -975,6 +976,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let messages = body["messages"].as_array().unwrap();
@@ -1038,6 +1040,7 @@ mod tests {
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let body = build_request_body(&req, &OllamaOptions::default(), false, None).unwrap();
         let opts = body["options"].as_object().unwrap();
@@ -1060,6 +1063,7 @@ mod tests {
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let options = OllamaOptions {
             num_ctx: Some(8192),
@@ -1085,6 +1089,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let err =
             build_request_body(&req, &OllamaOptions::default(), false, None).unwrap_err();
@@ -1243,6 +1248,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1322,6 +1328,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         // Would be Err without the retry; the second attempt succeeds.
@@ -1427,6 +1434,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1470,6 +1478,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let _ = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1500,6 +1509,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let _ = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1532,6 +1542,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1579,6 +1590,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1628,6 +1640,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1671,6 +1684,7 @@ mod tests {
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let _ = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1751,6 +1765,7 @@ mod tests {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();

@@ -197,6 +197,7 @@ impl RecallJudge for LlmRecallJudge {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         // Non-cancellable token: the consolidation pass is on
         // a reflection cron, not an interactive turn (Phase 87

@@ -55,6 +55,7 @@ async fn final_message_against_real_api() {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
     };
 
     let cancel = CancellationToken::new();

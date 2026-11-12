@@ -662,6 +662,7 @@ async fn test_generation(base_url: &str, model: &str) -> Result<String, String> 
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
     };
 
     let token = aivyx_core::CancellationToken::new();

@@ -269,6 +269,7 @@ pub async fn draft_team_template(
     id_slot: None,
     slot_hint: None,
     route: None,
+    no_thinking: true,
     };
     let cancel = CancellationToken::new();
     let mut stream = provider.chat_stream(request, &cancel).await.ok()?;

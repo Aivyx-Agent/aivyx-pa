@@ -64,6 +64,7 @@ pub async fn decompose_goal(
     id_slot: None,
     slot_hint: None,
     route,
+    no_thinking: false,
     };
 
     let mut stream = provider

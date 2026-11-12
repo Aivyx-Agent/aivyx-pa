@@ -1511,6 +1511,7 @@ mod tests {
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let _ = provider
             .chat_stream(request, &aivyx_core::CancellationToken::new())

@@ -92,6 +92,7 @@ impl TextCompleter for LlmTextCompleter {
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         // One-shot, non-interactive call -- nothing to cancel from a
         // human-facing loop, so a token that's never triggered is

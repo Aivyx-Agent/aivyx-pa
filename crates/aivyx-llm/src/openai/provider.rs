@@ -206,7 +206,12 @@ impl LlmProvider for OpenAiProvider {
         // and only when the operator enabled it (llama.cpp-family).
         let constrain = self.config.constrain_tool_calls && !request.tools.is_empty();
         let body =
-            build_request_body(&request, self.config.include_stream_usage, constrain)?;
+            build_request_body(
+                &request,
+                self.config.include_stream_usage,
+                constrain,
+                self.base_url() != DEFAULT_BASE_URL,
+            )?;
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| LlmError::Parse(format!("request serialization: {e}")))?;
 
@@ -254,10 +259,13 @@ impl LlmProvider for OpenAiProvider {
 // Request-body construction
 // ---------------------------------------------------------------------------
 
+/// `local_server`: not OpenAI's own API, whose strict schema rejects the
+/// llama.cpp extensions this may add.
 fn build_request_body(
     request: &LlmRequest<'_>,
     include_stream_usage: bool,
     constrain: bool,
+    local_server: bool,
 ) -> Result<Value, LlmError> {
     if request.model.is_empty() {
         return Err(LlmError::UnknownModel(String::new()));
@@ -285,6 +293,13 @@ fn build_request_body(
 
     if include_stream_usage {
         body["stream_options"] = json!({"include_usage": true});
+    }
+
+    // Answer without reasoning first (llama.cpp's chat-template switch,
+    // which Qwen3-family templates read; others ignore it). Never sent to
+    // OpenAI itself.
+    if request.no_thinking && local_server {
+        body["chat_template_kwargs"] = json!({"enable_thinking": false});
     }
 
     if constrain {
@@ -798,6 +813,7 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -853,6 +869,7 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -897,6 +914,7 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -951,6 +969,7 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         }
     }
 
@@ -1082,8 +1101,9 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
-        let body = build_request_body(&req, true, false).unwrap();
+        let body = build_request_body(&req, true, false, true).unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[0]["content"], "you are helpful");
@@ -1108,8 +1128,9 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
-        let body = build_request_body(&req, true, false).unwrap();
+        let body = build_request_body(&req, true, false, true).unwrap();
         let tool_arr = body["tools"].as_array().unwrap();
         assert_eq!(tool_arr.len(), 1);
         assert_eq!(tool_arr[0]["type"], "function");
@@ -1143,8 +1164,9 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
-        let body = build_request_body(&req, false, true).unwrap();
+        let body = build_request_body(&req, false, true, true).unwrap();
 
         // The grammar is present as `json_schema` (a oneOf union)…
         assert!(body.get("json_schema").is_some(), "json_schema injected");
@@ -1200,6 +1222,7 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1247,6 +1270,7 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1337,8 +1361,9 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
-        let body = build_request_body(&req, false, false).unwrap();
+        let body = build_request_body(&req, false, false, true).unwrap();
         assert!(
             body.get("stream_options").is_none(),
             "stream_options must be absent when include_stream_usage is false: {body}"
@@ -1358,8 +1383,9 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
-        let body = build_request_body(&req, true, false).unwrap();
+        let body = build_request_body(&req, true, false, true).unwrap();
         assert!(
             body.get("stream_options").is_some(),
             "stream_options must be present when include_stream_usage is true: {body}"
@@ -1533,6 +1559,7 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = provider.chat_stream(req, &cancel).await.unwrap();
@@ -1553,6 +1580,32 @@ data: [DONE]\n\n";
         }
     }
 
+    /// Onboarding audit 3: the setup wizard's drafts ask a thinking model
+    /// to answer without reasoning; only local servers get the switch.
+    #[test]
+    fn no_thinking_sets_the_chat_template_switch_for_local_servers_only() {
+        let messages: Vec<LlmMessage> = vec![];
+        let tools: Vec<LlmToolDescriptor> = vec![];
+        let request = |no_thinking| LlmRequest {
+            model: "m",
+            system: None,
+            messages: &messages,
+            tools: &tools,
+            max_tokens: 100,
+            temperature: None,
+            id_slot: None,
+            slot_hint: None,
+            route: None,
+            no_thinking,
+        };
+        let local = build_request_body(&request(true), true, false, true).unwrap();
+        assert_eq!(local["chat_template_kwargs"], json!({"enable_thinking": false}));
+        let openai = build_request_body(&request(true), true, false, false).unwrap();
+        assert!(openai.get("chat_template_kwargs").is_none());
+        let normal = build_request_body(&request(false), true, false, true).unwrap();
+        assert!(normal.get("chat_template_kwargs").is_none());
+    }
+
     #[test]
     fn build_request_body_omits_id_slot_when_none() {
         let messages: Vec<LlmMessage> = vec![];
@@ -1567,8 +1620,9 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
-        let body = build_request_body(&request, true, false).unwrap();
+        let body = build_request_body(&request, true, false, true).unwrap();
         assert!(body.get("id_slot").is_none(), "id_slot must be omitted entirely when None");
     }
 
@@ -1586,8 +1640,9 @@ data: [DONE]\n\n";
             id_slot: Some(2),
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
-        let body = build_request_body(&request, true, false).unwrap();
+        let body = build_request_body(&request, true, false, true).unwrap();
         assert_eq!(body["id_slot"], serde_json::json!(2));
     }
 
@@ -1605,8 +1660,9 @@ data: [DONE]\n\n";
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         };
-        let body = build_request_body(&request, true, false).unwrap();
+        let body = build_request_body(&request, true, false, true).unwrap();
         assert!(
             body.get("aivyx_slot_hint").is_none(),
             "aivyx_slot_hint must be omitted entirely when None -- a request without it \
@@ -1634,8 +1690,9 @@ data: [DONE]\n\n";
                 preferred_slot: Some(2),
             }),
             route: None,
+            no_thinking: false,
         };
-        let body = build_request_body(&request, true, false).unwrap();
+        let body = build_request_body(&request, true, false, true).unwrap();
         assert_eq!(
             body["aivyx_slot_hint"],
             serde_json::json!({"prefix_hash": "abc123", "preferred_slot": 2}),

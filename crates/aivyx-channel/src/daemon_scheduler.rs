@@ -103,6 +103,7 @@ pub fn llm_probe(provider: Arc<dyn aivyx_llm::LlmProvider>, model: String) -> Mo
                     id_slot: None,
                     slot_hint: None,
                     route: None,
+                    no_thinking: false,
                 };
                 let cancel = CancellationToken::new();
                 let Ok(mut stream) = provider.chat_stream(request, &cancel).await else {

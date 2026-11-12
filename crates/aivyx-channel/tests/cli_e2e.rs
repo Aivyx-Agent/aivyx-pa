@@ -859,6 +859,7 @@ async fn in_process_repl_prints_routing_line_once_while_unchanged() {
         temperature: None,
         id_slot: None,
         slot_hint: None,
+        no_thinking: false,
         route: Some(RouteHint {
             task: TaskKind::Chat,
             session: Some(session_id.clone()),

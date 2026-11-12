@@ -994,6 +994,7 @@ impl LlmPlanner {
                 // always `None` here.
                 slot_hint: None,
                 route: None,
+                no_thinking: false,
             };
             let cancellation = crate::CancellationToken::new();
             let provider = self.provider.clone();
@@ -1208,6 +1209,7 @@ impl LlmPlanner {
             // Tagged only when `with_routing` was called (the daemon's
             // conversational planners); otherwise untagged, per the
             // "untagged ⇒ unchanged" compatibility invariant.
+            no_thinking: false,
             route: self.routing.as_ref().map(|(_, task)| aivyx_llm::RouteHint {
                 task: task.clone(),
                 session: self.route_session.clone(),

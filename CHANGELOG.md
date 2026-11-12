@@ -5,6 +5,19 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **The setup wizard's identity draft works with local thinking
+  models.** With Qwen3.5 and similar, the draft was cut off while the
+  model was still reasoning, and the wizard said it "couldn't reach the
+  model" and asked the same questions again. The setup drafts now ask a
+  local server to answer without reasoning first, so a draft arrives in
+  seconds. If a draft still fails, the message says so plainly and every
+  answer you gave comes back as the default to keep with Enter.
+- **The installer says what to do when `aivyx-pa` isn't found yet**
+  (open a new terminal), since its "Next" line comes before the PATH
+  note.
+
 ## [0.21.1] — 2026-11-12
 
 ### Fixed

@@ -419,6 +419,13 @@ pub struct LlmRequest<'a> {
     /// `RoutedProvider` forwards the request to the configured provider
     /// unchanged, `model` included.
     pub route: Option<RouteHint>,
+    /// Ask the model to answer without reasoning first. For short,
+    /// structured calls (the setup wizard's drafts): a thinking model
+    /// otherwise spends the whole `max_tokens` budget reasoning and is cut
+    /// off before it answers (onboarding audit 3, 2026-11-12). Honoured
+    /// where the server supports it (llama.cpp-style servers'
+    /// `chat_template_kwargs.enable_thinking`); ignored elsewhere.
+    pub no_thinking: bool,
 }
 
 /// See [`LlmRequest::route`].
@@ -879,6 +886,7 @@ mod tests {
             id_slot: None,
             slot_hint: None,
             route: None,
+            no_thinking: false,
         }
     }
 

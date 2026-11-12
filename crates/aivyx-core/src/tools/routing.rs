@@ -630,6 +630,7 @@ mod routing_tool_tests {
             temperature: None,
             id_slot: None,
             slot_hint: None,
+            no_thinking: false,
             route: Some(RouteHint {
                 task: TaskKind::Plan,
                 session: Some(session.to_string()),

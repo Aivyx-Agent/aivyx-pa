@@ -3869,6 +3869,7 @@ mod routing_visibility {
                 temperature: None,
                 id_slot: None,
                 slot_hint: None,
+                no_thinking: false,
                 route: Some(RouteHint {
                     task: TaskKind::Chat,
                     session: Some(channel.session_id().to_string()),

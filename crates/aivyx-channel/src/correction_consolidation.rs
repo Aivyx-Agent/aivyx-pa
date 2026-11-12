@@ -309,6 +309,7 @@ impl TopicPhraser for LlmTopicPhraser {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream =

@@ -2055,6 +2055,9 @@ async fn run_identity_builder(
             writer,
         )?;
 
+    // Answers from the assisted path when its draft didn't work out: the
+    // manual questions offer them, so nothing the person said is lost.
+    let mut kept: Option<IdentityAnswers> = None;
     if assisted {
         let answers = IdentityAnswers {
             intent: prompt_line(
@@ -2112,19 +2115,24 @@ async fn run_identity_builder(
                 return review_draft(reader, writer, draft);
             }
             DraftOutcome::Skipped => {
-                w(writer, "\nSkipped the draft. Let's do it together instead.")?;
+                w(
+                    writer,
+                    "\nSkipped the draft. Let's do it together instead; \
+                     I've kept your answers.",
+                )?;
             }
             DraftOutcome::Failed => {
                 w(
                     writer,
-                    "\n(I couldn't reach the model for a draft — \
-                     let's do it together instead.)",
+                    "\n(The model didn't give a usable draft. Let's do it \
+                     together instead; I've kept your answers.)",
                 )?;
             }
         }
+        kept = Some(answers);
     }
 
-    manual_identity(reader, writer, defaults)
+    manual_identity(reader, writer, defaults, kept.as_ref())
 }
 
 /// Review/edit a drafted profile field-by-field. The operator is
@@ -2209,13 +2217,22 @@ fn manual_identity(
     reader: &mut dyn BufRead,
     writer: &mut dyn IoWrite,
     defaults: &TemplateDefaults,
+    answers: Option<&IdentityAnswers>,
 ) -> Result<IdentityFields, String> {
     writeln!(
         writer,
-        "\nLet's set up the identity together (press Enter to skip \
-         any line):"
+        "\nLet's set up the identity together (press Enter to {} \
+         any line):",
+        if answers.is_some() { "keep the answer in brackets on" } else { "skip" }
     )
     .map_err(|e| format!("write error: {e}"))?;
+
+    let said = |pick: fn(&IdentityAnswers) -> &str| {
+        answers
+            .map(|a| pick(a).trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let bracket = |v: &Option<String>| v.as_deref().map_or(String::new(), |v| format!(" [{v}]"));
 
     let name_default = defaults.assistant_name.as_deref().unwrap_or("Aivyx PA");
     let assistant_name = opt(prompt_line(
@@ -2231,44 +2248,60 @@ fn manual_identity(
         writer,
     )?);
 
-    let style_default = defaults.communication_style.as_deref().unwrap_or("");
+    let style_default = said(|a| &a.tone).or_else(|| defaults.communication_style.clone());
     let communication_style = opt(prompt_line(
         &format!(
-            "  How should it talk to you? (e.g. 'warm but concise')\
-             {}\n> ",
-            if style_default.is_empty() {
-                String::new()
-            } else {
-                format!(" [{style_default}]")
-            }
+            "  How should it talk to you? (e.g. 'warm but concise'){}\n> ",
+            bracket(&style_default)
         ),
         reader,
         writer,
     )?)
-    .or_else(|| defaults.communication_style.clone());
+    .or(style_default);
 
+    let use_default = said(|a| &a.intent);
     let uc_raw = prompt_line(
-        "  Primary use cases (1-3, comma-separated)\n> ",
+        &format!("  Primary use cases (1-3, comma-separated){}\n> ", bracket(&use_default)),
         reader,
         writer,
     )?;
-    let primary_use_cases = if uc_raw.is_empty() {
-        defaults.primary_use_case.clone().into_iter().collect()
-    } else {
+    let primary_use_cases = if !uc_raw.is_empty() {
         split_list(&uc_raw)
+    } else if let Some(intent) = use_default {
+        vec![intent]
+    } else {
+        defaults.primary_use_case.clone().into_iter().collect()
     };
 
-    let behavioral_preferences = split_list(&prompt_line(
-        "  Things it should generally do (comma-separated, optional)\n> ",
+    let do_default = said(|a| &a.role).map(|role| format!("act as my {role}"));
+    let do_raw = prompt_line(
+        &format!(
+            "  Things it should generally do (comma-separated, optional){}\n> ",
+            bracket(&do_default)
+        ),
         reader,
         writer,
-    )?);
+    )?;
+    let behavioral_preferences = if do_raw.is_empty() {
+        do_default.into_iter().collect()
+    } else {
+        split_list(&do_raw)
+    };
 
-    let behavioral_constraints = split_list(&prompt_line(
-        "  Things it should NEVER do (comma-separated, optional)\n> ",
+    let never_default = said(|a| &a.never_do);
+    let never_raw = prompt_line(
+        &format!(
+            "  Things it should NEVER do (comma-separated, optional){}\n> ",
+            bracket(&never_default)
+        ),
         reader,
         writer,
-    )?);
+    )?;
+    let behavioral_constraints = if never_raw.is_empty() {
+        never_default.into_iter().collect()
+    } else {
+        split_list(&never_raw)
+    };
 
     Ok(IdentityFields {
         assistant_name,
@@ -3609,7 +3642,7 @@ mod tests {
         .await;
         assert!(matches!(outcome, DraftOutcome::Skipped));
         // And the manual questions still work afterwards.
-        let fields = manual_identity(&mut reader, &mut writer, &TemplateDefaults::empty());
+        let fields = manual_identity(&mut reader, &mut writer, &TemplateDefaults::empty(), None);
         assert!(fields.is_ok());
     }
 
@@ -3637,6 +3670,47 @@ mod tests {
         assert_eq!(fields.assistant_name.as_deref(), Some("Fallback"));
         assert_eq!(fields.operator_profile.as_deref(), Some("a dev"));
         assert_eq!(fields.primary_use_cases, vec!["coding"]);
+    }
+
+    /// Onboarding audit 3 (H1): when the draft fails, the manual questions
+    /// offer the answers the person just gave (Enter keeps them), and the
+    /// message doesn't claim the model was unreachable.
+    #[tokio::test]
+    async fn a_failed_draft_keeps_the_answers_already_given() {
+        let provider = fake_provider(None);
+        // offer=yes, the 4 conversation answers, then Enter at every
+        // manual prompt (name, about you, tone, use cases, do, never).
+        let input = b"
+help me run my bakery
+assistant
+friendly but brief
+email customers without asking
+
+
+
+
+
+
+".to_vec();
+        let mut reader = std::io::Cursor::new(input);
+        let mut writer: Vec<u8> = Vec::new();
+        let fields = run_identity_builder(
+            &mut reader,
+            &mut writer,
+            Some(&provider),
+            "m",
+            &TemplateDefaults::empty(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(fields.communication_style.as_deref(), Some("friendly but brief"));
+        assert_eq!(fields.primary_use_cases, vec!["help me run my bakery"]);
+        assert_eq!(fields.behavioral_preferences, vec!["act as my assistant"]);
+        assert_eq!(fields.behavioral_constraints, vec!["email customers without asking"]);
+        let out = String::from_utf8(writer).unwrap();
+        assert!(!out.contains("couldn't reach"), "{out}");
+        assert!(out.contains("kept your answers"), "{out}");
+        assert!(out.contains("[friendly but brief]"), "{out}");
     }
 
     #[test]

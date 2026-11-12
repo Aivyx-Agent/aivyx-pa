@@ -417,6 +417,7 @@ impl SpecializationDrafter for LlmSpecializationDrafter {
         id_slot: None,
         slot_hint: None,
         route: None,
+        no_thinking: false,
         };
         let cancel = CancellationToken::new();
         let mut stream = self.provider.chat_stream(request, &cancel).await.ok()?;

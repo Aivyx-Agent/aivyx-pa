@@ -466,6 +466,7 @@ impl RoutedProvider {
                 temperature: Some(0.0),
                 id_slot: None,
                 slot_hint: None,
+                no_thinking: false,
                 route: Some(RouteHint {
                     task: TaskKind::Classify,
                     session: None,
@@ -1089,6 +1090,7 @@ mod tests {
             id_slot: None,
             slot_hint: None,
             route,
+            no_thinking: false,
         }
     }
 
