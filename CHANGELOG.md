@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.21.2] — 2026-11-13
+
 ### Fixed
 
 - **The setup wizard's identity draft works with local thinking
