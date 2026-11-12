@@ -153,7 +153,8 @@ hotkey (`Ctrl+Shift+A`) to summon the window.
    [latest release](https://github.com/Aivyx-Agent/aivyx-pa/releases/latest):
    - **Ubuntu/Debian:** `aivyx-desktop_<version>_amd64.deb`, then
      `sudo apt install ./aivyx-desktop_<version>_amd64.deb` (apt pulls in
-     WebKitGTK and the tray library). It installs `aivyx-pa` beside the app.
+     WebKitGTK and the tray library). It installs `aivyx-pa` and the tool
+     programs (Gmail, Calendar, the Toolkit, …) beside the app.
    - **macOS:** `aivyx-desktop-aarch64-apple-darwin.zip` (Apple Silicon) or
      `…-x86_64-apple-darwin.zip` (Intel); unzip and drag the app to
      Applications. See [macOS first launch](#macos-first-launch-gatekeeper).
