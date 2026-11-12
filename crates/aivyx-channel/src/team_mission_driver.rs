@@ -2323,12 +2323,19 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn team_domain() -> DomainHandle {
+        // Two calls in one clock tick (seen on CI) shared a folder and its
+        // database lock; the counter keeps them apart.
+        static UNIQUE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let dir = std::env::temp_dir()
-            .join(format!("aivyx-team-driver-{}-{nanos}", std::process::id()));
+            .join(format!(
+                "aivyx-team-driver-{}-{nanos}-{}",
+                std::process::id(),
+                UNIQUE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let storage: Arc<dyn Storage> = RedbStorage::open(
             StorageConfig::new(dir.join("store.redb")),
@@ -2344,12 +2351,19 @@ pub(crate) mod tests {
     /// standing up a full daemon. Byte-for-byte `team_domain()`'s own
     /// shape, targeting `KeyDomain::Schedules` instead.
     async fn schedule_domain() -> DomainHandle {
+        // Two calls in one clock tick (seen on CI) shared a folder and its
+        // database lock; the counter keeps them apart.
+        static UNIQUE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let dir = std::env::temp_dir()
-            .join(format!("aivyx-schedule-notify-{}-{nanos}", std::process::id()));
+            .join(format!(
+                "aivyx-schedule-notify-{}-{nanos}-{}",
+                std::process::id(),
+                UNIQUE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let storage: Arc<dyn Storage> = RedbStorage::open(
             StorageConfig::new(dir.join("store.redb")),

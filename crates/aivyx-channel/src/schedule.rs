@@ -634,13 +634,17 @@ mod tests {
     /// store, mirroring `schedule_tool.rs`'s own `schedule_domain()`
     /// fixture — this file had no live-storage test before this one.
     async fn schedule_domain() -> DomainHandle {
+        // Two calls in one clock tick (seen on CI) shared a folder and its
+        // database lock; the counter keeps them apart.
+        static UNIQUE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let dir = std::env::temp_dir().join(format!(
-            "aivyx-schedule-operator-update-test-{}-{nanos}",
-            std::process::id()
+            "aivyx-schedule-operator-update-test-{}-{nanos}-{}",
+            std::process::id(),
+            UNIQUE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let storage: std::sync::Arc<dyn aivyx_storage::Storage> = aivyx_storage::RedbStorage::open(
