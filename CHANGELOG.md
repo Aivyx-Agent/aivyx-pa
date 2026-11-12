@@ -14,6 +14,21 @@ All notable changes to Aivyx are recorded here. This project adheres to
   local server to answer without reasoning first, so a draft arrives in
   seconds. If a draft still fails, the message says so plainly and every
   answer you gave comes back as the default to keep with Enter.
+- **The desktop app's first launch is a welcome, not an error.** On a
+  machine that isn't set up, it used to start the daemon anyway and show
+  "background service stopped before it could start" with a raw log. It
+  now says what setup involves, opens `aivyx-pa init` in a terminal
+  window with one button (Terminal on macOS; the desktop's default
+  terminal on Linux), and continues to the Studio when you're done. If no
+  terminal opens, it gives the command.
+- **`aivyx-pa keyring set` works without a keyring.** On servers, WSL and
+  minimal desktops it failed, though it's the command every "running
+  without the daemon" message suggests; it now offers the same owner-only
+  file `init` uses.
+- **Skipping the passphrase in `aivyx-pa init` says what it costs**: no
+  background daemon, so no Studio and no scheduled routines until it's
+  stored. The closing steps then show `aivyx-pa keyring set` instead of a
+  Studio link that wouldn't answer.
 - **The installer says what to do when `aivyx-pa` isn't found yet**
   (open a new terminal), since its "Next" line comes before the PATH
   note.

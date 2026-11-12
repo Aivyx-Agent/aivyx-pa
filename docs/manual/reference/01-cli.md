@@ -146,8 +146,10 @@ Credential Manager).
 aivyx-pa keyring set|clear|status
 ```
 
-On a machine without a keyring the passphrase is kept in an owner-only
-`daemon.env` file instead (see [Files and paths](04-files-and-paths.md)).
+On a machine without a keyring (servers, WSL, minimal desktops),
+`keyring set` offers to keep the passphrase in an owner-only `daemon.env`
+file instead, which `aivyx-pa` and its daemon read (see
+[Files and paths](04-files-and-paths.md)).
 
 ### `aivyx-pa access`
 

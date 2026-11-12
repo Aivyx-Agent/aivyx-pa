@@ -97,9 +97,9 @@ pub fn started_line(log_path: &std::path::Path) -> String {
 pub fn in_process_notice(reason: &InProcessReason) -> Option<String> {
     match reason {
         InProcessReason::PassphraseNeedsPrompt => Some(format!(
-            "{WITHOUT_THE_DAEMON} Store your passphrase (`aivyx-pa keyring set`, or \
-             export AIVYX_PA_PASSPHRASE where there's no keyring) and aivyx-pa will start \
-             it for you."
+            "{WITHOUT_THE_DAEMON} Store your passphrase with `aivyx-pa keyring set` \
+             (it uses a file only you can read where there's no keyring) and aivyx-pa will \
+             start it for you."
         )),
         InProcessReason::SessionOverrides => Some(
             "Running in-process: --provider, --mcp and --mcp-sse apply only to \
@@ -300,9 +300,9 @@ mod tests {
     use std::path::Path;
 
     const NOTICE: &str = "Running without the daemon — the Studio, scheduled routines and \
-                          cloud escalation need it. Store your passphrase (`aivyx-pa keyring \
-                          set`, or export AIVYX_PA_PASSPHRASE where there's no keyring) and \
-                          aivyx-pa will start it for you.";
+                          cloud escalation need it. Store your passphrase with `aivyx-pa \
+                          keyring set` (it uses a file only you can read where there's no \
+                          keyring) and aivyx-pa will start it for you.";
 
     #[test]
     fn decide_covers_every_combination() {

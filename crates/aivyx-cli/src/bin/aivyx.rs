@@ -6079,7 +6079,7 @@ fn run_keyring(sub: KeyringSubcommand) -> Result<(), String> {
     use aivyx_channel::keyring_store;
     match sub {
         KeyringSubcommand::Set => {
-            let pass = rpassword::prompt_password("New master passphrase (keyring): ")
+            let pass = rpassword::prompt_password("New master passphrase: ")
                 .map_err(|e| format!("could not read passphrase: {e}"))?;
             if pass.is_empty() {
                 return Err("passphrase must not be empty".to_string());
@@ -6089,13 +6089,19 @@ fn run_keyring(sub: KeyringSubcommand) -> Result<(), String> {
             if pass != confirm {
                 return Err("passphrases did not match".to_string());
             }
-            keyring_store::store(&secrecy::SecretString::from(pass))
-                .map_err(|e| format!("could not store in the OS keyring: {e}"))?;
-            println!(
-                "Stored the master passphrase in the OS keyring. The daemon will \
-                 use it automatically (no `AIVYX_PA_PASSPHRASE` / TOML plaintext \
-                 needed for interactive runs)."
-            );
+            // Onboarding audit 3 (M2): where there's no keyring, offer the
+            // owner-only file `init` uses, so this command works everywhere.
+            let message = init::store_passphrase(
+                &pass,
+                &mut io::stdin().lock(),
+                &mut io::stdout(),
+                |p| {
+                    keyring_store::store(&secrecy::SecretString::from(p.to_string()))
+                        .map_err(|e| e.to_string())
+                },
+                daemon_service::save_passphrase_file,
+            )?;
+            println!("{message}");
             Ok(())
         }
         KeyringSubcommand::Clear => {

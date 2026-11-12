@@ -781,6 +781,19 @@ enum PassphraseSetup {
 }
 
 impl PassphraseSetup {
+    /// Whether the background daemon (the Studio, scheduled routines) can
+    /// get the passphrase without asking. An existing store's passphrase
+    /// may be anywhere, so it isn't counted (its message says what to do).
+    fn daemon_starts_alone(&self) -> bool {
+        matches!(
+            self,
+            PassphraseSetup::FromEnv
+                | PassphraseSetup::InKeyring
+                | PassphraseSetup::Stored(_)
+                | PassphraseSetup::SavedToFile(_)
+        )
+    }
+
     /// The passphrase chosen during this run, for the service install.
     fn chosen(&self) -> Option<String> {
         match self {
@@ -839,7 +852,9 @@ fn setup_passphrase(
         if empties == 3 || attempts == 5 {
             w(
                 writer,
-                "  No passphrase set for now — aivyx-pa asks for it on first launch.",
+                "  No passphrase set for now — aivyx-pa asks for it on first launch. Until \
+                 it's stored, aivyx-pa runs without its background daemon: no Studio and no \
+                 scheduled routines. `aivyx-pa keyring set` stores it any time.",
             )?;
             return Ok(PassphraseSetup::Skipped);
         }
@@ -880,8 +895,9 @@ fn setup_passphrase(
             )? {
                 w(
                     writer,
-                    "  Not saved — aivyx-pa asks for it each time it starts (or export \
-                     AIVYX_PA_PASSPHRASE).",
+                    "  Not saved — aivyx-pa asks for it each time it starts and runs \
+                     without its background daemon (no Studio, no scheduled routines). \
+                     `aivyx-pa keyring set` saves it later.",
                 )?;
                 return Ok(PassphraseSetup::NotStored(chosen));
             }
@@ -1323,6 +1339,55 @@ fn prompt_mistralrs_model_path(
             Err(e) => writeln!(writer, "{e}").map_err(|e| format!("write error: {e}"))?,
         }
     }
+}
+
+/// The closing message's Studio line when the daemon can't start on its
+/// own (onboarding audit 3, M2): what's missing and the one command that
+/// fixes it, instead of a Studio link that won't answer.
+const NO_DAEMON_NEXT_STEP: &str = "  aivyx-pa keyring set       — store your passphrase so the \
+                                   background daemon can start: it serves the Studio and runs \
+                                   scheduled routines (without it, aivyx-pa chats in the \
+                                   terminal only)";
+
+/// Store `passphrase` for `aivyx-pa keyring set`: in the OS keyring, or,
+/// where there's none, (after asking) in the owner-only file `init` uses,
+/// which `aivyx-pa` and its daemon read. Returns what to tell the operator.
+pub(crate) fn store_passphrase(
+    passphrase: &str,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+    keyring_store: impl FnOnce(&str) -> Result<(), String>,
+    save_file: impl FnOnce(&str) -> Result<std::path::PathBuf, String>,
+) -> Result<String, String> {
+    let keyring_error = match keyring_store(passphrase) {
+        Ok(()) => {
+            return Ok("Stored the master passphrase in the OS keyring. The daemon will \
+                       use it automatically (no `AIVYX_PA_PASSPHRASE` / TOML plaintext \
+                       needed for interactive runs)."
+                .to_string());
+        }
+        Err(e) => e,
+    };
+    writeln!(
+        writer,
+        "There's no usable OS keyring here ({keyring_error}); common on servers, WSL and \
+         minimal desktops."
+    )
+    .map_err(|e| format!("write error: {e}"))?;
+    if !prompt_yes_no(
+        "Save it in a file only you can read instead, so aivyx-pa and its daemon start on their own?",
+        true,
+        reader,
+        writer,
+    )? {
+        return Err("not stored: no OS keyring, and the file was declined".to_string());
+    }
+    let path = save_file(passphrase)?;
+    Ok(format!(
+        "Saved the master passphrase in {} (readable only by you). The daemon will use it \
+         automatically; delete that file to be asked each time instead.",
+        path.display()
+    ))
 }
 
 /// The closing message's Studio line: the daemon serves it by default, and
@@ -3443,7 +3508,11 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     eprintln!("  aivyx-pa                   — chat with your agent in the terminal");
     // First-run coherence A2 — the Studio is on by default, behind a token
     // the daemon creates; `aivyx-pa studio` prints the sign-in link.
-    eprintln!("{}", studio_next_step_line(web_ui_port));
+    if passphrase.daemon_starts_alone() {
+        eprintln!("{}", studio_next_step_line(web_ui_port));
+    } else {
+        eprintln!("{}", NO_DAEMON_NEXT_STEP);
+    }
     eprintln!("  aivyx-pa doctor            — re-check your setup any time");
     if cfg.provider.is_local() && cfg.provider != Provider::MistralRs {
         eprintln!(
@@ -5954,6 +6023,62 @@ email customers without asking
         assert!(out.contains("A model path is required."), "{out:?}");
         assert!(out.contains("does not exist"), "doctor's message is shown: {out:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Onboarding audit 3 (M2): only a passphrase the daemon can read on
+    /// its own gets the Studio line; otherwise the closing says how to fix it.
+    #[test]
+    fn only_a_stored_passphrase_lets_the_daemon_start_alone() {
+        assert!(PassphraseSetup::Stored("p".into()).daemon_starts_alone());
+        assert!(PassphraseSetup::SavedToFile("p".into()).daemon_starts_alone());
+        assert!(PassphraseSetup::InKeyring.daemon_starts_alone());
+        assert!(PassphraseSetup::FromEnv.daemon_starts_alone());
+        assert!(!PassphraseSetup::Skipped.daemon_starts_alone());
+        assert!(!PassphraseSetup::NotStored("p".into()).daemon_starts_alone());
+        assert!(NO_DAEMON_NEXT_STEP.contains("aivyx-pa keyring set"));
+        assert!(NO_DAEMON_NEXT_STEP.contains("Studio"));
+    }
+
+    #[test]
+    fn keyring_set_uses_the_keyring_when_there_is_one() {
+        let mut out = Vec::new();
+        let msg = store_passphrase(
+            "p",
+            &mut Cursor::new(b"" as &[u8]),
+            &mut out,
+            |_| Ok(()),
+            |_| panic!("no file when the keyring works"),
+        )
+        .unwrap();
+        assert!(msg.contains("OS keyring"), "{msg}");
+    }
+
+    #[test]
+    fn keyring_set_without_a_keyring_offers_the_file() {
+        let mut out = Vec::new();
+        let msg = store_passphrase(
+            "p",
+            &mut Cursor::new(b"\n" as &[u8]),
+            &mut out,
+            |_| Err("no secret service".into()),
+            |p| {
+                assert_eq!(p, "p");
+                Ok(std::path::PathBuf::from("/c/aivyx-pa/passphrase"))
+            },
+        )
+        .unwrap();
+        assert!(msg.contains("/c/aivyx-pa/passphrase"), "{msg}");
+        let shown = String::from_utf8(out).unwrap();
+        assert!(shown.contains("no secret service"), "{shown}");
+
+        let declined = store_passphrase(
+            "p",
+            &mut Cursor::new(b"n\n" as &[u8]),
+            &mut Vec::new(),
+            |_| Err("no secret service".into()),
+            |_| panic!("declined"),
+        );
+        assert!(declined.is_err());
     }
 
     #[test]

@@ -144,6 +144,24 @@ Features: a tray / menu-bar icon (Open Studio · Restart daemon · Start at logi
 Quit), hide-to-tray on close, native approval-gate notifications, and a global
 hotkey (`Ctrl+Shift+A`) to summon the window.
 
+### Install it and open it for the first time
+
+1. **Get a model running first** (unless you'll use a cloud account): for
+   example Ollama, LM Studio, Lemonade or llama.cpp. Setup finds it.
+2. **Download the app** from the
+   [latest release](https://github.com/Aivyx-Agent/aivyx-pa/releases/latest):
+   - **Ubuntu/Debian:** `aivyx-desktop_<version>_amd64.deb`, then
+     `sudo apt install ./aivyx-desktop_<version>_amd64.deb` (apt pulls in
+     WebKitGTK and the tray library). It installs `aivyx-pa` beside the app.
+   - **macOS:** `aivyx-desktop-aarch64-apple-darwin.zip` (Apple Silicon) or
+     `…-x86_64-apple-darwin.zip` (Intel); unzip and drag the app to
+     Applications. See [macOS first launch](#macos-first-launch-gatekeeper).
+3. **Open "Aivyx PA"** from your applications menu. The first time, it
+   shows a welcome page: press **Open setup** and a terminal window runs
+   `aivyx-pa init` (the model, a few questions about you, a passphrase).
+4. When setup ends, press **Setup's done — continue**. The app starts the
+   assistant and shows the Studio; from then on it opens straight there.
+
 ### Runtime dependencies (Linux)
 
 The shell links the system webview + tray libraries, so a Linux machine needs:
@@ -171,9 +189,10 @@ On launch it attaches to a running daemon, or spawns one (`aivyx-pa daemon run
 --studio`) — resolving the `aivyx-pa` binary from `AIVYX_PA_BIN`, else the one
 installed beside the app (the `.deb` and `.app` both ship it, so the versions
 match), else `PATH`. The daemon's output goes to
-`~/.local/state/aivyx-pa/desktop-daemon.log`. If it can't start — typically
-because `aivyx-pa init` hasn't been run yet — the window shows what it said,
-how to fix it, and a **Try again** button, instead of a connection error.
+`~/.local/state/aivyx-pa/desktop-daemon.log`. With no config yet it shows the
+welcome page above instead of starting the daemon. If the daemon can't start
+for another reason, the window shows what it said, how to fix it, and a **Try
+again** button, instead of a connection error.
 
 ### Packaging (installer)
 
