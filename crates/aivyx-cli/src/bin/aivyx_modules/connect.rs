@@ -374,6 +374,57 @@ pub fn resolve_service_binary(svc: &ConnectService, exe_dir: Option<&Path>) -> O
     binary_on_path(svc.binary)
 }
 
+/// The first-party tool programs this repository builds (the Docker
+/// image ships them; the shell installer and the `.deb` don't).
+const FIRST_PARTY_TOOLS: &[&str] = &[
+    "aivyx-gmail",
+    "aivyx-calendar",
+    "aivyx-drive",
+    "aivyx-contacts",
+    "aivyx-notion",
+    "aivyx-obsidian",
+    "aivyx-n8n",
+    "aivyx-toolkit",
+];
+
+/// The first-party tool a `[[tool_process]] command` names, by its file
+/// name (so `/usr/local/bin/aivyx-gmail` counts too).
+pub fn first_party_tool(command: &str) -> Option<&'static str> {
+    let name = Path::new(command).file_name()?.to_str()?;
+    FIRST_PARTY_TOOLS.iter().copied().find(|t| *t == name)
+}
+
+/// How to get a tool program: the shell installer and the `.deb` ship
+/// only `aivyx-pa`; the Docker image has them all.
+pub fn tool_binary_help(binary: &str) -> String {
+    format!(
+        "`{binary}` isn't installed. The shell installer and the .deb ship only `aivyx-pa`; \
+         the Docker image includes `{binary}`. To build it from source:\n\
+         \n    git clone https://github.com/Aivyx-Agent/aivyx-pa && cd aivyx-pa\n    \
+         cargo install --locked --path crates/{binary}\n"
+    )
+}
+
+/// The tool program `found`, or, when it wasn't, how to get it and its
+/// path if the operator has one. `None`: stop (a blank answer).
+fn binary_or_ask(
+    binary: &str,
+    found: Option<PathBuf>,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn Write,
+) -> Result<Option<PathBuf>, String> {
+    if found.is_some() {
+        return Ok(found);
+    }
+    writeln!(writer, "\n{}", tool_binary_help(binary)).map_err(|e| format!("write error: {e}"))?;
+    let typed = prompt_line(
+        &format!("If you have `{binary}` elsewhere, its path (Enter to stop here): "),
+        reader,
+        writer,
+    )?;
+    Ok((!typed.is_empty()).then(|| PathBuf::from(typed)))
+}
+
 fn binary_on_path(program: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
@@ -439,24 +490,21 @@ async fn run_onboarding(
         return Ok(());
     }
 
-    let (client_id, client_secret) = collect_credentials(reader, writer, svc)?;
-    let path = write_oauth_config(svc, home, &client_id, &client_secret)?;
-    writeln!(writer, "\nWrote {}.", path.display()).map_err(|e| format!("write error: {e}"))?;
-
+    // Onboarding audit 3 (M3): find the tool program before the Google
+    // Cloud steps, since the released installer ships only `aivyx-pa`.
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf));
-    let binary = match resolve_service_binary(svc, exe_dir.as_deref()) {
-        Some(b) => b,
-        None => {
-            let typed = prompt_line(
-                &format!("Couldn't find `{}` automatically. Path to it: ", svc.binary),
-                reader,
-                writer,
-            )?;
-            PathBuf::from(typed)
-        }
+    let found = resolve_service_binary(svc, exe_dir.as_deref());
+    let Some(binary) = binary_or_ask(svc.binary, found, reader, writer)? else {
+        writeln!(writer, "Stopped before changing anything.")
+            .map_err(|e| format!("write error: {e}"))?;
+        return Ok(());
     };
+
+    let (client_id, client_secret) = collect_credentials(reader, writer, svc)?;
+    let path = write_oauth_config(svc, home, &client_id, &client_secret)?;
+    writeln!(writer, "\nWrote {}.", path.display()).map_err(|e| format!("write error: {e}"))?;
 
     writeln!(
         writer,
@@ -731,6 +779,49 @@ mod tests {
         let err = collect_credentials(&mut reader, &mut writer, svc).unwrap_err();
         assert!(err.contains("nothing was changed"), "{err}");
         assert!(err.contains("aivyx-pa connect gmail"), "{err}");
+    }
+
+    #[test]
+    fn first_party_tools_are_known_by_file_name() {
+        assert_eq!(first_party_tool("aivyx-gmail"), Some("aivyx-gmail"));
+        assert_eq!(first_party_tool("/usr/local/bin/aivyx-toolkit"), Some("aivyx-toolkit"));
+        assert_eq!(first_party_tool("my-own-tool"), None);
+        assert_eq!(first_party_tool("aivyx-pa"), None);
+        for svc in SERVICES {
+            assert_eq!(first_party_tool(svc.binary), Some(svc.binary), "{}", svc.binary);
+        }
+    }
+
+    #[test]
+    fn binary_or_ask_explains_how_to_get_a_missing_tool() {
+        let mut out = Vec::new();
+        let got = binary_or_ask("aivyx-gmail", None, &mut std::io::Cursor::new(b"\n" as &[u8]), &mut out)
+            .unwrap();
+        assert_eq!(got, None);
+        let shown = String::from_utf8(out).unwrap();
+        assert!(shown.contains("ship only `aivyx-pa`"), "{shown}");
+        assert!(shown.contains("cargo install --locked --path crates/aivyx-gmail"), "{shown}");
+
+        let typed = binary_or_ask(
+            "aivyx-gmail",
+            None,
+            &mut std::io::Cursor::new(b"/opt/aivyx-gmail\n" as &[u8]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(typed, Some(PathBuf::from("/opt/aivyx-gmail")));
+
+        let found = Some(PathBuf::from("/usr/bin/aivyx-gmail"));
+        let mut quiet = Vec::new();
+        let got = binary_or_ask(
+            "aivyx-gmail",
+            found.clone(),
+            &mut std::io::Cursor::new(b"" as &[u8]),
+            &mut quiet,
+        )
+        .unwrap();
+        assert_eq!(got, found);
+        assert!(quiet.is_empty(), "nothing asked when it's found");
     }
 
     #[test]

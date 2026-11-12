@@ -29,6 +29,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
   background daemon, so no Studio and no scheduled routines until it's
   stored. The closing steps then show `aivyx-pa keyring set` instead of a
   Studio link that wouldn't answer.
+- **`aivyx-pa connect gmail` (and Calendar, Drive, Contacts) checks for
+  the tool program first.** The installer ships only `aivyx-pa`, so a
+  newcomer went through the whole Google Cloud setup and was then asked
+  for the path to a program they never had. It now says where the
+  program comes from (the Docker image, or one `cargo install` from a
+  clone) before any setup, and stops without changing anything. The
+  daemon prints the same hint when a configured first-party tool program
+  is missing, and INSTALL.md has a section on the tool programs.
+- **INSTALL.md no longer recommends `cargo install aivyx-channel`**, which
+  can't work (no Aivyx crate is on crates.io); the embedded-provider and
+  voice builds install from a clone.
 - **The installer says what to do when `aivyx-pa` isn't found yet**
   (open a new terminal), since its "Next" line comes before the PATH
   note.

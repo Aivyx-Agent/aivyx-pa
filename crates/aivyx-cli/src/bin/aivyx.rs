@@ -9776,6 +9776,14 @@ async fn run_async(
             Ok(b) => std::sync::Arc::new(b),
             Err(e) => {
                 eprintln!("aivyx-pa: tool process {:?} failed to start: {e}", tp_cfg.name,);
+                // Onboarding audit 3 (M3): a first-party tool the release
+                // didn't ship — say how to get it.
+                if let aivyx_tool::bridge::ToolBridgeError::Spawn { command, source } = &e
+                    && source.kind() == io::ErrorKind::NotFound
+                    && let Some(binary) = connect::first_party_tool(command)
+                {
+                    eprintln!("aivyx-pa: {}", connect::tool_binary_help(binary));
+                }
                 continue;
             }
         };

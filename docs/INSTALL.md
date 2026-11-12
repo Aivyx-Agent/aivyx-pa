@@ -318,6 +318,23 @@ curl --proto '=https' --tlsv1.2 -LsSf \
   | sh
 ```
 
+### The tool programs (Gmail, Calendar, Drive, Contacts, Notion, Obsidian, n8n, toolkit)
+
+The installer, the release archives and the `.deb` ship `aivyx-pa` only.
+The optional tool programs a `[[tool_process]]` entry runs —
+`aivyx-gmail`, `aivyx-calendar`, `aivyx-drive`, `aivyx-contacts`,
+`aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n` and `aivyx-toolkit` — are
+in the [Docker image](#docker--the-server-appliance), or build one from a
+clone of this repository:
+
+```sh
+git clone https://github.com/Aivyx-Agent/aivyx-pa && cd aivyx-pa
+cargo install --locked --path crates/aivyx-gmail   # any of the names above
+```
+
+`cargo install` puts it in `~/.cargo/bin`, beside the installer's
+`aivyx-pa`, where both `aivyx-pa connect` and the daemon find it.
+
 ### macOS first launch: Gatekeeper
 
 Phase 61's release will not include code signing or notarization.
@@ -1922,21 +1939,25 @@ local-agent UX.
 
 #### Building Aivyx PA with the embedded provider
 
-```bash
-# Recommended for new users — pulls in the embedded
-# provider alongside Anthropic/OpenAI/Ollama:
-$ cargo install --features recommended-providers aivyx-channel
+The release binaries (the shell installer, the `.deb`, Docker) **don't
+include the embedded provider**; it's a build from source. No Aivyx crate
+is published on crates.io, so install from a clone of this repository:
 
-# Lean build — Ollama-only, no mistralrs dependency.
-# Compiles fast; smallest release binary.
-$ cargo install aivyx-channel
+```bash
+$ git clone https://github.com/Aivyx-Agent/aivyx-pa && cd aivyx-pa
+
+# The embedded provider alongside Anthropic/OpenAI/Ollama (CPU):
+$ cargo install --locked --path crates/aivyx-cli --features recommended-providers
 
 # Embedded provider with platform GPU acceleration —
 # pick exactly one per platform:
-$ cargo install --features aivyx-channel/provider-mistral-rs-cuda aivyx-channel       # NVIDIA
-$ cargo install --features aivyx-channel/provider-mistral-rs-metal aivyx-channel      # Apple Silicon
-$ cargo install --features aivyx-channel/provider-mistral-rs-accelerate aivyx-channel # Apple CPU
+$ cargo install --locked --path crates/aivyx-cli --features provider-mistral-rs-cuda       # NVIDIA
+$ cargo install --locked --path crates/aivyx-cli --features provider-mistral-rs-metal      # Apple Silicon
+$ cargo install --locked --path crates/aivyx-cli --features provider-mistral-rs-accelerate # Apple CPU
 ```
+
+Most people don't need this: a local server (Ollama, LM Studio, Lemonade,
+llama.cpp) works with the released binary.
 
 The embedded provider's pure-Rust CPU build requires
 **no C compiler, no CUDA toolkit, no Metal SDK**. The
@@ -2080,19 +2101,15 @@ LLM, extended end-to-end.
 
 ### Building with the voice channel
 
+A build from source, from a clone of this repository (no Aivyx crate is
+on crates.io):
+
 ```bash
-# Recommended one-liner — voice channel with the
-# bundled whisper-rs (STT) + Kokoro (TTS) engines:
-$ cargo install --features channel-voice-full aivyx-channel
+# Voice channel with the bundled whisper-rs (STT) + Kokoro (TTS) engines:
+$ cargo install --locked --path crates/aivyx-cli --features channel-voice-full
 
-# Bare voice channel (no engines). Useful for
-# Phase 136+ when wiring an alternative engine
-# yourself:
-$ cargo install --features channel-voice aivyx-channel
-
-# Lean build — no voice channel. Existing operators
-# see zero binary-size impact.
-$ cargo install aivyx-channel
+# Bare voice channel (no engines), for wiring an alternative engine yourself:
+$ cargo install --locked --path crates/aivyx-cli --features channel-voice
 ```
 
 ### Build prerequisites
@@ -3543,6 +3560,9 @@ can't leak it.
 
 **5. Register the tool process in `aivyx-pa.toml`:**
 
+(`aivyx-pa` doesn't ship the tool program itself; see
+[The tool programs](#the-tool-programs-gmail-calendar-drive-contacts-notion-obsidian-n8n-toolkit).)
+
 ```toml
 [[tool_process]]
 name = "gmail"
@@ -4521,6 +4541,9 @@ api_key = "BSA-..."
 external credentials.)
 
 **3. Register the tool process in `aivyx-pa.toml`:**
+
+(`aivyx-pa` doesn't ship the tool program itself; see
+[The tool programs](#the-tool-programs-gmail-calendar-drive-contacts-notion-obsidian-n8n-toolkit).)
 
 ```toml
 [[tool_process]]
