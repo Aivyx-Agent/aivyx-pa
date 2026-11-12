@@ -40,9 +40,11 @@ includes the `aivyx-pa` command, so there's nothing else to install. See the
 [installation guide](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md#desktop-app)
 for the build-from-source steps.
 
-**The first time**, open a terminal and run `aivyx-pa init` to choose your model
-and passphrase. If you open the app before that, it says so and shows a **Try
-again** button to press once you've run it.
+**The first time** you open it, the app shows a welcome page. Press **Open
+setup**: a terminal window runs `aivyx-pa init`, which picks your model, asks
+a few questions about you and sets a passphrase. When it's done, press
+**Setup's done — continue** and the Studio opens. (If no terminal opens, the
+page shows the command to run yourself.)
 
 > **On Linux** the desktop app needs a few system packages (a webview and the
 > tray libraries) — the install guide lists them for your distribution. macOS

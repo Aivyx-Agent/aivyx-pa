@@ -31,6 +31,7 @@ Task-by-task, for everyday use. These pages are also built into the Studio
 16. [Named instances](../guide/16-named-instances.md)
 17. [Security and privacy](../guide/17-security-and-privacy.md)
 18. [Backups, upgrades and moving](../guide/18-backups-upgrades-and-moving.md)
+19. [Packs](../guide/19-packs.md)
 
 ## Part 2 — Reference
 

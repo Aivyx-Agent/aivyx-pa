@@ -132,6 +132,12 @@ pub const PAGES: &[Page] = &[
         body: include_str!("../../../docs/guide/18-backups-upgrades-and-moving.md"),
     },
     Page {
+        id: "packs",
+        file: "19-packs.md",
+        title: "Packs",
+        body: include_str!("../../../docs/guide/19-packs.md"),
+    },
+    Page {
         id: "troubleshooting",
         file: "10-troubleshooting.md",
         title: "Troubleshooting",

@@ -45,11 +45,13 @@ instead of stat cards and panels, it's one readable column written by the
 assistant in its own voice, in this order:
 
 - **Instrument strip.** A ruled line of readings — daemon status, the model
-  and its context window, today's spend against your budget (24 h,
-  rolling), memory topic count, and whether the audit chain is sealed or
-  broken. Click any reading to jump to the screen it belongs to; a reading
-  turns warn or rust when something needs attention (offline, spend at 80%
-  or more of budget, a broken chain).
+  and its context window ("32k context"; nothing when it's the server's
+  default), today's spend against your budget (24 h, rolling), what it
+  remembers ("remembers 7 topics", or "nothing remembered yet"), and
+  whether the record of what it did is intact ("record intact", or
+  "record altered"). Click any reading to jump to the screen it belongs
+  to; a reading turns warn or rust when something needs attention
+  (offline, spend at 80% or more of budget, an altered record).
 - **Greeting.** A time-of-day headline, then the date and when you were last
   active — "Wednesday 1 October · last here 9 h ago".
 - **Needs you.** Everything waiting on you: your own pending chat approval,
@@ -68,8 +70,9 @@ assistant in its own voice, in this order:
   *previous* visit, not just now, so acting on a card here never empties
   the log you're reading. A trailing "and N more → Audit" covers anything
   past the 12-line cap.
-- **Coming up.** The next three scheduled routines and up to three pieces of
-  work already in progress ("and N more in progress." past that).
+- **Coming up.** The next five scheduled routines, in plain words ("Your
+  weekly digest"), and up to three pieces of work already in progress
+  ("and N more in progress." past that).
 
 The log is written straight from the record with fixed wording — no model
 is involved, ever. That also means it can't tell you *which* files changed:

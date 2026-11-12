@@ -7,7 +7,17 @@ This page gets you from a fresh install to a running assistant.
 Pick the path that matches your machine — the full instructions live in the
 [install guide](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md):
 
-- **macOS / Linux** — run the one-line installer, or build from source.
+- **macOS / Linux** — run the one-line installer:
+
+  ```sh
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Aivyx-Agent/aivyx-pa/releases/latest/download/aivyx-cli-installer.sh | sh
+  ```
+
+  It puts `aivyx-pa` in `~/.cargo/bin`; if your shell then says
+  `command not found`, open a new terminal.
+- **Desktop app** — the `.deb` (Ubuntu, Debian) or the macOS app from the
+  [latest release](https://github.com/Aivyx-Agent/aivyx-pa/releases/latest);
+  see [The desktop app](11-desktop-app.md).
 - **Windows** — run Aivyx PA under WSL2, or use the Docker appliance. (There is no
   native Windows build yet; both options run the same Linux binary.)
 - **Always-on server** — the Docker appliance runs the daemon and this Studio in
@@ -22,7 +32,7 @@ Aivyx PA needs an AI model to reason with. You have two kinds of choice:
   - [Ollama](https://ollama.com) — the easiest start; pull a tool-capable model
     such as `qwen3:8b`.
   - [Lemonade Server](https://lemonade-server.ai), a llama.cpp `llama-server`,
-    or [Jan](https://jan.ai).
+    [Jan](https://jan.ai), or Docker Model Runner.
   - `aivyx-broker`, if you want Aivyx PA and Aivyx Coder to share one
     llama-server.
 - **A provider (Anthropic or OpenAI).** Paste an API key during setup. These
@@ -39,7 +49,7 @@ aivyx-pa init
 ```
 
 It looks for a local model server that's already running (Ollama, Lemonade,
-llama.cpp, Jan or the broker), offers the ones it finds first, and lets you pick
+llama.cpp, Jan, Docker Model Runner or the broker), offers the ones it finds first, and lets you pick
 one of their models. If it finds none, it asks you to choose — it never picks a
 cloud provider for you. Then it walks you through **creating your agent** —
 giving your assistant a name, a personality, and a level of access to your
