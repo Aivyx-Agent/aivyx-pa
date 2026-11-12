@@ -75,6 +75,9 @@ pub(crate) enum UserEvent {
     ToggleWindow,
     /// First-run E — the setup page's **Try again** button.
     Retry,
+    /// The welcome page's **Open setup** button: `aivyx-pa init` in a
+    /// terminal window (onboarding audit 3, H5).
+    OpenSetup,
 }
 
 /// Build the launch-on-login controller for this executable. `None` if the
@@ -90,6 +93,33 @@ fn auto_launch() -> Option<auto_launch::AutoLaunch> {
 
 /// The `aivyx-pa` binary to drive the daemon: `AIVYX_PA_BIN` if set, else the
 /// one installed beside this app, else `aivyx-pa` on `PATH`.
+/// Whether `aivyx-pa` has a config to start from (the file `aivyx-pa init`
+/// writes). Unknown home: assume set up, and let the daemon say otherwise.
+fn is_set_up() -> bool {
+    let standard = aivyx_instance::InstancePaths::current()
+        .ok()
+        .and_then(|paths| paths.config_file());
+    first_run::config_file(std::env::var("AIVYX_PA_CONFIG_PATH").ok(), standard)
+        .is_none_or(|path| path.exists())
+}
+
+/// Open `aivyx-pa init` in a terminal window: the first program that
+/// starts wins. False when none could be started.
+fn open_setup_terminal() -> bool {
+    let bin = aivyx_bin();
+    first_run::setup_terminal_commands(&bin, cfg!(target_os = "macos"))
+        .into_iter()
+        .any(|(program, args)| {
+            Command::new(&program)
+                .args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .is_ok()
+        })
+}
+
 fn aivyx_bin() -> String {
     let sibling = std::env::current_exe()
         .ok()
@@ -162,6 +192,15 @@ fn daemon_log() -> Option<std::path::PathBuf> {
 fn ensure_daemon() -> (Option<Child>, Option<first_run::SetupProblem>) {
     if daemon_reachable() {
         return (None, None);
+    }
+    // Nothing set up yet: a first launch, so a welcome with setup one click
+    // away, not a daemon that "stopped before it could start".
+    if studio_is_local() && !is_set_up() {
+        let problem = first_run::SetupProblem::NotSetUp {
+            bin: aivyx_bin(),
+            terminal_failed: false,
+        };
+        return (None, Some(problem));
     }
     if !studio_is_local() {
         eprintln!(
@@ -313,10 +352,14 @@ fn main() -> wry::Result<()> {
         .expect("failed to create the window");
 
     let retry_proxy = proxy.clone();
-    let on_ipc = move |message: &str| {
-        if message == "retry" {
+    let on_ipc = move |message: &str| match message {
+        "retry" => {
             let _ = retry_proxy.send_event(UserEvent::Retry);
         }
+        "setup" => {
+            let _ = retry_proxy.send_event(UserEvent::OpenSetup);
+        }
+        _ => {}
     };
     let first_page = match &problem {
         None => Page::Url(studio_entry_url(token.as_deref())),
@@ -436,6 +479,17 @@ fn main() -> wry::Result<()> {
                 if problem.is_none() && !watcher_started {
                     start_gate_watcher(proxy.clone(), token.clone());
                     watcher_started = true;
+                }
+            }
+            // The welcome page's Open setup: init in a terminal. When no
+            // terminal starts, the page says so and gives the command.
+            Event::UserEvent(UserEvent::OpenSetup) => {
+                if !open_setup_terminal() {
+                    problem = Some(first_run::SetupProblem::NotSetUp {
+                        bin: aivyx_bin(),
+                        terminal_failed: true,
+                    });
+                    show_studio_or_setup(&webview, &mut problem, &mut token);
                 }
             }
             // The global hotkey toggles the window.
