@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.21.1] — 2026-11-12
+
 ### Fixed
 
 - **The Docker image reads its config again.** Since v0.19.4 pa no longer
