@@ -54,10 +54,13 @@ COPY deploy/docker/entrypoint.sh /usr/local/bin/aivyx-entrypoint
 RUN chmod +x /usr/local/bin/aivyx-entrypoint
 
 # Studio + state live here; mount a named volume on /root/.aivyx-pa to persist.
-# WORKDIR is /root/.aivyx-pa because the daemon reads `./aivyx-pa.toml` relative
-# to its working directory (there is no --config flag yet), and the entrypoint
-# seeds the appliance config there on first boot.
+# The config is named explicitly: since v0.19.4 pa never reads `./aivyx-pa.toml`
+# from its working directory, and without this it would look in
+# ~/.config/aivyx-pa/ and silently ignore the appliance config (Studio host,
+# token, /work root) the entrypoint seeds here. Set AIVYX_PA_CONFIG_PATH to use
+# another file.
 ENV HOME=/root
+ENV AIVYX_PA_CONFIG_PATH=/root/.aivyx-pa/aivyx-pa.toml
 WORKDIR /root/.aivyx-pa
 VOLUME ["/root/.aivyx-pa", "/work"]
 EXPOSE 7843

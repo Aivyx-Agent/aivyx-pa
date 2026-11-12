@@ -55,6 +55,45 @@ jobs:
             type=raw,value=latest,enable=${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
             type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
 
+      # Run the image before publishing it: v0.19.4-v0.21.0 shipped an image
+      # whose daemon ignored the appliance config (pa stopped reading
+      # ./aivyx-pa.toml from the working directory), so its Studio bound
+      # 127.0.0.1 and couldn't be reached through the published port.
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: aivyx-pa:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — the Studio answers through the published port
+        run: |
+          # A keyless local provider at a dead address: enough to boot the
+          # daemon. 401 means the Studio is up and wants its generated token.
+          docker run -d --name pa-smoke \
+            -e AIVYX_PA_PASSPHRASE=ci-smoke-passphrase \
+            -e AIVYX_PA_PROVIDER=llamacpp -e AIVYX_PA_MODEL=smoke \
+            -e AIVYX_PA_OPENAI_BASE_URL=http://127.0.0.1:9 \
+            -p 127.0.0.1:7843:7843 aivyx-pa:smoke
+          code=000
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7843/ || true)
+            [ "$code" != 000 ] && break
+            sleep 2
+          done
+          docker logs pa-smoke
+          if docker logs pa-smoke 2>&1 | grep -q "no longer read"; then
+            echo "::error::the daemon ignored the appliance config"; exit 1
+          fi
+          if [ "$code" != 401 ]; then
+            echo "::error::Studio through the published port answered $code, expected 401"; exit 1
+          fi
+          docker rm -f pa-smoke
+
       - name: Build + push
         uses: docker/build-push-action@v6
         with:

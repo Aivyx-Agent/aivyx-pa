@@ -5,6 +5,17 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Docker image reads its config again.** Since v0.19.4 pa no longer
+  reads `./aivyx-pa.toml` from its working directory, and the image found
+  its config only that way, so the daemon ignored the appliance config the
+  entrypoint seeds: the Studio bound `127.0.0.1` inside the container and
+  couldn't be reached through the published port, and `[fs] root = "/work"`
+  and the generated Studio token didn't apply. The image now sets
+  `AIVYX_PA_CONFIG_PATH=/root/.aivyx-pa/aivyx-pa.toml`, and the image is
+  run and its Studio reached before it is published.
+
 ## [0.21.0] — 2026-11-12
 
 Images, 3D and an agent that checks what it made; and the configuration

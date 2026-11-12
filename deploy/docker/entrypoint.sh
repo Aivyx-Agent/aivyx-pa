@@ -24,12 +24,16 @@ if [ -z "${AIVYX_PA_PASSPHRASE:-}" ]; then
     exit 2
 fi
 
-# First boot seeds ~/.aivyx-pa with the baked appliance config unless the
-# operator mounted their own (or a prior run already wrote one).
-if [ ! -f /root/.aivyx-pa/aivyx-pa.toml ]; then
-    mkdir -p /root/.aivyx-pa
-    cp /etc/aivyx/aivyx.appliance.toml /root/.aivyx-pa/aivyx-pa.toml
-    echo "aivyx-pa (entrypoint): seeded /root/.aivyx-pa/aivyx-pa.toml from the appliance default" >&2
+# The config the daemon reads (the Dockerfile sets AIVYX_PA_CONFIG_PATH; pa
+# never reads one from its working directory). First boot seeds it with the
+# baked appliance config unless the operator mounted their own (or a prior run
+# already wrote one).
+_cfg="${AIVYX_PA_CONFIG_PATH:-/root/.aivyx-pa/aivyx-pa.toml}"
+export AIVYX_PA_CONFIG_PATH="$_cfg"
+if [ ! -f "$_cfg" ]; then
+    mkdir -p "$(dirname "$_cfg")"
+    cp /etc/aivyx/aivyx.appliance.toml "$_cfg"
+    echo "aivyx-pa (entrypoint): seeded $_cfg from the appliance default" >&2
 fi
 
 # Chapter Gatehouse — the daemon refuses an off-host bind with no auth token
@@ -41,7 +45,6 @@ fi
 # subsequent boots see the token in the file. Reads both spellings: `[studio]
 # host` and the deprecated `[daemon] web_ui_host` (R21), and answers in the
 # spelling the file uses.
-_cfg=/root/.aivyx-pa/aivyx-pa.toml
 # Prints `studio` or `daemon` (where the off-host bind is) when a token is
 # needed, nothing otherwise.
 _gatehouse_awk='
@@ -79,7 +82,7 @@ if [ -n "$_where" ]; then
     echo "aivyx-pa (entrypoint): generated a Studio auth token (Gatehouse):" >&2
     echo "aivyx-pa (entrypoint):   $_tok" >&2
     echo "aivyx-pa (entrypoint): browsers: any username, this token as the password." >&2
-    echo "aivyx-pa (entrypoint): it is saved in /root/.aivyx-pa/aivyx-pa.toml ([$_where] $_tok_key)." >&2
+    echo "aivyx-pa (entrypoint): it is saved in $_cfg ([$_where] $_tok_key)." >&2
 fi
 
 exec aivyx-pa daemon run "$@"
