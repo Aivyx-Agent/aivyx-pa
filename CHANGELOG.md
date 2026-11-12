@@ -37,6 +37,12 @@ All notable changes to Aivyx are recorded here. This project adheres to
   clone) before any setup, and stops without changing anything. The
   daemon prints the same hint when a configured first-party tool program
   is missing, and INSTALL.md has a section on the tool programs.
+- **`aivyx-pa init` finds Docker Model Runner.** When no llama-server
+  answers on port 8080 and Docker Model Runner is running, setup offers
+  it as the llama.cpp server at its own address
+  (`http://127.0.0.1:12434/engines`) and lists its models.
+- **The README leads with local models**, not "your API key talks
+  directly to the LLM"; the local servers setup finds are named.
 - **INSTALL.md no longer recommends `cargo install aivyx-channel`**, which
   can't work (no Aivyx crate is on crates.io); the embedded-provider and
   voice builds install from a clone.

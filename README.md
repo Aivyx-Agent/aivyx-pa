@@ -4,15 +4,17 @@
 [![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](LICENSE)
 
 > A personal autonomous agent platform that runs on your hardware,
-> talks to cloud LLMs under your own API key, and never compromises
-> privacy or auditability for the sake of a feature.
+> works with a model on your own machine (Ollama, Lemonade, llama.cpp,
+> Jan, Docker Model Runner) or a cloud LLM under your own API key, and
+> never compromises privacy or auditability for the sake of a feature.
 
 Aivyx PA is a Rust-built agent framework whose load-bearing
 properties are **capability-based security**, **HMAC-chained
 auditability**, and **encryption at rest**. It does not run as a
 hosted service. There is no Aivyx-the-company server in your
-agent's request path; your API key talks directly to the LLM
-provider, your data stays on your hardware, your audit chain is
+agent's request path: your model runs on your machine, or your API
+key talks directly to the LLM provider you chose; your data stays on
+your hardware, your audit chain is
 verifiable offline.
 
 > **Where Aivyx is headed:** [`VISION.md`](VISION.md) — the mission

@@ -78,11 +78,16 @@ pub fn tool_process_hint(key: &str) -> Option<String> {
     let tool_process = crate::pack_check::KNOWN_INTEGRATIONS.contains(&k.as_str())
         && !crate::pack_check::CONNECTABLE.contains(&k.as_str());
     tool_process.then(|| {
+        let binary = format!("aivyx-{k}");
+        // Onboarding audit 3 (M3): say where the program comes from.
+        let get_it = first_party_tool(&binary)
+            .map(tool_source_help)
+            .unwrap_or_default();
         format!(
             "`{k}` has nothing to sign in to here: it runs as a tool process. Install \
              `aivyx-{k}` and add it to aivyx-pa.toml:\n\n[[tool_process]]\nname = \"{k}\"\n\
              command = \"aivyx-{k}\"\n\nThen restart the daemon. See docs/INSTALL.md for \
-             its own settings."
+             its own settings.\n\n{get_it}"
         )
     })
 }
@@ -397,9 +402,14 @@ pub fn first_party_tool(command: &str) -> Option<&'static str> {
 /// How to get a tool program: the shell installer and the `.deb` ship
 /// only `aivyx-pa`; the Docker image has them all.
 pub fn tool_binary_help(binary: &str) -> String {
+    format!("`{binary}` isn't installed. {}", tool_source_help(binary))
+}
+
+/// Where a first-party tool program comes from, and its build command.
+fn tool_source_help(binary: &str) -> String {
     format!(
-        "`{binary}` isn't installed. The shell installer and the .deb ship only `aivyx-pa`; \
-         the Docker image includes `{binary}`. To build it from source:\n\
+        "The shell installer and the .deb ship only `aivyx-pa`; the Docker image includes \
+         `{binary}`. To build it from source:\n\
          \n    git clone https://github.com/Aivyx-Agent/aivyx-pa && cd aivyx-pa\n    \
          cargo install --locked --path crates/{binary}\n"
     )
@@ -726,6 +736,11 @@ mod tests {
         assert!(hint.contains("[[tool_process]]\nname = \"toolkit\"\ncommand = \"aivyx-toolkit\""), "{hint}");
         assert!(hint.contains("docs/INSTALL.md"), "{hint}");
         assert!(!hint.contains("unknown service"), "{hint}");
+        // Where the program comes from (the installer ships only aivyx-pa).
+        assert!(hint.contains("cargo install --locked --path crates/aivyx-toolkit"), "{hint}");
+        // aivyx-vision lives in its own repository: no build line from this one.
+        let vision = tool_process_hint("vision").unwrap();
+        assert!(!vision.contains("crates/aivyx-vision"), "{vision}");
         for key in ["notion", "obsidian", "n8n", "vision"] {
             assert!(tool_process_hint(key).is_some(), "{key}");
         }

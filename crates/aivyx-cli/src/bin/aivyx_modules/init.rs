@@ -1137,6 +1137,10 @@ pub(crate) const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
 /// trailing `/v1` in a configured address is dropped).
 pub(crate) const DEFAULT_JAN_BASE_URL: &str = "http://localhost:1337";
 
+/// Docker Model Runner's host address (its OpenAI-compatible API is under
+/// `/engines/v1`).
+const DEFAULT_DMR_BASE_URL: &str = "http://127.0.0.1:12434/engines";
+
 /// Where `init` looks for each local runtime. The base URL is the one the
 /// provider would use (so it is what gets written when non-default); each
 /// probe appends its runtime's own health path. Injectable for tests.
@@ -1151,6 +1155,10 @@ struct ProbeBases {
     jan: String,
     /// Probed with `GET {base}/status`.
     broker: String,
+    /// Docker Model Runner, probed with `GET {base}/v1/models`. Offered as
+    /// the llama.cpp server (it serves the same API, and runs llama.cpp)
+    /// when no llama-server answers.
+    dmr: String,
 }
 
 impl ProbeBases {
@@ -1161,6 +1169,7 @@ impl ProbeBases {
             llamacpp: "http://127.0.0.1:8080".to_string(),
             jan: "http://127.0.0.1:1337".to_string(),
             broker: crate::DEFAULT_BROKER_BASE_URL.to_string(),
+            dmr: DEFAULT_DMR_BASE_URL.to_string(),
         }
     }
 
@@ -1210,6 +1219,42 @@ async fn detect_local_runtimes(bases: &ProbeBases) -> Vec<Provider> {
         .zip(answered)
         .filter_map(|((p, _), ok)| ok.then_some(*p))
         .collect()
+}
+
+/// Docker Model Runner answering at `bases.dmr`.
+async fn docker_model_runner_answers(bases: &ProbeBases) -> bool {
+    let url = format!("{}/v1/models", bases.dmr.trim_end_matches('/'));
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(PROBE_TIMEOUT)
+        .timeout(PROBE_TIMEOUT)
+        .build()
+    else {
+        return false;
+    };
+    client
+        .get(&url)
+        .send()
+        .await
+        .is_ok_and(|r| r.status().is_success())
+}
+
+/// Onboarding audit 3 (M7): with no llama-server on its default port, a
+/// running Docker Model Runner becomes the llama.cpp server at its own
+/// address. Returns whether it did, for the "detected" line.
+fn adopt_docker_model_runner(
+    detected: &mut Vec<Provider>,
+    bases: &mut ProbeBases,
+    dmr_answers: bool,
+) -> bool {
+    if !dmr_answers || detected.contains(&Provider::LlamaCpp) {
+        return false;
+    }
+    bases.llamacpp = bases.dmr.clone();
+    detected.push(Provider::LlamaCpp);
+    // Keep menu order.
+    let order = all_providers(true);
+    detected.sort_by_key(|p| order.iter().position(|o| o == p));
+    true
 }
 
 /// The base URL an OpenAI-compatible provider should get: no trailing `/`,
@@ -3083,12 +3128,20 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // coherence A4 — `init` never defaults to a cloud provider). A
     // template's provider is the default only when it's local and nothing
     // was detected.
-    let probes = ProbeBases::standard();
+    let mut probes = ProbeBases::standard();
     let base_url = DEFAULT_OLLAMA_BASE_URL;
-    let detected = detect_local_runtimes(&probes).await;
+    let (mut detected, dmr_answers) = tokio::join!(
+        detect_local_runtimes(&probes),
+        docker_model_runner_answers(&probes)
+    );
+    let via_dmr = adopt_docker_model_runner(&mut detected, &mut probes, dmr_answers);
     for p in &detected {
         if let Some(at) = probes.base_for(*p) {
-            eprintln!("{} detected at {at}", p.label());
+            if via_dmr && *p == Provider::LlamaCpp {
+                eprintln!("Docker Model Runner detected at {at} (offered as the llama.cpp server)");
+            } else {
+                eprintln!("{} detected at {at}", p.label());
+            }
         }
     }
     let template_provider = template_defaults
@@ -5570,7 +5623,33 @@ email customers without asking
             llamacpp: closed_base(),
             jan: closed_base(),
             broker: closed_base(),
+            dmr: closed_base(),
         }
+    }
+
+    #[tokio::test]
+    async fn docker_model_runner_is_offered_as_the_llamacpp_server() {
+        let dmr = serve_routes(vec![("/engines/v1/models", String::from("{\"data\":[]}"))]).await;
+        let mut probes = ProbeBases {
+            dmr: format!("{dmr}/engines"),
+            ..all_closed()
+        };
+        assert!(docker_model_runner_answers(&probes).await);
+        let mut detected = vec![Provider::Ollama, Provider::Jan];
+        assert!(adopt_docker_model_runner(&mut detected, &mut probes, true));
+        assert_eq!(detected, vec![Provider::Ollama, Provider::LlamaCpp, Provider::Jan]);
+        assert_eq!(probes.base_for(Provider::LlamaCpp), Some(format!("{dmr}/engines").as_str()));
+
+        // A real llama-server on its own port wins; nothing running: nothing.
+        let mut with_llama = vec![Provider::LlamaCpp];
+        let mut bases = all_closed();
+        let before = bases.llamacpp.clone();
+        assert!(!adopt_docker_model_runner(&mut with_llama, &mut bases, true));
+        assert_eq!(bases.llamacpp, before);
+        assert!(!docker_model_runner_answers(&all_closed()).await);
+        let mut none = Vec::new();
+        assert!(!adopt_docker_model_runner(&mut none, &mut all_closed(), false));
+        assert!(none.is_empty());
     }
 
     #[tokio::test]
@@ -5621,6 +5700,7 @@ email customers without asking
             llamacpp: serve_silence().await,
             jan: serve_silence().await,
             broker: serve_silence().await,
+            dmr: serve_silence().await,
         };
         let started = std::time::Instant::now();
         let found = detect_local_runtimes(&probes).await;

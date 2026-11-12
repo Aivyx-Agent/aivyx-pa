@@ -147,7 +147,8 @@ hotkey (`Ctrl+Shift+A`) to summon the window.
 ### Install it and open it for the first time
 
 1. **Get a model running first** (unless you'll use a cloud account): for
-   example Ollama, LM Studio, Lemonade or llama.cpp. Setup finds it.
+   example Ollama, Lemonade, llama.cpp, Jan or Docker Model Runner. Setup
+   finds it.
 2. **Download the app** from the
    [latest release](https://github.com/Aivyx-Agent/aivyx-pa/releases/latest):
    - **Ubuntu/Debian:** `aivyx-desktop_<version>_amd64.deb`, then
@@ -1956,8 +1957,8 @@ $ cargo install --locked --path crates/aivyx-cli --features provider-mistral-rs-
 $ cargo install --locked --path crates/aivyx-cli --features provider-mistral-rs-accelerate # Apple CPU
 ```
 
-Most people don't need this: a local server (Ollama, LM Studio, Lemonade,
-llama.cpp) works with the released binary.
+Most people don't need this: a local server (Ollama, Lemonade, llama.cpp,
+Jan, Docker Model Runner) works with the released binary.
 
 The embedded provider's pure-Rust CPU build requires
 **no C compiler, no CUDA toolkit, no Metal SDK**. The
