@@ -49,10 +49,16 @@ them afterwards like any other setting.
 ## Tools a pack uses
 
 Some packs use Aivyx's tool programs — Gmail, Calendar, Drive, Contacts,
-the Toolkit. The one-line installer and the desktop app ship `aivyx-pa`
-only; the Docker image includes every tool. To add one to an install, see
-[the tool programs](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md#the-tool-programs-gmail-calendar-drive-contacts-notion-obsidian-n8n-toolkit)
-in the install guide. `aivyx-pa connect gmail` tells you if one is missing.
+the Toolkit. The desktop app's `.deb` and the Docker image include them.
+After the one-line install, add them with:
+
+```sh
+aivyx-pa tool-programs install
+```
+
+It downloads the ones for your version, checks them and puts them beside
+`aivyx-pa`; `aivyx-pa tool-programs list` shows what's there.
+`aivyx-pa connect gmail` offers to do this when the program is missing.
 
 ## Trusting a publisher
 

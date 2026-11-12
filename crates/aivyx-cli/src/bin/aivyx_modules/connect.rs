@@ -381,7 +381,7 @@ pub fn resolve_service_binary(svc: &ConnectService, exe_dir: Option<&Path>) -> O
 
 /// The first-party tool programs this repository builds (the Docker
 /// image ships them; the shell installer and the `.deb` don't).
-const FIRST_PARTY_TOOLS: &[&str] = &[
+pub(crate) const FIRST_PARTY_TOOLS: &[&str] = &[
     "aivyx-gmail",
     "aivyx-calendar",
     "aivyx-drive",
@@ -405,14 +405,25 @@ pub fn tool_binary_help(binary: &str) -> String {
     format!("`{binary}` isn't installed. {}", tool_source_help(binary))
 }
 
-/// Where a first-party tool program comes from, and its build command.
+/// Where a first-party tool program comes from: `aivyx-pa tool-programs install`
+/// first, then the Docker image or a build from source.
 fn tool_source_help(binary: &str) -> String {
     format!(
-        "The shell installer and the .deb ship only `aivyx-pa`; the Docker image includes \
-         `{binary}`. To build it from source:\n\
+        "Install the tool programs for this version with:\n\
+         \n    aivyx-pa tool-programs install\n\
+         \nThe .deb and the Docker image include them already. Or build `{binary}` from \
+         source:\n\
          \n    git clone https://github.com/Aivyx-Agent/aivyx-pa && cd aivyx-pa\n    \
          cargo install --locked --path crates/{binary}\n"
     )
+}
+
+/// A tool program beside `aivyx-pa` (`exe_dir`), else on `PATH`.
+pub(crate) fn find_tool_program(name: &str, exe_dir: Option<&Path>) -> Option<PathBuf> {
+    exe_dir
+        .map(|dir| dir.join(name))
+        .filter(|p| p.is_file())
+        .or_else(|| binary_on_path(name))
 }
 
 /// The tool program `found`, or, when it wasn't, how to get it and its
@@ -505,7 +516,35 @@ async fn run_onboarding(
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf));
-    let found = resolve_service_binary(svc, exe_dir.as_deref());
+    let mut found = resolve_service_binary(svc, exe_dir.as_deref());
+    // Offer to fetch the tool programs right here (pre-launch audit S2).
+    if found.is_none()
+        && let Some(target) = crate::tools_install::release_target()
+        && let Some(dir) = exe_dir.as_deref()
+        && prompt_yes_no(
+            &format!(
+                "`{}` isn't installed. Download the tool programs for this version now \
+                 (`aivyx-pa tool-programs install`)?",
+                svc.binary
+            ),
+            true,
+            reader,
+            writer,
+        )?
+    {
+        match crate::tools_install::install(
+            crate::tools_install::RELEASES,
+            env!("CARGO_PKG_VERSION"),
+            target,
+            dir,
+            writer,
+        )
+        .await
+        {
+            Ok(_) => found = resolve_service_binary(svc, exe_dir.as_deref()),
+            Err(e) => writeln!(writer, "  {e}").map_err(|e| format!("write error: {e}"))?,
+        }
+    }
     let Some(binary) = binary_or_ask(svc.binary, found, reader, writer)? else {
         writeln!(writer, "Stopped before changing anything.")
             .map_err(|e| format!("write error: {e}"))?;
@@ -814,7 +853,7 @@ mod tests {
             .unwrap();
         assert_eq!(got, None);
         let shown = String::from_utf8(out).unwrap();
-        assert!(shown.contains("ship only `aivyx-pa`"), "{shown}");
+        assert!(shown.contains("aivyx-pa tool-programs install"), "{shown}");
         assert!(shown.contains("cargo install --locked --path crates/aivyx-gmail"), "{shown}");
 
         let typed = binary_or_ask(

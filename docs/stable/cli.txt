@@ -121,6 +121,9 @@ team
   aivyx-pa team abort|pause|resume <mission-id>
 tool
   aivyx-pa tool init <path> [--force]
+tool-programs
+  aivyx-pa tool-programs [list]
+  aivyx-pa tool-programs install [--dir <folder>]
 tool-relevance (developer)
   aivyx-pa tool-relevance dump [--keyword-key <key>] (developer)
 tools

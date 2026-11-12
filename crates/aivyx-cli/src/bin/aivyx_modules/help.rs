@@ -351,6 +351,12 @@ pub const COMMANDS: &[CommandHelp] = &[
         usage: &["aivyx-pa mcp-server web-search"],
     },
     CommandHelp {
+        name: "tool-programs",
+        group: Group::Setup,
+        summary: "List or install the tool programs (Gmail, Toolkit, …)",
+        usage: &["aivyx-pa tool-programs [list]", "aivyx-pa tool-programs install [--dir <folder>]"],
+    },
+    CommandHelp {
         name: "connect",
         group: Group::Tools,
         summary: "Guided OAuth credential onboarding",

@@ -1,0 +1,98 @@
+# Builds the tool programs (aivyx-gmail, aivyx-calendar, aivyx-drive,
+# aivyx-contacts, aivyx-notion, aivyx-obsidian, aivyx-n8n, aivyx-toolkit)
+# into one archive per platform, `aivyx-pa-tools-<target>.tar.gz` with a
+# `.sha256` beside it, and attaches both to the GitHub Release.
+# `aivyx-pa tool-programs install` downloads the one matching its own version and
+# platform, checks it against the .sha256 and puts the programs beside
+# `aivyx-pa` (pre-launch audit 2026-11-13, S2).
+#
+# Like desktop-release.yml, this never creates the release: cargo-dist's
+# release.yml does. It waits for that release, then uploads. The targets
+# match release.yml's CLI targets (musl-static Linux, both macOS slices);
+# both macOS slices build on the Apple-Silicon runner, as in
+# desktop-release.yml.
+name: tools-release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # attach assets to the release
+
+env:
+  TOOLS: aivyx-gmail aivyx-calendar aivyx-drive aivyx-contacts aivyx-notion aivyx-obsidian aivyx-n8n aivyx-toolkit
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install musl-tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - name: Build the tool programs
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} \
+            $(for t in $TOOLS; do printf -- '-p %s ' "$t"; done)
+      - name: Package
+        shell: bash
+        run: |
+          name=aivyx-pa-tools-${{ matrix.target }}
+          mkdir "$name"
+          for t in $TOOLS; do
+            cp "target/${{ matrix.target }}/release/$t" "$name/"
+          done
+          # COPYFILE_DISABLE: macOS tar would add `._*` metadata entries,
+          # which `aivyx-pa tool-programs install` refuses.
+          COPYFILE_DISABLE=1 tar -czf "$name.tar.gz" "$name"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          else
+            shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+          cat "$name.tar.gz.sha256"
+      - name: Attach to the release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          name=aivyx-pa-tools-${{ matrix.target }}
+          # Up to 2 hours, as in desktop-release.yml: the release appears only
+          # after cargo-dist's slowest build.
+          for i in $(seq 1 360); do
+            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
+            echo "waiting for cargo-dist to create release $GITHUB_REF_NAME… ($i)"
+            sleep 20
+          done
+          for i in $(seq 1 15); do
+            gh release upload "$GITHUB_REF_NAME" "$name.tar.gz" "$name.tar.gz.sha256" --clobber && exit 0
+            echo "upload attempt $i failed; retrying…"
+            sleep 20
+          done
+          exit 1
+      - name: Upload artifact (manual dispatch)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: aivyx-pa-tools-${{ matrix.target }}
+          path: aivyx-pa-tools-${{ matrix.target }}.tar.gz*

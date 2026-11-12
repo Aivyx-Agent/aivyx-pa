@@ -1260,10 +1260,10 @@ textarea.input { width: 100%; resize: vertical; line-height: 1.5; font-family: i
 .cc-entry { display: flex; gap: 14px; width: 100%; text-align: left; background: none; border: 0; color: inherit;
   padding: 4px 0; cursor: pointer; font: inherit; }
 .cc-entry:hover span:last-child { color: var(--color-primary); }
-.cc-time { flex: none; width: 92px; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-secondary); }
+.cc-time { flex: none; width: 112px; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-secondary); }
 .cc-time.warn { color: var(--color-warning); }
 .cc-quiet, .cc-more { color: var(--color-text-secondary); }
 .cc-notice { color: var(--color-secondary-text); margin: 0; }
 .cc-skel-line { height: 14px; border-radius: 3px; margin: 8px 0; width: 60%; }
 .cc-skel-line.wide { height: 34px; width: 45%; }
-@media (max-width: 600px) { .cc-greeting { font-size: 26px; } .cc-time { width: 72px; } }
+@media (max-width: 600px) { .cc-greeting { font-size: 26px; } .cc-time { width: auto; min-width: 72px; } }

@@ -98,6 +98,8 @@
 
 #[path = "aivyx_modules/access.rs"]
 mod access;
+#[path = "aivyx_modules/tools_install.rs"]
+mod tools_install;
 #[path = "aivyx_modules/audit_export.rs"]
 mod audit_export;
 #[path = "aivyx_modules/autonomy.rs"]
@@ -851,6 +853,16 @@ fn run() -> Result<(), String> {
         return doctor::run_studio(token_only);
     }
 
+    // `aivyx-pa tool-programs [list|install]`: the tool programs (pre-launch audit
+    // S2). No daemon / passphrase.
+    if let CliMode::ToolPrograms(args) = mode {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to start runtime: {e}"))?;
+        return runtime.block_on(tools_install::run(&args));
+    }
+
     if let CliMode::Doctor = mode {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1068,7 +1080,7 @@ fn run() -> Result<(), String> {
         return rt.block_on(async move { loop_cli::run_loop(sub).await });
     }
 
-    // Phase 102 — `aivyx-pa tools`: read-only tool-observability
+    // Phase 102 — `aivyx-pa tool-programs`: read-only tool-observability
     // view. IPC-backed; same daemon-query shape as `learning`.
     if let CliMode::Tools { window_secs } = mode {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -2498,6 +2510,9 @@ enum CliMode {
     /// Chapter Keyring — `aivyx-pa keyring <set|clear|status>`: manage the master
     /// passphrase in the OS credential store. No daemon / storage.
     Keyring(KeyringSubcommand),
+    /// `aivyx-pa tool-programs [list|install [--dir <folder>]]`: the tool programs
+    /// (pre-launch audit S2). The arguments after `tools`.
+    ToolPrograms(Vec<String>),
     /// `aivyx-pa mcp <subcommand>`: Phase 106 curated-recipes
     /// catalog. Currently only `recipes [<name>]` — list or
     /// print MCP server recipes. Distinct from the
@@ -4614,7 +4629,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
                 other => {
                     return Err(format!(
-                        "unrecognized argument to `aivyx-pa tools`: \
+                        "unrecognized argument to `aivyx-pa tool-programs`: \
                          `{other}`"
                     ));
                 }
@@ -5585,6 +5600,21 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         };
         return Ok(CliArgs {
             mode: CliMode::Keyring(sub),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // `aivyx-pa tool-programs [list|install [--dir <folder>]]` (pre-launch
+    // audit S2). Not `tools`: that's the tool-usage ledger.
+    if !args.is_empty() && args[0] == "tool-programs" {
+        return Ok(CliArgs {
+            mode: CliMode::ToolPrograms(args[1..].to_vec()),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,
@@ -9759,7 +9789,12 @@ async fn run_async(
         }
         let spawn_cfg = aivyx_tool::ToolProcessConfig {
             name: tp_cfg.name.clone(),
-            command: tp_cfg.command.clone(),
+            // Beside the daemon first: where `tool-programs install` puts
+            // them, and a background service's PATH may not include it.
+            command: tools_install::resolve_command(
+                &tp_cfg.command,
+                tools_install::exe_dir().ok().as_deref(),
+            ),
             args: tp_cfg.args.clone(),
             env: tp_cfg.env.clone(),
             sandbox: spawn_sandbox,
@@ -13428,7 +13463,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 102 — `aivyx-pa tools` subcommand parse tests.
+    // Phase 102 — `aivyx-pa tool-programs` subcommand parse tests.
     // -----------------------------------------------------------------
 
     #[test]

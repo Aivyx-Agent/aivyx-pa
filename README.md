@@ -22,7 +22,7 @@ verifiable offline.
 > destination (local teams becoming a network of agents), and the
 > discipline every chapter is held against.
 
-![The Aivyx PA Studio — the local-first web GUI (Command Center), shown here in the native desktop app](docs/images/desktop-app.png)
+![The Aivyx PA Studio's Command Center: readings, what needs you, what it did, and its routines coming up](docs/images/studio-command-center.png)
 
 ## Status (v0.21.2 — source-available, BUSL-1.1, 2026-11-13)
 
@@ -51,7 +51,7 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 
 **2. Have a model to talk to.** Either a local model server —
 [Lemonade](https://lemonade-server.ai), [Ollama](https://ollama.com),
-llama.cpp's `llama-server`, Jan, or `aivyx-broker` — running with a
+llama.cpp's `llama-server`, Jan, Docker Model Runner, or `aivyx-broker` — running with a
 tool-capable model, or an Anthropic / OpenAI API key.
 
 **3. Set it up:**
@@ -85,6 +85,11 @@ talk to the agent, **Memory** shows what it has learned, **Documents**
 reads and edits files in scope, **Settings** adjusts access, autonomy
 and budgets, and **Audit** holds the HMAC-chained log (with offline
 **Verify chain**). The **Guide** screen is the in-app user guide.
+
+Gmail, Calendar, Drive, Contacts, Notion, Obsidian, n8n and the Toolkit
+are separate tool programs: `aivyx-pa tool-programs install` adds them
+beside `aivyx-pa` (the `.deb` and the Docker image include them), and
+`aivyx-pa connect gmail` signs in to Google.
 
 To keep it running for days (scheduled routines firing, the loop
 available), install it as a background service:

@@ -321,20 +321,30 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 
 ### The tool programs (Gmail, Calendar, Drive, Contacts, Notion, Obsidian, n8n, toolkit)
 
-The installer, the release archives and the `.deb` ship `aivyx-pa` only.
 The optional tool programs a `[[tool_process]]` entry runs —
 `aivyx-gmail`, `aivyx-calendar`, `aivyx-drive`, `aivyx-contacts`,
-`aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n` and `aivyx-toolkit` — are
-in the [Docker image](#docker--the-server-appliance), or build one from a
-clone of this repository:
+`aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n` and `aivyx-toolkit` — come
+separately from the one-line installer's `aivyx-pa`:
+
+```sh
+aivyx-pa tool-programs install   # download them for this version, beside aivyx-pa
+aivyx-pa tool-programs list      # where each one is
+```
+
+`install` downloads `aivyx-pa-tools-<platform>.tar.gz` from the same
+release, checks it against its published SHA-256, and puts the programs
+beside `aivyx-pa`, where `aivyx-pa connect` and the daemon find them
+(`--dir <folder>` puts them elsewhere on your `PATH`). The `.deb` and the
+[Docker image](#docker--the-server-appliance) include them already.
+`aivyx-pa connect gmail` offers to run `install` when the program is
+missing.
+
+To build one from source instead:
 
 ```sh
 git clone https://github.com/Aivyx-Agent/aivyx-pa && cd aivyx-pa
 cargo install --locked --path crates/aivyx-gmail   # any of the names above
 ```
-
-`cargo install` puts it in `~/.cargo/bin`, beside the installer's
-`aivyx-pa`, where both `aivyx-pa connect` and the daemon find it.
 
 ### macOS first launch: Gatekeeper
 

@@ -60,7 +60,12 @@ jobs:
       - name: Add the aivyx-pa daemon to the .deb
         run: |
           cargo build --release -p aivyx-cli --bin aivyx-pa
-          scripts/add-daemon-to-deb.sh target/release/bundle/deb/*.deb target/release/aivyx-pa
+          # The tool programs too, so `[[tool_process]]` entries and
+          # `aivyx-pa connect` work from the .deb (pre-launch audit S2).
+          tools="aivyx-gmail aivyx-calendar aivyx-drive aivyx-contacts aivyx-notion aivyx-obsidian aivyx-n8n aivyx-toolkit"
+          cargo build --release $(for t in $tools; do printf -- '-p %s ' "$t"; done)
+          scripts/add-daemon-to-deb.sh target/release/bundle/deb/*.deb target/release/aivyx-pa \
+            $(for t in $tools; do printf 'target/release/%s ' "$t"; done)
       # Attach to the release cargo-dist creates (release.yml) — wait for it to
       # exist first, then UPLOAD (never create), so we don't race cargo-dist's
       # "Create GitHub Release" step (it fails if the release already exists).

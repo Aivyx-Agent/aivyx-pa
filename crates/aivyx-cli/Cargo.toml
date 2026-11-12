@@ -161,6 +161,12 @@ directories = "6.0.0"
 # dependency set, even though it's a tiny, already-workspace-pinned crate.
 base64 = { workspace = true, optional = true }
 
+# `aivyx-pa tools install`: download, check and unpack the tool programs.
+sha2 = { workspace = true }
+hex = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 # Restores the default Ctrl-C action after `init`'s skippable drafting step.
 libc = { workspace = true }

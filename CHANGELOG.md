@@ -5,6 +5,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`aivyx-pa tool-programs install`** downloads the tool programs
+  (Gmail, Calendar, Drive, Contacts, Notion, Obsidian, n8n, the Toolkit)
+  for your version and platform, checks them against the release's
+  published SHA-256 and puts them beside `aivyx-pa`; `tool-programs list`
+  shows where each one is. Each release now carries
+  `aivyx-pa-tools-<platform>.tar.gz`. `aivyx-pa connect gmail` (and
+  calendar, drive, contacts) offers to install them when they're missing,
+  and the desktop app's `.deb` includes them. Packs such as Business
+  Manager need them.
+
 ## [0.21.2] — 2026-11-13
 
 ### Fixed

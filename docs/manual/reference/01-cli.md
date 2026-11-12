@@ -495,6 +495,24 @@ aivyx-pa signal verify
 
 Then run the channel with `aivyx-pa --channel signal`.
 
+### `aivyx-pa tool-programs`
+
+The tool programs a `[[tool_process]]` entry runs: `aivyx-gmail`,
+`aivyx-calendar`, `aivyx-drive`, `aivyx-contacts`, `aivyx-notion`,
+`aivyx-obsidian`, `aivyx-n8n` and `aivyx-toolkit`.
+
+```
+aivyx-pa tool-programs [list]
+aivyx-pa tool-programs install [--dir <folder>]
+```
+
+`list` shows where each one is (beside `aivyx-pa`, or on `PATH`).
+`install` downloads the tool programs for this version and platform from
+the release, checks them against the published SHA-256 and puts them beside
+`aivyx-pa` (or in `--dir`). The `.deb` and the Docker image include them
+already. `aivyx-pa connect gmail` offers to run it when the program is
+missing.
+
 ### `aivyx-pa pack`
 
 Vertical packs: signed bundles that turn an assistant into a domain
