@@ -3,6 +3,8 @@
 [![CI](https://github.com/Aivyx-Agent/aivyx-pa/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Aivyx-Agent/aivyx-pa/actions/workflows/ci.yml)
 [![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](LICENSE)
 
+**Website:** [aivyx-ecosystem.com/pa](https://aivyx-ecosystem.com/pa/) · [User manual](https://aivyx-ecosystem.com/pa/manual/) · [Get started](https://aivyx-ecosystem.com/start/)
+
 > A personal autonomous agent platform that runs on your hardware,
 > works with a model on your own machine (Ollama, Lemonade, llama.cpp,
 > Jan, Docker Model Runner) or a cloud LLM under your own API key, and
