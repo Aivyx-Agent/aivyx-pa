@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-apps"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-audit"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-auth-cli"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-instance",
  "serde",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-calendar"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-capability"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "globset",
  "serde",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-channel"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -255,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-cli"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-config"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-cost",
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-contacts"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -372,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-core"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-checkpoint",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-cost"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-crypto"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "argon2",
  "chacha20poly1305 0.10.1",
@@ -424,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-dataread"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-desktop"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-instance",
  "aivyx-ipc",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-discord"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-drive"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-federation"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-config",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-gmail"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-google-oauth"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-instance",
  "reqwest 0.12.28",
@@ -562,14 +562,14 @@ source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=a3eb989ea
 
 [[package]]
 name = "aivyx-instance"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "aivyx-ipc"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-instance",
@@ -580,14 +580,14 @@ dependencies = [
 
 [[package]]
 name = "aivyx-kitchen"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-vertical-sdk",
 ]
 
 [[package]]
 name = "aivyx-kitchen-toolkit"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-llm"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-route",
  "aivyx-stencil",
@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-matrix"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -667,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-mcp"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-memory"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-n8n"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-notion"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -736,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-obsidian"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-proton"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-signal"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-slack"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-storage"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-crypto",
  "async-trait",
@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-team"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-checkpoint",
@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-team-types"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "serde",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-telegram"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-tool"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-toolkit"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-tui"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-channel",
  "crossterm 0.29.0",
@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-vertical-sdk"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -992,11 +992,11 @@ dependencies = [
 
 [[package]]
 name = "aivyx-verticals-placeholder"
-version = "0.21.2"
+version = "0.21.3"
 
 [[package]]
 name = "aivyx-vision"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-voice"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -1085,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-web"
-version = "0.21.2"
+version = "0.21.3"
 dependencies = [
  "aivyx-ipc",
  "console_error_panic_hook",

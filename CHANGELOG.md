@@ -5,6 +5,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [0.21.3] — 2026-11-13
+
 ### Added
 
 - **`aivyx-pa tool-programs install`** downloads the tool programs
@@ -16,6 +18,18 @@ All notable changes to Aivyx are recorded here. This project adheres to
   calendar, drive, contacts) offers to install them when they're missing,
   and the desktop app's `.deb` includes them. Packs such as Business
   Manager need them.
+- **A Packs page in the user guide** (and the Studio's Guide): where to
+  get packs, inspecting and installing one, what a pack can't change,
+  the tool programs a pack may need, and trusting a publisher.
+
+### Fixed
+
+- **The background service finds the tool programs.** A `[[tool_process]]`
+  command given as a bare name now runs from beside `aivyx-pa` when it's
+  there; the service's `PATH` doesn't include `~/.cargo/bin`, so before
+  this only programs in a system folder were found.
+- **The Studio's Coming up no longer wraps a time** such as
+  "in 3 d · 08:00" onto two lines.
 
 ## [0.21.2] — 2026-11-13
 
