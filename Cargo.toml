@@ -47,6 +47,7 @@ members = [
     # ignores matches without a Cargo.toml, so an empty dir builds fine.
     "crates/verticals-private/*",
     "crates/aivyx-cost",
+    "crates/aivyx-card-helper",
     "crates/aivyx-web",
     # Native desktop shell — links a system webview (WebKitGTK), so like
     # aivyx-web it's kept OUT of default-members; build it explicitly with
@@ -105,6 +106,7 @@ default-members = [
     # Commercial / private packs (git-ignored, see crates/verticals-private/).
     "crates/verticals-private/*",
     "crates/aivyx-cost",
+    "crates/aivyx-card-helper",
 ]
 
 [workspace.package]
@@ -325,7 +327,9 @@ aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "d
 # consuming crate (not here) because it transitively needs `libpcsclite` at
 # build time via `pcsc-sys` — gated behind the `yubikey` Cargo feature,
 # off by default, so the default workspace build never touches it.
-aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "6dce9d40aa2698a36bbc62d18359a21a8ba79c9e" }
+aivyx-card-helper = { path = "crates/aivyx-card-helper" }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "badc3218fea6029a449bbec5f74aa85f2cd9f784" }
 
 # Prompt-injection phrase-list tripwire (Chapter Picket) for untrusted
 # tool output (fs.read, web.fetch, every tool-process/MCP tool),
