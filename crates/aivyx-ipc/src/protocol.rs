@@ -2322,6 +2322,13 @@ pub struct DocFile {
     pub binary: bool,
 }
 
+/// A18 — an enrolled unlock card as shown to frontends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LockCardView {
+    pub serial: String,
+    pub label: String,
+}
+
 // ---------------------------------------------------------------------------
 // Frontend → Daemon
 // ---------------------------------------------------------------------------
@@ -2329,6 +2336,28 @@ pub struct DocFile {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum FrontendMessage {
+    /// A18 — ask whether the store is locked and which cards are enrolled.
+    GetLockState,
+    /// A18 — unlock with a card PIN (optionally naming the card serial).
+    Unlock {
+        pin: String,
+        #[serde(default)]
+        serial: Option<String>,
+    },
+    /// A18 — unlock with the passphrase fallback.
+    UnlockWithPassphrase { passphrase: String },
+    /// A18 — lock the store again.
+    Lock,
+    /// A18 — enrol a card as an unlock factor.
+    EnrollCard {
+        serial: String,
+        label: String,
+        pin: String,
+        #[serde(default)]
+        generate: bool,
+        #[serde(default)]
+        admin_pin: Option<String>,
+    },
     StartSession {
         role: Option<String>,
         #[serde(default)]
@@ -2700,6 +2729,26 @@ pub enum PersonaProposalResolution {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonMessage {
+    /// A18 — current lock state and the enrolled cards.
+    LockState {
+        locked: bool,
+        cards: Vec<LockCardView>,
+    },
+    /// A18 — the store was unlocked; `method` is "card <serial>" or "passphrase".
+    Unlocked { method: String },
+    /// A18 — an unlock attempt failed. `code` is one of `wrong_pin`,
+    /// `pin_blocked`, `no_card`, `not_enrolled`, `touch_timeout`, `entry`,
+    /// `helper_missing`, `busy`, `backoff`, `wrong_passphrase`, `not_locked`, `other`.
+    UnlockFailed {
+        code: String,
+        message: String,
+        #[serde(default)]
+        tries_left: Option<u8>,
+    },
+    /// A18 — refusal of any other request while the store is locked.
+    Locked { message: String },
+    /// A18 — a card was enrolled.
+    CardEnrolled { serial: String },
     SessionStarted {
         session_id: String,
     },
@@ -3412,6 +3461,26 @@ pub fn decode_frame<T: for<'de> Deserialize<'de>>(buf: &[u8]) -> Result<(T, usiz
 #[serde(tag = "type")]
 pub enum DaemonEnvelope {
     // DaemonMessage variants (flattened for serde tag dispatch)
+    /// A18 — current lock state and the enrolled cards.
+    LockState {
+        locked: bool,
+        cards: Vec<LockCardView>,
+    },
+    /// A18 — the store was unlocked; `method` is "card <serial>" or "passphrase".
+    Unlocked { method: String },
+    /// A18 — an unlock attempt failed. `code` is one of `wrong_pin`,
+    /// `pin_blocked`, `no_card`, `not_enrolled`, `touch_timeout`, `entry`,
+    /// `helper_missing`, `busy`, `backoff`, `wrong_passphrase`, `not_locked`, `other`.
+    UnlockFailed {
+        code: String,
+        message: String,
+        #[serde(default)]
+        tries_left: Option<u8>,
+    },
+    /// A18 — refusal of any other request while the store is locked.
+    Locked { message: String },
+    /// A18 — a card was enrolled.
+    CardEnrolled { serial: String },
     SessionStarted {
         session_id: String,
     },
@@ -3628,6 +3697,23 @@ pub enum DaemonEnvelope {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn lock_state_messages_round_trip() {
+        for m in [
+            FrontendMessage::GetLockState,
+            FrontendMessage::Unlock { pin: "1".into(), serial: Some("S".into()) },
+            FrontendMessage::UnlockWithPassphrase { passphrase: "p".into() },
+            FrontendMessage::Lock,
+            FrontendMessage::EnrollCard { serial: "S".into(), label: "l".into(), pin: "1".into(), generate: false, admin_pin: None },
+        ] {
+            let (back, _) = decode_frame::<FrontendMessage>(&encode_frame(&m).unwrap()).unwrap();
+            assert_eq!(back, m);
+        }
+        let d = DaemonMessage::UnlockFailed { code: "wrong_pin".into(), message: "PIN incorrect".into(), tries_left: Some(2) };
+        let (env, _) = decode_frame::<DaemonEnvelope>(&encode_frame(&d).unwrap()).unwrap();
+        assert!(matches!(env, DaemonEnvelope::UnlockFailed { tries_left: Some(2), .. }));
+    }
 
     #[test]
     fn approval_messages_round_trip() {

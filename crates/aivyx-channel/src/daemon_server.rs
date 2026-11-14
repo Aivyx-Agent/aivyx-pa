@@ -4069,6 +4069,34 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        // A18 — lock-state messages. The full (unlocked) daemon
+                        // is never locked; Task 9 fills in cards, Lock, EnrollCard.
+                        FrontendMessage::GetLockState => {
+                            let resp = DaemonMessage::LockState {
+                                locked: false,
+                                cards: vec![],
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
+                        FrontendMessage::Unlock { .. }
+                        | FrontendMessage::UnlockWithPassphrase { .. } => {
+                            let resp = DaemonMessage::UnlockFailed {
+                                code: "not_locked".into(),
+                                message: "PA is already unlocked".into(),
+                                tries_left: None,
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
+                        FrontendMessage::Lock | FrontendMessage::EnrollCard { .. } => {
+                            let resp = DaemonMessage::Error {
+                                code: "unsupported".into(),
+                                message: "not available yet".into(),
+                            };
+                            let frame = encode_frame(&resp)?;
+                            writer.write_all(&frame).await?;
+                        }
                     }
                 }
                 Err(e) => {
