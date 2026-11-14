@@ -118,12 +118,18 @@ aivyx-pa card list
 aivyx-pa card remove <serial>
 ```
 
-- `add` — enroll a card. It asks for your passphrase (to prove the store is
-  yours), the card's PIN, and a touch. If the card has no decryption key it
-  offers to make one, which needs the card's admin PIN. With several cards
-  plugged in, `--card <serial>` picks one; `--label` names it (shown by
-  `list`). It then offers to remove the saved passphrase (keyring or
-  `daemon.env`), so nothing on the disk can unlock PA without the card.
+- `add` — enroll a card. With PA running and unlocked, it asks for the
+  card's PIN and a touch (the running daemon already holds the key). With
+  no daemon running, it first asks for your passphrase, to prove the store
+  is yours. With a locked daemon it refuses: unlock it first
+  (`aivyx-pa unlock --passphrase`). If the card has no decryption key it
+  offers to make one, which needs the card's admin PIN; a key PA can't use
+  (not X25519) stops it before that. With several cards plugged in,
+  `--card <serial>` picks one; `--label` names it (shown by `list`). It
+  then offers to remove the saved passphrase (keyring or `daemon.env`), so
+  nothing on the disk can unlock PA without the card. A passphrase in
+  `AIVYX_PA_PASSPHRASE` or `[storage] passphrase` keeps the service starting
+  unlocked; `add` says so and how to remove it, but doesn't edit it.
 - `list` — each enrolled card, its label, when it was added, and whether it
   is plugged in now.
 - `remove <serial>` — forget a card. If it is your last card and no
@@ -138,7 +144,8 @@ needs the system's `pcscd` smart-card service. Install the helper with
 
 ### `aivyx-pa unlock`
 
-Open a locked daemon.
+Open a locked daemon. It needs the daemon to be running (`aivyx-pa daemon
+status` shows `locked: yes`).
 
 ```
 aivyx-pa unlock [--card <serial>] [--passphrase]
@@ -156,10 +163,14 @@ log (`StoreUnlocked`, with the method: `card <serial>` or `passphrase`).
 ### `aivyx-pa lock`
 
 Close an unlocked daemon: it stops its services and drops every key from
-memory, and comes back locked, with the same process. Unlock it again with
-`aivyx-pa unlock`. It is refused while a passphrase is saved anywhere (the
-keyring, `daemon.env` or `aivyx-pa.toml`) or set in the environment,
-because the daemon would just unlock itself again.
+memory, then re-executes itself in place (the same process id, a fresh
+process image) and comes back locked. Unlock it again with
+`aivyx-pa unlock`. It needs a running daemon and at least one enrolled
+card, and it is refused while a passphrase is saved anywhere (the keyring,
+`daemon.env` or `aivyx-pa.toml`) or set in the environment, because the
+daemon would just unlock itself again; the refusal says which one. These
+checks run when you ask, so a passphrase saved since the daemon started
+counts. Unlocking, locking and enrolling are CLI-only: Studio refuses them.
 
 ### `aivyx-pa init`
 
@@ -625,7 +636,7 @@ aivyx-pa audit export [--from <seq>] [--limit <N>] [--event-type <type>]
 
 `--event-type` keeps one kind of event: `tool_call`, `scope_denied`,
 `turn_started`, `turn_ended`, `memory_access`, `auto_notify_dispatched`,
-`skill_auto_proposal` or `skill_invocation` (the older CamelCase names,
+`skill_auto_proposal`, `skill_invocation` or `store_unlocked` (the older CamelCase names,
 such as `ToolCall`, still work).
 
 To verify the chain instead, run `aivyx-pa --verify-only`.

@@ -627,8 +627,12 @@ tools away from `card-unlock.toml`.
 
 **Residual:** the card helper (`aivyx-pa-card`) links the system PC/SC
 library and so is a glibc binary on Linux; it runs as a one-shot child that
-outputs only a 32-byte shared secret to its parent, and is not reachable as
-an agent tool.
+outputs only a 32-byte shared secret to its parent. It is not an agent
+tool, but an agent granted `shell.exec` can run it, or reach the daemon's
+socket, as it could run `gpg` or `ykman`: what guards the card then is its
+PIN and the touch, not PA. Studio never relays unlock, lock or enrollment
+requests from a browser (they are CLI-only), so a stolen Studio token
+can't spend the card's PIN tries.
 
 ## 5. Threats we explicitly do not defend against
 

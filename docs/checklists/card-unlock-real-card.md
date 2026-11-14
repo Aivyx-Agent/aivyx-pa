@@ -8,9 +8,13 @@ Date: ____  Card: ____  PA version: ____
 
 - [ ] 1. Enroll a fresh card (let `card add` generate the key), and a card that
       already has a decryption key. `card list` shows both.
-- [ ] 2. Restart the service. `aivyx-pa daemon status` shows `locked: yes`.
+- [ ] 2. Make sure no passphrase is saved (`card add` removed it, and
+      `AIVYX_PA_PASSPHRASE` / `[storage] passphrase` are unset). Restart the
+      service. `aivyx-pa daemon status` shows `locked: yes`.
       `aivyx-pa unlock` (PIN and touch) then shows `locked: no`.
-- [ ] 3. `aivyx-pa lock`, then unlock again.
+- [ ] 3. `aivyx-pa lock`, then unlock again. After the `lock`, `ps` shows the
+      same daemon pid and no tool or MCP child process from before the lock
+      survives (compare `ps --ppid <pid>` before and after).
 - [ ] 4. Unplug the card and run `aivyx-pa unlock --passphrase`.
 - [ ] 5. Enter the wrong PIN twice (the tries left are shown), then the right
       one.

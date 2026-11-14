@@ -38,23 +38,33 @@ you plug the card in, type its PIN and touch it.
 1. Install the card helper and make sure the smart-card service is running:
    `aivyx-pa tool-programs install`, and `pcscd` (on most Linux systems,
    `sudo systemctl enable --now pcscd`).
-2. Enroll the card: `aivyx-pa card add`. It asks for your passphrase, then
-   the card's PIN and a touch. If the card has no decryption key, it offers
-   to make one.
-3. When it asks, answer yes to removing the saved passphrase.
-4. From the next login, the background service starts *locked*: it's
-   running, but the store is closed and nothing runs. Open it with
+2. Enroll the card: `aivyx-pa card add`. With PA running and unlocked, it
+   asks only for the card's PIN and a touch. With PA stopped, it asks for
+   your passphrase first, then the PIN and a touch. If PA is running but
+   locked, unlock it first (`aivyx-pa unlock --passphrase`). If the card
+   has no decryption key, it offers to make one.
+3. When it asks, answer yes to removing the saved passphrase. A passphrase
+   set in `AIVYX_PA_PASSPHRASE` or in `aivyx-pa.toml` isn't removed for you:
+   `card add` says where it is, and you remove it yourself.
+4. After the service restarts (or at your next login), it starts *locked*:
+   it's running, but the store is closed and nothing runs. Open it with
    `aivyx-pa unlock` (PIN and a touch).
 5. When you step away, run `aivyx-pa lock`. It closes the store and drops
-   the keys from memory.
+   the keys from memory. `unlock` and `lock` talk to the running service, so
+   it must be running; `lock` also needs an enrolled card and no saved
+   passphrase, and says which one is in the way.
 6. If you lose the card, run `aivyx-pa unlock --passphrase`, then
    `aivyx-pa card remove <serial>`.
 7. Enroll a second card as a spare with `aivyx-pa card add`.
 
 Your passphrase still works and is always your way back in, so keep it
 somewhere safe. A card can't recover a lost passphrase. After 5 wrong
-unlocks in a row PA refuses more for 30 seconds. The assistant's own file
-tools can't read the card file (`card-unlock.toml`).
+unlocks in a row PA refuses more for 30 seconds. Unlocking, locking and
+enrolling are done only with the `aivyx-pa` command, never from Studio.
+Ward, which is on by default, stops the assistant's own file tools reading
+the card file (`card-unlock.toml`); it can be turned off
+(`guard_sensitive_paths = false` under `[access]`), which also lets them
+read it.
 
 ## Permission for every action
 

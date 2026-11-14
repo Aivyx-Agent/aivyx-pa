@@ -164,7 +164,10 @@ the entry is saved.
   `passphrase`).
 - **`Lock`** (only when unlocked) stops the same services in the same
   order as shutdown, drops the master key and every subkey (zeroed), and
-  returns to the locked state without the process exiting.
+  returns to the locked state without the process exiting. (As built, it
+  re-executes itself in place: the same pid, a new process image, which
+  starts locked. Services and their child processes are stopped before
+  the exec; the real-card checklist checks that none survives.)
 - **Failed attempts.** One unlock at a time is allowed; a second one while
   the first runs is told to wait. After 5 failed unlocks in a row, the
   daemon waits 30 s before accepting the next. This is on top of the

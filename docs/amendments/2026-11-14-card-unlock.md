@@ -47,7 +47,9 @@ daemon starts **locked**:
 
 Unlocking continues the normal start-up path. `lock` returns a running
 daemon to that state: services stop as on shutdown, and every key is
-dropped and zeroed.
+dropped and zeroed. It does this by re-executing itself in place (the same
+pid, a new process image) once its services have stopped, so no key or
+state from the unlocked process survives in memory.
 
 ## Why this is consistent with D7 and the threat model
 

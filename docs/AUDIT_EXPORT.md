@@ -93,7 +93,7 @@ aivyx-pa audit export --limit 100 --from 1000   # equivalent to above
 
 Emit only one kind of event: `tool_call`, `scope_denied`, `turn_started`,
 `turn_ended`, `memory_access`, `auto_notify_dispatched`,
-`skill_auto_proposal` or `skill_invocation`. The older spellings, the
+`skill_auto_proposal`, `skill_invocation` or `store_unlocked`. The older spellings, the
 event's `kind` (`ToolCall`, ...), still work.
 
 ```bash
