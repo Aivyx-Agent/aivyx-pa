@@ -37,6 +37,7 @@ pub mod approval_prompt;
 pub mod activity;
 pub mod briefing;
 pub mod daemon_server;
+pub mod locked_daemon;
 pub mod document_browse;
 pub mod mcp_status;
 pub mod mission;

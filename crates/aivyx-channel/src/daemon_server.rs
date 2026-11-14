@@ -680,7 +680,7 @@ pub struct ToolDescriptor {
 /// crate's own test suite starts many daemons at once), not an
 /// external attacker discovering it.
 #[cfg(unix)]
-fn bind_unix_socket_0600(path: &Path) -> std::io::Result<UnixListener> {
+pub(crate) fn bind_unix_socket_0600(path: &Path) -> std::io::Result<UnixListener> {
     use std::os::unix::fs::PermissionsExt;
 
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -4357,7 +4357,7 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
     .await
 }
 
-async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {
+pub(crate) async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {
     let event = DaemonLifecycleEvent::ShuttingDown {
         reason: reason.to_string(),
     };
