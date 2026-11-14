@@ -4140,30 +4140,45 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
-                        FrontendMessage::Lock => match card_unlock.as_ref() {
-                            Some(c) if c.can_lock => {
-                                // The same path as `Shutdown`; aivyx.rs sees the
-                                // flag once `run_daemon` returns and re-execs
-                                // itself, which starts locked.
-                                c.relock_requested.store(true, std::sync::atomic::Ordering::SeqCst);
-                                let resp = DaemonMessage::Locked {
-                                    message: "PA is locked — run `aivyx-pa unlock`".into(),
-                                };
-                                let frame = encode_frame(&resp)?;
-                                writer.write_all(&frame).await?;
-                                send_shutting_down(&mut writer, "locked").await;
-                                shutdown.cancel();
-                                return Ok(());
+                        FrontendMessage::Lock => {
+                            let refusal = match card_unlock.as_ref() {
+                                None => Err(LOCK_NO_CARD_CONTEXT.to_string()),
+                                Some(c) if !c.can_lock => Err(LOCK_STARTED_UNLOCKED.to_string()),
+                                // The start-up snapshot may be stale: a passphrase
+                                // saved since, or every card removed, would make
+                                // the re-exec start unlocked or fail to start.
+                                Some(c) => {
+                                    let lockable = Arc::clone(&c.lockable);
+                                    tokio::task::spawn_blocking(move || lockable())
+                                        .await
+                                        .unwrap_or_else(|e| Err(format!("PA can't lock: {e}")))
+                                }
+                            };
+                            match (refusal, card_unlock.as_ref()) {
+                                (Ok(()), Some(c)) => {
+                                    // The same path as `Shutdown`; aivyx.rs sees the
+                                    // flag once `run_daemon` returns and re-execs
+                                    // itself, which starts locked.
+                                    c.relock_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+                                    let resp = DaemonMessage::Locked {
+                                        message: "PA is locked — run `aivyx-pa unlock`".into(),
+                                    };
+                                    let frame = encode_frame(&resp)?;
+                                    writer.write_all(&frame).await?;
+                                    send_shutting_down(&mut writer, "locked").await;
+                                    shutdown.cancel();
+                                    return Ok(());
+                                }
+                                (refusal, _) => {
+                                    let resp = DaemonMessage::Error {
+                                        code: "lock_unavailable".into(),
+                                        message: refusal.err().unwrap_or_else(|| LOCK_NO_CARD_CONTEXT.to_string()),
+                                    };
+                                    let frame = encode_frame(&resp)?;
+                                    writer.write_all(&frame).await?;
+                                }
                             }
-                            _ => {
-                                let resp = DaemonMessage::Error {
-                                    code: "lock_unavailable".into(),
-                                    message: LOCK_UNAVAILABLE.into(),
-                                };
-                                let frame = encode_frame(&resp)?;
-                                writer.write_all(&frame).await?;
-                            }
-                        },
+                        }
                     }
                 }
                 Err(e) => {
@@ -4226,9 +4241,15 @@ pub async fn run_poc_daemon_with_routing<C: ChannelContext + Send + Sync + 'stat
     run_single_connection_daemon(socket_path, agent, factory, routing_guard, routed).await
 }
 
-/// A18 — why `Lock` is refused (no card context, or a saved passphrase).
-const LOCK_UNAVAILABLE: &str = "PA can't lock: a saved passphrase would unlock it again. \
-     Remove it (`aivyx-pa keyring clear`, or delete daemon.env) and enroll a card first.";
+/// A18 — why `Lock` is refused when this daemon has no card context.
+const LOCK_NO_CARD_CONTEXT: &str =
+    "PA can't lock: card unlock isn't set up for this daemon (no instance config folder).";
+/// A18 — why `Lock` is refused when this daemon started from a passphrase
+/// (or with no card enrolled): a restart would start the same way.
+const LOCK_STARTED_UNLOCKED: &str = "PA can't lock: it started from a passphrase \
+     or with no card enrolled, so a restart would start the same way. Enroll a card \
+     (`aivyx-pa card add`), remove the saved passphrase (`aivyx-pa keyring clear`, \
+     daemon.env, AIVYX_PA_PASSPHRASE or `[storage] passphrase`) and restart the service.";
 
 /// A18 — the enrolled cards (label, serial) for `GetLockState`. A missing
 /// or broken file lists none.
@@ -11414,6 +11435,14 @@ system_prompt = "You are a custom role."
     }
 
     async fn start_card_daemon(helper: Arc<aivyx_card_helper::FakeHelper>, can_lock: bool) -> CardDaemon {
+        start_card_daemon_with(helper, can_lock, Arc::new(|| Ok(()))).await
+    }
+
+    async fn start_card_daemon_with(
+        helper: Arc<aivyx_card_helper::FakeHelper>,
+        can_lock: bool,
+        lockable: crate::card_unlock::Lockable,
+    ) -> CardDaemon {
         let dir = std::env::temp_dir().join(format!("aivyx-card-daemon-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let socket = dir.join("daemon.sock");
@@ -11434,6 +11463,7 @@ system_prompt = "You are a custom role."
             helper,
             master: card_master(),
             can_lock,
+            lockable,
             relock_requested: Arc::clone(&relock),
         });
         let handle = tokio::spawn(run_daemon(config));
@@ -11562,7 +11592,33 @@ system_prompt = "You are a custom role."
         match &reply[0] {
             aivyx_ipc::protocol::DaemonEnvelope::Error { code, message } => {
                 assert_eq!(code, "lock_unavailable");
-                assert!(message.contains("saved passphrase would unlock it again"), "{message}");
+                assert!(message.contains("started from a passphrase"), "{message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(!d.relock.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!d.handle.is_finished(), "a refused Lock leaves the daemon running");
+        d.shutdown.cancel();
+        let _ = d.handle.await;
+        std::fs::remove_dir_all(&d.dir).ok();
+    }
+
+    #[tokio::test]
+    async fn lock_rechecks_and_refuses_with_the_reason_when_a_restart_would_not_start_locked() {
+        // Started locked (can_lock), but a passphrase was saved since: the
+        // re-check refuses, says why, and leaves the daemon running.
+        let helper = Arc::new(aivyx_card_helper::FakeHelper::with_card("S2", [9u8; 32]));
+        let d = start_card_daemon_with(
+            helper,
+            true,
+            Arc::new(|| Err("PA can't lock: a passphrase is saved in the OS keyring".to_string())),
+        )
+        .await;
+        let reply = ask(&d.socket, &FrontendMessage::Lock, false).await;
+        match &reply[0] {
+            aivyx_ipc::protocol::DaemonEnvelope::Error { code, message } => {
+                assert_eq!(code, "lock_unavailable");
+                assert!(message.contains("saved in the OS keyring"), "{message}");
             }
             other => panic!("expected Error, got {other:?}"),
         }

@@ -249,23 +249,84 @@ fn run_list() -> Result<(), String> {
     Ok(())
 }
 
-/// Where a saved passphrase lives, for the last-card guard and the
-/// "remove it?" offer after `card add`.
-enum SavedPassphrase {
+/// Where a saved passphrase lives, for the last-card guard, the
+/// "remove it?" offer after `card add`, and `lock`'s re-check (A18). The
+/// order is start-up's (`select_passphrase_source`): env, TOML, keyring,
+/// daemon.env.
+pub enum SavedPassphrase {
+    /// `AIVYX_PA_PASSPHRASE` in this process's environment.
+    Env,
+    /// `[storage] passphrase` in this TOML file.
+    Toml(std::path::PathBuf),
     Keyring,
     EnvFile(std::path::PathBuf),
 }
 
-fn saved_passphrase() -> Option<SavedPassphrase> {
-    if matches!(aivyx_channel::keyring_store::retrieve(), Ok(Some(_))) {
-        return Some(SavedPassphrase::Keyring);
+impl SavedPassphrase {
+    /// Where it is, in words.
+    pub fn place(&self) -> String {
+        match self {
+            SavedPassphrase::Env => {
+                format!("the {} environment variable", crate::DEFAULT_ENV_VAR)
+            }
+            SavedPassphrase::Toml(p) => format!("`[storage] passphrase` in {}", p.display()),
+            SavedPassphrase::Keyring => "the OS keyring".to_string(),
+            SavedPassphrase::EnvFile(p) => p.display().to_string(),
+        }
     }
-    let path = crate::daemon_service::passphrase_file_path().ok()?;
-    matches!(
+
+    /// How the operator removes it.
+    pub fn how_to_remove(&self) -> String {
+        match self {
+            SavedPassphrase::Env => format!(
+                "remove {} from the service's environment",
+                crate::DEFAULT_ENV_VAR
+            ),
+            SavedPassphrase::Toml(p) => {
+                format!("delete the `passphrase` line under `[storage]` in {}", p.display())
+            }
+            SavedPassphrase::Keyring => "run `aivyx-pa keyring clear`".to_string(),
+            SavedPassphrase::EnvFile(p) => format!("delete {}", p.display()),
+        }
+    }
+}
+
+/// The saved passphrase source a start-up would use now, read afresh (the
+/// config is reloaded). `Err` when the config can't be read.
+pub fn saved_passphrase_checked() -> Result<Option<SavedPassphrase>, String> {
+    let toml_path = aivyx_config::resolve_config_path();
+    let cfg = aivyx_config::AivyxConfig::load_from_env_and_toml(&aivyx_config::LoadOptions {
+        toml_path: Some(toml_path.clone()),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    })
+    .map_err(|e| format!("failed to load the config: {e}"))?;
+    if let Some(secret) = &cfg.passphrase {
+        return Ok(Some(match secret.source {
+            aivyx_config::FieldSource::Env => SavedPassphrase::Env,
+            _ => SavedPassphrase::Toml(toml_path),
+        }));
+    }
+    if matches!(aivyx_channel::keyring_store::retrieve(), Ok(Some(_))) {
+        return Ok(Some(SavedPassphrase::Keyring));
+    }
+    let Ok(path) = crate::daemon_service::passphrase_file_path() else {
+        return Ok(None);
+    };
+    Ok(matches!(
         crate::daemon_service::read_passphrase_file(&path),
         Ok(Some(_))
     )
-    .then_some(SavedPassphrase::EnvFile(path))
+    .then_some(SavedPassphrase::EnvFile(path)))
+}
+
+/// Like [`saved_passphrase_checked`]; a config that can't be read counts as
+/// no saved passphrase (so the last-card guard still asks).
+fn saved_passphrase() -> Option<SavedPassphrase> {
+    saved_passphrase_checked().ok().flatten()
 }
 
 fn run_remove(serial: &str) -> Result<(), String> {
@@ -449,12 +510,15 @@ fn offer_to_remove_saved_passphrase() -> Result<(), String> {
     let Some(saved) = saved_passphrase() else {
         return Ok(());
     };
-    let (where_,) = match &saved {
-        SavedPassphrase::Keyring => ("the OS keyring".to_string(),),
-        SavedPassphrase::EnvFile(p) => (p.display().to_string(),),
-    };
+    // The env var and the TOML line are the operator's own settings: say
+    // what they do and how to remove them, but don't edit them.
+    if let Some(note) = kept_passphrase_note(&saved) {
+        println!("{note}");
+        return Ok(());
+    }
     if !ask_yes(&format!(
-        "Remove the saved passphrase from {where_}? [y/N] "
+        "Remove the saved passphrase from {}? [y/N] ",
+        saved.place()
     ))? {
         return Ok(());
     }
@@ -463,14 +527,40 @@ fn offer_to_remove_saved_passphrase() -> Result<(), String> {
             .map_err(|e| format!("could not clear the OS keyring: {e}"))?,
         SavedPassphrase::EnvFile(p) => std::fs::remove_file(&p)
             .map_err(|e| format!("could not remove {}: {e}", p.display()))?,
+        SavedPassphrase::Env | SavedPassphrase::Toml(_) => {}
     }
     println!("Removed the saved passphrase.");
     Ok(())
 }
 
+/// For a passphrase PA doesn't remove itself (env var, TOML): what it does
+/// and how to remove it. `None` for the keyring and daemon.env.
+fn kept_passphrase_note(saved: &SavedPassphrase) -> Option<String> {
+    match saved {
+        SavedPassphrase::Env | SavedPassphrase::Toml(_) => Some(format!(
+            "A passphrase is still set in {}: it keeps the service starting unlocked. \
+             To start locked and use the card, {}.",
+            saved.place(),
+            saved.how_to_remove()
+        )),
+        SavedPassphrase::Keyring | SavedPassphrase::EnvFile(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_env_or_toml_passphrase_is_explained_not_removed() {
+        let env = kept_passphrase_note(&SavedPassphrase::Env).unwrap();
+        assert!(env.contains("AIVYX_PA_PASSPHRASE"), "{env}");
+        assert!(env.contains("starting unlocked"), "{env}");
+        let toml = kept_passphrase_note(&SavedPassphrase::Toml("/c/aivyx-pa.toml".into())).unwrap();
+        assert!(toml.contains("[storage]") && toml.contains("/c/aivyx-pa.toml"), "{toml}");
+        assert!(kept_passphrase_note(&SavedPassphrase::Keyring).is_none());
+        assert!(kept_passphrase_note(&SavedPassphrase::EnvFile("/d.env".into())).is_none());
+    }
 
     #[test]
     fn the_last_card_needs_the_phrase_only_without_a_saved_passphrase() {

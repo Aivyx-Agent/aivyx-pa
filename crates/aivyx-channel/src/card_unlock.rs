@@ -206,6 +206,9 @@ pub fn unlock_with(
     open_entry(entry, instance, helper, pin).map(|m| (m, entry.serial.clone()))
 }
 
+/// See [`CardUnlockContext::lockable`].
+pub type Lockable = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+
 /// What a running, unlocked daemon needs for `EnrollCard` and `Lock` (A18).
 ///
 /// It holds a copy of the master key. A18 accepts this: the daemon already
@@ -219,7 +222,12 @@ pub struct CardUnlockContext {
     pub master: MasterKey,
     /// False when a passphrase source is saved (keyring, daemon.env, env, TOML):
     /// a relocked daemon would unlock itself again, so `Lock` is refused.
+    /// Decided at start-up; [`Self::lockable`] re-checks at `Lock` time.
     pub can_lock: bool,
+    /// Would a restart right now start locked? Re-checks the saved
+    /// passphrase sources and the enrolled cards when `Lock` arrives
+    /// (`Err` says why not). Blocking: call it from `spawn_blocking`.
+    pub lockable: Lockable,
     /// Set by `Lock`; read by aivyx.rs after `run_daemon` returns to re-exec.
     pub relock_requested: Arc<AtomicBool>,
 }

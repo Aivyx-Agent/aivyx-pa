@@ -1054,6 +1054,7 @@ async fn handle_websocket(
     // to daemon.
     let ws_to_ipc = {
         let unix_writer = Arc::clone(&unix_writer);
+        let ws_sink = Arc::clone(&ws_sink);
         async move {
             while let Some(msg_result) = ws_source.next().await {
                 let msg = match msg_result {
@@ -1075,6 +1076,27 @@ async fn handle_websocket(
                         continue;
                     }
                 };
+
+                // A18 — unlock, lock and card enrollment are CLI-only: a
+                // browser (an XSS, or a stolen Studio token) must not be able
+                // to spend the card's PIN tries. Log the variant, never its
+                // fields (they hold the PIN or passphrase).
+                if let Some(variant) = cli_only_variant(&frontend_msg) {
+                    eprintln!("aivyx-pa web ui: refused {variant} from Studio (CLI-only)");
+                    drop(frontend_msg);
+                    let Ok(json) = serde_json::to_string(&cli_only_refusal()) else {
+                        continue;
+                    };
+                    let mut sink = ws_sink.lock().await;
+                    if sink
+                        .send(tokio_tungstenite::tungstenite::Message::Text(json.into()))
+                        .await
+                        .is_err()
+                    {
+                        return; // WebSocket closed
+                    }
+                    continue;
+                }
 
                 let frame = match encode_frame(&frontend_msg) {
                     Ok(f) => f,
@@ -1164,6 +1186,28 @@ async fn handle_websocket(
     Ok(())
 }
 
+/// A18 — the frames Studio never relays to the daemon: unlock, lock and
+/// card enrollment are done with the `aivyx-pa` command. Returns the
+/// variant's name (safe to log) for a refused frame.
+fn cli_only_variant(msg: &FrontendMessage) -> Option<&'static str> {
+    match msg {
+        FrontendMessage::EnrollCard { .. } => Some("EnrollCard"),
+        FrontendMessage::Lock => Some("Lock"),
+        FrontendMessage::Unlock { .. } => Some("Unlock"),
+        FrontendMessage::UnlockWithPassphrase { .. } => Some("UnlockWithPassphrase"),
+        _ => None,
+    }
+}
+
+/// A18 — Studio's answer to a [`cli_only_variant`] frame.
+fn cli_only_refusal() -> DaemonEnvelope {
+    DaemonEnvelope::Error {
+        code: "cli_only".into(),
+        message: "Unlock, lock and card enrollment are done with the aivyx-pa command, not Studio"
+            .into(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1171,6 +1215,27 @@ async fn handle_websocket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn studio_refuses_unlock_lock_and_enroll_frames() {
+        // A18 — what `ws_to_ipc` drops instead of relaying, parsed from the
+        // JSON a browser would send.
+        for (json, name) in [
+            (r#"{"type":"EnrollCard","serial":"S","label":"l","pin":"123456","generate":true,"admin_pin":"12345678"}"#, "EnrollCard"),
+            (r#"{"type":"Lock"}"#, "Lock"),
+            (r#"{"type":"Unlock","pin":"123456"}"#, "Unlock"),
+            (r#"{"type":"UnlockWithPassphrase","passphrase":"hunter2"}"#, "UnlockWithPassphrase"),
+        ] {
+            let msg: FrontendMessage = serde_json::from_str(json).unwrap();
+            assert_eq!(cli_only_variant(&msg), Some(name));
+        }
+        for allowed in [FrontendMessage::GetLockState, FrontendMessage::Disconnect] {
+            assert_eq!(cli_only_variant(&allowed), None);
+        }
+        let refusal = serde_json::to_string(&cli_only_refusal()).unwrap();
+        assert!(refusal.contains(r#""code":"cli_only""#), "{refusal}");
+        assert!(refusal.contains("aivyx-pa command"), "{refusal}");
+    }
 
     #[test]
     fn web_channel_platform_is_local() {
@@ -1725,6 +1790,100 @@ mod tests {
 
         shutdown.cancel();
         let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn a_lock_frame_from_the_browser_is_answered_and_never_reaches_the_daemon() {
+        // A18 Important 3, end to end: a fake daemon records what Studio
+        // relays; a browser sends `Lock`, then `GetLockState`.
+        use tokio::net::UnixListener;
+        let dir = std::env::temp_dir().join(format!("aivyx-cli-only-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("d.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let (seen_tx, seen_rx) = tokio::sync::oneshot::channel::<FrontendMessage>();
+        let daemon = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let ready = DaemonEnvelope::DaemonReady { version: "1".into() };
+            s.write_all(&encode_frame(&ready).unwrap()).await.unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            let mut handshake = 0;
+            loop {
+                while let Ok((m, used)) = decode_frame::<FrontendMessage>(&buf) {
+                    buf.drain(..used);
+                    if handshake < 2 {
+                        // StartSession, SetApprovals.
+                        handshake += 1;
+                        if handshake == 2 {
+                            let started =
+                                DaemonEnvelope::SessionStarted { session_id: "s1".into() };
+                            s.write_all(&encode_frame(&started).unwrap()).await.unwrap();
+                        }
+                        continue;
+                    }
+                    // The first relayed frame after the handshake.
+                    let _ = seen_tx.send(m);
+                    return;
+                }
+                let n = s.read(&mut tmp).await.unwrap();
+                if n == 0 {
+                    return;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+        });
+
+        let port = free_port().await;
+        let shutdown = CancellationToken::new();
+        let server_shutdown = shutdown.clone();
+        let server_sock = sock.clone();
+        let server = tokio::spawn(async move {
+            let _ = run_web_ui_server(
+                server_sock,
+                Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                port,
+                Vec::new(),
+                None,
+                None,
+                server_shutdown,
+                None,
+            )
+            .await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let (mut ws, _) =
+            tokio_tungstenite::client_async(format!("ws://127.0.0.1:{port}/ws"), tcp)
+                .await
+                .unwrap();
+        use tokio_tungstenite::tungstenite::Message;
+        ws.send(Message::Text(r#"{"type":"Lock"}"#.into())).await.unwrap();
+        let refusal = loop {
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+                .await
+                .expect("Studio answers")
+                .unwrap()
+                .unwrap();
+            if let Message::Text(t) = msg
+                && t.contains("cli_only")
+            {
+                break t.to_string();
+            }
+        };
+        assert!(refusal.contains("aivyx-pa command"), "{refusal}");
+        ws.send(Message::Text(r#"{"type":"GetLockState"}"#.into())).await.unwrap();
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), seen_rx)
+            .await
+            .expect("the daemon sees a frame")
+            .unwrap();
+        assert_eq!(first, FrontendMessage::GetLockState, "Lock must not be relayed");
+
+        shutdown.cancel();
+        let _ = server.await;
+        daemon.abort();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

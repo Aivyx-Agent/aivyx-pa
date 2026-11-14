@@ -20,6 +20,11 @@ const HELPER_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct ProcessHelper {
     path: PathBuf,
     timeout: Duration,
+    /// Tests run their stub scripts as `/bin/sh <script>`: sh only reads the
+    /// file, so a concurrent fork still holding it open for writing can't make
+    /// the spawn fail with ETXTBSY (as exec'ing the script itself can).
+    #[cfg(test)]
+    interpreter: Option<PathBuf>,
 }
 
 impl ProcessHelper {
@@ -27,6 +32,31 @@ impl ProcessHelper {
         Self {
             path,
             timeout: HELPER_TIMEOUT,
+            #[cfg(test)]
+            interpreter: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_interpreter(mut self, interpreter: PathBuf) -> Self {
+        self.interpreter = Some(interpreter);
+        self
+    }
+
+    #[cfg(not(test))]
+    fn command(&self) -> Command {
+        Command::new(&self.path)
+    }
+
+    #[cfg(test)]
+    fn command(&self) -> Command {
+        match &self.interpreter {
+            Some(sh) => {
+                let mut c = Command::new(sh);
+                c.arg(&self.path);
+                c
+            }
+            None => Command::new(&self.path),
         }
     }
 
@@ -60,7 +90,8 @@ impl ProcessHelper {
     // acceptable because the helper process exits right after the call. The
     // serialized body and the reply are zeroized.
     fn call(&self, req: &Request) -> Result<Reply, HelperError> {
-        let mut child = Command::new(&self.path)
+        let mut child = self
+            .command()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -184,13 +215,15 @@ impl CardHelper for ProcessHelper {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
+    /// A stub helper script, run as `/bin/sh <script>` (not exec'd, so
+    /// it needs no exec bit and can't hit ETXTBSY under parallel tests).
     fn stub(dir: &tempfile::TempDir, body: &str) -> ProcessHelper {
         let p = dir.path().join("stub.sh");
-        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        ProcessHelper::at(p).with_timeout(Duration::from_secs(5))
+        std::fs::write(&p, format!("{body}\n")).unwrap();
+        ProcessHelper::at(p)
+            .with_interpreter(PathBuf::from("/bin/sh"))
+            .with_timeout(Duration::from_secs(5))
     }
 
     #[test]
@@ -214,16 +247,20 @@ mod tests {
     fn ecdh_pin_goes_on_stdin_only() {
         let d = tempfile::tempdir().unwrap();
         let (inp, args) = (d.path().join("in"), d.path().join("args"));
+        let secret = encode_key(&[9u8; 32]);
         let h = stub(
             &d,
             &format!(
-                "printf '%s' \"$*\" > {a}\ncat > {i}\necho '{{\"result\":\"cards\",\"cards\":[]}}'",
+                "printf '%s' \"$*\" > {a}\ncat > {i}\necho '{{\"result\":\"shared\",\"secret\":\"{secret}\"}}'",
                 a = args.display(),
                 i = inp.display()
             ),
         );
-        // The stub replies with the wrong variant; only the saved request matters.
-        let _ = h.ecdh("S1", &SecretString::from("424242"), &[7u8; 32]);
+        // A valid reply, so a failed spawn can't pass unnoticed.
+        let shared = h
+            .ecdh("S1", &SecretString::from("424242"), &[7u8; 32])
+            .unwrap();
+        assert_eq!(*shared, [9u8; 32]);
         assert!(std::fs::read_to_string(&inp).unwrap().contains("424242"));
         assert_eq!(std::fs::read_to_string(&args).unwrap(), "");
     }

@@ -153,6 +153,11 @@ pub async fn run_locked(cfg: LockedConfig) -> Result<LockedOutcome, String> {
         crate::daemon_server::create_dir_all_0700(parent)
             .map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
+    // The bind renames over the path, and the locked path opens no store
+    // (whose lock would refuse a second daemon), so check here first.
+    if crate::daemon_client::daemon_is_running(&cfg.socket_path).await {
+        return Err(already_running(&cfg.socket_path));
+    }
     let listener = crate::daemon_server::bind_unix_socket_0600(&cfg.socket_path)
         .map_err(|e| format!("bind {}: {e}", cfg.socket_path.display()))?;
     let mut backoff = Backoff {
@@ -263,6 +268,14 @@ pub async fn run_locked(cfg: LockedConfig) -> Result<LockedOutcome, String> {
             }
         }
     }
+}
+
+/// The full daemon's wording for the same collision (aivyx.rs).
+fn already_running(socket: &std::path::Path) -> String {
+    format!(
+        "a daemon is already running on {}. Stop it first with `aivyx-pa daemon stop`.",
+        socket.display()
+    )
 }
 
 fn too_many() -> DaemonMessage {
@@ -456,6 +469,43 @@ mod tests {
             task.await.unwrap().unwrap(),
             LockedOutcome::Unlocked(_, UnlockMethod::Passphrase)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_live_daemon_on_the_socket_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path(), Arc::new(FakeHelper::with_card("S1", [5u8; 32])));
+        let path = cfg.socket_path.clone();
+        // A daemon already answers on the path.
+        let live = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = live.accept().await else {
+                    return;
+                };
+                let ready = DaemonLifecycleEvent::DaemonReady {
+                    version: PROTOCOL_VERSION.into(),
+                };
+                let _ = s.write_all(&encode_frame(&ready).unwrap()).await;
+            }
+        });
+        use std::os::unix::fs::MetadataExt;
+        let inode = std::fs::metadata(&path).unwrap().ino();
+        let err = match run_locked(cfg).await {
+            Err(e) => e,
+            Ok(_) => panic!("a locked start must not take a live daemon's socket"),
+        };
+        assert!(err.contains("already running"), "{err}");
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+        // The live daemon still answers.
+        let mut s = UnixStream::connect(&path).await.unwrap();
+        let mut buf = vec![0u8; 4096];
+        let n = s.read(&mut buf).await.unwrap();
+        assert!(matches!(
+            decode_frame::<DaemonEnvelope>(&buf[..n]).unwrap().0,
+            DaemonEnvelope::DaemonReady { .. }
+        ));
+        server.abort();
     }
 
     #[tokio::test]

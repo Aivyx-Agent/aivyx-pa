@@ -1555,13 +1555,14 @@ fn run() -> Result<(), String> {
     // locked. Every other mode, and a daemon with a source, is unchanged.
     let card_file_path =
         aivyx_instance::InstancePaths::current().ok().and_then(|p| p.card_unlock_file());
+    let is_daemon = matches!(mode, CliMode::DaemonRun);
     let (card_file, enrolled) = cards_for_start(
         card_file_path
             .as_deref()
             .map(aivyx_channel::card_unlock::CardUnlockFile::load),
+        is_daemon,
     );
     let selected = select_passphrase_source(config.passphrase.as_ref(), new_store);
-    let is_daemon = matches!(mode, CliMode::DaemonRun);
     let plan = plan_master_key(
         selected.as_ref().map(|_| ()).map_err(Clone::clone),
         enrolled,
@@ -1789,12 +1790,13 @@ fn run() -> Result<(), String> {
         card_file_path.clone().map(|file_path| {
             aivyx_channel::card_unlock::CardUnlockContext {
                 instance: current_instance_name().as_str().to_string(),
-                file_path,
+                file_path: file_path.clone(),
                 helper: aivyx_card_helper::ProcessHelper::find()
                     .map(|h| Arc::new(h) as Arc<dyn aivyx_card_helper::CardHelper>)
                     .unwrap_or_else(|_| Arc::new(aivyx_card_helper::MissingHelper)),
                 master: master_key.clone(),
                 can_lock: !passphrase_saved && enrolled > 0,
+                lockable: Arc::new(move || lockable_now(&file_path)),
                 relock_requested: Arc::clone(RELOCK_REQUESTED.get_or_init(Default::default)),
             }
         })
@@ -6408,6 +6410,36 @@ fn plan_master_key(source: Result<(), String>, enrolled_cards: usize, is_daemon:
     }
 }
 
+/// A18 — `Lock`'s re-check: would a restart right now start locked? The
+/// start-up decision, re-run with the saved passphrase sources and the card
+/// file read afresh (no terminal prompt: a daemon has none). Blocking.
+fn lockable_now(card_file: &std::path::Path) -> Result<(), String> {
+    let saved = card::saved_passphrase_checked().map_err(|e| format!("PA can't lock: {e}"))?;
+    let (_, enrolled) =
+        cards_for_start(Some(aivyx_channel::card_unlock::CardUnlockFile::load(card_file)), true);
+    lock_decision(saved.as_ref(), enrolled)
+}
+
+/// A18 — [`lockable_now`]'s decision, given what it found.
+fn lock_decision(saved: Option<&card::SavedPassphrase>, enrolled_cards: usize) -> Result<(), String> {
+    let source = match saved {
+        Some(_) => Ok(()),
+        None => Err(String::new()),
+    };
+    match (plan_master_key(source, enrolled_cards, true), saved) {
+        (MasterKeyPlan::Locked, _) => Ok(()),
+        (_, Some(s)) => Err(format!(
+            "PA can't lock: a passphrase is saved in {}, so it would start unlocked again. \
+             To lock, {} first.",
+            s.place(),
+            s.how_to_remove()
+        )),
+        (_, None) => Err("PA can't lock: no card is enrolled, so it couldn't start again. \
+             Enroll one with `aivyx-pa card add` first."
+            .to_string()),
+    }
+}
+
 /// A18 — the card list a start-up decides with, from loading
 /// `card-unlock.toml` (`None`: no instance paths). A broken file counts as
 /// one card with an empty list: the daemon starts locked and says so, and
@@ -6419,6 +6451,7 @@ fn cards_for_start(
             aivyx_channel::card_unlock::CardUnlockError,
         >,
     >,
+    is_daemon: bool,
 ) -> (Option<aivyx_channel::card_unlock::CardUnlockFile>, usize) {
     match loaded {
         Some(Ok(Some(f))) => {
@@ -6427,7 +6460,11 @@ fn cards_for_start(
         }
         Some(Ok(None)) | None => (None, 0),
         Some(Err(e)) => {
-            eprintln!("aivyx-pa: {e}; `aivyx-pa unlock --passphrase` still works");
+            // Only a daemon can start locked; for anything else the file
+            // doesn't matter, so don't warn about it.
+            if is_daemon {
+                eprintln!("aivyx-pa: {e}; `aivyx-pa unlock --passphrase` still works");
+            }
             (Some(aivyx_channel::card_unlock::CardUnlockFile::default()), 1)
         }
     }
@@ -13358,21 +13395,35 @@ mod tests {
     }
 
     #[test]
+    fn lock_is_allowed_only_when_a_restart_would_start_locked() {
+        // A18 Important 1 — `Lock`'s re-check, not the start-up snapshot.
+        assert_eq!(lock_decision(None, 1), Ok(()));
+        let saved = card::SavedPassphrase::Keyring;
+        let err = lock_decision(Some(&saved), 1).unwrap_err();
+        assert!(err.contains("OS keyring") && err.contains("keyring clear"), "{err}");
+        let saved = card::SavedPassphrase::EnvFile("/run/x/daemon.env".into());
+        let err = lock_decision(Some(&saved), 2).unwrap_err();
+        assert!(err.contains("/run/x/daemon.env"), "{err}");
+        let err = lock_decision(None, 0).unwrap_err();
+        assert!(err.contains("no card is enrolled"), "{err}");
+    }
+
+    #[test]
     fn plan_master_key_starts_locked_with_no_cards_when_the_card_file_is_broken() {
         use aivyx_channel::card_unlock::{CardUnlockError, CardUnlockFile};
         // No file: no cards, so no passphrase fails as today.
-        let (file, enrolled) = cards_for_start(Some(Ok(None)));
+        let (file, enrolled) = cards_for_start(Some(Ok(None)), true);
         assert_eq!((file, enrolled), (None, 0));
         assert_eq!(
             plan_master_key(Err("no passphrase".into()), enrolled, true),
             MasterKeyPlan::Fail("no passphrase".into())
         );
         // No instance paths at all: the same.
-        assert_eq!(cards_for_start(None), (None, 0));
+        assert_eq!(cards_for_start(None, true), (None, 0));
         // A broken file: the daemon starts locked with an empty card list,
         // so only `UnlockWithPassphrase` can open it.
         let broken = CardUnlockError::BrokenFile { path: "card-unlock.toml".into(), reason: "bad".into() };
-        let (file, enrolled) = cards_for_start(Some(Err(broken)));
+        let (file, enrolled) = cards_for_start(Some(Err(broken)), true);
         assert_eq!(file, Some(CardUnlockFile::default()));
         assert_eq!(
             plan_master_key(Err("no passphrase".into()), enrolled, true),
@@ -13389,7 +13440,7 @@ mod tests {
             nonce: String::new(),
             wrapped: String::new(),
         });
-        assert_eq!(cards_for_start(Some(Ok(Some(f.clone())))), (Some(f), 1));
+        assert_eq!(cards_for_start(Some(Ok(Some(f.clone()))), true), (Some(f), 1));
     }
 
     fn nt(
