@@ -327,9 +327,9 @@ aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "d
 # consuming crate (not here) because it transitively needs `libpcsclite` at
 # build time via `pcsc-sys` — gated behind the `yubikey` Cargo feature,
 # off by default, so the default workspace build never touches it.
+aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "badc3218fea6029a449bbec5f74aa85f2cd9f784" }
 aivyx-card-helper = { path = "crates/aivyx-card-helper" }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-aivyx-yubi = { git = "https://github.com/Aivyx-Agent/aivyx-yubi", rev = "badc3218fea6029a449bbec5f74aa85f2cd9f784" }
 
 # Prompt-injection phrase-list tripwire (Chapter Picket) for untrusted
 # tool output (fs.read, web.fetch, every tool-process/MCP tool),

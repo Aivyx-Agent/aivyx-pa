@@ -23,3 +23,4 @@ test-util = ["dep:x25519-dalek"]
 [dev-dependencies]
 x25519-dalek = { workspace = true }
 aivyx-yubi = { workspace = true, features = ["test-util"] }
+tempfile = "3"

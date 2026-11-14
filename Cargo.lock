@@ -198,6 +198,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "x25519-dalek 2.0.1",
  "zeroize",

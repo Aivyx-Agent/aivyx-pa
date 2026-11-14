@@ -200,4 +200,78 @@ mod tests {
         h.unplugged("S1");
         assert!(h.list().unwrap().is_empty());
     }
+
+    fn eph() -> [u8; 32] {
+        *PublicKey::from(&StaticSecret::from([8u8; 32])).as_bytes()
+    }
+
+    #[test]
+    fn blocked_at_zero_tries() {
+        let h = FakeHelper::with_card("S1", [5u8; 32]);
+        let bad = SecretString::from("000000");
+        for _ in 0..3 {
+            let _ = h.ecdh("S1", &bad, &eph());
+        }
+        // Even the right PIN is refused now.
+        let err = h
+            .ecdh("S1", &SecretString::from("123456"), &eph())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HelperError::Card {
+                kind: ErrorKind::PinBlocked,
+                tries_left: Some(0),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn tries_reset_on_success() {
+        let h = FakeHelper::with_card("S1", [5u8; 32]);
+        let _ = h.ecdh("S1", &SecretString::from("000000"), &eph());
+        h.ecdh("S1", &SecretString::from("123456"), &eph()).unwrap();
+        let err = h
+            .ecdh("S1", &SecretString::from("000000"), &eph())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HelperError::Card {
+                kind: ErrorKind::WrongPin,
+                tries_left: Some(2),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn generate_refused_on_an_occupied_slot() {
+        let h = FakeHelper::with_card("S1", [5u8; 32]);
+        let err = h
+            .generate("S1", &SecretString::from("12345678"))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HelperError::Card {
+                kind: ErrorKind::SlotOccupied,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn generate_then_public_key_returns_the_new_key() {
+        let h = FakeHelper::empty_card("S1");
+        assert_eq!(h.public_key("S1").unwrap(), None);
+        let generated = h.generate("S1", &SecretString::from("12345678")).unwrap();
+        assert_eq!(h.public_key("S1").unwrap(), Some(generated));
+    }
+
+    #[test]
+    fn missing_helper_is_not_installed() {
+        assert!(matches!(
+            crate::MissingHelper.list(),
+            Err(HelperError::NotInstalled)
+        ));
+    }
 }
