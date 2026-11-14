@@ -11465,6 +11465,7 @@ system_prompt = "You are a custom role."
             can_lock,
             lockable,
             relock_requested: Arc::clone(&relock),
+            enroll_lock: std::sync::Mutex::new(()),
         });
         let handle = tokio::spawn(run_daemon(config));
         for _ in 0..100 {

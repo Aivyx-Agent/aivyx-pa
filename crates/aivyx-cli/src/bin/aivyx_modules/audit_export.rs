@@ -225,6 +225,7 @@ pub const EVENT_TYPE_FILTERS: &[(&str, &str)] = &[
     ("auto_notify_dispatched", "AutoNotifyDispatched"),
     ("skill_auto_proposal", "SkillAutoProposal"),
     ("skill_invocation", "SkillInvocation"),
+    ("store_unlocked", "StoreUnlocked"),
 ];
 
 /// The event label an `--event-type` value selects, from either spelling.
@@ -460,6 +461,7 @@ mod tests {
         assert_eq!(event_type_filter("tool_call"), Some("ToolCall"));
         assert_eq!(event_type_filter("ToolCall"), Some("ToolCall"));
         assert_eq!(event_type_filter("skill_auto_proposal"), Some("SkillAutoProposal"));
+        assert_eq!(event_type_filter("store_unlocked"), Some("StoreUnlocked"));
         assert_eq!(event_type_filter("toolcall"), None);
         for (snake, label) in EVENT_TYPE_FILTERS {
             // The snake_case name is the label's own words.

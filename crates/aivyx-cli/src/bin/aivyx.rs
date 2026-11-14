@@ -1679,6 +1679,7 @@ fn run() -> Result<(), String> {
                 socket_path: default_socket_path()?,
                 instance: current_instance_name().as_str().to_string(),
                 cards: card_file.clone().unwrap_or_default(),
+                cards_path: card_file_path.clone(),
                 helper,
                 from_passphrase: Arc::new(move |p| {
                     derive_master_key(
@@ -1798,6 +1799,7 @@ fn run() -> Result<(), String> {
                 can_lock: !passphrase_saved && enrolled > 0,
                 lockable: Arc::new(move || lockable_now(&file_path)),
                 relock_requested: Arc::clone(RELOCK_REQUESTED.get_or_init(Default::default)),
+                enroll_lock: std::sync::Mutex::new(()),
             }
         })
     } else {

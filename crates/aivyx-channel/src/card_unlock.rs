@@ -98,6 +98,12 @@ impl CardUnlockFile {
             std::fs::create_dir_all(dir).map_err(io)?;
         }
         let tmp = path.with_extension("toml.tmp");
+        // `mode` only applies when the file is created: a stale temp file
+        // left with wider permissions would keep them, so start fresh.
+        match std::fs::remove_file(&tmp) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(e)),
+            _ => {}
+        }
         let mut f = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -230,6 +236,9 @@ pub struct CardUnlockContext {
     pub lockable: Lockable,
     /// Set by `Lock`; read by aivyx.rs after `run_daemon` returns to re-exec.
     pub relock_requested: Arc<AtomicBool>,
+    /// Held across `EnrollCard`'s load-modify-save, so two enrollments at
+    /// once can't drop each other's entry.
+    pub enroll_lock: std::sync::Mutex<()>,
 }
 
 /// `EnrollCard` in a running daemon: load the file (or start one), get the
@@ -244,6 +253,10 @@ pub fn enroll_card(
     generate: bool,
     admin_pin: Option<&SecretString>,
 ) -> Result<(), CardUnlockError> {
+    let _held = ctx
+        .enroll_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut file = CardUnlockFile::load(&ctx.file_path)?.unwrap_or_default();
     let card_public = if generate {
         let admin_pin = admin_pin.ok_or_else(|| {
@@ -397,6 +410,53 @@ mod tests {
             CardUnlockFile::load(&path),
             Err(CardUnlockError::BrokenFile { .. })
         ));
+    }
+
+    #[test]
+    fn save_replaces_a_stale_wide_open_temp_file_with_a_0600_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("card-unlock.toml");
+        let tmp = dir.path().join("card-unlock.toml.tmp");
+        std::fs::write(&tmp, "stale").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let h = FakeHelper::with_card("S1", [5u8; 32]);
+        enrolled(&h, "S1").save(&path).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn two_enrollments_at_once_keep_both_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = Arc::new(FakeHelper::with_card("S1", [5u8; 32]));
+        h.add_card("S2", [6u8; 32]);
+        let ctx = Arc::new(CardUnlockContext {
+            instance: "default".into(),
+            file_path: dir.path().join("card-unlock.toml"),
+            helper: h,
+            master: master(),
+            can_lock: true,
+            lockable: Arc::new(|| Ok(())),
+            relock_requested: Arc::default(),
+            enroll_lock: std::sync::Mutex::new(()),
+        });
+        let threads: Vec<_> = ["S1", "S2"]
+            .into_iter()
+            .map(|serial| {
+                let ctx = Arc::clone(&ctx);
+                std::thread::spawn(move || {
+                    enroll_card(&ctx, serial, serial, &pin(), false, None).unwrap()
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let file = CardUnlockFile::load(&ctx.file_path).unwrap().unwrap();
+        assert_eq!(file.cards.len(), 2);
     }
 
     #[test]

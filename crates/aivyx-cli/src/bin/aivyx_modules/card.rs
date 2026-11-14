@@ -398,6 +398,11 @@ async fn run_add(card: Option<String>, label: Option<String>, socket: &Path) -> 
         }
     }
 
+    // `has_decryption_key` is also false for a key PA can't use (not
+    // X25519): ask the card before offering to make one, so the admin PIN
+    // is never asked for a slot the helper would refuse.
+    let has_key = has_key || slot_has_usable_key(helper.public_key(&serial))?;
+
     let mut generate = false;
     let mut admin_pin: Option<String> = None;
     if !has_key {
@@ -493,6 +498,22 @@ fn enroll_offline(
     file.save(&path).map_err(|e| e.to_string())
 }
 
+/// From the card's `public_key` answer: does its decryption slot hold a
+/// usable key (`true`), or is it empty (`false`)? A key of another type
+/// stops `card add` here.
+fn slot_has_usable_key(answer: Result<Option<[u8; 32]>, HelperError>) -> Result<bool, String> {
+    match answer {
+        Ok(key) => Ok(key.is_some()),
+        Err(HelperError::Card {
+            kind: ErrorKind::UnsupportedKey,
+            ..
+        }) => Err("This card's decryption key isn't X25519, so PA can't use it. \
+             Nothing was changed."
+            .to_string()),
+        Err(e) => Err(describe_helper_error(e)),
+    }
+}
+
 fn describe_helper_error(e: HelperError) -> String {
     match e {
         HelperError::Card {
@@ -550,6 +571,19 @@ fn kept_passphrase_note(saved: &SavedPassphrase) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_non_x25519_key_stops_card_add_before_the_admin_pin() {
+        assert_eq!(slot_has_usable_key(Ok(None)), Ok(false));
+        assert_eq!(slot_has_usable_key(Ok(Some([1u8; 32]))), Ok(true));
+        let unsupported = HelperError::Card {
+            kind: ErrorKind::UnsupportedKey,
+            message: "RSA key".into(),
+            tries_left: None,
+        };
+        let err = slot_has_usable_key(Err(unsupported)).unwrap_err();
+        assert!(err.contains("isn't X25519"), "{err}");
+    }
 
     #[test]
     fn an_env_or_toml_passphrase_is_explained_not_removed() {

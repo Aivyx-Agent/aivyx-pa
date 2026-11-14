@@ -37,10 +37,14 @@ pub fn handle(
                 let cards = list().map_err(|e| error(&e, None))?;
                 let mut out = Vec::new();
                 for c in cards {
-                    let mut card = open(Some(&c.serial)).map_err(|e| error(&e, None))?;
-                    let mut tx = card
-                        .transaction()
-                        .map_err(|e| error(&YubiError::from(e), None))?;
+                    // A card that won't open (or start a transaction) is
+                    // left out: one broken card must not hide the others.
+                    let Ok(mut card) = open(Some(&c.serial)) else {
+                        continue;
+                    };
+                    let Ok(mut tx) = card.transaction() else {
+                        continue;
+                    };
                     let has = matches!(decrypt::decryption_public_key(&mut tx), Ok(Some(_)));
                     out.push(CardInfo {
                         serial: c.serial,
@@ -183,6 +187,36 @@ mod tests {
         assert_eq!(
             handle(req, &opener(FakeCard::new()), &no_list),
             Reply::PublicKey { public: None }
+        );
+    }
+
+    #[test]
+    fn list_skips_a_card_that_will_not_open() {
+        let good = FakeCard::new().with_decryption_key([5u8; 32]);
+        let open = move |serial: Option<&str>| match serial {
+            Some("good") => Card::new(good.clone()).map_err(YubiError::from),
+            _ => Err(YubiError::CardNotFound("unplugged mid-list".into())),
+        };
+        let list = || {
+            Ok(vec![
+                discovery::CardSummary {
+                    serial: "bad".into(),
+                    has_signature_key: false,
+                },
+                discovery::CardSummary {
+                    serial: "good".into(),
+                    has_signature_key: false,
+                },
+            ])
+        };
+        assert_eq!(
+            handle(Request::List, &open, &list),
+            Reply::Cards {
+                cards: vec![CardInfo {
+                    serial: "good".into(),
+                    has_decryption_key: true,
+                }]
+            }
         );
     }
 

@@ -90,23 +90,21 @@ impl ProcessHelper {
     // CLI), so its PIN fields are `Sensitive` and zeroize on drop; the
     // serialized body and the raw reply are zeroized too.
     fn call(&self, req: &Request) -> Result<Reply, HelperError> {
-        let mut child = self
-            .command()
-            .stdin(Stdio::piped())
+        // Serialize first: nothing to clean up if it fails.
+        let body = Zeroizing::new(
+            serde_json::to_vec(req).map_err(|e| HelperError::Broken(e.to_string()))?,
+        );
+        let mut cmd = self.command();
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env_clear();
+        for (k, v) in helper_env(|k| std::env::var_os(k)) {
+            cmd.env(k, v);
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| HelperError::Broken(format!("start {}: {e}", self.path.display())))?;
-        let body = match serde_json::to_vec(req) {
-            Ok(b) => Zeroizing::new(b),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(HelperError::Broken(e.to_string()));
-            }
-        };
 
         // Read stdout on its own thread so the wait below can time out.
         let mut stdout_pipe = child.stdout.take().expect("stdout is piped");
@@ -157,6 +155,19 @@ impl ProcessHelper {
             })),
         }
     }
+}
+
+/// The environment the helper keeps after `env_clear()`: `PATH`, and
+/// pcsc-lite's `PCSCLITE_CSOCK_NAME` when set (a non-default pcscd socket,
+/// e.g. in a container or a Flatpak), without which it finds no reader.
+fn helper_env(
+    get: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<(&'static str, std::ffi::OsString)> {
+    let mut env = vec![("PATH", get("PATH").unwrap_or_default())];
+    if let Some(sock) = get("PCSCLITE_CSOCK_NAME") {
+        env.push(("PCSCLITE_CSOCK_NAME", sock));
+    }
+    env
 }
 
 impl CardHelper for ProcessHelper {
@@ -302,6 +313,24 @@ mod tests {
             Err(HelperError::Broken(m)) => assert!(m.contains("didn't answer"), "{m}"),
             other => panic!("got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_helper_keeps_path_and_the_pcscd_socket_only() {
+        let env = helper_env(|k| match k {
+            "PATH" => Some("/usr/bin".into()),
+            "PCSCLITE_CSOCK_NAME" => Some("/run/pcscd/alt.comm".into()),
+            _ => Some("leak".into()),
+        });
+        assert_eq!(
+            env,
+            vec![
+                ("PATH", "/usr/bin".into()),
+                ("PCSCLITE_CSOCK_NAME", "/run/pcscd/alt.comm".into())
+            ]
+        );
+        let env = helper_env(|k| (k == "PATH").then(|| "/bin".into()));
+        assert_eq!(env, vec![("PATH", "/bin".into())]);
     }
 
     #[test]

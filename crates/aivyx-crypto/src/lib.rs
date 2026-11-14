@@ -660,6 +660,25 @@ mod tests {
     }
 
     #[test]
+    fn the_card_wrap_salt_is_pinned() {
+        // A18 — changing CARD_WRAP_SALT (or the HKDF shape) would make every
+        // enrolled card's entry stop opening. Known answer, computed once:
+        // HKDF-SHA256(salt = "aivyx-pa-card-unlock-v1", ikm = [4; 32], info = "info").
+        assert_eq!(CARD_WRAP_SALT, b"aivyx-pa-card-unlock-v1");
+        let key = WrapKey::derive(&[4u8; 32], b"info").unwrap();
+        let hex: String = key.bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, "9e0e2800c3d65b3579b78d18b49f0ff0968ee71a7ccec5477e6e085f4ecfc219");
+    }
+
+    #[test]
+    fn wrap_key_debug_is_redacted() {
+        let key = WrapKey::derive(&[4u8; 32], b"info").unwrap();
+        let dbg = format!("{key:?}");
+        assert!(dbg.contains("<redacted>"), "{dbg}");
+        assert!(!dbg.contains("9e"), "{dbg}");
+    }
+
+    #[test]
     fn two_wraps_use_different_nonces() {
         let master = MasterKey::from_raw([3u8; 32]);
         let key = WrapKey::derive(&[4u8; 32], b"info").unwrap();

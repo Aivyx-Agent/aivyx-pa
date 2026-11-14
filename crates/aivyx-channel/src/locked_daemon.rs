@@ -28,7 +28,11 @@ pub type FromPassphrase = Arc<dyn Fn(&SecretString) -> Result<MasterKey, String>
 pub struct LockedConfig {
     pub socket_path: PathBuf,
     pub instance: String,
+    /// The cards at start-up: the fallback when a reload of `cards_path` fails.
     pub cards: CardUnlockFile,
+    /// `card-unlock.toml`, re-read on each `Unlock` and `GetLockState` so a
+    /// card removed (`aivyx-pa card remove`) stops working at once.
+    pub cards_path: Option<PathBuf>,
     pub helper: Arc<dyn CardHelper>,
     /// Derives the master key from a passphrase (Argon2id + the store's salt).
     pub from_passphrase: FromPassphrase,
@@ -87,11 +91,33 @@ fn failed(code: &str, message: impl Into<String>, tries_left: Option<u8>) -> Dae
     }
 }
 
-fn lock_state(cfg: &LockedConfig) -> DaemonMessage {
+/// The enrolled cards now: `card-unlock.toml` re-read (a missing file has
+/// none), or the start-up list when the reload fails. Blocking.
+fn current_cards(path: Option<&std::path::Path>, fallback: &CardUnlockFile) -> CardUnlockFile {
+    let Some(path) = path else {
+        return fallback.clone();
+    };
+    match CardUnlockFile::load(path) {
+        Ok(f) => f.unwrap_or_default(),
+        Err(e) => {
+            eprintln!("aivyx-pa: {e}; using the card list from start-up");
+            fallback.clone()
+        }
+    }
+}
+
+async fn reload_cards(cfg: &LockedConfig) -> CardUnlockFile {
+    let (path, fallback) = (cfg.cards_path.clone(), cfg.cards.clone());
+    let backup = fallback.clone();
+    tokio::task::spawn_blocking(move || current_cards(path.as_deref(), &fallback))
+        .await
+        .unwrap_or(backup)
+}
+
+fn lock_state(cards: &CardUnlockFile) -> DaemonMessage {
     DaemonMessage::LockState {
         locked: true,
-        cards: cfg
-            .cards
+        cards: cards
             .cards
             .iter()
             .map(|c| LockCardView {
@@ -178,27 +204,38 @@ pub async fn run_locked(cfg: LockedConfig) -> Result<LockedOutcome, String> {
             continue;
         };
         match msg {
-            FrontendMessage::GetLockState => send(&mut w, &lock_state(&cfg)).await,
+            FrontendMessage::GetLockState => {
+                send(&mut w, &lock_state(&reload_cards(&cfg).await)).await
+            }
             FrontendMessage::Shutdown => {
                 crate::daemon_server::send_shutting_down(&mut w, "stopped while locked").await;
                 return Ok(LockedOutcome::Stopped);
             }
             FrontendMessage::Unlock { pin, serial } => {
                 if backoff.active() {
-                    send(&mut w, &too_many()).await;
+                    send(&mut w, &too_many(&cfg)).await;
                     continue;
                 }
                 let helper = cfg.helper.clone();
-                let (cards, inst) = (cfg.cards.clone(), cfg.instance.clone());
+                let verify = cfg.verify.clone();
+                let (path, fallback) = (cfg.cards_path.clone(), cfg.cards.clone());
+                let inst = cfg.instance.clone();
                 let pin = SecretString::from(pin.into_inner());
                 let res = tokio::task::spawn_blocking(move || {
-                    crate::card_unlock::unlock_with(
+                    let cards = current_cards(path.as_deref(), &fallback);
+                    let (key, serial) = crate::card_unlock::unlock_with(
                         &cards,
                         &inst,
                         serial.as_deref(),
                         &*helper,
                         &pin,
-                    )
+                    )?;
+                    // The entry decrypted, but is it this store's key?
+                    if verify(&key) {
+                        Ok((key, serial))
+                    } else {
+                        Err(CardUnlockError::EntryDoesNotOpen { serial })
+                    }
                 })
                 .await
                 .map_err(|e| e.to_string())?;
@@ -221,19 +258,29 @@ pub async fn run_locked(cfg: LockedConfig) -> Result<LockedOutcome, String> {
             }
             FrontendMessage::UnlockWithPassphrase { passphrase } => {
                 if backoff.active() {
-                    send(&mut w, &too_many()).await;
+                    send(&mut w, &too_many(&cfg)).await;
                     continue;
                 }
                 let derive = cfg.from_passphrase.clone();
                 let verify = cfg.verify.clone();
                 let passphrase = SecretString::from(passphrase.into_inner());
                 let key = tokio::task::spawn_blocking(move || {
-                    derive(&passphrase).ok().filter(|k| verify(k))
+                    derive(&passphrase).map(|k| Some(k).filter(|k| verify(k)))
                 })
                 .await
                 .map_err(|e| e.to_string())?;
                 match key {
-                    Some(key) => {
+                    // Not a wrong guess (the salt file, Argon2): log the
+                    // reason (never the input) and don't count it.
+                    Err(e) => {
+                        eprintln!("aivyx-pa: deriving the key from the passphrase failed: {e}");
+                        send(
+                            &mut w,
+                            &failed("other", format!("deriving the key failed: {e}"), None),
+                        )
+                        .await;
+                    }
+                    Ok(Some(key)) => {
                         send(
                             &mut w,
                             &DaemonMessage::Unlocked {
@@ -243,7 +290,7 @@ pub async fn run_locked(cfg: LockedConfig) -> Result<LockedOutcome, String> {
                         .await;
                         return Ok(LockedOutcome::Unlocked(key, UnlockMethod::Passphrase));
                     }
-                    None => {
+                    Ok(None) => {
                         backoff.fail(&cfg);
                         send(
                             &mut w,
@@ -278,10 +325,11 @@ fn already_running(socket: &std::path::Path) -> String {
     )
 }
 
-fn too_many() -> DaemonMessage {
+fn too_many(cfg: &LockedConfig) -> DaemonMessage {
+    let secs = cfg.backoff.as_secs_f64().ceil() as u64;
     failed(
         "backoff",
-        "Too many failed unlocks — try again in 30 s",
+        format!("Too many failed unlocks — try again in {secs} s"),
         None,
     )
 }
@@ -318,6 +366,7 @@ mod tests {
             socket_path: dir.join("d.sock"),
             instance: "default".into(),
             cards,
+            cards_path: None,
             helper,
             from_passphrase: Arc::new(|p| {
                 if p.expose_secret() == "right" {
@@ -327,7 +376,7 @@ mod tests {
                 }
             }),
             verify: Arc::new(|m| m.same_as(&MasterKey::from_raw([3u8; 32]))),
-            backoff: Duration::from_millis(200),
+            backoff: Duration::from_secs(1),
             max_failures: 2,
         }
     }
@@ -345,7 +394,7 @@ mod tests {
     }
 
     async fn wait_for(path: &Path) {
-        for _ in 0..100 {
+        for _ in 0..500 {
             if path.exists() {
                 return;
             }
@@ -427,8 +476,10 @@ mod tests {
             },
         )
         .await;
-        assert!(matches!(r, DaemonEnvelope::UnlockFailed { ref code, .. } if code == "backoff"));
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(
+            matches!(r, DaemonEnvelope::UnlockFailed { ref code, ref message, .. } if code == "backoff" && message.contains("in 1 s"))
+        );
+        tokio::time::sleep(Duration::from_millis(1300)).await;
         let r = ask(
             &path,
             FrontendMessage::Unlock {
@@ -469,6 +520,100 @@ mod tests {
             task.await.unwrap().unwrap(),
             LockedOutcome::Unlocked(_, UnlockMethod::Passphrase)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_card_key_that_does_not_open_the_store_is_refused_and_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(dir.path(), Arc::new(FakeHelper::with_card("S1", [5u8; 32])));
+        // The entry decrypts, but to a key this store doesn't take.
+        cfg.verify = Arc::new(|_| false);
+        cfg.max_failures = 1;
+        let path = cfg.socket_path.clone();
+        let _task = tokio::spawn(run_locked(cfg));
+        wait_for(&path).await;
+        let unlock = || FrontendMessage::Unlock {
+            pin: "123456".into(),
+            serial: None,
+        };
+        let r = ask(&path, unlock()).await;
+        assert!(
+            matches!(r, DaemonEnvelope::UnlockFailed { ref code, .. } if code == "entry"),
+            "{r:?}"
+        );
+        let r = ask(&path, unlock()).await;
+        assert!(
+            matches!(r, DaemonEnvelope::UnlockFailed { ref code, .. } if code == "backoff"),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_card_removed_from_the_file_stops_working_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(dir.path(), Arc::new(FakeHelper::with_card("S1", [5u8; 32])));
+        let file = dir.path().join("card-unlock.toml");
+        cfg.cards.save(&file).unwrap();
+        cfg.cards_path = Some(file.clone());
+        let path = cfg.socket_path.clone();
+        let _task = tokio::spawn(run_locked(cfg));
+        wait_for(&path).await;
+        // `aivyx-pa card remove S1` while locked.
+        let mut f = CardUnlockFile::load(&file).unwrap().unwrap();
+        crate::card_unlock::remove(&mut f, "S1").unwrap();
+        f.save(&file).unwrap();
+        let r = ask(&path, FrontendMessage::GetLockState).await;
+        assert!(
+            matches!(r, DaemonEnvelope::LockState { ref cards, .. } if cards.is_empty()),
+            "{r:?}"
+        );
+        let r = ask(
+            &path,
+            FrontendMessage::Unlock {
+                pin: "123456".into(),
+                serial: None,
+            },
+        )
+        .await;
+        assert!(
+            matches!(r, DaemonEnvelope::UnlockFailed { ref code, .. } if code == "no_card"),
+            "{r:?}"
+        );
+        // A broken file falls back to the start-up list.
+        std::fs::write(&file, "not toml [").unwrap();
+        let r = ask(&path, FrontendMessage::GetLockState).await;
+        assert!(
+            matches!(r, DaemonEnvelope::LockState { ref cards, .. } if cards.len() == 1),
+            "{r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_derive_is_reported_and_not_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(dir.path(), Arc::new(FakeHelper::with_card("S1", [5u8; 32])));
+        cfg.from_passphrase = Arc::new(|_| Err("salt file unreadable".into()));
+        cfg.max_failures = 1;
+        let path = cfg.socket_path.clone();
+        let _task = tokio::spawn(run_locked(cfg));
+        wait_for(&path).await;
+        for _ in 0..2 {
+            let r = ask(
+                &path,
+                FrontendMessage::UnlockWithPassphrase {
+                    passphrase: "secret-input".into(),
+                },
+            )
+            .await;
+            match r {
+                DaemonEnvelope::UnlockFailed { code, message, .. } => {
+                    assert_eq!(code, "other");
+                    assert!(message.contains("salt file unreadable"), "{message}");
+                    assert!(!message.contains("secret-input"), "{message}");
+                }
+                other => panic!("got {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]
