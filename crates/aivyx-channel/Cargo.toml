@@ -227,8 +227,14 @@ tokio-tungstenite = { workspace = true }
 # into independent read/write halves. Already a workspace dep via
 # aivyx-llm's SSE parser.
 futures-util = { workspace = true }
+# A18 card unlock — the daemon never links PC/SC (no `card` feature); the
+# `aivyx-pa` binary supplies the real helper.
+aivyx-card-helper = { workspace = true }
+x25519-dalek = { workspace = true }
+toml = "0.8"
 
 [dev-dependencies]
+aivyx-card-helper = { workspace = true, features = ["test-util"] }
 tempfile = "3"
 # LocalChannel unit tests exercise the async ChannelContext surface
 # against an in-memory Vec<u8> sink; tokio drives #[tokio::test] and

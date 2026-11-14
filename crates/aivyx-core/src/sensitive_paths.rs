@@ -64,6 +64,8 @@ const SENSITIVE_BASENAMES: &[&str] = &[
     "credentials",
     "credentials.json",
     "daemon.env",
+    // A18: wrapped master keys (useless without the card, still never readable by a tool).
+    "card-unlock.toml",
     // The Studio's automatic sign-in token (first-run coherence A2). The
     // CLI also puts its exact path on the extra-deny list; the basename
     // catches the relative spellings `shell.exec`'s text scan would miss
@@ -365,6 +367,7 @@ mod tests {
             "/home/alice/certs/tls.key",
             // Aivyx's own crown jewels:
             "/home/alice/.config/aivyx-pa/daemon.env",
+        "/home/alice/.config/aivyx-pa/card-unlock.toml",
             "/home/alice/.local/share/aivyx-pa/store.redb",
             "/home/alice/.aivyx-pa/studio-token",
         ] {

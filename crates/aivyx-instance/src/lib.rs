@@ -195,6 +195,11 @@ impl InstancePaths {
         self.config_dir().map(|d| d.join("aivyx-pa.toml"))
     }
 
+    /// Card unlock file (A18): `config_dir/card-unlock.toml`, beside `aivyx-pa.toml`.
+    pub fn card_unlock_file(&self) -> Option<PathBuf> {
+        self.config_dir().map(|d| d.join("card-unlock.toml"))
+    }
+
     /// Data directory: `<data_home>/aivyx-pa[/instances/<n>]`
     fn data_dir_base(&self) -> Option<PathBuf> {
         let data_home = self
@@ -739,6 +744,12 @@ mod tests {
         for bad in ["", "-a", "a-", "Research", "a_b", "a b", "../x", &"a".repeat(33)] {
             assert!(InstanceName::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_card_unlock_file_sits_beside_the_config() {
+        let d = p("default", dirs(Some("/h"), Some("/c"), Some("/d"), Some("/r")));
+        assert_eq!(d.card_unlock_file().unwrap(), d.config_dir().unwrap().join("card-unlock.toml"));
     }
 
     #[test]
