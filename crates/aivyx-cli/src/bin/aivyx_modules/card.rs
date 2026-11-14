@@ -337,7 +337,13 @@ async fn run_add(card: Option<String>, label: Option<String>, socket: &Path) -> 
     if running {
         daemon_client::enroll_card(socket, serial.clone(), label, pin, generate, admin_pin).await?;
     } else {
-        enroll_offline(&helper, &serial, &label, &pin, generate, admin_pin)?;
+        // `store_opens_with` drives its own runtime, so run off this one's thread.
+        let serial = serial.clone();
+        tokio::task::spawn_blocking(move || {
+            enroll_offline(&helper, &serial, &label, &pin, generate, admin_pin)
+        })
+        .await
+        .map_err(|e| format!("enroll task failed: {e}"))??;
     }
     println!("PA can now be unlocked with this card.");
     offer_to_remove_saved_passphrase()
