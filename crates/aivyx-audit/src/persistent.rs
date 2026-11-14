@@ -487,6 +487,26 @@ impl PersistentAuditLog {
         let (entries, _) = scan_decode_verify(&storage, &audit_key).await?;
         Ok(VerifyReport::from_entries(&entries))
     }
+
+    /// A18 — does the key `storage` was opened with really open this
+    /// store? Reads one sealed audit row (the chain header, else the first
+    /// entry, else the anchor) and reports whether it decrypts: a wrong
+    /// master key derives a wrong `Audit` subkey, so the AEAD open fails.
+    /// Much cheaper than [`Self::verify_from_disk`], which reads the whole
+    /// chain. `Ok(true)` when the domain holds none of those rows yet:
+    /// there is nothing to check.
+    pub async fn key_opens_store(storage: &Arc<dyn Storage>) -> Result<bool, AuditError> {
+        let handle = storage.domain(KeyDomain::Audit);
+        for key in [CHAIN_HEADER_KEY.to_vec(), audit_key(0), CHAIN_ANCHOR_KEY.to_vec()] {
+            match handle.get(&key).await {
+                Ok(Some(_)) => return Ok(true),
+                Ok(None) => continue,
+                Err(aivyx_storage::StorageError::DecryptFailed { .. }) => return Ok(false),
+                Err(e) => return Err(AuditError::Storage(e.to_string())),
+            }
+        }
+        Ok(true)
+    }
 }
 
 /// Result of a cold-start `verify_from_disk` run.
@@ -1026,6 +1046,35 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         panic!("chain anchor never reached seq {expected_seq}");
+    }
+
+    // ---- A18 — key_opens_store ----
+
+    #[tokio::test]
+    async fn key_opens_store_tells_the_right_key_from_a_wrong_one() {
+        // Nothing written yet: nothing to check.
+        let (dir, storage, chain_key) = fresh_storage(1).await;
+        assert!(PersistentAuditLog::key_opens_store(&storage).await.unwrap());
+
+        let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key).await.unwrap();
+        log.append(AuditEvent::StoreUnlocked { method: "passphrase".into() }).unwrap();
+        wait_for_disk(&storage, 1).await;
+        drop(log);
+        assert!(PersistentAuditLog::key_opens_store(&storage).await.unwrap());
+        drop(storage);
+
+        // Same file, another master key: the sealed rows don't open.
+        let wrong = RedbStorage::open(StorageConfig::new(dir.path()), MasterKey::from_raw([2u8; 32]))
+            .await
+            .unwrap();
+        assert!(!PersistentAuditLog::key_opens_store(&wrong).await.unwrap());
+        drop(wrong);
+
+        // And the right one still does after a reopen.
+        let right = RedbStorage::open(StorageConfig::new(dir.path()), MasterKey::from_raw([1u8; 32]))
+            .await
+            .unwrap();
+        assert!(PersistentAuditLog::key_opens_store(&right).await.unwrap());
     }
 
     /// A runtime shutting down under in-flight writes cancels their

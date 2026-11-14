@@ -96,6 +96,9 @@ aivyx-pack = { workspace = true }
 aivyx-crypto = { path = "../aivyx-crypto" }
 aivyx-storage = { path = "../aivyx-storage" }
 aivyx-audit = { path = "../aivyx-audit" }
+# A18 — card unlock: the helper client only (no `card` feature, so no PC/SC
+# in this static binary; the card work runs in the `aivyx-pa-card` helper).
+aivyx-card-helper = { workspace = true }
 aivyx-memory = { path = "../aivyx-memory" }
 aivyx-mcp = { path = "../aivyx-mcp" }
 aivyx-tool = { path = "../aivyx-tool" }

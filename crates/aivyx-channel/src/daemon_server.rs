@@ -570,6 +570,10 @@ pub struct DaemonConfig {
     /// present): the loop then arms its next iteration after a Verdict FAIL
     /// and gives a stall one escalated rescue iteration per run.
     pub loop_escalate_on_failure: bool,
+    /// A18 — card unlock in the running daemon: the enrolled-card list for
+    /// `GetLockState`, plus `EnrollCard` and `Lock`. `None` ⇒ `GetLockState`
+    /// lists no cards and both requests are refused.
+    pub card_unlock: Option<crate::card_unlock::CardUnlockContext>,
 }
 
 /// Chapter X — the provider + model the daemon uses for one-shot persona-seed
@@ -737,7 +741,7 @@ pub(crate) fn bind_unix_socket_0600(path: &Path) -> std::io::Result<UnixListener
 /// which is why that fix stages-and-renames rather than relying on
 /// `mode()` alone).
 #[cfg(unix)]
-fn create_dir_all_0700(dir: &Path) -> std::io::Result<()> {
+pub(crate) fn create_dir_all_0700(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)?;
@@ -852,6 +856,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         routed,
         escalation_arming,
         loop_escalate_on_failure,
+        card_unlock,
         wiki_sweep,
         wiki_store,
         graph_sweep,
@@ -1839,6 +1844,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         channel_trigger_authz.telegram, channel_trigger_authz.discord, channel_trigger_authz.slack
     );
 
+    // A18 — shared by every connection (`GetLockState`, `EnrollCard`, `Lock`).
+    let card_unlock: Option<Arc<crate::card_unlock::CardUnlockContext>> = card_unlock.map(Arc::new);
+
     loop {
         let (stream, _addr) = tokio::select! {
             result = listener.accept() => {
@@ -1913,6 +1921,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             comfyui_base_url: comfyui_base_url.clone(),
             routing_guard: routing_guard.clone(),
             routed: routed.clone(),
+            card_unlock: card_unlock.clone(),
         };
 
         let handle = tokio::spawn(async move {
@@ -2240,6 +2249,8 @@ struct ConnectionContext {
     /// Studio Gallery — base URL of the `comfyui` `[[mcp_server]]`'s
     /// backing ComfyUI instance, for the `GetGallery` query handler.
     comfyui_base_url: Option<String>,
+    /// A18 — see `DaemonConfig::card_unlock`.
+    card_unlock: Option<Arc<crate::card_unlock::CardUnlockContext>>,
 }
 
 async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
@@ -2301,6 +2312,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         comfyui_base_url,
         routing_guard,
         routed,
+        card_unlock,
     } = ctx;
     let (mut reader, mut writer) = stream.into_split();
 
@@ -4069,12 +4081,12 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
-                        // A18 — lock-state messages. The full (unlocked) daemon
-                        // is never locked; Task 9 fills in cards, Lock, EnrollCard.
+                        // A18 — lock-state messages. The full daemon is
+                        // unlocked by construction; it lists the enrolled cards.
                         FrontendMessage::GetLockState => {
                             let resp = DaemonMessage::LockState {
                                 locked: false,
-                                cards: vec![],
+                                cards: enrolled_card_views(card_unlock.as_deref()).await,
                             };
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
@@ -4089,14 +4101,64 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
-                        FrontendMessage::Lock | FrontendMessage::EnrollCard { .. } => {
-                            let resp = DaemonMessage::Error {
-                                code: "unsupported".into(),
-                                message: "not available yet".into(),
+                        FrontendMessage::EnrollCard {
+                            serial,
+                            label,
+                            pin,
+                            generate,
+                            admin_pin,
+                        } => {
+                            let resp = match card_unlock.as_ref() {
+                                None => DaemonMessage::Error {
+                                    code: "card_unlock_unavailable".into(),
+                                    message: "card unlock isn't set up for this daemon".into(),
+                                },
+                                Some(c) => {
+                                    match enroll_card_blocking(
+                                        Arc::clone(c),
+                                        serial.clone(),
+                                        label,
+                                        pin,
+                                        generate,
+                                        admin_pin,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => DaemonMessage::CardEnrolled { serial },
+                                        Err(e) => DaemonMessage::Error {
+                                            code: "enroll_failed".into(),
+                                            message: e,
+                                        },
+                                    }
+                                }
                             };
                             let frame = encode_frame(&resp)?;
                             writer.write_all(&frame).await?;
                         }
+                        FrontendMessage::Lock => match card_unlock.as_ref() {
+                            Some(c) if c.can_lock => {
+                                // The same path as `Shutdown`; aivyx.rs sees the
+                                // flag once `run_daemon` returns and re-execs
+                                // itself, which starts locked.
+                                c.relock_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+                                let resp = DaemonMessage::Locked {
+                                    message: "PA is locked — run `aivyx-pa unlock`".into(),
+                                };
+                                let frame = encode_frame(&resp)?;
+                                writer.write_all(&frame).await?;
+                                send_shutting_down(&mut writer, "locked").await;
+                                shutdown.cancel();
+                                return Ok(());
+                            }
+                            _ => {
+                                let resp = DaemonMessage::Error {
+                                    code: "lock_unavailable".into(),
+                                    message: LOCK_UNAVAILABLE.into(),
+                                };
+                                let frame = encode_frame(&resp)?;
+                                writer.write_all(&frame).await?;
+                            }
+                        },
                     }
                 }
                 Err(e) => {
@@ -4157,6 +4219,55 @@ pub async fn run_poc_daemon_with_routing<C: ChannelContext + Send + Sync + 'stat
     let channel: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
     run_single_connection_daemon(socket_path, agent, factory, routing_guard, routed).await
+}
+
+/// A18 — why `Lock` is refused (no card context, or a saved passphrase).
+const LOCK_UNAVAILABLE: &str = "PA can't lock: a saved passphrase would unlock it again. \
+     Remove it (`aivyx-pa keyring clear`, or delete daemon.env) and enroll a card first.";
+
+/// A18 — the enrolled cards (label, serial) for `GetLockState`. A missing
+/// or broken file lists none.
+async fn enrolled_card_views(
+    ctx: Option<&crate::card_unlock::CardUnlockContext>,
+) -> Vec<aivyx_ipc::protocol::LockCardView> {
+    let Some(path) = ctx.map(|c| c.file_path.clone()) else {
+        return Vec::new();
+    };
+    tokio::task::spawn_blocking(move || crate::card_unlock::CardUnlockFile::load(&path))
+        .await
+        .ok()
+        .and_then(|r| r.ok().flatten())
+        .map(|f| {
+            f.cards
+                .into_iter()
+                .map(|c| aivyx_ipc::protocol::LockCardView {
+                    serial: c.serial,
+                    label: c.label,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A18 — `EnrollCard`: the helper and the file I/O block, so they run on
+/// the blocking pool. The PIN and admin PIN become `SecretString`s at once
+/// and are never logged.
+async fn enroll_card_blocking(
+    ctx: Arc<crate::card_unlock::CardUnlockContext>,
+    serial: String,
+    label: String,
+    pin: String,
+    generate: bool,
+    admin_pin: Option<String>,
+) -> Result<(), String> {
+    let pin = secrecy::SecretString::from(pin);
+    let admin_pin = admin_pin.map(secrecy::SecretString::from);
+    tokio::task::spawn_blocking(move || {
+        crate::card_unlock::enroll_card(&ctx, &serial, &label, &pin, generate, admin_pin.as_ref())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("enrollment task failed: {e}"))?
 }
 
 /// Accept exactly one connection, serve it to completion, then return.
@@ -4249,6 +4360,7 @@ async fn run_single_connection_daemon(
         comfyui_base_url: None,
         routing_guard,
         routed,
+        card_unlock: None,
     })
     .await
 }
@@ -4262,7 +4374,18 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
 ) -> Result<(), DaemonError> {
     let channel_for_factory: Arc<dyn ChannelContext + Send + Sync> = channel;
     let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel_for_factory));
-    run_daemon(DaemonConfig {
+    run_daemon(minimal_daemon_config(socket_path, agent, factory, shutdown)).await
+}
+
+/// A daemon config with every optional subsystem off: what
+/// `run_daemon_compat` runs, and what tests start from.
+fn minimal_daemon_config(
+    socket_path: &Path,
+    agent: Arc<dyn Agent>,
+    factory: ChannelFactory,
+    shutdown: CancellationToken,
+) -> DaemonConfig {
+    DaemonConfig {
         socket_path: socket_path.to_path_buf(),
         agent,
         channel_factory: factory,
@@ -4351,10 +4474,10 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
         routed: None,
         escalation_arming: None,
         loop_escalate_on_failure: false,
+        card_unlock: None,
         wiki_sweep: None,
         graph_sweep: None,
-    })
-    .await
+    }
 }
 
 pub(crate) async fn send_shutting_down(writer: &mut tokio::net::unix::OwnedWriteHalf, reason: &str) {
@@ -8328,6 +8451,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::ScheduleMutated { .. } => "ScheduleMutated",
         aivyx_audit::AuditEvent::TeamMissionChannelTriggered { .. } => "TeamMissionChannelTriggered",
         aivyx_audit::AuditEvent::TeamMissionChannelDenied { .. } => "TeamMissionChannelDenied",
+        aivyx_audit::AuditEvent::StoreUnlocked { .. } => "StoreUnlocked",
     }
     .to_string();
 
@@ -11238,6 +11362,285 @@ system_prompt = "You are a custom role."
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "pre-existing dir mode was {mode:o}, expected tightened to 0700");
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- A18 — EnrollCard / Lock in the running daemon -------------------
+
+    struct IdleAgent {
+        id: aivyx_core::AgentId,
+        caps: aivyx_capability::CapabilitySet,
+    }
+
+    #[async_trait::async_trait]
+    impl Agent for IdleAgent {
+        fn id(&self) -> aivyx_core::AgentId {
+            self.id
+        }
+        fn capabilities(&self) -> &aivyx_capability::CapabilitySet {
+            &self.caps
+        }
+        async fn turn(
+            &self,
+            _message: aivyx_core::Message,
+            _channel: &dyn ChannelContext,
+        ) -> aivyx_core::TurnOutcome {
+            aivyx_core::TurnOutcome::Completed {
+                final_message: "ok".to_string(),
+                tool_calls_made: 0,
+                duration: std::time::Duration::from_millis(0),
+            }
+        }
+    }
+
+    /// A temp dir, a card context over a fake card "S2", and a daemon
+    /// running on a socket inside the dir.
+    struct CardDaemon {
+        dir: PathBuf,
+        socket: PathBuf,
+        ctx_file: PathBuf,
+        relock: Arc<std::sync::atomic::AtomicBool>,
+        shutdown: CancellationToken,
+        handle: tokio::task::JoinHandle<Result<(), DaemonError>>,
+    }
+
+    fn card_master() -> aivyx_crypto::MasterKey {
+        aivyx_crypto::MasterKey::from_raw([7u8; 32])
+    }
+
+    async fn start_card_daemon(helper: Arc<aivyx_card_helper::FakeHelper>, can_lock: bool) -> CardDaemon {
+        let dir = std::env::temp_dir().join(format!("aivyx-card-daemon-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("daemon.sock");
+        let ctx_file = dir.join("card-unlock.toml");
+        let relock = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown = CancellationToken::new();
+        let agent: Arc<dyn Agent> = Arc::new(IdleAgent {
+            id: aivyx_core::AgentId::new(),
+            caps: aivyx_capability::CapabilitySet::empty(),
+        });
+        let channel: Arc<dyn ChannelContext + Send + Sync> =
+            Arc::new(crate::LocalChannel::new("card-test", Vec::<u8>::new()));
+        let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
+        let mut config = minimal_daemon_config(&socket, agent, factory, shutdown.clone());
+        config.card_unlock = Some(crate::card_unlock::CardUnlockContext {
+            instance: "default".into(),
+            file_path: ctx_file.clone(),
+            helper,
+            master: card_master(),
+            can_lock,
+            relock_requested: Arc::clone(&relock),
+        });
+        let handle = tokio::spawn(run_daemon(config));
+        for _ in 0..100 {
+            if tokio::net::UnixStream::connect(&socket).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        CardDaemon { dir, socket, ctx_file, relock, shutdown, handle }
+    }
+
+    /// Send one message and return every frame the daemon sends back
+    /// until it answers (anything but the `DaemonReady` greeting) and,
+    /// when `until_closed`, until it hangs up.
+    async fn ask(socket: &Path, msg: &FrontendMessage, until_closed: bool) -> Vec<aivyx_ipc::protocol::DaemonEnvelope> {
+        use aivyx_ipc::protocol::DaemonEnvelope;
+        let mut stream = tokio::net::UnixStream::connect(socket).await.unwrap();
+        stream.write_all(&encode_frame(msg).unwrap()).await.unwrap();
+        let mut buf = Vec::new();
+        let mut out = Vec::new();
+        let mut tmp = [0u8; 4096];
+        loop {
+            while let Ok((env, used)) = decode_frame::<DaemonEnvelope>(&buf) {
+                buf.drain(..used);
+                if !matches!(env, DaemonEnvelope::DaemonReady { .. }) {
+                    out.push(env);
+                }
+            }
+            if !until_closed && !out.is_empty() {
+                return out;
+            }
+            let n = tokio::time::timeout(std::time::Duration::from_secs(10), stream.read(&mut tmp))
+                .await
+                .expect("daemon answers within 10 s")
+                .unwrap();
+            if n == 0 {
+                return out;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+        }
+    }
+
+    #[tokio::test]
+    async fn enroll_card_writes_an_entry_that_opens_to_the_daemons_master_key() {
+        let helper = Arc::new(aivyx_card_helper::FakeHelper::with_card("S2", [9u8; 32]));
+        let d = start_card_daemon(Arc::clone(&helper), false).await;
+        let reply = ask(
+            &d.socket,
+            &FrontendMessage::EnrollCard {
+                serial: "S2".into(),
+                label: "desk".into(),
+                pin: "123456".into(),
+                generate: false,
+                admin_pin: None,
+            },
+            false,
+        )
+        .await;
+        match &reply[0] {
+            aivyx_ipc::protocol::DaemonEnvelope::CardEnrolled { serial } => assert_eq!(serial, "S2"),
+            other => panic!("expected CardEnrolled, got {other:?}"),
+        }
+        let file = crate::card_unlock::CardUnlockFile::load(&d.ctx_file).unwrap().unwrap();
+        let (key, serial) = crate::card_unlock::unlock_with(
+            &file,
+            "default",
+            Some("S2"),
+            &*helper,
+            &secrecy::SecretString::from("123456"),
+        )
+        .unwrap();
+        assert_eq!(serial, "S2");
+        assert!(key.same_as(&card_master()));
+
+        // GetLockState now lists it.
+        let reply = ask(&d.socket, &FrontendMessage::GetLockState, false).await;
+        match &reply[0] {
+            aivyx_ipc::protocol::DaemonEnvelope::LockState { locked, cards } => {
+                assert!(!locked);
+                assert_eq!(cards.len(), 1);
+                assert_eq!((cards[0].serial.as_str(), cards[0].label.as_str()), ("S2", "desk"));
+            }
+            other => panic!("expected LockState, got {other:?}"),
+        }
+        d.shutdown.cancel();
+        let _ = d.handle.await;
+        std::fs::remove_dir_all(&d.dir).ok();
+    }
+
+    #[tokio::test]
+    async fn enroll_card_reports_the_helpers_refusal() {
+        // A wrong PIN: the card refuses the ECDH, nothing is written.
+        let helper = Arc::new(aivyx_card_helper::FakeHelper::with_card("S2", [9u8; 32]));
+        let d = start_card_daemon(helper, false).await;
+        let reply = ask(
+            &d.socket,
+            &FrontendMessage::EnrollCard {
+                serial: "S2".into(),
+                label: "desk".into(),
+                pin: "000000".into(),
+                generate: false,
+                admin_pin: None,
+            },
+            false,
+        )
+        .await;
+        match &reply[0] {
+            aivyx_ipc::protocol::DaemonEnvelope::Error { code, message } => {
+                assert_eq!(code, "enroll_failed");
+                assert!(!message.contains("000000"), "the PIN must not be echoed: {message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(!d.ctx_file.exists());
+        d.shutdown.cancel();
+        let _ = d.handle.await;
+        std::fs::remove_dir_all(&d.dir).ok();
+    }
+
+    #[tokio::test]
+    async fn lock_is_refused_while_a_saved_passphrase_would_unlock_it_again() {
+        let helper = Arc::new(aivyx_card_helper::FakeHelper::with_card("S2", [9u8; 32]));
+        let d = start_card_daemon(helper, false).await;
+        let reply = ask(&d.socket, &FrontendMessage::Lock, false).await;
+        match &reply[0] {
+            aivyx_ipc::protocol::DaemonEnvelope::Error { code, message } => {
+                assert_eq!(code, "lock_unavailable");
+                assert!(message.contains("saved passphrase would unlock it again"), "{message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(!d.relock.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!d.handle.is_finished(), "a refused Lock leaves the daemon running");
+        d.shutdown.cancel();
+        let _ = d.handle.await;
+        std::fs::remove_dir_all(&d.dir).ok();
+    }
+
+    #[tokio::test]
+    async fn lock_sets_the_relock_flag_and_shuts_the_daemon_down() {
+        let helper = Arc::new(aivyx_card_helper::FakeHelper::with_card("S2", [9u8; 32]));
+        let d = start_card_daemon(helper, true).await;
+        let reply = ask(&d.socket, &FrontendMessage::Lock, true).await;
+        assert!(
+            matches!(reply.first(), Some(aivyx_ipc::protocol::DaemonEnvelope::Locked { .. })),
+            "{reply:?}"
+        );
+        assert!(
+            reply.iter().any(|e| matches!(
+                e,
+                aivyx_ipc::protocol::DaemonEnvelope::ShuttingDown { reason } if reason == "locked"
+            )),
+            "{reply:?}"
+        );
+        assert!(d.relock.load(std::sync::atomic::Ordering::SeqCst));
+        tokio::time::timeout(std::time::Duration::from_secs(10), d.handle)
+            .await
+            .expect("the daemon stops after Lock")
+            .unwrap()
+            .unwrap();
+        std::fs::remove_dir_all(&d.dir).ok();
+    }
+
+    #[tokio::test]
+    async fn without_a_card_context_get_lock_state_lists_no_cards_and_enroll_is_refused() {
+        let dir = std::env::temp_dir().join(format!("aivyx-card-daemon-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("daemon.sock");
+        let shutdown = CancellationToken::new();
+        let agent: Arc<dyn Agent> = Arc::new(IdleAgent {
+            id: aivyx_core::AgentId::new(),
+            caps: aivyx_capability::CapabilitySet::empty(),
+        });
+        let channel: Arc<dyn ChannelContext + Send + Sync> =
+            Arc::new(crate::LocalChannel::new("card-test", Vec::<u8>::new()));
+        let factory: ChannelFactory = Arc::new(move |_| Arc::clone(&channel));
+        let handle = tokio::spawn(run_daemon(minimal_daemon_config(&socket, agent, factory, shutdown.clone())));
+        for _ in 0..100 {
+            if tokio::net::UnixStream::connect(&socket).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let reply = ask(&socket, &FrontendMessage::GetLockState, false).await;
+        assert!(
+            matches!(&reply[0], aivyx_ipc::protocol::DaemonEnvelope::LockState { locked: false, cards } if cards.is_empty()),
+            "{reply:?}"
+        );
+        let reply = ask(
+            &socket,
+            &FrontendMessage::EnrollCard {
+                serial: "S2".into(),
+                label: "desk".into(),
+                pin: "123456".into(),
+                generate: false,
+                admin_pin: None,
+            },
+            false,
+        )
+        .await;
+        assert!(
+            matches!(&reply[0], aivyx_ipc::protocol::DaemonEnvelope::Error { code, .. } if code == "card_unlock_unavailable"),
+            "{reply:?}"
+        );
+        let reply = ask(&socket, &FrontendMessage::Lock, false).await;
+        assert!(
+            matches!(&reply[0], aivyx_ipc::protocol::DaemonEnvelope::Error { code, .. } if code == "lock_unavailable"),
+            "{reply:?}"
+        );
+        shutdown.cancel();
+        let _ = handle.await;
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -278,6 +278,7 @@ version = "0.21.3"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
+ "aivyx-card-helper",
  "aivyx-channel",
  "aivyx-config",
  "aivyx-core",

@@ -246,6 +246,7 @@ async fn operator_actions_are_stamped_over_ipc_but_looking_is_not() {
         routed: None,
         escalation_arming: None,
         loop_escalate_on_failure: false,
+        card_unlock: None,
         wiki_sweep: None,
         wiki_store: None,
         graph_sweep: None,

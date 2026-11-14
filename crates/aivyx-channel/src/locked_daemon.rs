@@ -148,6 +148,11 @@ impl Backoff {
 }
 
 pub async fn run_locked(cfg: LockedConfig) -> Result<LockedOutcome, String> {
+    // A boot-time start finds no runtime folder yet; `run_daemon` makes it too.
+    if let Some(parent) = cfg.socket_path.parent() {
+        crate::daemon_server::create_dir_all_0700(parent)
+            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
     let listener = crate::daemon_server::bind_unix_socket_0600(&cfg.socket_path)
         .map_err(|e| format!("bind {}: {e}", cfg.socket_path.display()))?;
     let mut backoff = Backoff {

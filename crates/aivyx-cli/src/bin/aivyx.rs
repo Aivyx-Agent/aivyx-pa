@@ -253,6 +253,12 @@ const PROMPT: &str = "> ";
 /// Populated by main() before any other processing, and accessed via cli_args().
 static CLI_ARGS: OnceLock<Vec<String>> = OnceLock::new();
 
+/// A18 — set by the running daemon's `Lock` (through
+/// `CardUnlockContext::relock_requested`). `main` reads it once `run()`
+/// has returned, when every key it held has been dropped, and re-execs
+/// the binary, which then starts locked.
+static RELOCK_REQUESTED: OnceLock<Arc<std::sync::atomic::AtomicBool>> = OnceLock::new();
+
 /// Get the CLI args with the --instance flag already stripped.
 /// Must only be called after main() has initialized CLI_ARGS.
 fn cli_args() -> Vec<String> {
@@ -589,12 +595,48 @@ fn main() -> ExitCode {
     }
 
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            // A18 — `Lock`: `run()` has returned, so its master key, store
+            // (with every subkey) and chain-key arrays are dropped. Re-exec
+            // in place: the same pid, so the service manager sees no
+            // restart, and the new image starts locked.
+            if RELOCK_REQUESTED
+                .get()
+                .is_some_and(|f| f.load(std::sync::atomic::Ordering::SeqCst))
+            {
+                return relock_reexec();
+            }
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("aivyx-pa: {}", help::with_help_hint(e, &stripped_args));
             ExitCode::FAILURE
         }
     }
+}
+
+/// A18 — replace this process with a fresh `aivyx-pa` run with the same
+/// arguments (and the same environment, so the same instance). Returns only
+/// when `exec` fails; the failure exit then lets the service manager's
+/// `Restart=on-failure` start it again, locked.
+fn relock_reexec() -> ExitCode {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        eprintln!("aivyx-pa: PA is locked; restarting locked");
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(e) => {
+                eprintln!("aivyx-pa: relock: can't find this binary: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let err = std::process::Command::new(exe)
+            .args(std::env::args_os().skip(1))
+            .exec();
+        eprintln!("aivyx-pa: relock: re-exec failed: {err}");
+    }
+    ExitCode::FAILURE
 }
 
 fn run() -> Result<(), String> {
@@ -1489,7 +1531,28 @@ fn run() -> Result<(), String> {
     //    source — continuing would either hang on a tty read that
     //    never comes, or crash with an opaque Argon2 error.
     let new_store = !storage_path.exists();
-    let passphrase_source = select_passphrase_source(config.passphrase.as_ref(), new_store)?;
+    // A18 — a daemon with no passphrase source but an enrolled card starts
+    // locked. Every other mode, and a daemon with a source, is unchanged.
+    let card_file_path =
+        aivyx_instance::InstancePaths::current().ok().and_then(|p| p.card_unlock_file());
+    let (card_file, enrolled) = cards_for_start(
+        card_file_path
+            .as_deref()
+            .map(aivyx_channel::card_unlock::CardUnlockFile::load),
+    );
+    let selected = select_passphrase_source(config.passphrase.as_ref(), new_store);
+    let is_daemon = matches!(mode, CliMode::DaemonRun);
+    let plan = plan_master_key(
+        selected.as_ref().map(|_| ()).map_err(Clone::clone),
+        enrolled,
+        is_daemon,
+    );
+    let passphrase_source = match plan {
+        MasterKeyPlan::Passphrase => Some(selected?),
+        MasterKeyPlan::Locked => None,
+        MasterKeyPlan::Fail(e) => return Err(e),
+    };
+    let passphrase_saved = passphrase_source.is_some();
 
     // ---- First-run coherence A1: the interactive REPL and the daemon ---
     // Decided here, before the master key is derived and the store is
@@ -1513,7 +1576,7 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         let running = rt.block_on(aivyx_channel::daemon_client::daemon_is_running(&sp));
         let non_interactive =
-            !matches!(passphrase_source, PassphraseSource::InteractivePrompt { .. });
+            !matches!(passphrase_source, Some(PassphraseSource::InteractivePrompt { .. }));
         let session_overrides = cli_provider.is_some()
             || !cli_mcp_servers.is_empty()
             || !cli_mcp_sse_servers.is_empty();
@@ -1564,8 +1627,62 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let master_key = derive_master_key(passphrase_source, &salt_path, Argon2Params::d7_default())
-        .map_err(|e| format!("failed to derive master key: {e}"))?;
+    let (master_key, unlock_method) = match passphrase_source {
+        Some(source) => (
+            derive_master_key(source, &salt_path, Argon2Params::d7_default())
+                .map_err(|e| format!("failed to derive master key: {e}"))?,
+            "passphrase".to_string(),
+        ),
+        // A18 — locked: serve only lock requests until a card (or the
+        // passphrase, typed at `aivyx-pa unlock --passphrase`) yields the key.
+        None => {
+            use aivyx_channel::locked_daemon::{
+                LockedConfig, LockedOutcome, UnlockMethod, run_locked,
+            };
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+            let helper: Arc<dyn aivyx_card_helper::CardHelper> =
+                match aivyx_card_helper::ProcessHelper::find() {
+                    Ok(h) => Arc::new(h),
+                    Err(e) => {
+                        eprintln!("aivyx-pa: {e}");
+                        Arc::new(aivyx_card_helper::MissingHelper)
+                    }
+                };
+            let salt = salt_path.clone();
+            let store = storage_path.clone();
+            eprintln!("aivyx-pa: starting locked — run `aivyx-pa unlock`");
+            let outcome = rt.block_on(run_locked(LockedConfig {
+                socket_path: default_socket_path()?,
+                instance: current_instance_name().as_str().to_string(),
+                cards: card_file.clone().unwrap_or_default(),
+                helper,
+                from_passphrase: Arc::new(move |p| {
+                    derive_master_key(
+                        PassphraseSource::FromConfig(p.clone()),
+                        &salt,
+                        Argon2Params::d7_default(),
+                    )
+                    .map_err(|e| e.to_string())
+                }),
+                verify: Arc::new(move |key| store_opens_with(&store, key)),
+                backoff: std::time::Duration::from_secs(30),
+                max_failures: 5,
+            }))?;
+            match outcome {
+                LockedOutcome::Stopped => return Ok(()),
+                LockedOutcome::Unlocked(key, method) => (
+                    key,
+                    match method {
+                        UnlockMethod::Card { serial } => format!("card {serial}"),
+                        UnlockMethod::Passphrase => "passphrase".to_string(),
+                    },
+                ),
+            }
+        }
+    };
 
     if matches!(mode, CliMode::MatrixConnect | CliMode::MatrixVerify) {
         let keys = aivyx_matrix::credentials::MatrixKeys::derive(&master_key)?;
@@ -1644,6 +1761,26 @@ fn run() -> Result<(), String> {
     };
 
     let matrix_keys = aivyx_matrix::credentials::MatrixKeys::derive(&master_key)?;
+
+    // A18 — `EnrollCard` and `Lock` in the running daemon. Built before
+    // `RedbStorage::open` consumes `master_key`; only for the daemon, so
+    // no other mode holds a second copy of the key.
+    let card_unlock = if is_daemon {
+        card_file_path.clone().map(|file_path| {
+            aivyx_channel::card_unlock::CardUnlockContext {
+                instance: current_instance_name().as_str().to_string(),
+                file_path,
+                helper: aivyx_card_helper::ProcessHelper::find()
+                    .map(|h| Arc::new(h) as Arc<dyn aivyx_card_helper::CardHelper>)
+                    .unwrap_or_else(|_| Arc::new(aivyx_card_helper::MissingHelper)),
+                master: master_key.clone(),
+                can_lock: !passphrase_saved && enrolled > 0,
+                relock_requested: Arc::clone(RELOCK_REQUESTED.get_or_init(Default::default)),
+            }
+        })
+    } else {
+        None
+    };
 
     // ---- Runtime ------------------------------------------------------
     // A multi-threaded runtime is overkill for a single-user REPL, but
@@ -1771,6 +1908,8 @@ fn run() -> Result<(), String> {
             cli_web_ui_port,
             load_opts.role_override.clone(),
             repl_in_process_notice,
+            card_unlock,
+            unlock_method,
         )
         .await
     })
@@ -6108,6 +6247,90 @@ fn select_passphrase_source(
     }
 }
 
+/// What start-up does for the master key (A18).
+#[derive(Debug, PartialEq)]
+enum MasterKeyPlan {
+    /// Derive it from the passphrase source, as before A18.
+    Passphrase,
+    /// Start locked: wait for a card (or the passphrase) over the socket.
+    Locked,
+    /// Fail with this message (today's "no passphrase" error).
+    Fail(String),
+}
+
+/// A18 — a daemon with no passphrase source but at least one enrolled card
+/// starts locked. One-shot commands and the REPL keep today's error.
+fn plan_master_key(source: Result<(), String>, enrolled_cards: usize, is_daemon: bool) -> MasterKeyPlan {
+    match source {
+        Ok(()) => MasterKeyPlan::Passphrase,
+        Err(_) if is_daemon && enrolled_cards > 0 => MasterKeyPlan::Locked,
+        Err(e) => MasterKeyPlan::Fail(e),
+    }
+}
+
+/// A18 — the card list a start-up decides with, from loading
+/// `card-unlock.toml` (`None`: no instance paths). A broken file counts as
+/// one card with an empty list: the daemon starts locked and says so, and
+/// only `UnlockWithPassphrase` can open it.
+fn cards_for_start(
+    loaded: Option<
+        Result<
+            Option<aivyx_channel::card_unlock::CardUnlockFile>,
+            aivyx_channel::card_unlock::CardUnlockError,
+        >,
+    >,
+) -> (Option<aivyx_channel::card_unlock::CardUnlockFile>, usize) {
+    match loaded {
+        Some(Ok(Some(f))) => {
+            let n = f.cards.len();
+            (Some(f), n)
+        }
+        Some(Ok(None)) | None => (None, 0),
+        Some(Err(e)) => {
+            eprintln!("aivyx-pa: {e}; `aivyx-pa unlock --passphrase` still works");
+            (Some(aivyx_channel::card_unlock::CardUnlockFile::default()), 1)
+        }
+    }
+}
+
+/// A18 — does `key` really open the store at `store_path`? The locked
+/// daemon's check that a typed passphrase (or an unwrapped card key) is the
+/// right one. Opens the store, reads one sealed audit row (see
+/// `PersistentAuditLog::key_opens_store`) and closes it again before
+/// returning, so the store lock is free for the real open that follows.
+/// True when there is no store yet: there is nothing to check. Runs on a
+/// blocking thread (the locked daemon calls it from `spawn_blocking`), so
+/// it drives its own small runtime.
+fn store_opens_with(store_path: &std::path::Path, key: &aivyx_crypto::MasterKey) -> bool {
+    if !store_path.exists() {
+        return true;
+    }
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("aivyx-pa: can't check the key: {e}");
+            return false;
+        }
+    };
+    let path = store_path.to_path_buf();
+    let key = key.clone();
+    rt.block_on(async move {
+        let storage = match RedbStorage::open(StorageConfig::new(path), key).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("aivyx-pa: can't open the store to check the key: {e}");
+                return false;
+            }
+        };
+        let opens = PersistentAuditLog::key_opens_store(&storage).await;
+        drop(storage);
+        opens.unwrap_or_else(|e| {
+            eprintln!("aivyx-pa: can't check the key: {e}");
+            false
+        })
+    })
+}
+
 /// Chapter Keyring — `aivyx-pa keyring <set|clear|status>`. Manages the master
 /// passphrase in the OS credential store; pure sync, no daemon/storage.
 fn run_keyring(sub: KeyringSubcommand) -> Result<(), String> {
@@ -7140,6 +7363,10 @@ async fn run_async(
     // this interactive REPL runs in-process (and why): skip the connect
     // attempt and print the notice instead.
     repl_in_process_notice: Option<String>,
+    // A18 — see `DaemonConfig::card_unlock`; `Some` only for the daemon.
+    card_unlock: Option<aivyx_channel::card_unlock::CardUnlockContext>,
+    // A18 — "passphrase" or "card <serial>": the daemon's first audit entry.
+    unlock_method: String,
 ) -> Result<(), String> {
     // First-run coherence A1 (F14) — computed before the destructure below
     // moves `config.routing`; printed when the REPL runs in-process.
@@ -8082,6 +8309,15 @@ async fn run_async(
     let persistent_audit = Arc::new(persistent_audit);
     let audit_log_for_tool: Arc<dyn aivyx_audit::AuditLog + Send + Sync> =
         Arc::clone(&persistent_audit) as _;
+    // A18 — the daemon's first entry records how the store was unlocked.
+    if matches!(mode, CliMode::DaemonRun) {
+        use aivyx_audit::AuditWriter;
+        if let Err(e) = persistent_audit.append(aivyx_audit::AuditEvent::StoreUnlocked {
+            method: unlock_method.clone(),
+        }) {
+            eprintln!("aivyx-pa daemon: failed to audit the unlock: {e}");
+        }
+    }
     // Chapter W — emit the deferred `PersonaSeeded` audit entry now that the
     // audit log is open. The seed itself ran earlier (before the base system
     // prompt), where this log did not yet exist.
@@ -11535,6 +11771,8 @@ async fn run_async(
             // `escalation_arming` build site above).
             escalation_arming: escalation_arming.clone(),
             loop_escalate_on_failure,
+            // A18 — `GetLockState`'s card list, `EnrollCard`, `Lock`.
+            card_unlock,
             // Chapter L (L.5) — the team-mission service built above.
             team_missions,
             // Supervised batching — `Some` only when some area is supervised.
@@ -12941,6 +13179,116 @@ mod tests {
     use aivyx_config::Role;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+
+    // ---- A18 — what start-up does for the master key ----
+
+    #[test]
+    fn a_daemon_with_no_passphrase_and_an_enrolled_card_starts_locked() {
+        assert_eq!(plan_master_key(Ok(()), 1, true), MasterKeyPlan::Passphrase);
+        assert_eq!(plan_master_key(Err("no passphrase".into()), 1, true), MasterKeyPlan::Locked);
+        assert_eq!(
+            plan_master_key(Err("no passphrase".into()), 0, true),
+            MasterKeyPlan::Fail("no passphrase".into())
+        );
+        // Only the daemon starts locked; one-shot commands keep today's error.
+        assert_eq!(
+            plan_master_key(Err("no passphrase".into()), 1, false),
+            MasterKeyPlan::Fail("no passphrase".into())
+        );
+        // A passphrase source wins even with no card.
+        assert_eq!(plan_master_key(Ok(()), 0, false), MasterKeyPlan::Passphrase);
+    }
+
+    #[test]
+    fn store_opens_with_accepts_the_stores_key_and_refuses_another() {
+        use aivyx_audit::AuditWriter;
+        let dir = std::env::temp_dir().join(format!("aivyx-store-opens-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = dir.join("store.redb");
+        let right = || aivyx_crypto::MasterKey::from_raw([5u8; 32]);
+        // No store yet: nothing to check.
+        assert!(store_opens_with(&store, &right()));
+        // Write one audit entry under the right key, then close the store.
+        {
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let key: [u8; 32] = {
+                    let sub = right().derive_subkey(b"audit").unwrap();
+                    let mut out = [0u8; 32];
+                    out.copy_from_slice(sub.as_bytes());
+                    out
+                };
+                let storage = RedbStorage::open(StorageConfig::new(store.clone()), right()).await.unwrap();
+                let log = PersistentAuditLog::open(Arc::clone(&storage), key).await.unwrap();
+                log.append(aivyx_audit::AuditEvent::StoreUnlocked { method: "passphrase".into() })
+                    .unwrap();
+                for _ in 0..2000 {
+                    if log.len() == 1 && PersistentAuditLog::verify_from_disk(Arc::clone(&storage), key)
+                        .await
+                        .is_ok_and(|r| r.entries_verified == 1)
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            });
+        }
+        // The locked daemon calls it from `spawn_blocking` on its own runtime.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let s2 = store.clone();
+        let (ok_right, ok_wrong) = rt.block_on(async move {
+            tokio::task::spawn_blocking(move || {
+                (
+                    store_opens_with(&s2, &aivyx_crypto::MasterKey::from_raw([5u8; 32])),
+                    store_opens_with(&s2, &aivyx_crypto::MasterKey::from_raw([6u8; 32])),
+                )
+            })
+            .await
+            .unwrap()
+        });
+        assert!(ok_right, "the store's own key opens it");
+        assert!(!ok_wrong, "another key does not");
+        // The check let go of the store lock: a real open still works.
+        rt.block_on(async {
+            RedbStorage::open(StorageConfig::new(store.clone()), right()).await.unwrap();
+        });
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plan_master_key_starts_locked_with_no_cards_when_the_card_file_is_broken() {
+        use aivyx_channel::card_unlock::{CardUnlockError, CardUnlockFile};
+        // No file: no cards, so no passphrase fails as today.
+        let (file, enrolled) = cards_for_start(Some(Ok(None)));
+        assert_eq!((file, enrolled), (None, 0));
+        assert_eq!(
+            plan_master_key(Err("no passphrase".into()), enrolled, true),
+            MasterKeyPlan::Fail("no passphrase".into())
+        );
+        // No instance paths at all: the same.
+        assert_eq!(cards_for_start(None), (None, 0));
+        // A broken file: the daemon starts locked with an empty card list,
+        // so only `UnlockWithPassphrase` can open it.
+        let broken = CardUnlockError::BrokenFile { path: "card-unlock.toml".into(), reason: "bad".into() };
+        let (file, enrolled) = cards_for_start(Some(Err(broken)));
+        assert_eq!(file, Some(CardUnlockFile::default()));
+        assert_eq!(
+            plan_master_key(Err("no passphrase".into()), enrolled, true),
+            MasterKeyPlan::Locked
+        );
+        // A good file counts its cards.
+        let mut f = CardUnlockFile::default();
+        f.cards.push(aivyx_channel::card_unlock::CardEntry {
+            serial: "S1".into(),
+            label: "desk".into(),
+            added: String::new(),
+            card_public: String::new(),
+            ephemeral_public: String::new(),
+            nonce: String::new(),
+            wrapped: String::new(),
+        });
+        assert_eq!(cards_for_start(Some(Ok(Some(f.clone())))), (Some(f), 1));
+    }
 
     fn nt(
         name: &str,

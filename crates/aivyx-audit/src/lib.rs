@@ -561,6 +561,15 @@ pub enum AuditEvent {
         goal: String,
         reason: String,
     },
+
+    /// Amendment A18 — how the store was unlocked this session. The first
+    /// entry a daemon appends after it opens the audit log, so a forensic walk
+    /// can tell a card unlock from a passphrase one. Records the method only,
+    /// never the PIN or the passphrase.
+    StoreUnlocked {
+        /// `"passphrase"`, or `"card <serial>"` (e.g. `"card S1"`).
+        method: String,
+    },
 }
 
 /// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].
@@ -3161,6 +3170,20 @@ mod tests {
             reason: "channel not authorized via team_run_channel in aivyx-pa.toml".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serialize");
+        let back: AuditEvent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(event, back);
+    }
+
+    // ---- A18 — StoreUnlocked variant ----
+
+    #[test]
+    fn store_unlocked_round_trips_with_its_method() {
+        let event = AuditEvent::StoreUnlocked {
+            method: "card S1".to_string(),
+        };
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert!(json.contains("StoreUnlocked"), "{json}");
+        assert!(json.contains(r#""method":"card S1""#), "{json}");
         let back: AuditEvent = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(event, back);
     }

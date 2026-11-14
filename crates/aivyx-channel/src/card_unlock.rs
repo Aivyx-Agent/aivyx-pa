@@ -2,7 +2,9 @@
 //! wrapped under HKDF(X25519(ephemeral, card)). The ephemeral secret is
 //! dropped at enrollment, so only the card's ECDH rebuilds the wrap key.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use aivyx_card_helper::{CardHelper, HelperError, decode_key, encode_key};
 use aivyx_crypto::{MasterKey, WrapKey, WrappedMasterKey};
@@ -202,6 +204,62 @@ pub fn unlock_with(
         }
     };
     open_entry(entry, instance, helper, pin).map(|m| (m, entry.serial.clone()))
+}
+
+/// What a running, unlocked daemon needs for `EnrollCard` and `Lock` (A18).
+///
+/// It holds a copy of the master key. A18 accepts this: the daemon already
+/// holds the master key for as long as it runs (inside the store), and the
+/// copy here lives exactly as long and is zeroed on drop like the original.
+pub struct CardUnlockContext {
+    pub instance: String,
+    pub file_path: PathBuf,
+    pub helper: Arc<dyn CardHelper>,
+    /// A copy of the master key, held only so `EnrollCard` can wrap it.
+    pub master: MasterKey,
+    /// False when a passphrase source is saved (keyring, daemon.env, env, TOML):
+    /// a relocked daemon would unlock itself again, so `Lock` is refused.
+    pub can_lock: bool,
+    /// Set by `Lock`; read by aivyx.rs after `run_daemon` returns to re-exec.
+    pub relock_requested: Arc<AtomicBool>,
+}
+
+/// `EnrollCard` in a running daemon: load the file (or start one), get the
+/// card's decryption key (making one first when `generate` is set: the
+/// helper refuses a slot that already holds a key), wrap the master key to
+/// it, and save. Blocking (runs the helper): call it from `spawn_blocking`.
+pub fn enroll_card(
+    ctx: &CardUnlockContext,
+    serial: &str,
+    label: &str,
+    pin: &SecretString,
+    generate: bool,
+    admin_pin: Option<&SecretString>,
+) -> Result<(), CardUnlockError> {
+    let mut file = CardUnlockFile::load(&ctx.file_path)?.unwrap_or_default();
+    let card_public = if generate {
+        let admin_pin = admin_pin.ok_or_else(|| {
+            CardUnlockError::Io("making a key on the card needs the admin PIN".into())
+        })?;
+        ctx.helper.generate(serial, admin_pin)?
+    } else {
+        ctx.helper.public_key(serial)?.ok_or_else(|| {
+            CardUnlockError::Io(format!(
+                "card {serial} has no decryption key: make one first (generate)"
+            ))
+        })?
+    };
+    enroll(
+        &mut file,
+        &ctx.master,
+        &ctx.instance,
+        serial,
+        label,
+        card_public,
+        &*ctx.helper,
+        pin,
+    )?;
+    file.save(&ctx.file_path)
 }
 
 pub fn remove(file: &mut CardUnlockFile, serial: &str) -> Result<CardEntry, CardUnlockError> {
