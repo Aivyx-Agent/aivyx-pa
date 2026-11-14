@@ -19,6 +19,7 @@ layout is used on Linux, macOS and WSL.
 | Studio sign-in token | `studio-token`, next to the store | — (`aivyx-pa studio` prints a sign-in link) |
 | Layout version of the instance (`1`; a newer aivyx-pa's layout is refused) | `~/.local/share/aivyx-pa/layout-version` | — |
 | Saved passphrase, when there's no OS keyring | `~/.config/aivyx-pa/daemon.env` (mode `0600`) | delete it to be asked each time |
+| YubiKey unlock entries: the wrapped master key for each enrolled card (useless without the card; back it up with your config) | `~/.config/aivyx-pa/card-unlock.toml` (mode `0600`) | `aivyx-pa card add` / `remove` |
 | Daemon socket and PID file | `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock`, `daemon.pid` — else `~/.local/share/aivyx-pa/` | — |
 | Log of a daemon started on demand | `daemon.log`, next to the socket | — |
 | Log of a daemon running as a service | the system journal: `journalctl --user -u aivyx-pa-daemon -f` | — |

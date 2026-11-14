@@ -29,6 +29,33 @@ it safe. Aivyx PA can't recover it.
 The passphrase itself is kept in your operating system's keyring, or, where
 there isn't one, in a file only your user account can read.
 
+## Unlock with a YubiKey
+
+If you own a YubiKey (or another OpenPGP smart card), it can unlock Aivyx PA
+in place of a saved passphrase. Then nothing on your disk can open the store:
+you plug the card in, type its PIN and touch it.
+
+1. Install the card helper and make sure the smart-card service is running:
+   `aivyx-pa tool-programs install`, and `pcscd` (on most Linux systems,
+   `sudo systemctl enable --now pcscd`).
+2. Enroll the card: `aivyx-pa card add`. It asks for your passphrase, then
+   the card's PIN and a touch. If the card has no decryption key, it offers
+   to make one.
+3. When it asks, answer yes to removing the saved passphrase.
+4. From the next login, the background service starts *locked*: it's
+   running, but the store is closed and nothing runs. Open it with
+   `aivyx-pa unlock` (PIN and a touch).
+5. When you step away, run `aivyx-pa lock`. It closes the store and drops
+   the keys from memory.
+6. If you lose the card, run `aivyx-pa unlock --passphrase`, then
+   `aivyx-pa card remove <serial>`.
+7. Enroll a second card as a spare with `aivyx-pa card add`.
+
+Your passphrase still works and is always your way back in, so keep it
+somewhere safe. A card can't recover a lost passphrase. After 5 wrong
+unlocks in a row PA refuses more for 30 seconds. The assistant's own file
+tools can't read the card file (`card-unlock.toml`).
+
 ## Permission for every action
 
 Every tool call is checked **before** it runs:

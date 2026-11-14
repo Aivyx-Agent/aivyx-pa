@@ -31,9 +31,12 @@ single `aivyx-pa` binary. The release pipeline is active — see the
 
 ## Supported targets
 
-The release covers four targets. All Linux builds are musl-static,
-so a single Linux binary works on every distro without glibc
-version drift.
+The release covers four targets. All Linux builds of `aivyx-pa` are
+musl-static, so a single Linux binary works on every distro without glibc
+version drift. The one exception is `aivyx-pa-card`, the YubiKey-unlock
+helper in the tool-programs download: it talks to the system smart-card
+service, so on Linux it is a glibc build (Ubuntu 22.04, glibc 2.35 or
+newer) and needs `pcscd`.
 
 | Target | Binary | Notes |
 |---|---|---|
@@ -154,7 +157,8 @@ hotkey (`Ctrl+Shift+A`) to summon the window.
    - **Ubuntu/Debian:** `aivyx-desktop_<version>_amd64.deb`, then
      `sudo apt install ./aivyx-desktop_<version>_amd64.deb` (apt pulls in
      WebKitGTK and the tray library). It installs `aivyx-pa` and the tool
-     programs (Gmail, Calendar, the Toolkit, …) beside the app.
+     programs (Gmail, Calendar, the Toolkit, …) beside the app (the YubiKey helper `aivyx-pa-card` isn't included; get it
+     with `aivyx-pa tool-programs install`).
    - **macOS:** `aivyx-desktop-aarch64-apple-darwin.zip` (Apple Silicon) or
      `…-x86_64-apple-darwin.zip` (Intel); unzip and drag the app to
      Applications. See [macOS first launch](#macos-first-launch-gatekeeper).
@@ -337,7 +341,8 @@ aivyx-pa tool-programs list      # where each one is
 release, checks it against its published SHA-256, and puts the programs
 beside `aivyx-pa`, where `aivyx-pa connect` and the daemon find them
 (`--dir <folder>` puts them elsewhere on your `PATH`). The `.deb` and the
-[Docker image](#docker--the-server-appliance) include them already.
+[Docker image](#docker--the-server-appliance) include them already,
+except `aivyx-pa-card`, which only `install` brings.
 `aivyx-pa connect gmail` offers to run `install` when the program is
 missing.
 

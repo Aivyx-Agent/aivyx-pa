@@ -96,13 +96,70 @@ aivyx-pa daemon uninstall
   the port. `--web-ui` and `--web-ui-port` are the old spellings: they still
   work, with a warning.
 - `status` — whether it's running, its protocol version, socket and PID (and
-  the instance, for a named one).
+  the instance, for a named one), then `locked: yes` or `locked: no`. When it
+  is locked, a `cards: N` line says how many cards can unlock it. See
+  [`aivyx-pa unlock`](#aivyx-pa-unlock).
 - `stop` — ask the running daemon to shut down cleanly.
 - `install` — register a background service that survives logout and reboot
   (a systemd user unit on Linux, a launchd agent on macOS) and start it;
   `--no-start` installs without starting. Each named instance gets its own
   service (`aivyx-pa-daemon-<name>`).
 - `uninstall` — stop and remove that service.
+
+### `aivyx-pa card`
+
+Unlock PA with a YubiKey (or another OpenPGP card with a decryption key)
+instead of a saved passphrase. Each command works on one instance; add
+`--instance <name>` for a named one.
+
+```
+aivyx-pa card add [--card <serial>] [--label <name>]
+aivyx-pa card list
+aivyx-pa card remove <serial>
+```
+
+- `add` — enroll a card. It asks for your passphrase (to prove the store is
+  yours), the card's PIN, and a touch. If the card has no decryption key it
+  offers to make one, which needs the card's admin PIN. With several cards
+  plugged in, `--card <serial>` picks one; `--label` names it (shown by
+  `list`). It then offers to remove the saved passphrase (keyring or
+  `daemon.env`), so nothing on the disk can unlock PA without the card.
+- `list` — each enrolled card, its label, when it was added, and whether it
+  is plugged in now.
+- `remove <serial>` — forget a card. If it is your last card and no
+  passphrase is saved, PA asks you to type `I know my passphrase` first,
+  because after that only the passphrase can unlock PA.
+
+The enrolled cards are kept in `card-unlock.toml` in the instance's config
+folder. Card operations are done by a helper program, `aivyx-pa-card`, which
+needs the system's `pcscd` smart-card service. Install the helper with
+`aivyx-pa tool-programs install`. See
+[Unlock with a YubiKey](../../guide/17-security-and-privacy.md#unlock-with-a-yubikey).
+
+### `aivyx-pa unlock`
+
+Open a locked daemon.
+
+```
+aivyx-pa unlock [--card <serial>] [--passphrase]
+```
+
+By default it asks for the card's PIN and a touch. `--card <serial>` picks
+one card when several are enrolled and plugged in. `--passphrase` asks for
+your passphrase instead, which is the way in when the card is lost or
+missing. A wrong PIN shows how many tries are left, and stops to ask before
+the last one. If the card isn't touched in about 15 seconds, PA stays
+locked. After 5 failed unlocks in a row, further unlocks are refused for
+30 seconds. A successful unlock is the first entry in that session's audit
+log (`StoreUnlocked`, with the method: `card <serial>` or `passphrase`).
+
+### `aivyx-pa lock`
+
+Close an unlocked daemon: it stops its services and drops every key from
+memory, and comes back locked, with the same process. Unlock it again with
+`aivyx-pa unlock`. It is refused while a passphrase is saved anywhere (the
+keyring, `daemon.env` or `aivyx-pa.toml`) or set in the environment,
+because the daemon would just unlock itself again.
 
 ### `aivyx-pa init`
 
@@ -511,8 +568,8 @@ aivyx-pa tool-programs install [--dir <folder>]
 `install` downloads the tool programs for this version and platform from
 the release, checks them against the published SHA-256 and puts them beside
 `aivyx-pa` (or in `--dir`). The `.deb` and the Docker image include them
-already. `aivyx-pa connect gmail` offers to run it when the program is
-missing.
+already, except `aivyx-pa-card`, which only `install` brings. `aivyx-pa
+connect gmail` offers to run it when the program is missing.
 
 ### `aivyx-pa pack`
 

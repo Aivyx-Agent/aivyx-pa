@@ -599,6 +599,37 @@ moves the conversation's next turn — and, for the autonomous loop, the
 next iteration — to the cloud without a prompt; the operator enabled
 exactly that by setting both, and taint still blocks it.
 
+### 4.13 The store is opened from a copied disk (card unlock, A18)
+
+An operator can enroll a YubiKey or other OpenPGP card
+(`aivyx-pa card add`) and remove the saved passphrase. The master key is
+then kept only as a copy encrypted to the card's decryption key, in
+`card-unlock.toml`, and the daemon starts locked.
+
+**What a card protects.** No passphrase is on disk. The store can't be opened
+from a copied disk, a stolen backup or a copied `card-unlock.toml` without the
+card and its PIN: the wrapped key opens only with a key exchange performed
+on the card, and the ephemeral secret that made it is never stored. A locked
+daemon has no keys, no store and no running services; its `0600` socket
+answers only lock state, unlock and stop. Unlock attempts are limited (5
+failures, then a 30-second refusal), and a successful unlock is the first
+audit entry of the session, with its method. Ward keeps the agent's file
+tools away from `card-unlock.toml`.
+
+**What it does not protect.**
+- A running, unlocked daemon: its memory holds the keys until `aivyx-pa lock`
+  or a stop.
+- Root on the machine (§5.1): it can read the daemon's memory or capture the
+  PIN as it is typed.
+- Anyone who knows the passphrase, which still unlocks the store. Keep it
+  safe, and separate from the card.
+- A lost card whose PIN is known to the finder.
+
+**Residual:** the card helper (`aivyx-pa-card`) links the system PC/SC
+library and so is a glibc binary on Linux; it runs as a one-shot child that
+outputs only a 32-byte shared secret to its parent, and is not reachable as
+an agent tool.
+
 ## 5. Threats we explicitly do not defend against
 
 The honest section. These are out-of-scope by design; if they
