@@ -7,6 +7,8 @@
 pub mod client;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fake;
+#[cfg(feature = "card")]
+pub mod serve;
 
 pub use client::ProcessHelper;
 #[cfg(any(test, feature = "test-util"))]

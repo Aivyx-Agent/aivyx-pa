@@ -195,6 +195,7 @@ version = "0.21.3"
 dependencies = [
  "aivyx-yubi",
  "base64 0.22.1",
+ "openpgp-card",
  "secrecy",
  "serde",
  "serde_json",
