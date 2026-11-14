@@ -21,6 +21,16 @@ pub fn removal_needs_confirmation(cards_left_after: usize, passphrase_saved: boo
     cards_left_after == 0 && !passphrase_saved
 }
 
+/// Does a raw typed line equal the last-card phrase? Only the trailing line
+/// ending is stripped; surrounding spaces make the answer a mismatch.
+pub fn is_last_card_phrase(raw_line: &str) -> bool {
+    let line = raw_line
+        .strip_suffix("\r\n")
+        .or_else(|| raw_line.strip_suffix('\n'))
+        .unwrap_or(raw_line);
+    line == LAST_CARD_PHRASE
+}
+
 /// The plain-words line for a refused unlock.
 pub fn unlock_failure_text(code: &str, message: &str, tries_left: Option<u8>) -> String {
     match code {
@@ -34,7 +44,9 @@ pub fn unlock_failure_text(code: &str, message: &str, tries_left: Option<u8>) ->
         "pin_blocked" => "The card's PIN is blocked. Unlock with `aivyx-pa unlock --passphrase`, \
             and reset the PIN with your card's admin PIN."
             .to_string(),
+        "no_card" if !message.is_empty() => message.to_string(),
         "no_card" => "No enrolled card is plugged in.".to_string(),
+        "not_enrolled" if !message.is_empty() => message.to_string(),
         "not_enrolled" => "That card isn't enrolled. See `aivyx-pa card list`.".to_string(),
         "touch_timeout" => "No touch — still locked.".to_string(),
         "helper_missing" => format!(
@@ -43,7 +55,8 @@ pub fn unlock_failure_text(code: &str, message: &str, tries_left: Option<u8>) ->
         ),
         "wrong_passphrase" => "Wrong passphrase — still locked.".to_string(),
         "busy" => "Another unlock is in progress — try again in a moment.".to_string(),
-        "backoff" => format!("Too many failed attempts — {message}"),
+        "backoff" if !message.is_empty() => message.to_string(),
+        "backoff" => "Too many failed unlocks — try again later.".to_string(),
         "not_locked" => "PA is already unlocked.".to_string(),
         _ => format!("Couldn't unlock: {message}"),
     }
@@ -101,6 +114,11 @@ fn secret(prompt: &str) -> Result<String, String> {
 }
 
 fn ask_line(prompt: &str) -> Result<String, String> {
+    Ok(ask_raw_line(prompt)?.trim().to_string())
+}
+
+/// Like `ask_line`, but keeps the line exactly as typed (line ending included).
+fn ask_raw_line(prompt: &str) -> Result<String, String> {
     print!("{prompt}");
     std::io::stdout().flush().ok();
     let mut line = String::new();
@@ -108,7 +126,7 @@ fn ask_line(prompt: &str) -> Result<String, String> {
         .lock()
         .read_line(&mut line)
         .map_err(|e| format!("could not read input: {e}"))?;
-    Ok(line.trim().to_string())
+    Ok(line)
 }
 
 fn ask_yes(prompt: &str) -> Result<bool, String> {
@@ -262,8 +280,8 @@ fn run_remove(serial: &str) -> Result<(), String> {
             "This is your last card and no passphrase is saved on this machine: \
              without the card you'll need your passphrase to unlock PA."
         );
-        let typed = ask_line(&format!("Type \"{LAST_CARD_PHRASE}\" to remove it: "))?;
-        if typed != LAST_CARD_PHRASE {
+        let typed = ask_raw_line(&format!("Type \"{LAST_CARD_PHRASE}\" to remove it: "))?;
+        if !is_last_card_phrase(&typed) {
             return Err("not removed".to_string());
         }
     }
@@ -332,9 +350,9 @@ async fn run_add(card: Option<String>, label: Option<String>, socket: &Path) -> 
         .filter(|l| !l.is_empty())
         .unwrap_or_else(|| serial.clone());
     let pin = secret("YubiKey PIN: ")?;
-    println!("Touch your YubiKey…");
 
     if running {
+        println!("Touch your YubiKey…");
         daemon_client::enroll_card(socket, serial.clone(), label, pin, generate, admin_pin).await?;
     } else {
         // `store_opens_with` drives its own runtime, so run off this one's thread.
@@ -385,6 +403,7 @@ fn enroll_offline(
         return Err("that isn't the passphrase for this PA's store".to_string());
     }
 
+    println!("Touch your YubiKey…");
     let card_public = if generate {
         let admin = SecretString::from(admin_pin.ok_or("an admin PIN is needed to make a key")?);
         helper
@@ -478,5 +497,42 @@ mod tests {
             unlock_failure_text("helper_missing", "card unlock needs …", None)
                 .contains("tool-programs install")
         );
+    }
+
+    #[test]
+    fn no_card_and_not_enrolled_keep_the_daemon_message() {
+        let msg = "None of your enrolled cards is plugged in (enrolled: laptop (S1))";
+        assert!(unlock_failure_text("no_card", msg, None).contains("laptop (S1)"));
+        let msg = "no card reader found — is pcscd running?";
+        assert!(unlock_failure_text("no_card", msg, None).contains("pcscd"));
+        assert_eq!(
+            unlock_failure_text("no_card", "", None),
+            "No enrolled card is plugged in."
+        );
+        assert_eq!(
+            unlock_failure_text("not_enrolled", "card X is not enrolled", None),
+            "card X is not enrolled"
+        );
+        assert!(unlock_failure_text("not_enrolled", "", None).contains("card list"));
+    }
+
+    #[test]
+    fn backoff_returns_the_daemon_message_alone() {
+        let msg = "Too many failed unlocks — try again in 30 s";
+        assert_eq!(unlock_failure_text("backoff", msg, None), msg);
+        assert_eq!(
+            unlock_failure_text("backoff", "", None),
+            "Too many failed unlocks — try again later."
+        );
+    }
+
+    #[test]
+    fn last_card_phrase_strips_only_the_line_ending() {
+        assert!(is_last_card_phrase("I know my passphrase\n"));
+        assert!(is_last_card_phrase("I know my passphrase\r\n"));
+        assert!(is_last_card_phrase("I know my passphrase"));
+        assert!(!is_last_card_phrase(" I know my passphrase\n"));
+        assert!(!is_last_card_phrase("I know my passphrase \n"));
+        assert!(!is_last_card_phrase("i know my passphrase\n"));
     }
 }
