@@ -62,11 +62,12 @@ It downloads the ones for your version, checks them and puts them beside
 
 ## Trusting a publisher
 
-Aivyx PA installs only packs signed by a publisher you trust. Until
-Aivyx PA 1.0 builds the Aivyx keys in, add them yourself: copy the keys from
-the Hub's `publisher-key.txt` into your default assistant's
-`aivyx-pa.toml` (`~/.config/aivyx-pa/aivyx-pa.toml`; a pack's new assistant
-uses this list too),
+Aivyx PA installs only packs signed by a publisher you trust. Packs from
+Aivyx itself need no setup: the Aivyx publisher keys are built in (the Hub's
+`publisher-key.txt` lists the same two, a primary and an offline backup, so
+you can compare). To trust another publisher, add their key to your default
+assistant's `aivyx-pa.toml` (`~/.config/aivyx-pa/aivyx-pa.toml`; a pack's
+new assistant uses this list too),
 
 ```toml
 [pack]

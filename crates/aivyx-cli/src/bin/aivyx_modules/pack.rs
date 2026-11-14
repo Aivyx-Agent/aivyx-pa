@@ -789,6 +789,27 @@ mod tests {
         assert!(err.contains("no aivyx-pa part"), "{err}");
     }
 
+    /// Launch Task 8: a pack signed with either built-in Aivyx key passes
+    /// the signature check with an empty `trusted_publishers`. The fixtures
+    /// (aivyx-pack's own) are coder-only, so install then stops at the
+    /// missing aivyx-pa part, not at trust.
+    #[test]
+    fn a_pack_signed_with_a_built_in_aivyx_key_needs_no_trusted_publishers() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        for name in ["primary", "backup"] {
+            let bundle = read_bundle(&fixtures.join(format!("{name}.aivyxpack"))).unwrap();
+            verify_bundle(&bundle, &[]).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let Manifest::Config(m) = read_any_manifest(&bundle.payload).unwrap() else {
+                panic!("{name}: the fixture is a config pack");
+            };
+            let tag = format!("builtin-{name}-home");
+            let err = prepare_config_install(&bundle.payload, &m, &InstanceName::default_instance(), &base_dirs(&tag), &[])
+                .err()
+                .unwrap();
+            assert!(err.contains("no aivyx-pa part"), "{name}: {err}");
+        }
+    }
+
     #[test]
     fn config_pack_target_tells_tool_packs_apart() {
         let dir = tmp("target");

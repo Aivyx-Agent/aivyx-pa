@@ -348,7 +348,7 @@ aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "d1089
 # Extracted from crates/aivyx-pack into its own repo 2026-10-07. Not on
 # crates.io — pinned by commit SHA, same as the shared crates above.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "aec62513f35e20ffc59bbc45e299bc8f3a7127f1" }
+aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "b2fa693d1a61d45979b4cb399c0b25a48bb481bf" }
 
 # Shared tool-call grammar (Chapters Stencil/Emboss), extracted 2026-10-18.
 # MUST stay a public repo — see the aivyx-confine entry above for why.

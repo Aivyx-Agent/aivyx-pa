@@ -44,9 +44,9 @@ optional `team_config` (a `config/`-relative path wired
 
 - Verification requires the publisher key to appear in
   `[pack] trusted_publishers` (base64 Ed25519 keys, operator config) —
-  **unioned with** the compiled-in `AIVYX_PUBLISHER_KEYS` (empty until
-  the v1.0 web presence establishes the real publisher key; documented
-  TODO, not a placeholder key).
+  **unioned with** the compiled-in `AIVYX_PUBLISHER_KEYS` (since
+  2026-11-14, aivyx-pack b2fa693: the Aivyx primary and offline backup
+  keys, both file keys).
 - The signature proves **authenticity and integrity** (protects the
   customer from tampered packs). It is deliberately not DRM.
 - Archive extraction is path-sanitized: absolute paths, `..`
