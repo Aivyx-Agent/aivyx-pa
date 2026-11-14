@@ -1,6 +1,6 @@
 //! Request handling for `aivyx-pa-card`, generic over how a card is opened
 //! so tests can run against `FakeCard`.
-use aivyx_yubi::{SecretString, YubiError, decrypt, discovery, pin};
+use aivyx_yubi::{YubiError, decrypt, discovery, pin};
 use openpgp_card::{Card, state::Open};
 
 use crate::{CardInfo, ErrorKind, Reply, Request, decode_key, encode_key};
@@ -66,7 +66,7 @@ pub fn handle(
                     .transaction()
                     .map_err(|e| error(&YubiError::from(e), None))?;
                 let mut admin = tx
-                    .as_admin_card(SecretString::from(admin_pin))
+                    .as_admin_card(admin_pin.into_secret())
                     .map_err(|e| error(&YubiError::from(e), None))?;
                 let public =
                     decrypt::generate_decryption_key(&mut admin).map_err(|e| error(&e, None))?;
@@ -88,9 +88,9 @@ pub fn handle(
                 let mut tx = card
                     .transaction()
                     .map_err(|e| error(&YubiError::from(e), None))?;
-                match decrypt::ecdh(&mut tx, SecretString::from(user_pin), &theirs) {
+                match decrypt::ecdh(&mut tx, user_pin.into_secret(), &theirs) {
                     Ok(s) => Ok(Reply::Shared {
-                        secret: encode_key(s.as_bytes()),
+                        secret: encode_key(s.as_bytes()).into(),
                     }),
                     Err(e @ YubiError::PinIncorrect) => {
                         // The card's retry counter is cached when the card is
@@ -138,7 +138,7 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            crate::decode_key(&secret).unwrap(),
+            crate::decode_key(secret.expose()).unwrap(),
             *eph.diffie_hellman(&PublicKey::from(card_pub)).as_bytes()
         );
     }

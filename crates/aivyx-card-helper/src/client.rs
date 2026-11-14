@@ -86,9 +86,9 @@ impl ProcessHelper {
             .ok_or(HelperError::NotInstalled)
     }
 
-    // The `Request` holds the PIN as a plain `String` (not zeroized); that is
-    // acceptable because the helper process exits right after the call. The
-    // serialized body and the reply are zeroized.
+    // The `Request` lives in this long-running parent (the daemon or the
+    // CLI), so its PIN fields are `Sensitive` and zeroize on drop; the
+    // serialized body and the raw reply are zeroized too.
     fn call(&self, req: &Request) -> Result<Reply, HelperError> {
         let mut child = self
             .command()
@@ -182,7 +182,7 @@ impl CardHelper for ProcessHelper {
     fn generate(&self, serial: &str, admin_pin: &SecretString) -> Result<[u8; 32], HelperError> {
         let req = Request::Generate {
             serial: serial.into(),
-            admin_pin: admin_pin.expose_secret().to_string(),
+            admin_pin: admin_pin.expose_secret().into(),
         };
         match self.call(&req)? {
             Reply::PublicKey { public: Some(p) } => {
@@ -200,11 +200,11 @@ impl CardHelper for ProcessHelper {
     ) -> Result<Zeroizing<[u8; 32]>, HelperError> {
         let req = Request::Ecdh {
             serial: serial.into(),
-            pin: pin.expose_secret().to_string(),
+            pin: pin.expose_secret().into(),
             their_public: encode_key(their_public),
         };
         match self.call(&req)? {
-            Reply::Shared { secret } => decode_key(&secret)
+            Reply::Shared { secret } => decode_key(secret.expose())
                 .map(Zeroizing::new)
                 .ok_or_else(|| HelperError::Broken("bad shared secret".into())),
             r => Err(r.into()),

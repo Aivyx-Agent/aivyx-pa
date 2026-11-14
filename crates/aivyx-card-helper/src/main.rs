@@ -27,8 +27,7 @@ fn main() {
             ),
         },
     };
-    println!(
-        "{}",
-        serde_json::to_string(&reply).expect("reply serializes")
-    );
+    // The reply may carry the shared secret: zeroize the text too.
+    let out = zeroize::Zeroizing::new(serde_json::to_string(&reply).expect("reply serializes"));
+    println!("{}", out.as_str());
 }

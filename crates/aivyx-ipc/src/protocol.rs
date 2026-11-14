@@ -2333,6 +2333,41 @@ pub struct LockCardView {
 // Frontend → Daemon
 // ---------------------------------------------------------------------------
 
+/// A18 — a PIN or passphrase on the wire: serialized as a plain string
+/// (the wire format is unchanged), but `[redacted]` in `Debug`, so a
+/// `{:?}` of a [`FrontendMessage`] never shows it.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WireSecret(String);
+
+impl WireSecret {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for WireSecret {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for WireSecret {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Debug for WireSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum FrontendMessage {
@@ -2340,23 +2375,23 @@ pub enum FrontendMessage {
     GetLockState,
     /// A18 — unlock with a card PIN (optionally naming the card serial).
     Unlock {
-        pin: String,
+        pin: WireSecret,
         #[serde(default)]
         serial: Option<String>,
     },
     /// A18 — unlock with the passphrase fallback.
-    UnlockWithPassphrase { passphrase: String },
+    UnlockWithPassphrase { passphrase: WireSecret },
     /// A18 — lock the store again.
     Lock,
     /// A18 — enrol a card as an unlock factor.
     EnrollCard {
         serial: String,
         label: String,
-        pin: String,
+        pin: WireSecret,
         #[serde(default)]
         generate: bool,
         #[serde(default)]
-        admin_pin: Option<String>,
+        admin_pin: Option<WireSecret>,
     },
     StartSession {
         role: Option<String>,
@@ -3697,6 +3732,32 @@ pub enum DaemonEnvelope {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn pins_and_passphrases_are_redacted_in_debug_but_not_on_the_wire() {
+        let msgs = [
+            FrontendMessage::Unlock { pin: "424242".into(), serial: None },
+            FrontendMessage::UnlockWithPassphrase { passphrase: "hunter2".into() },
+            FrontendMessage::EnrollCard {
+                serial: "S".into(),
+                label: "l".into(),
+                pin: "424242".into(),
+                generate: true,
+                admin_pin: Some("87654321".into()),
+            },
+        ];
+        for m in &msgs {
+            let dbg = format!("{m:?}");
+            for secret in ["424242", "hunter2", "87654321"] {
+                assert!(!dbg.contains(secret), "{dbg}");
+            }
+            assert!(dbg.contains("[redacted]"), "{dbg}");
+        }
+        assert_eq!(
+            serde_json::to_string(&msgs[1]).unwrap(),
+            r#"{"type":"UnlockWithPassphrase","passphrase":"hunter2"}"#
+        );
+    }
 
     #[test]
     fn lock_state_messages_round_trip() {

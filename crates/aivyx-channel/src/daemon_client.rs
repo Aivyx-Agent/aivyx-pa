@@ -582,7 +582,7 @@ pub async fn unlock(
     pin: String,
     serial: Option<String>,
 ) -> Result<String, UnlockRefused> {
-    let reply = one_shot(socket_path, &FrontendMessage::Unlock { pin, serial })
+    let reply = one_shot(socket_path, &FrontendMessage::Unlock { pin: pin.into(), serial })
         .await
         .map_err(|e| UnlockRefused::other(e.to_string()))?;
     match reply {
@@ -596,7 +596,7 @@ pub async fn unlock_with_passphrase(
     socket_path: &Path,
     passphrase: String,
 ) -> Result<String, UnlockRefused> {
-    let reply = one_shot(socket_path, &FrontendMessage::UnlockWithPassphrase { passphrase })
+    let reply = one_shot(socket_path, &FrontendMessage::UnlockWithPassphrase { passphrase: passphrase.into() })
         .await
         .map_err(|e| UnlockRefused::other(e.to_string()))?;
     match reply {
@@ -626,7 +626,13 @@ pub async fn enroll_card(
     generate: bool,
     admin_pin: Option<String>,
 ) -> Result<(), String> {
-    let req = FrontendMessage::EnrollCard { serial, label, pin, generate, admin_pin };
+    let req = FrontendMessage::EnrollCard {
+        serial,
+        label,
+        pin: pin.into(),
+        generate,
+        admin_pin: admin_pin.map(Into::into),
+    };
     match one_shot(socket_path, &req).await.map_err(|e| e.to_string())? {
         DaemonEnvelope::CardEnrolled { .. } => Ok(()),
         DaemonEnvelope::Error { message, .. } => Err(message),

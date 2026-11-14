@@ -190,7 +190,7 @@ pub async fn run_locked(cfg: LockedConfig) -> Result<LockedOutcome, String> {
                 }
                 let helper = cfg.helper.clone();
                 let (cards, inst) = (cfg.cards.clone(), cfg.instance.clone());
-                let pin = SecretString::from(pin);
+                let pin = SecretString::from(pin.into_inner());
                 let res = tokio::task::spawn_blocking(move || {
                     crate::card_unlock::unlock_with(
                         &cards,
@@ -226,7 +226,7 @@ pub async fn run_locked(cfg: LockedConfig) -> Result<LockedOutcome, String> {
                 }
                 let derive = cfg.from_passphrase.clone();
                 let verify = cfg.verify.clone();
-                let passphrase = SecretString::from(passphrase);
+                let passphrase = SecretString::from(passphrase.into_inner());
                 let key = tokio::task::spawn_blocking(move || {
                     derive(&passphrase).ok().filter(|k| verify(k))
                 })

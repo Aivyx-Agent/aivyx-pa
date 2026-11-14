@@ -4282,12 +4282,12 @@ async fn enroll_card_blocking(
     ctx: Arc<crate::card_unlock::CardUnlockContext>,
     serial: String,
     label: String,
-    pin: String,
+    pin: aivyx_ipc::protocol::WireSecret,
     generate: bool,
-    admin_pin: Option<String>,
+    admin_pin: Option<aivyx_ipc::protocol::WireSecret>,
 ) -> Result<(), String> {
-    let pin = secrecy::SecretString::from(pin);
-    let admin_pin = admin_pin.map(secrecy::SecretString::from);
+    let pin = secrecy::SecretString::from(pin.into_inner());
+    let admin_pin = admin_pin.map(|p| secrecy::SecretString::from(p.into_inner()));
     tokio::task::spawn_blocking(move || {
         crate::card_unlock::enroll_card(&ctx, &serial, &label, &pin, generate, admin_pin.as_ref())
             .map_err(|e| e.to_string())
