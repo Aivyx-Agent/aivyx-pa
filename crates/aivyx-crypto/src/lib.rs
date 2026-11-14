@@ -235,6 +235,83 @@ pub fn derive_master_key(
 }
 
 // --------------------------------------------------------------------
+// WrapKey — card-derived key that wraps the master key
+// --------------------------------------------------------------------
+
+/// HKDF salt for card-unlock wrap keys (Amendment A18).
+pub const CARD_WRAP_SALT: &[u8] = b"aivyx-pa-card-unlock-v1";
+
+/// A key that wraps the master key for one enrolled card. Built only by
+/// HKDF from a card's X25519 shared secret; zeroized on drop.
+#[derive(ZeroizeOnDrop)]
+pub struct WrapKey {
+    bytes: [u8; KEY_LEN],
+}
+
+impl WrapKey {
+    /// Derive a wrap key from a card's X25519 shared secret, using the
+    /// versioned [`CARD_WRAP_SALT`] and the caller's `info` as domain
+    /// separator.
+    pub fn derive(shared_secret: &[u8; 32], info: &[u8]) -> Result<Self, CryptoError> {
+        let hk = Hkdf::<Sha256>::new(Some(CARD_WRAP_SALT), shared_secret);
+        let mut bytes = [0u8; KEY_LEN];
+        hk.expand(info, &mut bytes)
+            .map_err(|e| CryptoError::HkdfExpandFailed(e.to_string()))?;
+        Ok(Self { bytes })
+    }
+}
+
+impl std::fmt::Debug for WrapKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WrapKey").field("bytes", &"<redacted>").finish()
+    }
+}
+
+/// The master key encrypted under a [`WrapKey`] (ChaCha20-Poly1305).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrappedMasterKey {
+    pub nonce: [u8; NONCE_LEN],
+    pub ciphertext: Vec<u8>,
+}
+
+impl MasterKey {
+    /// Encrypt this master key under `key` with a fresh random nonce.
+    /// `aad` binds the wrapped blob to its context (e.g. the card id).
+    pub fn wrap(&self, key: &WrapKey, aad: &[u8]) -> Result<WrappedMasterKey, CryptoError> {
+        use chacha20poly1305::aead::{AeadCore, OsRng};
+        let cipher = ChaCha20Poly1305::new(AeadKey::from_slice(&key.bytes));
+        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let ciphertext = cipher
+            .encrypt(&nonce, Payload { msg: &self.bytes, aad })
+            .map_err(|e| CryptoError::AeadSealFailed(e.to_string()))?;
+        Ok(WrappedMasterKey { nonce: nonce.into(), ciphertext })
+    }
+
+    /// Decrypt a [`WrappedMasterKey`] produced by [`MasterKey::wrap`].
+    /// Fails if the key, aad, nonce, or ciphertext do not match.
+    pub fn unwrap(
+        wrapped: &WrappedMasterKey,
+        key: &WrapKey,
+        aad: &[u8],
+    ) -> Result<MasterKey, CryptoError> {
+        let cipher = ChaCha20Poly1305::new(AeadKey::from_slice(&key.bytes));
+        let mut plain = cipher
+            .decrypt(Nonce::from_slice(&wrapped.nonce), Payload { msg: &wrapped.ciphertext, aad })
+            .map_err(|_| CryptoError::AeadOpenFailed)?;
+        let result = <[u8; KEY_LEN]>::try_from(plain.as_slice())
+            .map(|bytes| MasterKey { bytes })
+            .map_err(|_| CryptoError::InvalidKeyLength(plain.len()));
+        plain.zeroize();
+        result
+    }
+
+    /// Equality without exposing bytes (constant time).
+    pub fn same_as(&self, other: &MasterKey) -> bool {
+        self.bytes.iter().zip(other.bytes.iter()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+    }
+}
+
+// --------------------------------------------------------------------
 // SubKey — per-domain AEAD key
 // --------------------------------------------------------------------
 
@@ -562,6 +639,31 @@ mod tests {
         // Sessions subkey round-trips cleanly.
         let pt = sessions.open(&nonce, b"record-1", &ct).unwrap();
         assert_eq!(pt, b"turn history");
+    }
+
+    #[test]
+    fn a_wrapped_master_key_round_trips_and_anything_changed_is_refused() {
+        let master = MasterKey::from_raw([3u8; 32]);
+        let key = WrapKey::derive(&[4u8; 32], b"info").unwrap();
+        let w = master.wrap(&key, b"aad").unwrap();
+        assert!(MasterKey::unwrap(&w, &key, b"aad").unwrap().same_as(&master));
+
+        let mut bad = w.clone();
+        bad.ciphertext[0] ^= 1;
+        assert!(matches!(MasterKey::unwrap(&bad, &key, b"aad"), Err(CryptoError::AeadOpenFailed)));
+        let mut bad = w.clone();
+        bad.nonce[0] ^= 1;
+        assert!(MasterKey::unwrap(&bad, &key, b"aad").is_err());
+        assert!(MasterKey::unwrap(&w, &key, b"other").is_err());
+        let other = WrapKey::derive(&[4u8; 32], b"other info").unwrap();
+        assert!(MasterKey::unwrap(&w, &other, b"aad").is_err());
+    }
+
+    #[test]
+    fn two_wraps_use_different_nonces() {
+        let master = MasterKey::from_raw([3u8; 32]);
+        let key = WrapKey::derive(&[4u8; 32], b"info").unwrap();
+        assert_ne!(master.wrap(&key, b"a").unwrap().nonce, master.wrap(&key, b"a").unwrap().nonce);
     }
 
     #[test]
