@@ -6,6 +6,11 @@
 # platform, checks it against the .sha256 and puts the programs beside
 # `aivyx-pa` (pre-launch audit 2026-11-13, S2).
 #
+# The archive also carries `aivyx-pa-card`, the YubiKey-unlock helper (A18).
+# It links the system PC/SC library, which can't be linked statically, so on
+# Linux it is built for glibc (the -gnu target on Ubuntu 22.04, hence glibc
+# 2.35 or newer), not musl.
+#
 # Like desktop-release.yml, this never creates the release: cargo-dist's
 # release.yml does. It waits for that release, then uploads. The targets
 # match release.yml's CLI targets (musl-static Linux, both macOS slices);
@@ -48,11 +53,22 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools libpcsclite-dev
       - name: Build the tool programs
         run: |
           cargo build --release --locked --target ${{ matrix.target }} \
             $(for t in $TOOLS; do printf -- '-p %s ' "$t"; done)
+      - name: Build the card helper (glibc on Linux: links the system PC/SC)
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)  ht=x86_64-unknown-linux-gnu ;;
+            aarch64-unknown-linux-musl) ht=aarch64-unknown-linux-gnu ;;
+            *) ht=${{ matrix.target }} ;;
+          esac
+          rustup target add "$ht"
+          cargo build --release --locked --target "$ht" -p aivyx-card-helper --features card
+          echo "HELPER_TARGET=$ht" >> "$GITHUB_ENV"
       - name: Package
         shell: bash
         run: |
@@ -61,6 +77,7 @@ jobs:
           for t in $TOOLS; do
             cp "target/${{ matrix.target }}/release/$t" "$name/"
           done
+          cp "target/$HELPER_TARGET/release/aivyx-pa-card" "$name/"
           # COPYFILE_DISABLE: macOS tar would add `._*` metadata entries,
           # which `aivyx-pa tool-programs install` refuses.
           COPYFILE_DISABLE=1 tar -czf "$name.tar.gz" "$name"

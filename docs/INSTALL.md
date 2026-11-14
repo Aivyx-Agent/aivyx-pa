@@ -324,7 +324,8 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 
 The optional tool programs a `[[tool_process]]` entry runs —
 `aivyx-gmail`, `aivyx-calendar`, `aivyx-drive`, `aivyx-contacts`,
-`aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n` and `aivyx-toolkit` — come
+`aivyx-notion`, `aivyx-obsidian`, `aivyx-n8n` and `aivyx-toolkit`, plus
+`aivyx-pa-card`, the YubiKey-unlock helper — come
 separately from the one-line installer's `aivyx-pa`:
 
 ```sh

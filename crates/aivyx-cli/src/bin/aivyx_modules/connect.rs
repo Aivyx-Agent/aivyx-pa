@@ -390,6 +390,8 @@ pub(crate) const FIRST_PARTY_TOOLS: &[&str] = &[
     "aivyx-obsidian",
     "aivyx-n8n",
     "aivyx-toolkit",
+    // The YubiKey-unlock helper (A18); shipped in the same archive.
+    "aivyx-pa-card",
 ];
 
 /// The first-party tool a `[[tool_process]] command` names, by its file

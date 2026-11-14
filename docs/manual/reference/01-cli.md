@@ -499,7 +499,8 @@ Then run the channel with `aivyx-pa --channel signal`.
 
 The tool programs a `[[tool_process]]` entry runs: `aivyx-gmail`,
 `aivyx-calendar`, `aivyx-drive`, `aivyx-contacts`, `aivyx-notion`,
-`aivyx-obsidian`, `aivyx-n8n` and `aivyx-toolkit`.
+`aivyx-obsidian`, `aivyx-n8n` and `aivyx-toolkit`, plus `aivyx-pa-card`
+(the YubiKey-unlock helper).
 
 ```
 aivyx-pa tool-programs [list]

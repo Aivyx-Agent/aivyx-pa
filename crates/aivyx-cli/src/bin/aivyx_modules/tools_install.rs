@@ -336,6 +336,12 @@ mod tests {
     }
 
     #[test]
+    fn the_card_helper_is_an_expected_program() {
+        assert!(FIRST_PARTY_TOOLS.contains(&"aivyx-pa-card"));
+        assert!(status(None).iter().any(|(n, _)| *n == "aivyx-pa-card"));
+    }
+
+    #[test]
     fn known_programs_in_the_top_folder_are_installed_executable() {
         let dest = tmp("good");
         let bytes = archive(&[
