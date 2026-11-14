@@ -93,6 +93,11 @@ pub enum DaemonError {
     #[error("websocket error: {0}")]
     WebSocket(String),
 
+    /// The daemon is locked (A18): it answered a session request with the
+    /// operator-facing message ("PA is locked — run `aivyx-pa unlock`").
+    #[error("{0}")]
+    Locked(String),
+
     /// Internal error (catch-all for unexpected conditions).
     #[error("{0}")]
     Internal(String),

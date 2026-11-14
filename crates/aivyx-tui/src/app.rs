@@ -61,6 +61,8 @@ pub async fn run(socket_path: PathBuf, role: Option<String>) -> Result<(), Strin
     .await
     {
         Ok(s) => s,
+        // A18 — a locked daemon: say how to open it; spawning another won't help.
+        Err(aivyx_channel::daemon_server::DaemonError::Locked(message)) => return Err(message),
         Err(_) => {
             spawn_daemon_and_wait(&socket_path, AUTO_SPAWN_TIMEOUT)
                 .await

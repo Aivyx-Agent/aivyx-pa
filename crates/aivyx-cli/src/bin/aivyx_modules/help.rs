@@ -199,6 +199,28 @@ pub const COMMANDS: &[CommandHelp] = &[
         usage: &["aivyx-pa keyring set|clear|status"],
     },
     CommandHelp {
+        name: "card",
+        group: Group::Setup,
+        summary: "Manage the YubiKeys that unlock PA",
+        usage: &[
+            "aivyx-pa card add [--card <serial>] [--label <name>]",
+            "aivyx-pa card list",
+            "aivyx-pa card remove <serial>",
+        ],
+    },
+    CommandHelp {
+        name: "unlock",
+        group: Group::Daemon,
+        summary: "Unlock a locked daemon with a YubiKey (or the passphrase)",
+        usage: &["aivyx-pa unlock [--card <serial>] [--passphrase]"],
+    },
+    CommandHelp {
+        name: "lock",
+        group: Group::Daemon,
+        summary: "Lock the running daemon (it restarts locked)",
+        usage: &["aivyx-pa lock"],
+    },
+    CommandHelp {
         name: "access",
         group: Group::Setup,
         summary: "Show or set the filesystem/network access level",

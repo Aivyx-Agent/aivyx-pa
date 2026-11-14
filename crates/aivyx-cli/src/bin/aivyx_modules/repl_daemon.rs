@@ -281,6 +281,9 @@ pub async fn start_and_connect(
     .await
     {
         Ok(session) => session,
+        // A18 — a locked daemon: running in-process would only fail on the
+        // missing passphrase, so say how to open it.
+        Err(aivyx_channel::daemon_server::DaemonError::Locked(message)) => return Err(message),
         Err(e) => return Ok(Reached::InProcess(start_failed_notice(&e.to_string(), &log_path))),
     };
     let facts = BannerFacts {

@@ -116,6 +116,8 @@ mod proton_cli;
 mod signal_cli;
 #[path = "aivyx_modules/cost.rs"]
 mod cost;
+#[path = "aivyx_modules/card.rs"]
+mod card;
 #[path = "aivyx_modules/daemon_service.rs"]
 mod daemon_service;
 #[path = "aivyx_modules/doctor.rs"]
@@ -919,6 +921,24 @@ fn run() -> Result<(), String> {
         return run_keyring(sub);
     }
 
+    // A18 — card / unlock / lock: the daemon socket, or the card file; no
+    // config, no store (except `card add` with no daemon, which checks the
+    // passphrase itself).
+    if matches!(mode, CliMode::Card(_) | CliMode::Unlock { .. } | CliMode::Lock) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        let socket = default_socket_path()?;
+        return match mode {
+            CliMode::Card(sub) => rt.block_on(card::run_card(sub, &socket)),
+            CliMode::Unlock { card, passphrase } => {
+                rt.block_on(card::run_unlock(card, passphrase, &socket))
+            }
+            _ => rt.block_on(card::run_lock(&socket)),
+        };
+    }
+
     // ---- Phase 119 Task 5: role import (PRODUCT.md P9 + P13) ---------
     if let CliMode::Role(sub) = mode {
         return match sub {
@@ -1667,7 +1687,7 @@ fn run() -> Result<(), String> {
                     )
                     .map_err(|e| e.to_string())
                 }),
-                verify: Arc::new(move |key| store_opens_with(&store, key)),
+                verify: Arc::new(move |key| card::store_opens_with(&store, key)),
                 backoff: std::time::Duration::from_secs(30),
                 max_failures: 5,
             }))?;
@@ -1935,6 +1955,14 @@ async fn run_daemon_management(mode: CliMode) -> Result<(), String> {
                     "aivyx-pa daemon: running (protocol {version})\n{instance_str}  socket: {}\n{pid_str}",
                     socket_path.display(),
                 );
+                // A18 — locked or not (and how many cards when locked).
+                match aivyx_channel::daemon_client::lock_state(&socket_path).await {
+                    Ok((true, cards)) => {
+                        eprintln!("  locked: yes\n  cards: {}", cards.len());
+                    }
+                    Ok((false, _)) => eprintln!("  locked: no"),
+                    Err(_) => {}
+                }
             } else {
                 eprintln!(
                     "aivyx-pa daemon: not running\n  socket: {} (not listening)",
@@ -2649,6 +2677,12 @@ enum CliMode {
     /// Chapter Keyring — `aivyx-pa keyring <set|clear|status>`: manage the master
     /// passphrase in the OS credential store. No daemon / storage.
     Keyring(KeyringSubcommand),
+    /// A18 — `aivyx-pa card add|list|remove`: the YubiKeys that unlock PA.
+    Card(CardSubcommand),
+    /// A18 — `aivyx-pa unlock [--card <serial>] [--passphrase]`: open a locked daemon.
+    Unlock { card: Option<String>, passphrase: bool },
+    /// A18 — `aivyx-pa lock`: lock a running daemon (it restarts locked).
+    Lock,
     /// `aivyx-pa tool-programs [list|install [--dir <folder>]]`: the tool programs
     /// (pre-launch audit S2). The arguments after `tools`.
     ToolPrograms(Vec<String>),
@@ -2722,6 +2756,14 @@ enum RoutingSubcommand {
     /// Part 3b (A15) — allow cloud escalation for one conversation on the
     /// running daemon (the same as `/allow-cloud` in that conversation).
     AllowCloud { session: String },
+}
+
+/// A18 — `aivyx-pa card <subcommand>`.
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum CardSubcommand {
+    Add { card: Option<String>, label: Option<String> },
+    List,
+    Remove { serial: String },
 }
 
 /// Chapter Keyring — `aivyx-pa keyring <subcommand>`.
@@ -5724,6 +5766,104 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
+    // A18 — `aivyx-pa card add|list|remove`, `unlock`, `lock`.
+    if !args.is_empty() && args[0] == "card" {
+        let usage = "Run `aivyx-pa --help` to see every command.";
+        let sub = match args.get(1).map(String::as_str) {
+            Some("list") if args.len() == 2 => CardSubcommand::List,
+            Some("remove") => match &args[2..] {
+                [serial] if !serial.starts_with('-') => {
+                    CardSubcommand::Remove { serial: serial.clone() }
+                }
+                _ => return Err(format!("usage: aivyx-pa card remove <serial>. {usage}")),
+            },
+            Some("add") => {
+                let (mut card, mut label) = (None, None);
+                let mut i = 2;
+                while i < args.len() {
+                    let slot = match args[i].as_str() {
+                        "--card" => &mut card,
+                        "--label" => &mut label,
+                        other => {
+                            return Err(format!(
+                                "unrecognized argument for `aivyx-pa card add`: `{other}`. {usage}"
+                            ));
+                        }
+                    };
+                    let v = args
+                        .get(i + 1)
+                        .ok_or_else(|| format!("`{}` needs a value", args[i]))?;
+                    *slot = Some(v.clone());
+                    i += 2;
+                }
+                CardSubcommand::Add { card, label }
+            }
+            Some(other) => {
+                return Err(format!("unknown `aivyx-pa card` subcommand: `{other}`. {usage}"));
+            }
+            None => return Err(format!("usage: aivyx-pa card add|list|remove. {usage}")),
+        };
+        return Ok(CliArgs {
+            mode: CliMode::Card(sub),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+    if !args.is_empty() && args[0] == "unlock" {
+        let (mut card, mut passphrase) = (None, false);
+        let mut i = 1;
+        while i < args.len() {
+            match args[i].as_str() {
+                "--passphrase" => passphrase = true,
+                "--card" => {
+                    card = Some(
+                        args.get(i + 1)
+                            .ok_or_else(|| "`--card` needs a serial".to_string())?
+                            .clone(),
+                    );
+                    i += 1;
+                }
+                other => {
+                    return Err(format!(
+                        "unrecognized argument for `aivyx-pa unlock`: `{other}`. \
+                         Run `aivyx-pa --help` to see every command."
+                    ));
+                }
+            }
+            i += 1;
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Unlock { card, passphrase },
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+    if !args.is_empty() && args[0] == "lock" {
+        if args.len() > 1 {
+            return Err("`aivyx-pa lock` takes no arguments".to_string());
+        }
+        return Ok(CliArgs {
+            mode: CliMode::Lock,
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: Vec::new(),
+            mcp_sse_servers: Vec::new(),
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
     // Chapter Keyring — `aivyx-pa keyring <set|clear|status>`.
     if !args.is_empty() && args[0] == "keyring" {
         let sub = match args.get(1).map(String::as_str) {
@@ -6291,44 +6431,6 @@ fn cards_for_start(
             (Some(aivyx_channel::card_unlock::CardUnlockFile::default()), 1)
         }
     }
-}
-
-/// A18 — does `key` really open the store at `store_path`? The locked
-/// daemon's check that a typed passphrase (or an unwrapped card key) is the
-/// right one. Opens the store, reads one sealed audit row (see
-/// `PersistentAuditLog::key_opens_store`) and closes it again before
-/// returning, so the store lock is free for the real open that follows.
-/// True when there is no store yet: there is nothing to check. Runs on a
-/// blocking thread (the locked daemon calls it from `spawn_blocking`), so
-/// it drives its own small runtime.
-fn store_opens_with(store_path: &std::path::Path, key: &aivyx_crypto::MasterKey) -> bool {
-    if !store_path.exists() {
-        return true;
-    }
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("aivyx-pa: can't check the key: {e}");
-            return false;
-        }
-    };
-    let path = store_path.to_path_buf();
-    let key = key.clone();
-    rt.block_on(async move {
-        let storage = match RedbStorage::open(StorageConfig::new(path), key).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("aivyx-pa: can't open the store to check the key: {e}");
-                return false;
-            }
-        };
-        let opens = PersistentAuditLog::key_opens_store(&storage).await;
-        drop(storage);
-        opens.unwrap_or_else(|e| {
-            eprintln!("aivyx-pa: can't check the key: {e}");
-            false
-        })
-    })
 }
 
 /// Chapter Keyring — `aivyx-pa keyring <set|clear|status>`. Manages the master
@@ -13207,7 +13309,7 @@ mod tests {
         let store = dir.join("store.redb");
         let right = || aivyx_crypto::MasterKey::from_raw([5u8; 32]);
         // No store yet: nothing to check.
-        assert!(store_opens_with(&store, &right()));
+        assert!(card::store_opens_with(&store, &right()));
         // Write one audit entry under the right key, then close the store.
         {
             let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
@@ -13239,8 +13341,8 @@ mod tests {
         let (ok_right, ok_wrong) = rt.block_on(async move {
             tokio::task::spawn_blocking(move || {
                 (
-                    store_opens_with(&s2, &aivyx_crypto::MasterKey::from_raw([5u8; 32])),
-                    store_opens_with(&s2, &aivyx_crypto::MasterKey::from_raw([6u8; 32])),
+                    card::store_opens_with(&s2, &aivyx_crypto::MasterKey::from_raw([5u8; 32])),
+                    card::store_opens_with(&s2, &aivyx_crypto::MasterKey::from_raw([6u8; 32])),
                 )
             })
             .await
@@ -17894,6 +17996,39 @@ mod tests {
     }
 
     #[test]
+    fn card_unlock_and_lock_parse() {
+        let p = |v: &[&str]| parse_cli_args_from(&argv(v)).map(|a| a.mode);
+        assert_eq!(
+            p(&["card", "add"]).unwrap(),
+            CliMode::Card(CardSubcommand::Add { card: None, label: None })
+        );
+        assert_eq!(
+            p(&["card", "add", "--card", "0006:1", "--label", "laptop"]).unwrap(),
+            CliMode::Card(CardSubcommand::Add {
+                card: Some("0006:1".into()),
+                label: Some("laptop".into())
+            })
+        );
+        assert_eq!(p(&["card", "list"]).unwrap(), CliMode::Card(CardSubcommand::List));
+        assert_eq!(
+            p(&["card", "remove", "0006:1"]).unwrap(),
+            CliMode::Card(CardSubcommand::Remove { serial: "0006:1".into() })
+        );
+        assert!(p(&["card", "remove"]).is_err());
+        assert!(p(&["card", "bogus"]).is_err());
+        assert_eq!(
+            p(&["unlock"]).unwrap(),
+            CliMode::Unlock { card: None, passphrase: false }
+        );
+        assert_eq!(
+            p(&["unlock", "--passphrase"]).unwrap(),
+            CliMode::Unlock { card: None, passphrase: true }
+        );
+        assert_eq!(p(&["lock"]).unwrap(), CliMode::Lock);
+        assert!(p(&["lock", "x"]).is_err());
+    }
+
+    #[test]
     fn unrecognized_subcommand_errors_drop_the_stale_supported_list() {
         for args in [
             vec!["identity", "bogus"],
@@ -17903,6 +18038,7 @@ mod tests {
             vec!["autonomy", "bogus"],
             vec!["workspace", "bogus"],
             vec!["keyring", "bogus"],
+            vec!["card", "bogus"],
             vec!["role", "bogus"],
         ] {
             let err = parse_cli_args_from(&argv(&args)).expect_err("must error");

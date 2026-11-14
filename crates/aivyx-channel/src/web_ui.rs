@@ -952,6 +952,11 @@ async fn handle_websocket(
                 ipc_buf.drain(..consumed);
                 continue;
             }
+            // A18 — a locked daemon answers the session request with
+            // `Locked`; surface its message, not a protocol error.
+            Ok((DaemonEnvelope::Locked { message }, _)) => {
+                return Err(DaemonError::Locked(message));
+            }
             Err(FrameError::IncompleteBuf) => continue,
             Ok((other, _)) => {
                 return Err(DaemonError::Protocol(format!(

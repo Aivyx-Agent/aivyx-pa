@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::daemon_ipc::{
     decode_frame, encode_frame, DaemonEnvelope, EffectivePersonaSummary, FrameError,
-    FrontendMessage, FrontendType, IpcAttachment, MemoryEntrySummary,
+    FrontendMessage, FrontendType, IpcAttachment, LockCardView, MemoryEntrySummary,
     NotificationHistoryEntry, PersonaDeltaSummary, PersonaProposalResolution,
     PersonaProposalResolveSuccess, PersonaProposalSummary, QueryPayload,
     QueryResponsePayload, StreamEventPayload,
@@ -128,6 +128,11 @@ impl DaemonSession {
                             lost_turns.len(),
                         );
                     }
+                }
+                // A18 — a locked daemon answers the session request with
+                // `Locked`; show its message, not a protocol error.
+                Ok((DaemonEnvelope::Locked { message }, _)) => {
+                    return Err(DaemonError::Locked(message));
                 }
                 Ok((DaemonEnvelope::Error { code, message }, _)) => {
                     return Err(DaemonError::Protocol(format!(
@@ -487,6 +492,147 @@ pub async fn daemon_stop(socket_path: &Path) -> Result<String, DaemonError> {
             }
             Err(e) => return Err(e.into()),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A18 — lock-state one-shot requests
+// ---------------------------------------------------------------------------
+
+/// A refused unlock: the daemon's code (`wrong_pin`, `pin_blocked`, `no_card`,
+/// `touch_timeout`, `busy`, `backoff`, `wrong_passphrase`, `not_locked`, …),
+/// its message and, for a wrong PIN, the tries the card has left. A
+/// transport failure is reported as code `other`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnlockRefused {
+    pub code: String,
+    pub message: String,
+    pub tries_left: Option<u8>,
+}
+
+impl UnlockRefused {
+    fn other(message: impl Into<String>) -> Self {
+        Self { code: "other".into(), message: message.into(), tries_left: None }
+    }
+}
+
+/// Connect, read `DaemonReady`, send one request and return the first reply
+/// (skipping a take-once `RecoveryNotice`). Shaped like [`daemon_stop`].
+async fn one_shot(
+    socket_path: &Path,
+    request: &FrontendMessage,
+) -> Result<DaemonEnvelope, DaemonError> {
+    let stream = UnixStream::connect(socket_path).await?;
+    let (mut reader, mut writer) = stream.into_split();
+    let mut buf = Vec::with_capacity(1024);
+    read_more(&mut reader, &mut buf).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::DaemonReady { .. }, consumed)) => {
+                buf.drain(..consumed);
+                break;
+            }
+            Ok((other, _)) => {
+                return Err(DaemonError::Protocol(format!(
+                    "expected DaemonReady, got {other:?}"
+                )));
+            }
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await?,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    writer.write_all(&encode_frame(request)?).await?;
+    loop {
+        match decode_frame::<DaemonEnvelope>(&buf) {
+            Ok((DaemonEnvelope::RecoveryNotice { .. }, consumed)) => {
+                buf.drain(..consumed);
+            }
+            Ok((reply, _)) => return Ok(reply),
+            Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await?,
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+fn refusal_from(reply: DaemonEnvelope) -> UnlockRefused {
+    match reply {
+        DaemonEnvelope::UnlockFailed { code, message, tries_left } => {
+            UnlockRefused { code, message, tries_left }
+        }
+        DaemonEnvelope::Error { code, message } => UnlockRefused { code, message, tries_left: None },
+        other => UnlockRefused::other(format!("unexpected reply: {other:?}")),
+    }
+}
+
+/// Is the daemon locked, and which cards are enrolled?
+pub async fn lock_state(
+    socket_path: &Path,
+) -> Result<(bool, Vec<LockCardView>), DaemonError> {
+    match one_shot(socket_path, &FrontendMessage::GetLockState).await? {
+        DaemonEnvelope::LockState { locked, cards } => Ok((locked, cards)),
+        other => Err(DaemonError::Protocol(format!(
+            "expected LockState, got {other:?}"
+        ))),
+    }
+}
+
+/// Unlock with a card PIN (and touch). Returns the method on success.
+pub async fn unlock(
+    socket_path: &Path,
+    pin: String,
+    serial: Option<String>,
+) -> Result<String, UnlockRefused> {
+    let reply = one_shot(socket_path, &FrontendMessage::Unlock { pin, serial })
+        .await
+        .map_err(|e| UnlockRefused::other(e.to_string()))?;
+    match reply {
+        DaemonEnvelope::Unlocked { method } => Ok(method),
+        other => Err(refusal_from(other)),
+    }
+}
+
+/// Unlock with the master passphrase.
+pub async fn unlock_with_passphrase(
+    socket_path: &Path,
+    passphrase: String,
+) -> Result<String, UnlockRefused> {
+    let reply = one_shot(socket_path, &FrontendMessage::UnlockWithPassphrase { passphrase })
+        .await
+        .map_err(|e| UnlockRefused::other(e.to_string()))?;
+    match reply {
+        DaemonEnvelope::Unlocked { method } => Ok(method),
+        other => Err(refusal_from(other)),
+    }
+}
+
+/// Lock a running, unlocked daemon (it restarts locked).
+pub async fn lock(socket_path: &Path) -> Result<(), String> {
+    match one_shot(socket_path, &FrontendMessage::Lock)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        DaemonEnvelope::Locked { .. } => Ok(()),
+        DaemonEnvelope::Error { message, .. } => Err(message),
+        other => Err(format!("unexpected reply: {other:?}")),
+    }
+}
+
+/// Enroll a card on a running, unlocked daemon.
+pub async fn enroll_card(
+    socket_path: &Path,
+    serial: String,
+    label: String,
+    pin: String,
+    generate: bool,
+    admin_pin: Option<String>,
+) -> Result<(), String> {
+    let req = FrontendMessage::EnrollCard { serial, label, pin, generate, admin_pin };
+    match one_shot(socket_path, &req).await.map_err(|e| e.to_string())? {
+        DaemonEnvelope::CardEnrolled { .. } => Ok(()),
+        DaemonEnvelope::Error { message, .. } => Err(message),
+        DaemonEnvelope::UnlockFailed { message, .. } => Err(message),
+        DaemonEnvelope::Locked { message } => Err(message),
+        other => Err(format!("unexpected reply: {other:?}")),
     }
 }
 
@@ -2406,6 +2552,93 @@ mod tests {
     use super::*;
     use crate::daemon_ipc::{encode_frame, DaemonEnvelope};
     use tokio::net::UnixListener;
+
+    /// A fake daemon: `DaemonReady`, then one canned reply to the request.
+    async fn serve_once(replies: Vec<DaemonEnvelope>) -> (std::path::PathBuf, tokio::task::JoinHandle<FrontendMessage>) {
+        let sock = std::env::temp_dir().join(format!("aivyx-lock-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&sock).expect("bind fake daemon");
+        let h = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let ready = DaemonEnvelope::DaemonReady { version: "0.1".into() };
+            stream.write_all(&encode_frame(&ready).unwrap()).await.unwrap();
+            let mut buf = Vec::new();
+            let req = loop {
+                let mut tmp = [0u8; 4096];
+                let n = stream.read(&mut tmp).await.unwrap();
+                buf.extend_from_slice(&tmp[..n]);
+                if let Ok((m, _)) = decode_frame::<FrontendMessage>(&buf) {
+                    break m;
+                }
+            };
+            for r in replies {
+                stream.write_all(&encode_frame(&r).unwrap()).await.unwrap();
+            }
+            req
+        });
+        (sock, h)
+    }
+
+    #[tokio::test]
+    async fn connect_to_a_locked_daemon_reports_the_lock_message() {
+        let msg = "PA is locked — run `aivyx-pa unlock`";
+        let (sock, h) = serve_once(vec![DaemonEnvelope::Locked { message: msg.into() }]).await;
+        let err = DaemonSession::connect(&sock, None, None).await.err().expect("must fail");
+        assert!(matches!(err, DaemonError::Locked(_)));
+        assert_eq!(err.to_string(), msg);
+        let _ = h.await;
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn lock_state_and_unlock_helpers_round_trip() {
+        let (sock, h) = serve_once(vec![DaemonEnvelope::LockState {
+            locked: true,
+            cards: vec![LockCardView { serial: "S1".into(), label: "laptop".into() }],
+        }])
+        .await;
+        let (locked, cards) = lock_state(&sock).await.unwrap();
+        assert!(locked);
+        assert_eq!(cards[0].serial, "S1");
+        assert_eq!(h.await.unwrap(), FrontendMessage::GetLockState);
+        let _ = std::fs::remove_file(&sock);
+
+        let (sock, h) = serve_once(vec![DaemonEnvelope::Unlocked { method: "card S1".into() }]).await;
+        assert_eq!(unlock(&sock, "123456".into(), None).await.unwrap(), "card S1");
+        assert_eq!(
+            h.await.unwrap(),
+            FrontendMessage::Unlock { pin: "123456".into(), serial: None }
+        );
+        let _ = std::fs::remove_file(&sock);
+
+        let (sock, h) = serve_once(vec![DaemonEnvelope::UnlockFailed {
+            code: "wrong_pin".into(),
+            message: "PIN incorrect".into(),
+            tries_left: Some(2),
+        }])
+        .await;
+        let refused = unlock(&sock, "0".into(), None).await.unwrap_err();
+        assert_eq!(refused.code, "wrong_pin");
+        assert_eq!(refused.tries_left, Some(2));
+        let _ = h.await;
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[tokio::test]
+    async fn lock_and_enroll_helpers_surface_the_daemons_refusal() {
+        let (sock, h) = serve_once(vec![DaemonEnvelope::Error {
+            code: "lock_unavailable".into(),
+            message: "can't lock".into(),
+        }])
+        .await;
+        assert_eq!(lock(&sock).await.unwrap_err(), "can't lock");
+        assert_eq!(h.await.unwrap(), FrontendMessage::Lock);
+        let _ = std::fs::remove_file(&sock);
+
+        let (sock, h) = serve_once(vec![DaemonEnvelope::CardEnrolled { serial: "S1".into() }]).await;
+        enroll_card(&sock, "S1".into(), "l".into(), "1".into(), false, None).await.unwrap();
+        let _ = h.await;
+        let _ = std::fs::remove_file(&sock);
+    }
 
     /// A fake daemon that performs the lifecycle handshake while
     /// injecting a `RecoveryNotice` between `DaemonReady` and

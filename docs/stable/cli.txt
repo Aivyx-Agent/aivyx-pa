@@ -15,6 +15,10 @@ autonomy
   aivyx-pa autonomy show
   aivyx-pa autonomy set <manual|assisted|supervised|autonomous|unleashed>
       [--yes]
+card
+  aivyx-pa card add [--card <serial>] [--label <name>]
+  aivyx-pa card list
+  aivyx-pa card remove <serial>
 connect
   aivyx-pa connect
   aivyx-pa connect <service>
@@ -41,6 +45,8 @@ keyring
   aivyx-pa keyring set|clear|status
 learning
   aivyx-pa learning [--window <secs>]
+lock
+  aivyx-pa lock
 loop
   aivyx-pa loop add <title> [<body>] [--body <text>] [--priority <N>]
   aivyx-pa loop list
@@ -130,6 +136,8 @@ tools
   aivyx-pa tools [--window <secs>]
 tui
   aivyx-pa tui [--role <name>]
+unlock
+  aivyx-pa unlock [--card <serial>] [--passphrase]
 workspace
   aivyx-pa workspace path
   aivyx-pa workspace ls [path]
