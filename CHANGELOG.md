@@ -5,8 +5,41 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-11-15
+
+Aivyx PA is **1.0**, with a stable surface you can build on.
+
+### The stability promise
+
+From 1.0, pa follows semantic versioning for everything
+[`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) lists as stable: config keys,
+their defaults and the values they accept; the CLI's commands and flags; the
+`AIVYX_PA_*` environment variables; the instance layout on disk; the data
+stores and the audit chain; pack formats 1 and 2; webhook payloads; and the
+`audit export` lines. A breaking change to any of these needs a new
+major version. A minor release may add to them or deprecate parts; anything
+deprecated keeps working for at least one minor release and warns when used,
+and a config key never silently gets a new meaning. Data written by 1.0 is
+read by every 1.x. The surface is checked by snapshots in `docs/stable/`,
+generated from the code, so a test fails if it changes without an update.
+
+Not covered, and tagged in those snapshots: previews, learning and recall
+tuning (`(advanced)`), build-time features, developer commands, the tool
+protocol version, and a few defaults that may move (the suggested model,
+the built-in prompts). Nor are the daemon IPC, the Studio's HTTP API, the
+tools the model sees, the internal crates, or the look of the terminal chat
+and the Studio.
+
+**Previews in 1.0:** the Matrix, Proton Mail and Signal channels, and YubiKey
+card unlock. None has been checked with a real client or card yet, so they
+can still change in any release. Each tag comes off in a 1.x release once
+that check passes.
+
 ### Added
 
+- **Built-in Aivyx publisher keys.** Packs signed by Aivyx install with no
+  `trusted_publishers` entry; `pack inspect` and `pack check` check them
+  the same way.
 - **Unlock with a YubiKey (preview).** `aivyx-pa card add|list|remove`
   enrolls an OpenPGP card (a YubiKey, or any card with a decryption key); PA's master
   key is then also kept encrypted to the card, so you can remove the saved
