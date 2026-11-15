@@ -55,7 +55,8 @@ plan-jobs = ["./quality-gate"]
 # binaries that way). With "ci" here dist neither checks nor regenerates
 # release.yml, so after changing this file or upgrading
 # cargo-dist-version, regenerate it (`dist generate --mode=ci`) and
-# re-apply the `host` guard by hand.
+# re-apply the `host` guard by hand, and the release step's missing
+# `--target` (see the comment there).
 allow-dirty = ["ci"]
 # Don't run the release workflow on pull requests — ci.yml already runs
 # the quality gate on every PR, so a PR-time release run would just
