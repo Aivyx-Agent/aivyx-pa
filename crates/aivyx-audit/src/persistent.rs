@@ -1061,6 +1061,17 @@ mod tests {
         wait_for_disk(&storage, 1).await;
         drop(log);
         assert!(PersistentAuditLog::key_opens_store(&storage).await.unwrap());
+        // The drain task holds its own clone of the storage and lets go
+        // only once it has seen the closed channel, which can be after
+        // `drop(log)` returns. Wait for that, or the file is still open
+        // (redb: "Database already open") when it is reopened below.
+        for _ in 0..2000 {
+            if Arc::strong_count(&storage) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(Arc::strong_count(&storage), 1, "drain task never let go of the store");
         drop(storage);
 
         // Same file, another master key: the sealed rows don't open.
