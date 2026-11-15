@@ -7,8 +7,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Added
 
-- **Unlock with a YubiKey.** `aivyx-pa card add|list|remove` enrolls an
-  OpenPGP card (a YubiKey, or any card with a decryption key); PA's master
+- **Unlock with a YubiKey (preview).** `aivyx-pa card add|list|remove`
+  enrolls an OpenPGP card (a YubiKey, or any card with a decryption key); PA's master
   key is then also kept encrypted to the card, so you can remove the saved
   passphrase. A background service with no saved passphrase and an
   enrolled card starts *locked*; `aivyx-pa unlock` (PIN and a touch, or
@@ -17,7 +17,9 @@ All notable changes to Aivyx are recorded here. This project adheres to
   waits 30 seconds. The card helper `aivyx-pa-card` comes in the
   tool-programs download and needs `pcscd`; on Linux it is a glibc build
   (Ubuntu 22.04, glibc 2.35 or newer), unlike the musl-static `aivyx-pa`.
-  The `.deb` and Docker image don't include it yet. Amendment A18.
+  The `.deb` and Docker image don't include it yet. A preview: it is tested
+  against a simulated card, not yet with a real one, so it is outside the
+  1.x stability promise until then. Amendment A18.
 
 ## [0.21.3] — 2026-11-13
 

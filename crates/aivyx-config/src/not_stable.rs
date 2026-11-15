@@ -125,6 +125,11 @@ pub const NOT_STABLE: &[NotStable] = &[
     entry(Cli, "--channel matrix", PREVIEW),
     entry(Cli, "--channel proton", PREVIEW),
     entry(Cli, "--channel signal", PREVIEW),
+    // A18: YubiKey card unlock. Previews until the real-card checklist
+    // (docs/checklists/card-unlock-real-card.md) passes with a real card.
+    entry(Cli, "aivyx-pa card ", PREVIEW),
+    entry(Cli, "aivyx-pa lock", PREVIEW),
+    entry(Cli, "aivyx-pa unlock", PREVIEW),
     // R26: a debugging flag. `--verify-only` (forensics) stays stable. The
     // commands in the help's Developer group are tagged (developer) by the
     // cli.txt generator from the group itself, so they need no entry here.

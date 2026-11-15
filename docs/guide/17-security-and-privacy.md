@@ -31,6 +31,10 @@ there isn't one, in a file only your user account can read.
 
 ## Unlock with a YubiKey
 
+> **Preview.** Tested end to end against a simulated card, but not yet with
+> a real YubiKey. Keep your passphrase somewhere safe, and please report
+> anything that doesn't work as described.
+
 If you own a YubiKey (or another OpenPGP smart card), it can unlock Aivyx PA
 in place of a saved passphrase. Then nothing on your disk can open the store:
 you plug the card in, type its PIN and touch it.

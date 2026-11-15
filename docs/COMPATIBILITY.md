@@ -83,10 +83,12 @@ one list of tagged entries is `NOT_STABLE` in
   `cli.txt` at all, because the help shows it only in a build with the
   feature.
 - **Previews**, tagged `(preview)`. Today these are the Matrix, Proton
-  Mail and Signal channels: their config sections, `aivyx-pa matrix
-  verify`, `aivyx-pa signal verify` and their `--channel` values. A
-  preview can change or be removed in any release. A channel's tag comes
-  off when it has been tested with a real client.
+  Mail and Signal channels (their config sections, `aivyx-pa matrix
+  verify`, `aivyx-pa signal verify` and their `--channel` values) and
+  YubiKey card unlock (`aivyx-pa card`, `aivyx-pa unlock` and
+  `aivyx-pa lock`). A preview can change or be removed in any release.
+  A channel's tag comes off when it has been tested with a real client,
+  and card unlock's when it has been tested with a real card.
 - **Formats not promised yet**, tagged `(not stable)` in `formats.txt`: the
   tool protocol version (`tool.protocol_version`; see The pack formats
   above).
