@@ -58,7 +58,7 @@ jobs:
         run: |
           cargo build --release --locked --target ${{ matrix.target }} \
             $(for t in $TOOLS; do printf -- '-p %s ' "$t"; done)
-      - name: Build the card helper (glibc on Linux: links the system PC/SC)
+      - name: "Build the card helper (glibc on Linux: links the system PC/SC)"
         shell: bash
         run: |
           case "${{ matrix.target }}" in
