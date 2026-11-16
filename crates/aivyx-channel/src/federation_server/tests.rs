@@ -376,6 +376,45 @@ async fn an_unknown_key_is_closed_and_audited_with_its_fingerprint() {
 }
 
 #[tokio::test]
+async fn an_unknown_key_retrying_is_audited_once_per_window() {
+    let f = start(Arc::new(RecordingAgent::new("x")), PeerSetup::default(), no_persona()).await;
+    let stranger = TransportKey::generate().unwrap();
+    let other = TransportKey::generate().unwrap();
+    for key in [&stranger, &stranger, &stranger, &other] {
+        if let Ok(mut link) = Link::connect(&f.addr, key, f.server_card.verify().unwrap()).await {
+            let _ = link.send(b"{}").await;
+            let _ = link.recv().await;
+        }
+    }
+    let c = wait_crossings(&f.audit, 2).await;
+    // Let any late duplicate land before counting.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let c2 = crossings(&f.audit);
+    assert_eq!(c, c2, "no further crossings");
+    let ids: Vec<&str> = c.iter().map(|row| row[0].as_str()).collect();
+    assert_eq!(
+        ids,
+        vec![
+            format!("unknown:{}", fingerprint(&stranger.public())).as_str(),
+            format!("unknown:{}", fingerprint(&other.public())).as_str(),
+        ]
+    );
+}
+
+#[test]
+fn unknown_keys_are_recorded_once_per_window() {
+    let state = ListenerState::new(CancellationToken::new());
+    assert!(state.should_record_unknown("aa"));
+    assert!(!state.should_record_unknown("aa"));
+    assert!(state.should_record_unknown("bb"));
+    // A machine up for less than the window can't backdate an Instant.
+    if let Some(earlier) = Instant::now().checked_sub(UNKNOWN_KEY_QUIET) {
+        state.unknown_seen.lock().unwrap().insert("aa".into(), earlier);
+        assert!(state.should_record_unknown("aa"), "recorded again after the window");
+    }
+}
+
+#[tokio::test]
 async fn a_replayed_frame_is_denied() {
     let f = start(Arc::new(RecordingAgent::new("hi")), PeerSetup::default(), no_persona()).await;
     let frame = signed_frame(&f, "desktop", &RelayRequest::Chat { message: "once".into() }).await;

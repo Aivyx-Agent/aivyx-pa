@@ -92,7 +92,8 @@ profile context and no skill-trigger injection. It runs with a fixed peer
 system prompt. What a peer can learn about the operator is what the tools
 it is allowed to call return, plus the names and descriptions of the tools
 its model is offered (the `federation.*` descriptions name the configured
-peer ids).
+peer ids). A turn whose ceiling leaves no scopes (a `chat`) is offered no
+tools: the default-off `TurnPlanner::withhold_tools` hook (1.1.1).
 
 ## Consent
 

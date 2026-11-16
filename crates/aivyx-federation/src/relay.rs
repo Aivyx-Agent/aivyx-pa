@@ -36,6 +36,9 @@ pub enum CrossingOutcome {
     /// Refused — deny-by-default, outside the peer's `TrustPolicy`, or a failed
     /// signature / replay check. `reason` is operator-readable.
     Denied { reason: String },
+    /// The requester stopped waiting (its turn was cancelled). The request
+    /// may already have reached the peer, which may record it as relayed.
+    Abandoned { reason: String },
 }
 
 /// The forensic shape of one cross-boundary crossing — the fields a future

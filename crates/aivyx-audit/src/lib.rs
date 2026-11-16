@@ -584,7 +584,8 @@ pub enum AuditEvent {
         direction: String,
         /// `"chat"` | `"task"` | `"search"`.
         verb: String,
-        /// `"relayed"` | `"denied"`.
+        /// `"relayed"` | `"denied"` | `"abandoned"` (outbound only: the turn was
+        /// cancelled before the reply; the peer may still have acted).
         outcome: String,
         /// Operator-readable; empty when relayed.
         #[serde(default)]

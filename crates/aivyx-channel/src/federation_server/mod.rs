@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aivyx_audit::{AuditEvent, AuditWriter, PersistentAuditLog};
 use aivyx_capability::{CapabilitySet, Scope, TrustTier};
@@ -58,6 +58,12 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
 /// Most skills one search returns.
 const MAX_SEARCH_RESULTS: usize = 20;
+/// An unknown transport key's crossing is written once per this window per
+/// key, so a stranger retrying in a loop doesn't fill the audit chain.
+const UNKNOWN_KEY_QUIET: Duration = Duration::from_secs(600);
+/// At most this many unknown keys are remembered; past it, expired entries
+/// are dropped and, if none had expired, every crossing is written again.
+const MAX_UNKNOWN_KEYS: usize = 1024;
 /// Most encoded bytes of search results in one reply, well under `MAX_FRAME`.
 const MAX_SEARCH_BYTES: usize = 512 * 1024;
 /// Characters of a task's goal shown in its approval summary.
@@ -181,6 +187,7 @@ pub fn crossing_event(c: &Crossing) -> AuditEvent {
     let (outcome, reason) = match &c.outcome {
         CrossingOutcome::Relayed => ("relayed", String::new()),
         CrossingOutcome::Denied { reason } => ("denied", reason.clone()),
+        CrossingOutcome::Abandoned { reason } => ("abandoned", reason.clone()),
     };
     AuditEvent::FederationCrossing {
         peer_id: c.peer_id.clone(),
@@ -250,6 +257,8 @@ pub(crate) struct ListenerState {
     connections: PeerSlots,
     /// Fires on daemon shutdown; every request's cancel token is a child.
     shutdown: CancellationToken,
+    /// When each unknown key's crossing was last written.
+    unknown_seen: Mutex<HashMap<String, Instant>>,
 }
 
 impl ListenerState {
@@ -259,7 +268,25 @@ impl ListenerState {
             busy: PeerSlots::new(1),
             connections: PeerSlots::new(MAX_CONNECTIONS_PER_PEER),
             shutdown,
+            unknown_seen: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Whether to write a crossing for this unknown key now: the first time,
+    /// then once per [`UNKNOWN_KEY_QUIET`].
+    fn should_record_unknown(&self, fingerprint: &str) -> bool {
+        let now = Instant::now();
+        let mut seen = self.unknown_seen.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.get(fingerprint).is_some_and(|at| now.duration_since(*at) < UNKNOWN_KEY_QUIET) {
+            return false;
+        }
+        if seen.len() >= MAX_UNKNOWN_KEYS {
+            seen.retain(|_, at| now.duration_since(*at) < UNKNOWN_KEY_QUIET);
+        }
+        if seen.len() < MAX_UNKNOWN_KEYS {
+            seen.insert(fingerprint.to_string(), now);
+        }
+        true
     }
 }
 
@@ -317,7 +344,9 @@ pub(crate) async fn handle_connection(serve: &FederationServe, stream: TcpStream
     let mut link = match Link::accept(stream, &serve.key, |k| peers.iter().any(|p| &p.x25519 == k)).await {
         Ok(link) => link,
         Err(NetError::UnknownPeer { fingerprint }) => {
-            record(&serve.audit, &Crossing::inbound_denied(format!("unknown:{fingerprint}"), "-", UNKNOWN_KEY));
+            if state.should_record_unknown(&fingerprint) {
+                record(&serve.audit, &Crossing::inbound_denied(format!("unknown:{fingerprint}"), "-", UNKNOWN_KEY));
+            }
             return;
         }
         Err(e) => {

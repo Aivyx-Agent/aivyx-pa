@@ -1361,6 +1361,10 @@ impl TurnPlanner for LlmPlanner {
         self.conversation = Some(session);
     }
 
+    fn withhold_tools(&mut self) {
+        self.tools.clear();
+    }
+
     fn repair_exhausted(&self) -> bool {
         self.turn_repair_exhausted
     }

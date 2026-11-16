@@ -106,6 +106,18 @@ impl Tool for WebhookCreateTool {
                     .to_string(),
             });
         }
+        // Like schedule.create: a triggered or scheduled run (System origin)
+        // never creates more automation, so an unattended run can't spread.
+        if ctx.message_origin == aivyx_core::MessageOrigin::System {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "webhook.create: cannot be called from within a triggered or scheduled \
+                         run — creating new webhooks is an operator/interactive-only \
+                         action, to prevent unattended runs from propagating more \
+                         automation"
+                    .to_string(),
+            });
+        }
         let Some(store) = self.store.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -620,6 +632,24 @@ mod tests {
             panic!("expected a refusal, got {outcome:?}");
         };
         assert!(detail.contains("federation peer"), "{detail}");
+        assert!(webhook::list_webhooks(&handle).await.unwrap().is_empty());
+    }
+
+    /// Like schedule.create: a triggered or scheduled run can't create more
+    /// automation.
+    #[tokio::test]
+    async fn webhook_create_refuses_a_system_run() {
+        let handle = test_store().await;
+        let tool = WebhookCreateTool::new();
+        tool.set_webhook_store(handle.clone()).unwrap();
+        let (ch, audit) = ctx_parts();
+        let mut ctx = make_ctx(&ch, &audit);
+        ctx.message_origin = aivyx_core::MessageOrigin::System;
+        let outcome = tool.execute(json!({ "prompt": "do the thing" }), &ctx).await;
+        let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
+            panic!("expected a refusal, got {outcome:?}");
+        };
+        assert!(detail.contains("triggered or scheduled run"), "{detail}");
         assert!(webhook::list_webhooks(&handle).await.unwrap().is_empty());
     }
 }

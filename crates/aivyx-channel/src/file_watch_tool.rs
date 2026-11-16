@@ -113,6 +113,18 @@ impl Tool for FileWatchCreateTool {
                     .to_string(),
             });
         }
+        // Like schedule.create: a triggered or scheduled run (System origin)
+        // never creates more automation, so an unattended run can't spread.
+        if ctx.message_origin == aivyx_core::MessageOrigin::System {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "file_watch.create: cannot be called from within a triggered or scheduled \
+                         run — creating new file watches is an operator/interactive-only \
+                         action, to prevent unattended runs from propagating more \
+                         automation"
+                    .to_string(),
+            });
+        }
         let Some(store) = self.store.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -465,6 +477,21 @@ mod tests {
     /// turns outside the peer's ceiling, so a peer's request can't make one.
     #[tokio::test]
     async fn file_watch_create_refuses_a_peer_request() {
+        let detail = refused_create_detail(aivyx_core::MessageOrigin::Peer).await;
+        assert!(detail.contains("federation peer"), "{detail}");
+    }
+
+    /// Like schedule.create: a triggered or scheduled run can't create more
+    /// automation.
+    #[tokio::test]
+    async fn file_watch_create_refuses_a_system_run() {
+        let detail = refused_create_detail(aivyx_core::MessageOrigin::System).await;
+        assert!(detail.contains("triggered or scheduled run"), "{detail}");
+    }
+
+    /// Calls `file_watch.create` from `origin`, asserts it was refused and
+    /// stored nothing, and returns the refusal text.
+    async fn refused_create_detail(origin: aivyx_core::MessageOrigin) -> String {
         use aivyx_core::{
             AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform, SessionId,
             StreamEvent, TurnId, TurnOutcome,
@@ -527,7 +554,7 @@ mod tests {
             channel: &ch,
             audit: &audit,
             cancellation: &ch.token,
-            message_origin: aivyx_core::MessageOrigin::Peer,
+            message_origin: origin,
         };
         let outcome = tool
             .execute(json!({ "path": dir.to_string_lossy(), "prompt": "summarise it" }), &ctx)
@@ -535,8 +562,8 @@ mod tests {
         let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
             panic!("expected a refusal, got {outcome:?}");
         };
-        assert!(detail.contains("federation peer"), "{detail}");
         assert!(file_watch::list_file_watches(&handle).await.unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
+        detail
     }
 }

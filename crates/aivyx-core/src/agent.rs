@@ -679,6 +679,9 @@ impl ConcreteAgent {
 
         let mut planner = (self.planner_factory)();
         planner.set_conversation(session_id);
+        if channel.capability_ceiling().is_some() && effective.iter().next().is_none() {
+            planner.withhold_tools();
+        }
         planner.begin_turn(&message, turn_id).await;
 
         // Chapter Throttle (TH.3) — reset per-turn tool-call quotas at the turn
@@ -5768,6 +5771,18 @@ mod tests {
     }
 
     #[test]
+    fn llm_planner_withhold_tools_advertises_none() {
+        use crate::llm_planner::{LlmPlanner, LlmPlannerConfig};
+        let fs_read = Arc::new(FakeTool::new_bare("fs.read", "fs.read")) as Arc<dyn Tool>;
+        let registry = Arc::new(ToolRegistry::new(vec![fs_read]));
+        let provider: Arc<dyn aivyx_llm::LlmProvider> = Arc::new(FakeProvider);
+        let mut planner = LlmPlanner::new(provider, registry, LlmPlannerConfig::new("test-model"));
+        assert_eq!(planner.advertised_tool_names(), vec!["fs.read"]);
+        planner.withhold_tools();
+        assert!(planner.advertised_tool_names().is_empty());
+    }
+
+    #[test]
     fn llm_planner_none_allowlist_advertises_every_tool() {
         // Backwards-compat: `tool_allowlist: None` preserves the
         // Phase 6–10 "advertise every registered tool" behavior.
@@ -7116,6 +7131,55 @@ mod tests {
         let snaps = turn_started_cap_snapshots(&audit.snapshot());
         assert_eq!(snaps.len(), 1);
         assert_eq!(snaps[0], fs_read_caps(), "the ceiling drops shell.exec");
+    }
+
+    /// Records whether the turn loop asked it to withhold tools.
+    struct WithholdProbe {
+        withheld: Arc<Mutex<bool>>,
+    }
+
+    #[async_trait]
+    impl TurnPlanner for WithholdProbe {
+        fn withhold_tools(&mut self) {
+            *self.withheld.lock().unwrap() = true;
+        }
+        async fn next_step(&mut self, _observed: &[StepObservation], _channel: &dyn ChannelContext) -> NextStep {
+            NextStep::FinalMessage("ok".into())
+        }
+    }
+
+    /// Runs one turn with `caps` on a channel with `ceiling` (`None` = an
+    /// ordinary channel) and reports whether tools were withheld.
+    async fn tools_withheld(caps: CapabilitySet, ceiling: Option<CapabilitySet>) -> bool {
+        let withheld = Arc::new(Mutex::new(false));
+        let probe = Arc::clone(&withheld);
+        let agent = ConcreteAgent::new(
+            AgentId::new(),
+            caps,
+            Arc::new(ToolRegistry::new(vec![])),
+            RecordingAudit::new(),
+            move || Box::new(WithholdProbe { withheld: Arc::clone(&probe) }),
+        );
+        let inner = ApprovingChannel::new(&[]);
+        let session = inner.session_id();
+        let out = match ceiling {
+            Some(ceiling) => {
+                let channel = CeilingChannel { inner, ceiling, confirm_all: false };
+                agent.turn(Message::text(session, "hi").from_peer(), &channel).await
+            }
+            None => agent.turn(Message::text(session, "hi"), &inner).await,
+        };
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        *withheld.lock().unwrap()
+    }
+
+    /// A19 follow-up — a peer's chat (an empty ceiling) is offered no
+    /// tools; a ceiling that leaves a scope, or no ceiling, keeps them.
+    #[tokio::test]
+    async fn an_empty_channel_ceiling_withholds_tools() {
+        assert!(tools_withheld(fs_read_caps(), Some(CapabilitySet::empty())).await);
+        assert!(!tools_withheld(fs_read_caps(), Some(fs_read_caps())).await);
+        assert!(!tools_withheld(CapabilitySet::empty(), None).await);
     }
 
     #[tokio::test]

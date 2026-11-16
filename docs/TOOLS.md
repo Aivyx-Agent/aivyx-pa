@@ -166,8 +166,8 @@ base, Trusted-tier only. See the Lattice addendum in
 | `team.run` / `team.delegate` / `team.message` | `team.run`, `team.delegate`, `team.message` | Trusted | multi-agent team execution |
 | *(channel-trigger)* | `team.run.channel` | (bespoke) | channel-triggered team mission — daemon-side per-channel config, not trust-tier gated |
 | `schedule.create` / `.list` / `.delete` / `.update` | `schedule.create`, `schedule.list`, `schedule.delete`, `schedule.update` | Trusted | cron-style scheduled runs; `.create`/`.update`/`.delete` refuse from within any triggered/scheduled run (cron, webhook, file-watch, reflection, loop, or any team mission started from within such a run) — operator/interactive-only, so an unattended run can't recursively create more automation |
-| `webhook.create` / `.list` / `.delete` | `webhook.create`, `webhook.list`, `webhook.delete` | Trusted | inbound webhook triggers |
-| *(file-watch)* | `file_watch.create`, `file_watch.list`, `file_watch.delete` | Trusted | filesystem-change triggers |
+| `webhook.create` / `.list` / `.delete` | `webhook.create`, `webhook.list`, `webhook.delete` | Trusted | inbound webhook triggers; `.create` refuses from within a triggered/scheduled run, like `schedule.create` |
+| *(file-watch)* | `file_watch.create`, `file_watch.list`, `file_watch.delete` | Trusted | filesystem-change triggers; `.create` refuses from within a triggered/scheduled run, like `schedule.create` |
 | `loop.next` / `.complete` / `.note` | `loop.next`, `loop.complete`, `loop.note` | Trusted | the autonomous (Ralph) loop |
 | `remind.set` / `.list` / `.cancel` | `remind.write`, `remind.read` | Trusted | reminders (everyday-PA) |
 | *(each MCP server's tools)* | `mcp.call` | Trusted | an MCP server's tools appear under their own names; each call needs `mcp.call:<server>:<tool>` |

@@ -9,8 +9,9 @@
 //! `output_is_untrusted()` (Picket scans it, Bulwark fences it).
 //!
 //! Every request that leaves writes one outbound
-//! [`AuditEvent::FederationCrossing`]: `relayed`, or `denied` with a fixed
-//! reason (ours, or one of the peer's own fixed reasons). Payload text never
+//! [`AuditEvent::FederationCrossing`]: `relayed`, `denied` with a fixed
+//! reason (ours, or one of the peer's own fixed reasons), or `abandoned`
+//! when the turn was cancelled before the reply. Payload text never
 //! enters the chain. `aivyx-pa federation send` uses [`relay`] too.
 //!
 //! [`AuditEvent::FederationCrossing`]: aivyx_audit::AuditEvent::FederationCrossing
@@ -94,8 +95,8 @@ fn net_failure(peer: &FederationPeer, e: &NetError) -> &'static str {
 /// Send `verb` + `text` to `peer` and wait for the reply; write the
 /// outbound crossing to `audit` whatever happens. `Ok` is the reply text
 /// (a search's results one per line); `Err` reads `peer <id>: <why>`, with
-/// a fixed `<why>`. `cancel` firing first ends the wait (denied,
-/// "cancelled before the reply").
+/// a fixed `<why>`. `cancel` firing first ends the wait (abandoned,
+/// "cancelled before the reply": the peer may still have acted on it).
 pub async fn relay(
     peer: &FederationPeer,
     identity: &Identity,
@@ -122,6 +123,7 @@ pub async fn relay(
         },
         None => Some(send.await),
     };
+    let abandoned = sent.is_none();
     // (reply, None) or (operator text, Some(fixed audit reason)).
     let (result, denied): (Result<String, String>, Option<&'static str>) = match sent {
         None => (Err(CANCELLED.to_string()), Some(CANCELLED)),
@@ -149,6 +151,7 @@ pub async fn relay(
         direction: CrossingDirection::Outbound,
         verb: verb.as_str(),
         outcome: match denied {
+            Some(reason) if abandoned => CrossingOutcome::Abandoned { reason: reason.into() },
             Some(reason) => CrossingOutcome::Denied { reason: reason.into() },
             None => CrossingOutcome::Relayed,
         },
@@ -510,7 +513,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cancelled_request_returns_promptly_and_writes_a_denied_crossing() {
+    async fn a_cancelled_request_returns_promptly_and_writes_an_abandoned_crossing() {
         // A task the peer's operator never approves: the reply would take
         // the peer's whole task timeout (30 s here).
         let setup = PeerSetup { allowed: vec!["fs.read"], ..PeerSetup::default() };
@@ -531,7 +534,7 @@ mod tests {
         assert_eq!(err, "peer desktop: cancelled before the reply");
         assert_eq!(
             crossings(&r.audit),
-            vec![["desktop", "outbound", "task", "denied", "cancelled before the reply"].map(String::from)]
+            vec![["desktop", "outbound", "task", "abandoned", "cancelled before the reply"].map(String::from)]
         );
     }
 

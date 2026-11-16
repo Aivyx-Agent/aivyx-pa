@@ -116,6 +116,14 @@ pub trait TurnPlanner: Send + Sync {
     /// `TurnEnded` pair.
     async fn begin_turn(&mut self, _message: &Message, _turn_id: crate::TurnId) {}
 
+    /// A19 follow-up — called before [`Self::begin_turn`] when a channel's
+    /// capability ceiling leaves the turn with no scopes at all (a
+    /// federation peer's chat), so every tool call would be refused. An
+    /// LLM-backed planner then offers the model no tools for this turn,
+    /// which keeps the instance's tool names and descriptions from the
+    /// peer. Deterministic planners ignore it (the default).
+    fn withhold_tools(&mut self) {}
+
     /// Model routing Part 3b — the conversation this turn belongs to,
     /// called just before [`Self::begin_turn`] with the channel's session
     /// id. That is the key taint is written under, so a planner that

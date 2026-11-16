@@ -3,6 +3,26 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [Unreleased]
+
+### Fixed
+
+- `webhook.create` and `file_watch.create` now refuse from within a
+  triggered or scheduled run, as `schedule.create` already did, so an
+  unattended run can't create more automation.
+- Federation (preview): a peer's `chat` turn is offered no tools, so it no
+  longer learns this instance's tool names and descriptions (a chat could
+  never call them).
+- Federation (preview): a stranger's key retrying in a loop writes one
+  `unknown transport key` crossing per key every 10 minutes, not one per
+  attempt.
+
+### Changed
+
+- Federation (preview): an outbound request whose turn is cancelled before
+  the reply is audited as `abandoned` instead of `denied`, because the
+  peer may already have acted on it.
+
 ## [1.1.0] — 2026-11-16
 
 ### Added

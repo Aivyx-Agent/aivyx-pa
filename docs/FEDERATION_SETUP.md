@@ -226,9 +226,10 @@ A peer's turn starts with a fixed system prompt on a fresh session. It
 gets **no** memory recall, **no** persona or profile and **no** skill
 triggers, and it never sees your conversations. What a peer can learn is
 what the tools you allowed for it return; for `search`, the names,
-triggers and steps of matching learned skills; and, because its model is
-offered this instance's tools, their names and descriptions, including
-the ids of your configured peers in the `federation.*` tools.
+triggers and steps of matching learned skills; and, for a `task`, because
+its model is offered this instance's tools, their names and descriptions,
+including the ids of your configured peers in the `federation.*` tools.
+A `chat` runs with no scopes, so its model is offered no tools at all.
 
 The reply that comes back is untrusted text from another instance. The
 sending assistant treats it as data: it is scanned for prompt-injection
@@ -320,6 +321,6 @@ aivyx-pa audit export --event-type federation_crossing
 ```
 
 Each line shows the peer, `inbound` or `outbound`, the verb, and `relayed`
-or `denied` with its reason. A request cancelled after it was sent is
-`denied` with `cancelled before the reply` on the sending side, while the
-peer may still record it as `relayed`.
+or `denied` with its reason. A request whose turn was cancelled before the
+reply is `abandoned` (`cancelled before the reply`) on the sending side:
+it may already have reached the peer, which may record it as `relayed`.
