@@ -133,7 +133,7 @@ pub const NOT_STABLE: &[NotStable] = &[
     // A19: federation between your own machines. Previews until the
     // two-machine checklist (docs/checklists/federation-two-machines.md) passes.
     entry(C, "federation.", PREVIEW),
-    // TODO(FED.3 Task 7+): add `entry(Cli, "aivyx-pa federation card|peer|ping|send", PREVIEW)`
+    // TODO(FED.3 Task 8): add `entry(Cli, "aivyx-pa federation card|peer|ping|send", PREVIEW)`
     // with the commands; an entry that tags no CLI line fails the help tests.
     // R26: a debugging flag. `--verify-only` (forensics) stays stable. The
     // commands in the help's Developer group are tagged (developer) by the

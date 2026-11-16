@@ -739,17 +739,22 @@ pub fn write_federation_peer(path: &Path, peer: &FederationPeerWrite) -> Result<
 
 /// Remove one `[[federation.peers]]` entry by `id`. A no-op when absent.
 pub fn remove_federation_peer(path: &Path, id: &str) -> Result<(), ConfigWriteError> {
+    if !path.exists() {
+        return Ok(());
+    }
     let mut doc = load_document(path)?;
-    if let Some(arr) = doc
+    let Some(arr) = doc
         .get_mut("federation")
         .and_then(|f| f.get_mut("peers"))
         .and_then(toml_edit::Item::as_array_of_tables_mut)
-    {
-        let idx = arr.iter().position(|t| t.get("id").and_then(|v| v.as_str()) == Some(id));
-        if let Some(i) = idx {
-            arr.remove(i);
-        }
-    }
+    else {
+        return Ok(());
+    };
+    let idx = arr.iter().position(|t| t.get("id").and_then(|v| v.as_str()) == Some(id));
+    let Some(i) = idx else {
+        return Ok(());
+    };
+    arr.remove(i);
     write_toml_0600(path, &doc.to_string())
 }
 
@@ -3501,6 +3506,40 @@ mod tests {
                 Err(ConfigWriteError::InvalidFederationPeer { .. })
             ));
         }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn federation_peer_write_rejects_more_bad_values() {
+        let path = temp_toml("fed-more-bad");
+        std::fs::write(&path, "[federation]\nid = \"desktop\"\n").unwrap();
+        let cases: [fn(&mut FederationPeerWrite); 4] = [
+            |p| p.id = "desktop".into(),
+            |p| p.address = "  ".into(),
+            |p| p.task_timeout_secs = 0,
+            |p| p.allowed_scopes = vec!["no.such".into()],
+        ];
+        for mutate in cases {
+            let mut p = fed_peer("laptop");
+            mutate(&mut p);
+            assert!(matches!(
+                write_federation_peer(&path, &p),
+                Err(ConfigWriteError::InvalidFederationPeer { .. })
+            ));
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn federation_peer_remove_does_not_touch_missing_files_or_entries() {
+        let path = temp_toml("fed-remove-missing");
+        std::fs::remove_file(&path).ok();
+        remove_federation_peer(&path, "laptop").unwrap();
+        assert!(!path.exists(), "a missing config must stay missing");
+        let text = "# keep   me\n[federation]\nid = \"desktop\"\n";
+        std::fs::write(&path, text).unwrap();
+        remove_federation_peer(&path, "laptop").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         std::fs::remove_file(&path).ok();
     }
 
