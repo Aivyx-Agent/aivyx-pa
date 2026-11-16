@@ -394,6 +394,8 @@ const KNOWN_BASES: &[&str] = &[
     // identity). Distinct from `skills.propose` (the gated
     // reflection path).
     "skills.write",
+    // A19 — outbound federation relay; qualifier = peer id
+    "federation.relay",
     // role mutation (Phase 30 — PRODUCT.md P8 completion)
     "role.update",
     // ollama model management (Phase 36 — local LLM story completion)
@@ -574,6 +576,7 @@ const IRREVERSIBLE_BASES: &[&str] = &[
     "role.update",
     "role.switch",
     "tool.allowlist",
+    "federation.relay", // sends a request to another instance
 ];
 
 /// Whether a capability `base` names an irreversible / outbound /
@@ -1257,6 +1260,8 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         // Phase 184 — operator-authored skill editing (Trusted
         // only; identity-modifying).
         "skills.write",
+        // A19 — outbound federation relay (Trusted only; irreversible).
+        "federation.relay",
         "role.update",
         "ollama.list",
         "ollama.show",
@@ -1592,6 +1597,18 @@ mod tests {
              Add them to the catalog (Chapter Atlas) when introducing a new tool surface.",
             missing.len(),
         );
+    }
+
+    // ---- A19 — federation.relay ----
+
+    #[test]
+    fn federation_relay_is_a_known_irreversible_trusted_only_base() {
+        let s = Scope::parse("federation.relay:desktop").expect("known base");
+        assert_eq!(s.base(), "federation.relay");
+        assert!(is_irreversible_base("federation.relay"));
+        assert!(TrustTier::Trusted.default_ceiling().grants(&s));
+        assert!(!TrustTier::SemiTrusted.default_ceiling().grants(&s));
+        assert!(!TrustTier::Untrusted.default_ceiling().grants(&s));
     }
 
     // ---- Scope::parse ----
@@ -2554,11 +2571,13 @@ mod tests {
         // (infrastructure, no P10 amendment).
         // Signal adds message.send — the signal.send tool's base
         // (Trusted-only, withheld like email.send).
+        // A19 adds federation.relay — the outbound federation relay
+        // gate (Trusted-only, irreversible); recorded in A19 itself.
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            101,
+            102,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );
