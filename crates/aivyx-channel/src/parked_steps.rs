@@ -1009,6 +1009,23 @@ mod tests {
         assert_eq!(steps[0].origin, "webhook deploy");
     }
 
+    /// A19: the daemon builds a parker whenever `[federation]` is configured,
+    /// even with no supervised area. Such a parker parks no ordinary step:
+    /// the parking channel hands every request to its inner channel.
+    #[tokio::test]
+    async fn a_parker_with_no_supervised_area_parks_nothing() {
+        let s = Scratch::new();
+        let store = open_store(&s, 3).await;
+        let p = Arc::new(StepParker::new(store.domain(KeyDomain::ParkedSteps), AreaFlags::everywhere(false), 7));
+        let ch = ParkingChannel::new(Arc::new(CantAsk), Arc::clone(&p), "routine tidy");
+        for (tool, base) in [("fs.delete", "fs.delete"), ("shell.exec", "shell.exec"), ("gmail.send", "email.send")] {
+            assert!(!p.parks(base));
+            let answer = ch.request_approval(&req(tool, base, "a.txt")).await;
+            assert_eq!(answer, Approval::Unavailable, "{tool}: the inner channel's answer");
+        }
+        assert!(p.list().await.unwrap().is_empty());
+    }
+
     /// A `CantAsk` with the two A19 hooks set.
     struct PeerLike;
     #[async_trait]

@@ -59,7 +59,7 @@ channel-voice-full = [
 # feature (so a contributor who forgot it gets an actionable message); only
 # the actual dispatch (`aivyx_modules/federation.rs`, gated by `mod
 # federation` itself being `#[cfg(feature = "yubikey")]`) requires it.
-yubikey = ["dep:aivyx-yubi", "dep:aivyx-federation", "dep:base64", "aivyx-federation/yubikey"]
+yubikey = ["dep:aivyx-yubi", "dep:base64", "aivyx-federation/yubikey"]
 
 [dependencies]
 # The crate this binary was extracted from — the library that owns
@@ -127,11 +127,16 @@ aivyx-voice = { path = "../aivyx-voice", optional = true }
 # `aivyx-yubi`'s discovery/pin/provision flow directly (not re-exported by
 # `aivyx-federation`), then hands the resulting `YubiKeySigner` to
 # `aivyx-federation::Identity::load_hardware` as a closing verification pass
-# — same production load path a daemon would use later. Both optional and
-# gated behind the `yubikey` feature above; see that feature's own comment
+# — same production load path a daemon would use later. `aivyx-yubi` is
+# optional and gated behind the `yubikey` feature above (as is
+# `aivyx-federation`'s own `yubikey` feature); see that feature's own comment
 # for why (`libpcsclite`/`pcsc-sys`).
 aivyx-yubi = { workspace = true, optional = true }
-aivyx-federation = { path = "../aivyx-federation", optional = true }
+# A19 (FED.3): `federation card|peer|ping|send` and the daemon's federation
+# start-up need the software identity in every build; only `yubikey-init`
+# needs the `yubikey` feature (which turns on `aivyx-federation/yubikey`).
+aivyx-federation = { path = "../aivyx-federation" }
+aivyx-federation-net = { path = "../aivyx-federation-net" }
 
 # External crates the binary uses directly. Same set the binary
 # relied on inside aivyx-channel.

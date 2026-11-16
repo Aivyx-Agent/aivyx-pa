@@ -289,6 +289,7 @@ dependencies = [
  "aivyx-dataread",
  "aivyx-discord",
  "aivyx-federation",
+ "aivyx-federation-net",
  "aivyx-google-oauth",
  "aivyx-instance",
  "aivyx-ipc",

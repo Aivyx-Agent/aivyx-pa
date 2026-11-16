@@ -161,8 +161,8 @@ pub(crate) struct Fixture {
     _scratch: Scratch,
     pub addr: String,
     pub server_card: PeerCard,
-    pub client_key: TransportKey,
-    pub client_id: Identity,
+    pub client_key: Arc<TransportKey>,
+    pub client_id: Arc<Identity>,
     pub parker: Arc<StepParker>,
     pub audit: Arc<PersistentAuditLog>,
     pub shutdown: CancellationToken,
@@ -225,8 +225,8 @@ pub(crate) async fn start(agent: Arc<dyn Agent>, setup: PeerSetup, persona: Shar
         _scratch: Scratch(dir),
         addr: listen.to_string(),
         server_card,
-        client_key,
-        client_id,
+        client_key: Arc::new(client_key),
+        client_id: Arc::new(client_id),
         parker,
         audit,
         shutdown,
@@ -587,7 +587,7 @@ async fn a_peer_turn_gets_no_recall() {
     assert_eq!(count.load(Ordering::SeqCst), 1);
 }
 
-fn test_context(parker: &Arc<StepParker>) -> FederationContext {
+pub(crate) fn test_context(parker: &Arc<StepParker>) -> FederationContext {
     FederationContext {
         peer_id: "laptop".into(),
         session: SessionId::new(),

@@ -737,6 +737,32 @@ pub fn write_federation_peer(path: &Path, peer: &FederationPeerWrite) -> Result<
     write_toml_0600(path, &doc.to_string())
 }
 
+/// Set `[federation] id` (this instance's own federation id), creating the
+/// section when absent and keeping everything else. Refuses an id that is
+/// not ASCII letters, digits, `-`, `_`, or one a configured peer already uses.
+pub fn set_federation_id(path: &Path, id: &str) -> Result<(), ConfigWriteError> {
+    let bad = |reason: String| ConfigWriteError::InvalidFederationPeer { reason };
+    if !crate::federation_id_ok(id) {
+        return Err(bad(format!("id {id:?} must be ASCII letters, digits, `-`, `_`")));
+    }
+    let mut doc = load_document(path)?;
+    if doc.get("federation").is_none() {
+        doc["federation"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let fed = doc["federation"]
+        .as_table_mut()
+        .ok_or_else(|| bad("`federation` is not a table".into()))?;
+    let taken = fed
+        .get("peers")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .is_some_and(|a| a.iter().any(|t| t.get("id").and_then(|v| v.as_str()) == Some(id)));
+    if taken {
+        return Err(bad(format!("`{id}` is already a peer's id")));
+    }
+    fed["id"] = toml_edit::value(id);
+    write_toml_0600(path, &doc.to_string())
+}
+
 /// Remove one `[[federation.peers]]` entry by `id`. A no-op when absent.
 pub fn remove_federation_peer(path: &Path, id: &str) -> Result<(), ConfigWriteError> {
     if !path.exists() {
@@ -3540,6 +3566,26 @@ mod tests {
         std::fs::write(&path, text).unwrap();
         remove_federation_peer(&path, "laptop").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn set_federation_id_creates_or_updates_the_section_and_keeps_the_rest() {
+        let path = temp_toml("fed-set-id");
+        std::fs::write(&path, "# mine\n[agent]\nprovider = \"ollama\"\n").unwrap();
+        set_federation_id(&path, "desktop").unwrap();
+        write_federation_peer(&path, &fed_peer("laptop")).unwrap();
+        set_federation_id(&path, "desk2").unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("# mine") && out.contains("provider = \"ollama\""), "{out}");
+        assert!(out.contains("id = \"desk2\""), "{out}");
+        assert_eq!(read_federation_peers(&path).unwrap().len(), 1, "peers kept");
+        for bad in ["Bad Id", "", "laptop"] {
+            assert!(matches!(
+                set_federation_id(&path, bad),
+                Err(ConfigWriteError::InvalidFederationPeer { .. })
+            ));
+        }
         std::fs::remove_file(&path).ok();
     }
 

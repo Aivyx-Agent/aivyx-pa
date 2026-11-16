@@ -133,6 +133,32 @@ fn global_flag_lines() -> String {
     out
 }
 
+/// `federation`'s usage lines; `yubikey-init` only in a `yubikey` build.
+#[cfg(not(feature = "yubikey"))]
+const FEDERATION_USAGE: &[&str] = &[
+    "aivyx-pa federation card",
+    "aivyx-pa federation peer add <id> <card> --address <host:port>",
+    "    [--verbs chat,task,search] [--scopes <scope,...>]",
+    "    [--ceiling manual|assisted] [--task-timeout-secs <N>]",
+    "aivyx-pa federation peer list",
+    "aivyx-pa federation peer remove <id>",
+    "aivyx-pa federation ping <peer>",
+    "aivyx-pa federation send <peer> <chat|task|search> <text>",
+];
+#[cfg(feature = "yubikey")]
+const FEDERATION_USAGE: &[&str] = &[
+    "aivyx-pa federation card",
+    "aivyx-pa federation peer add <id> <card> --address <host:port>",
+    "    [--verbs chat,task,search] [--scopes <scope,...>]",
+    "    [--ceiling manual|assisted] [--task-timeout-secs <N>]",
+    "aivyx-pa federation peer list",
+    "aivyx-pa federation peer remove <id>",
+    "aivyx-pa federation ping <peer>",
+    "aivyx-pa federation send <peer> <chat|task|search> <text>",
+    "aivyx-pa federation yubikey-init <instance-id> <key-binding-path>",
+    "    [--card <serial>] [--overwrite-existing-key]",
+];
+
 pub const COMMANDS: &[CommandHelp] = &[
     // ---- Chat and front ends ----------------------------------------
     CommandHelp {
@@ -452,16 +478,14 @@ pub const COMMANDS: &[CommandHelp] = &[
             "aivyx-pa identity import <path> [--force]",
         ],
     },
-    // R9: a build-time feature (`yubikey`), so only builds with it show it.
-    #[cfg(feature = "yubikey")]
+    // A19: federation between your own machines, in every build. R9:
+    // `yubikey-init` is a build-time feature (`yubikey`), so only builds
+    // with it list it.
     CommandHelp {
         name: "federation",
-        group: Group::Inspection,
-        summary: "Bind a hardware-backed federation key (YubiKey)",
-        usage: &[
-            "aivyx-pa federation yubikey-init <instance-id> <key-binding-path>",
-            "    [--card <serial>] [--overwrite-existing-key]",
-        ],
+        group: Group::Tools,
+        summary: "Pair this instance with your other PA instances",
+        usage: FEDERATION_USAGE,
     },
     CommandHelp {
         name: "tool-relevance",
@@ -617,14 +641,19 @@ mod tests {
 
     use super::*;
 
-    /// R9: `federation yubikey-init` needs the `yubikey` feature, so a build
-    /// without it does not offer it in help.
+    /// A19: `federation` is in every build's help. R9: `yubikey-init` needs
+    /// the `yubikey` feature, so a build without it does not offer it.
     #[test]
-    fn federation_is_in_help_only_with_the_yubikey_feature() {
+    fn federation_yubikey_init_is_in_help_only_with_the_yubikey_feature() {
         let help = render_top_level_help();
-        let shown = command_help("federation").is_some();
-        assert_eq!(shown, cfg!(feature = "yubikey"));
-        assert_eq!(help.contains("  federation "), cfg!(feature = "yubikey"), "{help}");
+        assert!(help.contains("  federation "), "{help}");
+        let cmd = command_help("federation").expect("federation help");
+        for sub in ["card", "peer add", "peer list", "peer remove", "ping", "send"] {
+            let line = format!("aivyx-pa federation {sub}");
+            assert!(cmd.usage.iter().any(|u| u.starts_with(&line)), "{line}");
+        }
+        let yubikey = cmd.usage.iter().any(|u| u.contains("yubikey-init"));
+        assert_eq!(yubikey, cfg!(feature = "yubikey"));
     }
 
     /// The command line and on-disk/wire format versions pa's 1.0 promises
@@ -636,19 +665,25 @@ mod tests {
         use aivyx_config::not_stable::{NOT_STABLE, Snapshot, stale_entries, tag_for};
         let suffix = |line: &str| tag_for(Snapshot::Cli, line).map_or("", |t| t.suffix());
         let mut commands: Vec<&CommandHelp> = COMMANDS.iter().collect();
-        // R9: the snapshot is the default build's surface. `federation`
-        // exists only with the `yubikey` feature, which hides it otherwise.
-        commands.retain(|c| c.name != "federation");
         commands.sort_by_key(|c| c.name);
         let mut cli = Vec::new();
         for c in commands {
+            // R9: the snapshot is the default build's surface:
+            // `federation yubikey-init` (and its continuation line) exists
+            // only with the `yubikey` feature.
+            let usage: Vec<&str> = c
+                .usage
+                .iter()
+                .copied()
+                .filter(|u| !u.contains("yubikey-init") && !u.contains("--overwrite-existing-key"))
+                .collect();
             // A usage line is tagged by its own text (`not_stable`); a
             // continuation line (indented) carries its usage line's tag, and
             // the command's name line is tagged when all its usage lines are.
             // R26: every command in the Developer group is (developer).
             let developer = c.group == Group::Developer;
             let mut tags: Vec<&str> = Vec::new();
-            for u in c.usage {
+            for u in &usage {
                 let tag = match tags.last() {
                     _ if developer => aivyx_config::not_stable::Tag::Developer.suffix(),
                     Some(last) if u.starts_with(' ') => last,
@@ -658,7 +693,7 @@ mod tests {
             }
             let common = if tags.iter().all(|t| *t == tags[0]) { tags[0] } else { "" };
             cli.push(format!("{}{common}", c.name));
-            cli.extend(c.usage.iter().zip(&tags).map(|(u, t)| format!("  {u}{t}")));
+            cli.extend(usage.iter().zip(&tags).map(|(u, t)| format!("  {u}{t}")));
         }
         // R4: the global flags, from the table the help is rendered from. A
         // flag value that is not stable (`--channel matrix`) gets its own

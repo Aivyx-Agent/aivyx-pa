@@ -32,6 +32,15 @@ daemon
   aivyx-pa daemon uninstall
 doctor
   aivyx-pa doctor
+federation (preview)
+  aivyx-pa federation card (preview)
+  aivyx-pa federation peer add <id> <card> --address <host:port> (preview)
+      [--verbs chat,task,search] [--scopes <scope,...>] (preview)
+      [--ceiling manual|assisted] [--task-timeout-secs <N>] (preview)
+  aivyx-pa federation peer list (preview)
+  aivyx-pa federation peer remove <id> (preview)
+  aivyx-pa federation ping <peer> (preview)
+  aivyx-pa federation send <peer> <chat|task|search> <text> (preview)
 identity
   aivyx-pa identity export <path>
   aivyx-pa identity import <path> [--force]

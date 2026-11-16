@@ -131,6 +131,10 @@ mod doctor;
 #[cfg(feature = "yubikey")]
 #[path = "aivyx_modules/federation.rs"]
 mod federation;
+// A19 (FED.3): `aivyx-pa federation card|peer|ping|send` and the daemon's
+// federation start-up. Every build (no feature).
+#[path = "aivyx_modules/federation_peer.rs"]
+mod federation_peer;
 #[path = "aivyx_modules/exit_signals.rs"]
 mod exit_signals;
 #[path = "aivyx_modules/headless.rs"]
@@ -1227,34 +1231,31 @@ fn run() -> Result<(), String> {
     // contributor who forgot the feature gets an actionable message
     // instead of a bare "unrecognized command".
     if let CliMode::Federation(sub) = mode {
-        #[cfg(feature = "yubikey")]
-        {
-            return match sub {
-                FederationSubcommand::YubikeyInit {
-                    instance_id,
-                    key_binding_path,
-                    card_serial,
-                    overwrite_existing_key,
-                } => federation::run_yubikey_init(
-                    &instance_id,
-                    &key_binding_path,
-                    card_serial.as_deref(),
-                    overwrite_existing_key,
-                ),
-            };
-        }
-        #[cfg(not(feature = "yubikey"))]
-        {
-            let _ = sub;
-            return Err(
+        return match sub {
+            // A19 (FED.3): every build.
+            FederationSubcommand::Net(cmd) => federation_peer::run(cmd),
+            #[cfg(feature = "yubikey")]
+            FederationSubcommand::YubikeyInit {
+                instance_id,
+                key_binding_path,
+                card_serial,
+                overwrite_existing_key,
+            } => federation::run_yubikey_init(
+                &instance_id,
+                &key_binding_path,
+                card_serial.as_deref(),
+                overwrite_existing_key,
+            ),
+            #[cfg(not(feature = "yubikey"))]
+            FederationSubcommand::YubikeyInit { .. } => Err(
                 "aivyx-pa federation: this binary was built without the `yubikey` feature \
                  (hardware-backed federation identity via a YubiKey's OpenPGP card applet). \
                  Rebuild with `cargo build -p aivyx-cli --features yubikey` (requires \
                  `pcscd`/libpcsclite available locally to build `pcsc-sys`). See \
                  docs/INSTALL.md's YubiKey section for the full requirements."
                     .to_string(),
-            );
-        }
+            ),
+        };
     }
 
     let verify_only = mode == CliMode::VerifyOnly;
@@ -1783,6 +1784,10 @@ fn run() -> Result<(), String> {
     };
 
     let matrix_keys = aivyx_matrix::credentials::MatrixKeys::derive(&master_key)?;
+    // A19 — the federation keys are sealed under the master key; they load
+    // once the store has opened with it (below), so a wrong key never seals
+    // a new key file. Only when `[federation]` is configured.
+    let federation_master = config.federation.as_ref().map(|_| master_key.clone());
 
     // A18 — `EnrollCard` and `Lock` in the running daemon. Built before
     // `RedbStorage::open` consumes `master_key`; only for the daemon, so
@@ -1916,6 +1921,13 @@ fn run() -> Result<(), String> {
             print_config_warnings(&config);
         }
 
+        // A19 — after the unlock and the store open: a bad peer card is a
+        // start-up error naming the peer.
+        let federation_start = match (&config.federation, federation_master) {
+            (Some(fed), Some(master)) => Some(federation_peer::load_for_start(fed, &master)?),
+            _ => None,
+        };
+
         run_async(
             config,
             storage,
@@ -1934,6 +1946,7 @@ fn run() -> Result<(), String> {
             repl_in_process_notice,
             card_unlock,
             unlock_method,
+            federation_start,
         )
         .await
     })
@@ -3028,6 +3041,9 @@ enum FederationSubcommand {
         card_serial: Option<String>,
         overwrite_existing_key: bool,
     },
+    /// A19 (FED.3): `card`, `peer add|list|remove`, `ping`, `send` — parsed
+    /// and run by `federation_peer.rs`, in every build.
+    Net(federation_peer::Command),
 }
 
 /// Phase 113 — `aivyx-pa persona list` filter discriminator.
@@ -3703,6 +3719,9 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 .to_string()
         })?;
         let subcommand = match sub.as_str() {
+            "card" | "peer" | "ping" | "send" => {
+                FederationSubcommand::Net(federation_peer::parse(&args[1..])?)
+            }
             "yubikey-init" => {
                 let instance_id = args.get(2).ok_or_else(|| {
                     "`aivyx-pa federation yubikey-init` requires an instance id. Usage: `aivyx-pa \
@@ -7508,6 +7527,9 @@ async fn run_async(
     card_unlock: Option<aivyx_channel::card_unlock::CardUnlockContext>,
     // A18 — "passphrase" or "card <serial>": the daemon's first audit entry.
     unlock_method: String,
+    // A19 — `[federation]`'s identity, transport key and verified peers;
+    // `Some` iff the section is configured.
+    federation_start: Option<federation_peer::FederationStart>,
 ) -> Result<(), String> {
     // First-run coherence A1 (F14) — computed before the destructure below
     // moves `config.routing`; printed when the REPL runs in-process.
@@ -7626,7 +7648,7 @@ async fn run_async(
         proton,
         // `[signal]` config consumed by the `ChannelKind::Signal` arm below.
         signal,
-        // `[federation]` is read by the federation daemon wiring (later FED.3 tasks).
+        // `[federation]` was loaded in `run()` (`federation_start`).
         federation: _,
         // Phase 108 — `slack` config consumed by the
         // `ChannelKind::Slack` dispatch arm below; carries
@@ -9778,6 +9800,16 @@ async fn run_async(
     let webhook_delete_tool: Arc<WebhookDeleteTool> = Arc::new(WebhookDeleteTool::new());
     tool_list.push(Arc::clone(&webhook_delete_tool) as Arc<dyn Tool>);
 
+    // A19 — `federation.chat|task|search`, only when a peer is configured.
+    if let Some(fed) = federation_start.as_ref().filter(|f| !f.peers.is_empty()) {
+        tool_list.extend(aivyx_channel::federation_tool::FederationRelayTool::all(
+            Arc::clone(&fed.peers),
+            Arc::clone(&fed.identity),
+            Arc::clone(&fed.key),
+            Arc::clone(&persistent_audit_for_query),
+        ));
+    }
+
     let file_watch_create_tool: Arc<FileWatchCreateTool> = Arc::new(FileWatchCreateTool::new());
     tool_list.push(Arc::clone(&file_watch_create_tool) as Arc<dyn Tool>);
     let file_watch_list_tool: Arc<FileWatchListTool> = Arc::new(FileWatchListTool::new());
@@ -11389,7 +11421,11 @@ async fn run_async(
         // Supervised batching — built only when some area is `supervised`;
         // with none, unattended runs refuse needs-approval calls as before.
         let supervised = supervised_areas(autonomy_level.value, &autonomy_overrides);
-        let step_parker = supervised.any().then(|| {
+        // A19 — `[federation]` needs the queue too: a peer's task waits on
+        // approvals parked there. With no supervised area the parker parks
+        // no ordinary step (`ParkingChannel` asks `parks()`, which reads only
+        // the supervised flags), so that behaviour is unchanged.
+        let step_parker = (supervised.any() || federation_start.is_some()).then(|| {
             let mut parker = aivyx_channel::parked_steps::StepParker::new(
                 storage.domain(KeyDomain::ParkedSteps),
                 supervised,
@@ -11859,6 +11895,24 @@ async fn run_async(
             )
         });
 
+        // A19 — the listener, only when `[federation] listen` is set. Built
+        // here, after the unlock: a locked daemon never reaches this code.
+        let federation_serve = match (&federation_start, &step_parker) {
+            (Some(fed), Some(parker)) => fed.listen.map(|listen| {
+                aivyx_channel::federation_server::FederationServe {
+                    listen,
+                    identity: Arc::clone(&fed.identity),
+                    key: Arc::clone(&fed.key),
+                    peers: Arc::clone(&fed.peers),
+                    agent: Arc::clone(&agent),
+                    parker: Arc::clone(parker),
+                    persona: shared_persona.clone(),
+                    audit: Arc::clone(&persistent_audit_for_query),
+                }
+            }),
+            _ => None,
+        };
+
         let result = run_daemon(DaemonConfig {
             socket_path,
             agent,
@@ -12009,8 +12063,8 @@ async fn run_async(
             notify_targets: config_notify_targets.clone(),
             schedule_store: Some(schedule_domain),
             webhook_store: Some(webhook_domain),
-            // A19 — the federation listener is built from `[federation]` in Task 8.
-            federation: None,
+            // A19 — `Some` when `[federation] listen` is set.
+            federation: federation_serve,
             file_watch_store: Some(file_watch_domain),
             webhook_port: config_webhook_port,
             web_ui_port: studio_port,
@@ -18037,10 +18091,6 @@ mod tests {
         );
         for name in &names {
             if help::NON_SUBCOMMAND_DISPATCH_NAMES.contains(&name.as_str()) {
-                continue;
-            }
-            // R9: help lists `federation` only in a build with `yubikey`.
-            if name == "federation" && !cfg!(feature = "yubikey") {
                 continue;
             }
             assert!(

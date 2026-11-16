@@ -81,6 +81,25 @@ const NO_READABLE_REQUEST: &str = "no readable request";
 const REPLY_NOT_SENT: &str = "reply could not be sent";
 const TOO_MANY_CONNECTIONS: &str = "too many connections from this peer";
 
+/// Every reason this listener ever replies with. The outbound side records
+/// a peer's reason only when it is one of these, so a peer can never put
+/// text of its own into the requester's audit chain.
+pub(crate) const REPLY_REASONS: &[&str] = &[
+    BAD_FRAME,
+    BAD_SIGNATURE,
+    WRONG_SIGNER,
+    REPLAYED,
+    BAD_REQUEST,
+    VERB_NOT_ALLOWED,
+    FIELD_TOO_LONG,
+    BUSY,
+    REFUSED,
+    NO_SCOPES,
+    NOT_QUEUED,
+    OVER_TIME,
+    TIMED_OUT_RESULT,
+];
+
 /// A configured peer whose card verified.
 #[derive(Debug, Clone)]
 pub struct FederationPeer {
