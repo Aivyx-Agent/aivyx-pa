@@ -30,6 +30,7 @@ pub fn client_label(frontend: Option<FrontendType>, channel: WireChannelPlatform
             WireChannelPlatform::Signal => "Signal",
             WireChannelPlatform::Rest => "API",
             WireChannelPlatform::Voice => "Voice",
+            WireChannelPlatform::Federation => "Another of your instances",
         },
     }
 }

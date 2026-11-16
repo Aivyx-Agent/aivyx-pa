@@ -316,6 +316,10 @@ pub enum ChannelPlatform {
     /// In-process on the operator's machine —
     /// trust posture matches `Local`.
     Voice,
+    /// A19 — a request relayed from one of the operator's own paired
+    /// instances over the federation transport. A display/routing label;
+    /// the peer's authority comes from the channel's capability ceiling.
+    Federation,
 }
 
 // ---------------------------------------------------------------------------
@@ -1427,6 +1431,7 @@ impl ChannelPlatform {
             ChannelPlatform::Signal => "signal",
             ChannelPlatform::Rest => "rest",
             ChannelPlatform::Voice => "voice",
+            ChannelPlatform::Federation => "federation",
         }
     }
 }
@@ -1986,6 +1991,7 @@ mod tests {
             ChannelPlatform::Signal,
             ChannelPlatform::Rest,
             ChannelPlatform::Voice,
+            ChannelPlatform::Federation,
         ] {
             let serde = serde_json::to_value(p).unwrap();
             assert_eq!(serde.as_str().unwrap().to_lowercase(), p.config_name());

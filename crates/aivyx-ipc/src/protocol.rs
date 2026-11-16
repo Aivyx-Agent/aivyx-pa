@@ -2026,6 +2026,8 @@ pub enum WireChannelPlatform {
     Signal,
     Rest,
     Voice,
+    /// A19 — a paired federation peer (another of the operator's instances).
+    Federation,
 }
 
 /// Minimal per-session metadata returned by
