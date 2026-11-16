@@ -415,6 +415,31 @@ impl PersistentAuditLog {
         self.health.load(Ordering::SeqCst)
     }
 
+    /// Close the log and wait until every entry appended so far is on
+    /// disk. Dropping the log aborts the drain task (invariant 5), which
+    /// is right for a long-running process but loses the tail for a
+    /// one-shot command that appends and then exits: such a command
+    /// calls this before it returns. `Err` when a write failed.
+    pub async fn close(mut self) -> Result<(), AuditError> {
+        let handle = self.drain_handle.take();
+        let health = Arc::clone(&self.health);
+        let first_error = Arc::clone(&self.first_error);
+        // Dropping `self` drops the only sender: the drain task writes
+        // what is queued, then its `recv` ends.
+        drop(self);
+        if let Some(handle) = handle {
+            handle
+                .await
+                .map_err(|e| AuditError::Storage(format!("audit drain task: {e}")))?;
+        }
+        if health.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            let why = first_error.lock().ok().and_then(|e| e.clone()).unwrap_or_default();
+            Err(AuditError::Storage(why))
+        }
+    }
+
     /// Current in-memory chain length. Matches the number of entries
     /// that have been chained; may briefly exceed the number persisted
     /// to disk while the drain task is catching up.
@@ -1155,6 +1180,28 @@ mod tests {
         wait_for_disk(&storage, 4).await;
         log.verify().unwrap();
         assert!(log.is_healthy());
+    }
+
+    /// A one-shot command's appends land even though it exits right after:
+    /// `close` waits for the drain instead of aborting it.
+    #[tokio::test]
+    async fn close_waits_for_every_queued_entry() {
+        let (_dir, storage, chain_key) = fresh_storage(41).await;
+        let log = PersistentAuditLog::open(Arc::clone(&storage), chain_key)
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            log.append(sample_tool_call()).unwrap();
+        }
+        log.close().await.unwrap();
+        let rows = storage
+            .domain(KeyDomain::Audit)
+            .scan_prefix(AUDIT_KEY_PREFIX)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 50, "close returned before the tail was written");
+        let log2 = PersistentAuditLog::open(storage, chain_key).await.unwrap();
+        assert_eq!(log2.len(), 50);
     }
 
     #[tokio::test]

@@ -583,7 +583,13 @@ fn run_send(peer_id: &str, verb: FederationVerb, text: &str) -> Result<(), Strin
         let audit = PersistentAuditLog::open(storage, audit_key)
             .await
             .map_err(|e| format!("failed to open the audit log: {e}"))?;
-        aivyx_channel::federation_tool::relay(&peer, &identity, &key, verb, text, &audit, None).await
+        let reply =
+            aivyx_channel::federation_tool::relay(&peer, &identity, &key, verb, text, &audit, None).await;
+        // Dropping the log would abort its writer and lose the crossing.
+        if let Err(e) = audit.close().await {
+            eprintln!("aivyx-pa federation: couldn't write the crossing to the audit log: {e}");
+        }
+        reply
     })?;
     println!("{reply}");
     Ok(())
