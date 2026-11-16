@@ -675,6 +675,10 @@ const WITHHELD_INTEGRATION_BASES: &[&str] = &[
     "n8n.write",
     "contacts.write",
     "calendar.write",
+    // A19: a request to another of the operator's instances leaves this
+    // machine, so it asks first under the same `confirm_destructive` gate
+    // (being in `IRREVERSIBLE_BASES` only stops auto-approval).
+    "federation.relay",
 ];
 
 /// Whether a capability `base` names a third-party/OAuth integration
@@ -1539,6 +1543,7 @@ mod tests {
             "n8n.write",
             "contacts.write",
             "calendar.write",
+            "federation.relay",
         ] {
             assert!(is_withheld_integration_base(base), "{base} must be withheld");
         }

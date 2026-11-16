@@ -2067,7 +2067,7 @@ impl ConcreteAgent {
             && aivyx_capability::is_withheld_integration_base(needed.base())
         {
             Some(format!(
-                "{tool_name_str} needs approval before it runs (`{}` is a third-party \
+                "{tool_name_str} needs approval before it runs (`{}` is an outbound \
                  action Aivyx PA never takes unasked).",
                 needed.base()
             ))
@@ -6601,6 +6601,41 @@ mod tests {
                 assert_eq!(*outcome, TurnOutcomeSummary::Escalated);
             }
             other => panic!("expected TurnEnded, got {other:?}"),
+        }
+    }
+
+    // ---- A19 — an outbound federation request asks first ----
+
+    /// `federation.relay` is granted (`peer add` is the grant), but at the
+    /// default `assisted` level the send still pauses for the operator:
+    /// before this, only auto-approval knew the base was irreversible, so
+    /// a headless or chat turn sent to the peer unasked.
+    #[tokio::test]
+    async fn granted_federation_relay_still_asks_first_when_confirm_destructive_is_on() {
+        let audit = RecordingAudit::new();
+        let tool = Arc::new(FakeTool::new_bare("federation.chat", "federation.relay:desktop"));
+        let tool_id = tool.id();
+        let agent_caps =
+            CapabilitySet::from_scopes([Scope::parse("federation.relay:desktop").unwrap()]);
+        let plan = vec![
+            NextStep::ToolCall {
+                tool_id,
+                input: json!({}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("should not reach here".to_string()),
+        ];
+        let agent = make_agent(agent_caps, vec![tool], audit.clone(), plan)
+            .with_confirm_integration_writes(true);
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let outcome = agent.turn(Message::text(channel.session, "ask desktop"), &channel).await;
+        match outcome {
+            TurnOutcome::Escalated { pending_tool, scope, .. } => {
+                assert_eq!(pending_tool, tool_id);
+                assert_eq!(scope.as_ref().map(|s| s.base()), Some("federation.relay"));
+            }
+            other => panic!("a federation send must ask first; got {other:?}"),
         }
     }
 
