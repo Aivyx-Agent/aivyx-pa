@@ -417,21 +417,33 @@ impl Identity {
         let timestamp = now_secs();
         let body_hash = sha256_hex(body);
         let message = signed_message(recipient, &self.instance_id, timestamp, &body_hash);
-        let signature_bytes = match &self.signer {
-            IdentitySigner::Software(k) => k.sign(message.as_bytes()).to_bytes(),
+        let signature_bytes = self.sign_raw(message.as_bytes()).await?;
+        Ok(SignedHeader {
+            instance_id: self.instance_id.clone(),
+            timestamp,
+            signature: BASE64.encode(signature_bytes),
+        })
+    }
+
+    /// Sign raw bytes with whichever signer backs this identity (software
+    /// key or hardware token). Shared by [`Self::sign_request`] and
+    /// [`Self::sign_binding`].
+    async fn sign_raw(&self, message: &[u8]) -> Result<[u8; 64], FederationError> {
+        Ok(match &self.signer {
+            IdentitySigner::Software(k) => k.sign(message).to_bytes(),
             #[cfg(feature = "yubikey")]
             IdentitySigner::Hardware(h) => {
                 // The real signing call blocks the calling thread for the
                 // whole touch-confirmation window (can be several seconds)
                 // — `spawn_blocking` moves it off whatever executor thread
-                // called `sign_request`, so a `current_thread` runtime
+                // called `sign_raw`, so a `current_thread` runtime
                 // (several of this project's own CLI subcommands use one)
                 // isn't frozen for the duration. `Arc::clone` gives the
                 // closure an owned, `'static` handle without needing `&mut
                 // self` or disturbing `&self`'s borrow across the `.await`.
                 let signer = std::sync::Arc::clone(h);
-                let message = message.clone();
-                tokio::task::spawn_blocking(move || signer.sign(message.as_bytes()))
+                let message = message.to_vec();
+                tokio::task::spawn_blocking(move || signer.sign(&message))
                     .await
                     .map_err(|e| {
                         FederationError::Hardware(format!(
@@ -440,12 +452,16 @@ impl Identity {
                     })?
                     .map_err(FederationError::Hardware)?
             }
-        };
-        Ok(SignedHeader {
-            instance_id: self.instance_id.clone(),
-            timestamp,
-            signature: BASE64.encode(signature_bytes),
         })
+    }
+
+    /// Sign the binding of this identity to an X25519 transport public key
+    /// (base64 signature over [`binding_message`]). Goes through the same
+    /// software/hardware signer as [`Self::sign_request`].
+    pub async fn sign_binding(&self, x25519_public: &[u8; 32]) -> Result<String, FederationError> {
+        let message = binding_message(&self.instance_id, x25519_public);
+        let sig = self.sign_raw(&message).await?;
+        Ok(BASE64.encode(sig))
     }
 
     /// Verify a peer's signed request: fresh timestamp + valid signature over
@@ -479,21 +495,8 @@ impl Identity {
         if is_too_old || is_too_far_in_future {
             return Err(FederationError::Identity("federation request expired".into()));
         }
-        let key_bytes = BASE64
-            .decode(peer_public_key)
-            .map_err(|e| FederationError::Identity(format!("invalid peer public key: {e}")))?;
-        let key_array: [u8; 32] = key_bytes
-            .try_into()
-            .map_err(|_| FederationError::Identity("peer public key must be 32 bytes".into()))?;
-        let verifying_key = VerifyingKey::from_bytes(&key_array)
-            .map_err(|e| FederationError::Identity(format!("invalid Ed25519 key: {e}")))?;
-        let sig_bytes = BASE64
-            .decode(&header.signature)
-            .map_err(|e| FederationError::Identity(format!("invalid signature encoding: {e}")))?;
-        let sig_array: [u8; 64] = sig_bytes
-            .try_into()
-            .map_err(|_| FederationError::Identity("signature must be 64 bytes".into()))?;
-        let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
+        let verifying_key = decode_verifying_key(peer_public_key)?;
+        let signature = decode_signature(&header.signature)?;
         let body_hash = sha256_hex(body);
         let message = signed_message(recipient, &header.instance_id, header.timestamp, &body_hash);
         verifying_key
@@ -625,9 +628,81 @@ pub fn validate_instance_id(id: &str) -> Result<(), FederationError> {
     Ok(())
 }
 
+/// Context string that domain-separates a transport-key binding from every
+/// other signature this identity makes.
+pub const BINDING_CONTEXT: &[u8] = b"aivyx-federation-transport-v1";
+
+/// The bytes an identity signs to bind itself to an X25519 transport key:
+/// `BINDING_CONTEXT || 0x00 || instance_id || 0x00 || x25519_public`.
+pub fn binding_message(instance_id: &str, x25519_public: &[u8; 32]) -> Vec<u8> {
+    let mut m = Vec::with_capacity(BINDING_CONTEXT.len() + instance_id.len() + 34);
+    m.extend_from_slice(BINDING_CONTEXT);
+    m.push(0);
+    m.extend_from_slice(instance_id.as_bytes());
+    m.push(0);
+    m.extend_from_slice(x25519_public);
+    m
+}
+
+/// Verify that `signature_b64` is `instance_id`'s Ed25519 signature
+/// (`ed25519_public_b64`) over the binding to `x25519_public`.
+pub fn verify_binding(
+    ed25519_public_b64: &str,
+    instance_id: &str,
+    x25519_public: &[u8; 32],
+    signature_b64: &str,
+) -> Result<(), FederationError> {
+    let fail = || FederationError::Identity("transport key binding does not verify".into());
+    validate_instance_id(instance_id)?;
+    let key = decode_verifying_key(ed25519_public_b64).map_err(|_| fail())?;
+    let sig = decode_signature(signature_b64).map_err(|_| fail())?;
+    key.verify(&binding_message(instance_id, x25519_public), &sig)
+        .map_err(|_| fail())
+}
+
+fn decode_verifying_key(public_key_b64: &str) -> Result<VerifyingKey, FederationError> {
+    let key_bytes = BASE64
+        .decode(public_key_b64)
+        .map_err(|e| FederationError::Identity(format!("invalid peer public key: {e}")))?;
+    let key_array: [u8; 32] = key_bytes
+        .try_into()
+        .map_err(|_| FederationError::Identity("peer public key must be 32 bytes".into()))?;
+    VerifyingKey::from_bytes(&key_array)
+        .map_err(|e| FederationError::Identity(format!("invalid Ed25519 key: {e}")))
+}
+
+fn decode_signature(signature_b64: &str) -> Result<ed25519_dalek::Signature, FederationError> {
+    let sig_bytes = BASE64
+        .decode(signature_b64)
+        .map_err(|e| FederationError::Identity(format!("invalid signature encoding: {e}")))?;
+    let sig_array: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| FederationError::Identity("signature must be 64 bytes".into()))?;
+    Ok(ed25519_dalek::Signature::from_bytes(&sig_array))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_binding_verifies_and_refuses_a_swapped_key_or_id() {
+        let id = Identity::generate("desktop".into()).unwrap();
+        let x = [7u8; 32];
+        let sig = id.sign_binding(&x).await.unwrap();
+        verify_binding(&id.public_key_base64(), "desktop", &x, &sig).unwrap();
+        assert!(verify_binding(&id.public_key_base64(), "desktop", &[8u8; 32], &sig).is_err());
+        assert!(verify_binding(&id.public_key_base64(), "laptop", &x, &sig).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_binding_signature_is_not_a_request_signature() {
+        // domain separation: a request signature over the same bytes must not verify as a binding
+        let id = Identity::generate("desktop".into()).unwrap();
+        let x = [7u8; 32];
+        let header = id.sign_request("desktop", &x).await.unwrap();
+        assert!(verify_binding(&id.public_key_base64(), "desktop", &x, &header.signature).is_err());
+    }
 
     fn tmp_key_path(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir()
