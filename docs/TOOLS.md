@@ -152,7 +152,6 @@ base, Trusted-tier only. See the Lattice addendum in
 | `skills.list` / `skills.invoke` | `skills.list`, `skills.invoke` | Trusted | enumerate / run learned skills |
 | `skills.teach` / `skills.update` / `skills.forget` / `skills.propose` | `skills.write`, `skills.propose` | Trusted | manage learned skills |
 | `skill_defaults.list` / `skill_defaults.read` | `skill_defaults.list`, `skill_defaults.read` | Trusted | enumerate / render compiled-in default skill library (Aivyx-Skills Part 3) |
-| `federation.relay` (peer-to-peer relay; tool lands with FED.3) | `federation.relay:<peer id>` | Trusted | send a request to another of the operator's instances; irreversible, so confirmed per request at `assisted` (amendment A19) |
 | `routing.status` / `routing.explain` | `routing.status`, `routing.read` | Trusted | model router's candidates / a session's last routing decision (model routing Part 3a; registered only when `[routing] enabled`) |
 | `reflection.propose` / `reflection.apply` | `reflection.propose`, `reflection.apply` | Trusted | self-improvement proposals |
 | *(via `reflection.propose`)* | `persona.propose` | Trusted | needed when a `reflection.propose` call carries persona changes |
@@ -172,6 +171,12 @@ base, Trusted-tier only. See the Lattice addendum in
 | `loop.next` / `.complete` / `.note` | `loop.next`, `loop.complete`, `loop.note` | Trusted | the autonomous (Ralph) loop |
 | `remind.set` / `.list` / `.cancel` | `remind.write`, `remind.read` | Trusted | reminders (everyday-PA) |
 | *(each MCP server's tools)* | `mcp.call` | Trusted | an MCP server's tools appear under their own names; each call needs `mcp.call:<server>:<tool>` |
+
+## Federation (infrastructure)
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `federation.task` / `federation.chat` / `federation.search` (land later in the FED.3 chapter) | `federation.relay:<peer>` | Trusted | send a request to another of the operator's own instances; irreversible, so confirmed per request at `assisted` (amendment A19) |
 
 ## Local-model management (infrastructure)
 

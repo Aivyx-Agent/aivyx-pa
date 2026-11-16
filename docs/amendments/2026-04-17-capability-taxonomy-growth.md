@@ -894,6 +894,9 @@ total at **100**, so this addendum and the runtime stay in sync.
 `known_bases_count_matches_phase_143_a3_addendum` test pins the new
 total at **101**.
 
+A19 (2026-11-16) adds `federation.relay` (Trusted-only, irreversible;
+qualifier = peer id): **101 → 102**. The test now pins **102**.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

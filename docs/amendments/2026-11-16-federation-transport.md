@@ -15,12 +15,14 @@ and `docs/FEDERATION.md` §9 FED.3.
 
 ## Why
 
-FED.1 and FED.2 gave each instance a signed identity and a signed relay
-wire format. Nothing yet moves those messages between machines. FED.3
+FED.1 gave each instance an Ed25519 identity and a signed, replay-guarded
+request header. FED.2 added deny-by-default trust and attenuation. The
+relay wire shapes are locked as part of FED.3. Nothing yet moves those
+messages between machines. FED.3
 adds the transport, for one operator's own machines only: a laptop and a
 desktop that both belong to the same person. This amendment records the
 decisions that need an architecture change. Most of the code lands in
-later FED.3 tasks. This task adds only the capability base.
+later FED.3 tasks.
 
 ## Transport
 
@@ -32,13 +34,15 @@ secrets in D7.
 The transport key is tied to the instance identity by a binding
 signature. The federation identity key signs the message context
 `aivyx-federation-transport-v1`, the instance id and the transport public
-key. A peer checks the signature during the handshake, so a transport key
-cannot be claimed by an identity that did not sign it.
+key.
 
 Operators exchange a peer card, a text string with the prefix
-`aivyx-peer-v1:`. It holds the instance id, the identity public key and
-the transport public key. Pasting a card on the other machine is the
-trust decision.
+`aivyx-peer-v1:`. It holds the instance id, the Ed25519 public key, the
+X25519 public key and the binding. `peer add` checks the binding and
+refuses a card whose binding does not verify. Pasting a valid card on the
+other machine is the trust decision. During the handshake, each side
+checks that the remote static key equals the bound transport key of a
+configured peer.
 
 Limits: one application frame is at most 1 MiB. The handshake must
 finish within 10 seconds.
