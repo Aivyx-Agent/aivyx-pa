@@ -170,6 +170,10 @@ pub struct FederationServe {
     /// defers to those gates, so with this set every peer task runs as
     /// `manual`: every action asks.
     pub assisted_as_manual: bool,
+    /// Tests only: a listener already bound to `listen`, served instead of
+    /// binding again (binding a released port again races other tests).
+    #[cfg(test)]
+    pub(crate) prebound: Option<TcpListener>,
 }
 
 /// The audit event for a crossing. Carries ids, verb and a fixed reason only.
@@ -261,6 +265,12 @@ impl ListenerState {
 
 /// Bind `serve.listen` and serve until `shutdown` fires.
 pub async fn run_federation_listener(serve: FederationServe, shutdown: CancellationToken) -> Result<(), String> {
+    #[cfg(test)]
+    let mut serve = serve;
+    #[cfg(test)]
+    if let Some(listener) = serve.prebound.take() {
+        return serve_listener(listener, serve, shutdown).await;
+    }
     let listener = TcpListener::bind(serve.listen)
         .await
         .map_err(|e| format!("couldn't listen on {}: {e}", serve.listen))?;

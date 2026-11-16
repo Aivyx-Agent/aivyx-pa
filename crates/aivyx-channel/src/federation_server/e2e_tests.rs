@@ -204,6 +204,9 @@ struct Keys {
     key: Arc<TransportKey>,
     card: PeerCard,
     addr: String,
+    /// The listener bound to `addr`, held from `keys` until the daemon
+    /// serves it, so no other test can take the port in between.
+    listener: StdMutex<Option<tokio::net::TcpListener>>,
 }
 
 /// `holder` lists `peer` with these settings.
@@ -244,24 +247,25 @@ impl Drop for Side {
     }
 }
 
-/// Free loopback ports, one per name. Bound together, then released, so
-/// they are distinct; the listeners bind them again moments later.
-async fn free_addrs(n: usize) -> Vec<String> {
-    let mut held = Vec::new();
-    for _ in 0..n {
-        held.push(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
-    }
-    held.iter().map(|l| l.local_addr().unwrap().to_string()).collect()
-}
-
+/// One bound loopback listener per name, kept bound and handed to that
+/// side's daemon (final review I3: releasing the ports and binding them
+/// again raced other tests for them).
 async fn keys(names: &[&'static str]) -> Vec<Keys> {
-    let addrs = free_addrs(names.len()).await;
     let mut out = Vec::new();
-    for (name, addr) in names.iter().zip(addrs) {
+    for name in names {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
         let identity = Identity::generate((*name).into()).unwrap();
         let key = TransportKey::generate().unwrap();
         let card = PeerCard::issue(&identity, &key).await.unwrap();
-        out.push(Keys { name, identity: Arc::new(identity), key: Arc::new(key), card, addr });
+        out.push(Keys {
+            name,
+            identity: Arc::new(identity),
+            key: Arc::new(key),
+            card,
+            addr,
+            listener: StdMutex::new(Some(listener)),
+        });
     }
     out
 }
@@ -390,6 +394,7 @@ async fn start_side(me: &Keys, all: &[Keys], pairings: &[Pairing], persona: Shar
         persona,
         audit: Arc::clone(&audit),
         assisted_as_manual: false,
+        prebound: Some(me.listener.lock().unwrap().take().expect("each side starts once")),
     });
     let handle = tokio::spawn(run_daemon(config));
     let deadline = tokio::time::Instant::now() + WAIT;

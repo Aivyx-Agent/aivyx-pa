@@ -224,6 +224,7 @@ pub(crate) async fn start(agent: Arc<dyn Agent>, setup: PeerSetup, persona: Shar
         persona,
         audit: Arc::clone(&audit),
         assisted_as_manual,
+        prebound: None,
     };
     let shutdown = CancellationToken::new();
     tokio::spawn(serve_listener(listener, serve, shutdown.clone()));
