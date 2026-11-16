@@ -163,6 +163,9 @@ pub enum MessageOrigin {
     #[default]
     Operator,
     System,
+    /// A2/A19 — a request relayed from a paired federation peer. The planner
+    /// gives it no recall, no persona/profile and no skill injection.
+    Peer,
 }
 
 /// The inbound unit delivered by a channel to an agent.
@@ -192,6 +195,13 @@ impl Message {
     /// reflection prompt). See [`MessageOrigin::System`].
     pub fn system_originated(mut self) -> Self {
         self.origin = MessageOrigin::System;
+        self
+    }
+
+    /// Mark this message as relayed from a federation peer (A19). See
+    /// [`MessageOrigin::Peer`].
+    pub fn from_peer(mut self) -> Self {
+        self.origin = MessageOrigin::Peer;
         self
     }
 
@@ -413,6 +423,23 @@ pub trait ChannelContext: Send + Sync {
     /// locked decision, so this addition is non-amendment.
     fn session_partition(&self) -> Option<String> {
         None
+    }
+
+    /// A19 — an extra capability ceiling for turns on this channel,
+    /// intersected into the turn's effective set after the trust-tier
+    /// ceiling. `None` (the default) changes nothing. The federation
+    /// channel returns the peer's effective authority. A wrapper that
+    /// delegates to an inner channel must forward this.
+    fn capability_ceiling(&self) -> Option<CapabilitySet> {
+        None
+    }
+
+    /// A19 — ask before every action that changes something, whatever the
+    /// configured autonomy (the `manual` posture for this channel's turns,
+    /// with the same read-only exemption). Default `false`. A wrapper that
+    /// delegates to an inner channel must forward this.
+    fn confirm_every_action(&self) -> bool {
+        false
     }
 
     /// Rotate the channel's cancellation token. Callers run this

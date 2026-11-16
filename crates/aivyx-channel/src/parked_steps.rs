@@ -433,6 +433,14 @@ impl ChannelContext for ParkingChannel {
         self.inner.session_partition()
     }
 
+    fn capability_ceiling(&self) -> Option<aivyx_capability::CapabilitySet> {
+        self.inner.capability_ceiling()
+    }
+
+    fn confirm_every_action(&self) -> bool {
+        self.inner.confirm_every_action()
+    }
+
     fn reset_cancellation(&self) {
         self.inner.reset_cancellation();
     }
@@ -786,6 +794,54 @@ mod tests {
         let steps = p.list().await.unwrap();
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].origin, "webhook deploy");
+    }
+
+    /// A `CantAsk` with the two A19 hooks set.
+    struct PeerLike;
+    #[async_trait]
+    impl ChannelContext for PeerLike {
+        fn channel_name(&self) -> &str {
+            CantAsk.channel_name()
+        }
+        fn platform(&self) -> ChannelPlatform {
+            CantAsk.platform()
+        }
+        fn trust_tier(&self) -> TrustTier {
+            CantAsk.trust_tier()
+        }
+        fn session_id(&self) -> SessionId {
+            CantAsk.session_id()
+        }
+        async fn stream_event(&self, _: StreamEvent<'_>) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        async fn finalize(&self, _: &TurnOutcome) -> Result<(), ChannelError> {
+            Ok(())
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            CancellationToken::new()
+        }
+        fn capability_ceiling(&self) -> Option<aivyx_capability::CapabilitySet> {
+            Some(aivyx_capability::CapabilitySet::from_scopes([
+                aivyx_capability::Scope::parse("fs.read").unwrap(),
+            ]))
+        }
+        fn confirm_every_action(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn the_parking_channel_forwards_the_a19_hooks() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let p = Arc::new(p);
+        let plain = ParkingChannel::new(Arc::new(CantAsk), Arc::clone(&p), "x");
+        assert_eq!(plain.capability_ceiling(), None);
+        assert!(!plain.confirm_every_action());
+        let peer = ParkingChannel::new(Arc::new(PeerLike), Arc::clone(&p), "x");
+        assert_eq!(peer.capability_ceiling(), PeerLike.capability_ceiling());
+        assert!(peer.confirm_every_action());
     }
 
     #[tokio::test]

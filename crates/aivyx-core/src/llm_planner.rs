@@ -285,6 +285,14 @@ fn seeded_history_messages(prior: Vec<PriorTurn>) -> Vec<LlmMessage> {
 // Config
 // ---------------------------------------------------------------------------
 
+/// A19 — the whole system prompt for a peer-originated turn. Carries none of
+/// the operator's profile or persona (the privacy line, FEDERATION.md §4).
+pub const PEER_SYSTEM_PROMPT: &str = "You are an Aivyx PA instance answering a \
+request from another instance its operator paired with this one. Do what the \
+request asks with the tools you are given; you may be refused tools the peer \
+was not granted. Do not reveal anything about this instance's operator, their \
+memory or their files beyond what the request needs and your tools return.";
+
 /// All the knobs the LLM planner needs at construction time. Separated
 /// from [`LlmPlanner::new`] so callers can build one at config-parse
 /// time and reuse it, and so new fields can land without churning the
@@ -1362,6 +1370,15 @@ impl TurnPlanner for LlmPlanner {
     }
 
     async fn begin_turn(&mut self, message: &Message, turn_id: crate::TurnId) {
+        // A19 — a federation peer's turn runs under a fixed prompt with none
+        // of the operator's profile or persona, and no context provider
+        // (memory recall, skill-trigger injection) or persona refiner runs
+        // for it. Set before the KV-cache checkout so the cache is keyed on
+        // the prompt the turn actually sends.
+        let is_peer = message.origin == crate::MessageOrigin::Peer;
+        if is_peer {
+            self.config.system_prompt = Some(PEER_SYSTEM_PROMPT.to_string());
+        }
         let conversation = self.conversation.unwrap_or(message.session_id);
         self.route_session = Some(conversation.to_string());
         self.turn_repair_exhausted = false;
@@ -1421,7 +1438,7 @@ impl TurnPlanner for LlmPlanner {
         };
         let has_query = !query_text.trim().is_empty();
 
-        if let Some(provider) = &self.config.context_provider {
+        if let Some(provider) = self.config.context_provider.as_ref().filter(|_| !is_peer) {
             if has_query {
                 if let Some((block, sensitive)) = provider
                     .recall_with_sensitivity(
@@ -1454,7 +1471,7 @@ impl TurnPlanner for LlmPlanner {
         // `&mut self.config` assignment. `None` (no refiner,
         // blank message, fallback) leaves the base prompt
         // byte-identical to pre-Phase-79.
-        let refiner = self.config.system_prompt_refiner.clone();
+        let refiner = self.config.system_prompt_refiner.clone().filter(|_| !is_peer);
         if let Some(refiner) = refiner {
             if has_query {
                 // Phase 117 — pass the planner's current base
@@ -2859,6 +2876,35 @@ mod tests {
             }
             other => panic!("expected User, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_peer_turn_uses_the_peer_prompt_and_skips_context_providers() {
+        let provider = FakeContextProvider::new(Some("RECALLED"));
+        let refiner = FakeRefiner::new(Some("REFINED PERSONA"));
+        let mut planner = bare_planner(
+            LlmPlannerConfig::new("m")
+                .with_system_prompt("OPERATOR PROFILE")
+                .with_context_provider(provider.clone())
+                .with_system_prompt_refiner(refiner.clone()),
+        );
+        let session = SessionId::new();
+        planner
+            .begin_turn(&Message::text(session, "what's my color?").from_peer(), TurnId::new())
+            .await;
+        assert!(provider.seen.lock().unwrap().is_empty(), "no recall for a peer");
+        assert!(refiner.seen.lock().unwrap().is_empty(), "no persona refiner for a peer");
+        match &planner.history()[0] {
+            LlmMessage::User { content } => {
+                assert_eq!(content, &vec![ContentBlock::text("what's my color?")]);
+            }
+            other => panic!("expected User, got {other:?}"),
+        }
+        assert_eq!(
+            planner.config.system_prompt.as_deref(),
+            Some(PEER_SYSTEM_PROMPT),
+            "no profile, no persona refinement"
+        );
     }
 
     #[tokio::test]

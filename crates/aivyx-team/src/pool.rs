@@ -129,6 +129,16 @@ impl ChannelContext for LeadApprovals<'_> {
     async fn request_approval(&self, request: &aivyx_core::ApprovalRequest) -> aivyx_core::Approval {
         self.lead.request_approval(request).await
     }
+    // A19 — like approvals, the lead channel's own limits bind work done on
+    // its behalf: a mission started on a channel with a capability ceiling
+    // or confirm-every-action (a federation peer) keeps them in every
+    // specialist turn. `None`/`false` on the lead changes nothing.
+    fn capability_ceiling(&self) -> Option<CapabilitySet> {
+        self.lead.capability_ceiling()
+    }
+    fn confirm_every_action(&self) -> bool {
+        self.lead.confirm_every_action()
+    }
 }
 
 /// Constructs + runs attenuated specialists for one team.

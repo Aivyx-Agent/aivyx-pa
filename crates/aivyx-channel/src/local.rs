@@ -314,6 +314,14 @@ impl ChannelContext for TierOverride {
         self.inner.session_partition()
     }
 
+    fn capability_ceiling(&self) -> Option<aivyx_capability::CapabilitySet> {
+        self.inner.capability_ceiling()
+    }
+
+    fn confirm_every_action(&self) -> bool {
+        self.inner.confirm_every_action()
+    }
+
     fn reset_cancellation(&self) {
         self.inner.reset_cancellation();
     }

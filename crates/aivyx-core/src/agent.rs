@@ -589,9 +589,7 @@ impl Agent for ConcreteAgent {
         let Some(tool_id) = self.tools.find_by_name(tool) else {
             return Err(format!("the tool `{tool}` no longer exists"));
         };
-        let effective = self
-            .capabilities
-            .intersect(channel.trust_tier().default_ceiling());
+        let effective = self.effective_for(channel);
         let cancellation = channel.cancellation_token();
         let env = TurnCallEnv {
             turn_id: TurnId::new(),
@@ -630,6 +628,19 @@ impl Agent for ConcreteAgent {
 }
 
 impl ConcreteAgent {
+    /// D1 step 2 — the capability set a turn on `channel` runs under: the
+    /// agent's own set capped by the channel's trust-tier ceiling and then,
+    /// when the channel sets one, by its own capability ceiling (A19 — a
+    /// federation peer's effective authority). The single source for both
+    /// the audited `TurnStarted` snapshot and the enforced set.
+    fn effective_for(&self, channel: &dyn ChannelContext) -> CapabilitySet {
+        let effective = self.capabilities.intersect(channel.trust_tier().default_ceiling());
+        match channel.capability_ceiling() {
+            Some(ceiling) => effective.intersect(&ceiling),
+            None => effective,
+        }
+    }
+
     /// The D1 turn loop proper; [`Agent::turn`] brackets it for
     /// `on_failure` arming.
     async fn turn_inner(&self, message: Message, channel: &dyn ChannelContext) -> TurnOutcome {
@@ -643,7 +654,7 @@ impl ConcreteAgent {
         // Captured up front: `message` is consumed before the arming step.
         let origin = message.origin;
         let tier = channel.trust_tier();
-        let effective = self.capabilities.intersect(tier.default_ceiling());
+        let effective = self.effective_for(channel);
         let cancellation = channel.cancellation_token();
         let start = Instant::now();
 
@@ -2014,7 +2025,10 @@ impl ConcreteAgent {
 
         // Why this call must ask first, if it must: a withheld integration
         // write (confirm-first), or — at the `manual` autonomy level — any
-        // change in an operator's turn.
+        // change in an operator's (or a federation peer's) turn. A channel
+        // can force the `manual` posture for its own turns (A19,
+        // `confirm_every_action`), with the same read-only exemption.
+        let changes_something = !aivyx_capability::is_read_only_base(needed.base());
         let ask_reason = if self.confirm_destructive
             && aivyx_capability::is_withheld_integration_base(needed.base())
         {
@@ -2023,14 +2037,19 @@ impl ConcreteAgent {
                  action Aivyx PA never takes unasked).",
                 needed.base()
             ))
-        } else if self.confirm_all.for_base(needed.base())
-            && message_origin == MessageOrigin::Operator
-            && !aivyx_capability::is_read_only_base(needed.base())
+        } else if changes_something
+            && self.confirm_all.for_base(needed.base())
+            && message_origin != MessageOrigin::System
         {
             let area = needed.base().split('.').next().unwrap_or(needed.base());
             Some(format!(
                 "{tool_name_str} would change something, and the autonomy level for `{area}` \
                  is manual: every change there needs approval first."
+            ))
+        } else if changes_something && channel.confirm_every_action() {
+            Some(format!(
+                "{tool_name_str} would change something, and every change requested on \
+                 this channel needs approval first."
             ))
         } else {
             None
@@ -6895,6 +6914,131 @@ mod tests {
         let out = agent.turn(Message::text(channel.session_id(), "note it"), &channel).await;
         assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
         assert!(channel.asked.lock().unwrap().is_empty());
+    }
+
+    // ---- A19: a channel's capability ceiling and confirm-every-action ----
+
+    /// An `ApprovingChannel` that also sets the two A19 hooks.
+    struct CeilingChannel {
+        inner: ApprovingChannel,
+        ceiling: CapabilitySet,
+        confirm_all: bool,
+    }
+    #[async_trait]
+    impl ChannelContext for CeilingChannel {
+        fn channel_name(&self) -> &str {
+            self.inner.channel_name()
+        }
+        fn platform(&self) -> ChannelPlatform {
+            self.inner.platform()
+        }
+        fn trust_tier(&self) -> TrustTier {
+            self.inner.trust_tier()
+        }
+        fn session_id(&self) -> SessionId {
+            self.inner.session_id()
+        }
+        async fn stream_event(&self, e: StreamEvent<'_>) -> Result<(), ChannelError> {
+            self.inner.stream_event(e).await
+        }
+        async fn finalize(&self, o: &TurnOutcome) -> Result<(), ChannelError> {
+            self.inner.finalize(o).await
+        }
+        fn cancellation_token(&self) -> CancellationToken {
+            self.inner.cancellation_token()
+        }
+        async fn request_approval(&self, r: &crate::ApprovalRequest) -> crate::Approval {
+            self.inner.request_approval(r).await
+        }
+        fn capability_ceiling(&self) -> Option<CapabilitySet> {
+            Some(self.ceiling.clone())
+        }
+        fn confirm_every_action(&self) -> bool {
+            self.confirm_all
+        }
+    }
+
+    #[tokio::test]
+    async fn a_channel_capability_ceiling_narrows_the_turn() {
+        let caps = CapabilitySet::from_scopes([
+            Scope::parse("fs.read").unwrap(),
+            Scope::parse("shell.exec").unwrap(),
+        ]);
+        let audit = RecordingAudit::new();
+        let agent = make_agent(caps, vec![], audit.clone(), vec![NextStep::FinalMessage("ok".into())]);
+        let channel = CeilingChannel {
+            inner: ApprovingChannel::new(&[]),
+            ceiling: fs_read_caps(),
+            confirm_all: false,
+        };
+        assert_eq!(channel.trust_tier(), TrustTier::Trusted);
+        let out = agent.turn(Message::text(channel.session_id(), "hi"), &channel).await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        let snaps = turn_started_cap_snapshots(&audit.snapshot());
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0], fs_read_caps(), "the ceiling drops shell.exec");
+    }
+
+    #[tokio::test]
+    async fn a_channel_capability_ceiling_denies_a_call_outside_it() {
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let tool = Arc::new(FakeTool::new_capturing("memory.write", json!({}), ran.clone()));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let agent = make_agent(caps, vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()));
+        let channel = CeilingChannel {
+            inner: ApprovingChannel::new(&[]),
+            ceiling: fs_read_caps(),
+            confirm_all: false,
+        };
+        let _ = agent.turn(Message::text(channel.session_id(), "note it"), &channel).await;
+        assert!(ran.lock().unwrap().is_empty(), "memory.write is outside the ceiling");
+    }
+
+    #[tokio::test]
+    async fn confirm_every_action_asks_before_a_reversible_call() {
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let tool = Arc::new(FakeTool::new_capturing("memory.write", json!({}), ran.clone()));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        // No `manual` autonomy on the agent: the channel alone forces it.
+        let agent = make_agent(caps.clone(), vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()));
+        let channel = CeilingChannel {
+            inner: ApprovingChannel::new(&[crate::Approval::Denied]),
+            ceiling: caps,
+            confirm_all: true,
+        };
+        let msg = Message::text(channel.session_id(), "note it").from_peer();
+        let _ = agent.turn(msg, &channel).await;
+        let asked = channel.inner.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(asked[0].tool, "memory.write");
+        assert!(ran.lock().unwrap().is_empty(), "a denied call never runs");
+    }
+
+    #[tokio::test]
+    async fn manual_applies_to_peer_turns() {
+        let tool = Arc::new(FakeTool::new_bare("memory.write", "memory.write"));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let agent = make_agent(caps, vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()))
+            .with_confirm_all(true);
+        let channel = ApprovingChannel::new(&[crate::Approval::Denied]);
+        let msg = Message::text(channel.session_id(), "note it").from_peer();
+        let _ = agent.turn(msg, &channel).await;
+        assert_eq!(channel.asked.lock().unwrap().len(), 1, "a peer turn is never unattended");
+    }
+
+    #[tokio::test]
+    async fn confirm_every_action_doesnt_ask_about_reads() {
+        let tool = Arc::new(FakeTool::new_bare("fs.read", "fs.read"));
+        let agent = make_agent(fs_read_caps(), vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()));
+        let channel = CeilingChannel {
+            inner: ApprovingChannel::new(&[]),
+            ceiling: fs_read_caps(),
+            confirm_all: true,
+        };
+        let msg = Message::text(channel.session_id(), "read it").from_peer();
+        let out = agent.turn(msg, &channel).await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        assert!(channel.inner.asked.lock().unwrap().is_empty(), "a read never asks");
     }
 
     #[test]

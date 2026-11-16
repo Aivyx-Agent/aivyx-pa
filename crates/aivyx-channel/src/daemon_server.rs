@@ -9272,6 +9272,16 @@ impl ChannelContext for IpcChannelBridge {
         // the underlying daemon stub.
         self.inner.cancel_inflight();
     }
+
+    // A19 — a wrapped channel keeps its capability ceiling and its
+    // confirm-every-action posture.
+    fn capability_ceiling(&self) -> Option<aivyx_capability::CapabilitySet> {
+        self.inner.capability_ceiling()
+    }
+
+    fn confirm_every_action(&self) -> bool {
+        self.inner.confirm_every_action()
+    }
 }
 
 fn stream_event_to_payload(event: &StreamEvent<'_>) -> StreamEventPayload {

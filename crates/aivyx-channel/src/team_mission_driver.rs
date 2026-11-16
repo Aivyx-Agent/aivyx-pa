@@ -2164,6 +2164,16 @@ impl Tool for TeamRunTool {
                 service.start_from_goal_for_agent_call(goal, None).await
             }
             aivyx_core::MessageOrigin::Operator => service.start_from_goal(goal, None).await,
+            // A19 — a background mission runs on its own lead channel, out
+            // of reach of the peer channel's capability ceiling and
+            // confirm-every-action, so a peer's request never starts one.
+            aivyx_core::MessageOrigin::Peer => {
+                return ToolOutcome::Failed(AivyxError::Tool {
+                    tool: self.id,
+                    detail: "team.run isn't available to a request from a federation peer"
+                        .to_string(),
+                });
+            }
         };
         match result {
             Ok(mission_id) => ToolOutcome::Completed {
@@ -4719,6 +4729,26 @@ pub(crate) mod tests {
             classify_trigger_origin(record.triggered_by.as_deref()),
             aivyx_core::MessageOrigin::Operator
         );
+    }
+
+    /// A19 — a peer's request never starts a background mission (it would
+    /// run outside the peer channel's ceiling).
+    #[tokio::test]
+    async fn team_run_tool_refuses_a_peer_origin_call() {
+        let svc = TeamMissionService::new(
+            SharedMissionState::new(team_domain().await),
+            deps(TOOL_PLAN_JSON),
+            default_nonagon(),
+            GatePolicy::Interactive,
+        );
+        let tool = TeamRunTool::new();
+        assert!(tool.set_service(svc.clone()));
+        let (ch, token) = tool_ctx_parts();
+        let audit = NullAuditHook;
+        let ctx = tool_ctx_with_origin(&ch, &token, &audit, aivyx_core::MessageOrigin::Peer);
+        let out = tool.execute(json!({ "goal": "do the big thing" }), &ctx).await;
+        assert!(matches!(out, ToolOutcome::Failed(_)), "{out:?}");
+        assert!(svc.list().is_empty(), "no mission was registered");
     }
 
     #[tokio::test]
