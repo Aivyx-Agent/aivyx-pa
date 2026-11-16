@@ -118,7 +118,7 @@ The options:
 | `--address <host:port>` | required | Where the peer's listener is. |
 | `--verbs chat,task,search` | `chat` | What the peer may ask **this** instance for. |
 | `--scopes <scope,...>` | none | The most a peer's task may use here, such as `fs.read` (read a file) and `fs.metadata` (list a folder). With none, every task from the peer is refused. |
-| `--ceiling manual\|assisted` | `manual` | How the peer's task asks you. `manual`: every action that changes something asks. `assisted`: only irreversible actions ask. Higher levels are refused. |
+| `--ceiling manual\|assisted` | `manual` | How the peer's task asks you. `manual`: every action that changes something asks. `assisted`: only irreversible actions ask. Higher levels are refused. "Irreversible" at `assisted` means what this instance's own `assisted` level asks about: a granted `shell.exec`, for example, runs commands that delete or overwrite nothing without asking. If this instance doesn't ask before deletes and overwrites somewhere (an `unleashed` level or area override, or `[access] confirm_destructive = false`), every `assisted` peer runs as `manual`, and the daemon says so when it starts. |
 | `--task-timeout-secs <N>` | `900` | How long a peer's task may take on this machine, approval included. |
 
 `peer add` refuses a card whose signature does not verify, or whose id is

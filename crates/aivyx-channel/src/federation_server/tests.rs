@@ -143,6 +143,8 @@ pub(crate) struct PeerSetup {
     pub allowed: Vec<&'static str>,
     pub ceiling: AutonomyLevel,
     pub task_timeout: Duration,
+    /// `FederationServe::assisted_as_manual` (A19 final review I2).
+    pub assisted_as_manual: bool,
 }
 
 impl Default for PeerSetup {
@@ -152,6 +154,7 @@ impl Default for PeerSetup {
             allowed: vec![],
             ceiling: AutonomyLevel::Manual,
             task_timeout: Duration::from_secs(30),
+            assisted_as_manual: false,
         }
     }
 }
@@ -194,6 +197,7 @@ pub(crate) async fn start(agent: Arc<dyn Agent>, setup: PeerSetup, persona: Shar
     let client_key = TransportKey::generate().unwrap();
     let client_card = PeerCard::issue(&client_id, &client_key).await.unwrap();
     let server_card = PeerCard::issue(&server_id, &server_key).await.unwrap();
+    let assisted_as_manual = setup.assisted_as_manual;
     let cfg = FederationConfig {
         id: "desktop".into(),
         listen: None,
@@ -219,6 +223,7 @@ pub(crate) async fn start(agent: Arc<dyn Agent>, setup: PeerSetup, persona: Shar
         parker: Arc::clone(&parker),
         persona,
         audit: Arc::clone(&audit),
+        assisted_as_manual,
     };
     let shutdown = CancellationToken::new();
     tokio::spawn(serve_listener(listener, serve, shutdown.clone()));
@@ -473,6 +478,33 @@ async fn a_task_runs_only_under_the_peers_scopes() {
     let (accepted, _) = task_reply(sender.await.unwrap());
     assert!(accepted);
     assert_eq!(runs.load(Ordering::SeqCst), 0, "shell.exec is outside the peer's grant");
+}
+
+/// A19 final review I2 — an `assisted` peer runs under this instance's own
+/// gates; when those skip a question somewhere (`unleashed`, or
+/// `confirm_destructive = false`), the daemon sets `assisted_as_manual` and
+/// the peer's task runs confirm-all.
+#[tokio::test]
+async fn an_assisted_peer_runs_as_manual_when_this_instance_is_looser() {
+    for (flag, want) in [(false, false), (true, true)] {
+        let agent = Arc::new(RecordingAgent::new("ok"));
+        let setup = PeerSetup {
+            allowed: vec!["fs.read"],
+            ceiling: AutonomyLevel::Assisted,
+            assisted_as_manual: flag,
+            ..Default::default()
+        };
+        let f = Arc::new(start(agent.clone(), setup, no_persona()).await);
+        let sender = {
+            let f = Arc::clone(&f);
+            tokio::spawn(async move { send(&f, task("list the notes")).await })
+        };
+        let step = waiting_step(&f.parker, "federation.task").await;
+        decide(&f.parker, &step.id, true).await;
+        assert!(task_reply(sender.await.unwrap()).0);
+        let seen = agent.seen.lock().unwrap().clone();
+        assert_eq!(seen[0].confirm_all, want, "assisted_as_manual = {flag}");
+    }
 }
 
 #[tokio::test]

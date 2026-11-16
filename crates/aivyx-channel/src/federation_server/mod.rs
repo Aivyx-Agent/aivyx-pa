@@ -164,6 +164,12 @@ pub struct FederationServe {
     pub parker: Arc<StepParker>,
     pub persona: SharedEffectivePersona,
     pub audit: Arc<PersistentAuditLog>,
+    /// A19 final review I2 — this instance doesn't ask before deletes and
+    /// overwrites in some area (an `unleashed` level or override, or
+    /// `[access] confirm_destructive = false`). A peer's `assisted` ceiling
+    /// defers to those gates, so with this set every peer task runs as
+    /// `manual`: every action asks.
+    pub assisted_as_manual: bool,
 }
 
 /// The audit event for a crossing. Carries ids, verb and a fixed reason only.
@@ -547,7 +553,9 @@ pub(crate) struct FederationContext {
     session: SessionId,
     /// The peer's effective authority (empty for chat).
     ceiling: CapabilitySet,
-    /// The `manual` posture: the peer's ceiling is `manual`.
+    /// The `manual` posture: the peer's ceiling is `manual`, or it is
+    /// `assisted` on an instance whose own gates skip some questions
+    /// ([`FederationServe::assisted_as_manual`]).
     confirm_all: bool,
     cancel: CancellationToken,
     /// The request's single deadline; approvals get what is left of it.
@@ -566,7 +574,8 @@ impl FederationContext {
             peer_id: peer.id.clone(),
             session: SessionId::new(),
             ceiling: content.authority().scopes.clone(),
-            confirm_all: content.authority().autonomy == AutonomyLevel::Manual,
+            confirm_all: content.authority().autonomy == AutonomyLevel::Manual
+                || serve.assisted_as_manual,
             cancel: state.shutdown.child_token(),
             deadline: tokio::time::Instant::now() + peer.task_timeout,
             parker: Arc::clone(&serve.parker),

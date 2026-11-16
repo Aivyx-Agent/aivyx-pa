@@ -389,6 +389,7 @@ async fn start_side(me: &Keys, all: &[Keys], pairings: &[Pairing], persona: Shar
         parker,
         persona,
         audit: Arc::clone(&audit),
+        assisted_as_manual: false,
     });
     let handle = tokio::spawn(run_daemon(config));
     let deadline = tokio::time::Instant::now() + WAIT;

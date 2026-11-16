@@ -7245,6 +7245,23 @@ fn area_confirm_destructive(
     )
 }
 
+/// A19 final review I2 — whether deletes and overwrites skip the question
+/// in any area (the global level or any `[[autonomy.override]]` area). A
+/// peer's `assisted` ceiling defers to this instance's own gates, so when
+/// any area doesn't ask, every `assisted` peer runs as `manual` instead.
+fn confirm_destructive_off_anywhere(
+    configured: &aivyx_config::Sourced<bool>,
+    level: aivyx_config::AutonomyLevel,
+    overrides: &[aivyx_config::AutonomyOverride],
+) -> bool {
+    !aivyx_config::confirm_destructive_for(
+        configured,
+        &aivyx_config::resolve_posture(level, overrides, None),
+    ) || overrides
+        .iter()
+        .any(|o| !area_confirm_destructive(configured, level, overrides, &o.domain))
+}
+
 /// The kvcache directory under `base` for `instance`: `base/kvcache` for
 /// the default instance (unchanged), `base/instances/<n>/kvcache` otherwise.
 fn kvcache_dir_for_instance(
@@ -8724,6 +8741,13 @@ async fn run_async(
     // Deletes and overwrites follow the level of each tool's own area: `git`
     // for git.commit, `fs` for fs.write/fs.delete and the data writers (the
     // shadowed `confirm_destructive` below).
+    // A19 final review I2 — read before `confirm_destructive` is shadowed
+    // below; used when the federation listener is built.
+    let federation_assisted_as_manual = confirm_destructive_off_anywhere(
+        &confirm_destructive,
+        autonomy_level.value,
+        &autonomy_overrides,
+    );
     let confirm_destructive_git = area_confirm_destructive(
         &confirm_destructive,
         autonomy_level.value,
@@ -11913,6 +11937,16 @@ async fn run_async(
         // here, after the unlock: a locked daemon never reaches this code.
         let federation_serve = match (&federation_start, &step_parker) {
             (Some(fed), Some(parker)) => fed.listen.map(|listen| {
+                let assisted_as_manual = federation_assisted_as_manual
+                    && fed.peers.iter().any(|p| p.policy.peer_ceiling == aivyx_config::AutonomyLevel::Assisted);
+                if assisted_as_manual {
+                    eprintln!(
+                        "aivyx-pa federation: this instance doesn't ask before deletes and \
+                         overwrites in every area (an `unleashed` level or override, or \
+                         `[access] confirm_destructive = false`), so peers with \
+                         `ceiling = \"assisted\"` run as `manual`: every action asks"
+                    );
+                }
                 aivyx_channel::federation_server::FederationServe {
                     listen,
                     identity: Arc::clone(&fed.identity),
@@ -11922,6 +11956,7 @@ async fn run_async(
                     parker: Arc::clone(parker),
                     persona: shared_persona.clone(),
                     audit: Arc::clone(&persistent_audit_for_query),
+                    assisted_as_manual: federation_assisted_as_manual,
                 }
             }),
             _ => None,
@@ -17771,6 +17806,23 @@ mod tests {
         assert!(area_confirm_destructive(&unset, L::Assisted, &ov, "git"));
         let explicit = Sourced::new(true, FieldSource::Toml);
         assert!(area_confirm_destructive(&explicit, L::Assisted, &ov, "fs"));
+    }
+
+    /// A19 final review I2 — any area that skips the delete question makes
+    /// every `assisted` peer run as `manual`.
+    #[test]
+    fn confirm_destructive_off_anywhere_sees_every_area() {
+        use aivyx_config::{AutonomyLevel as L, AutonomyOverride as O, FieldSource, Sourced};
+        let unset = Sourced::new(true, FieldSource::Default);
+        assert!(!confirm_destructive_off_anywhere(&unset, L::Assisted, &[]));
+        assert!(!confirm_destructive_off_anywhere(&unset, L::Manual, &[]));
+        assert!(confirm_destructive_off_anywhere(&unset, L::Unleashed, &[]));
+        let ov = vec![O { domain: "fs".into(), level: L::Unleashed }];
+        assert!(confirm_destructive_off_anywhere(&unset, L::Assisted, &ov));
+        let explicit_off = Sourced::new(false, FieldSource::Toml);
+        assert!(confirm_destructive_off_anywhere(&explicit_off, L::Manual, &[]));
+        let explicit_on = Sourced::new(true, FieldSource::Toml);
+        assert!(!confirm_destructive_off_anywhere(&explicit_on, L::Unleashed, &ov));
     }
 
     #[test]
