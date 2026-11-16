@@ -1118,6 +1118,15 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// A19 — whether the turn's wall-clock deadline pauses while this tool's
+    /// `execute` runs, as it does while an approval prompt waits. Default
+    /// `false`. For a tool that waits on another party with its own,
+    /// longer bound (a federation peer's task reply); the tool must still
+    /// honour `ToolContext::cancellation`.
+    fn pauses_turn_deadline(&self) -> bool {
+        false
+    }
+
     /// Whether this tool can mutate the `fs_root` sandbox directly on
     /// disk. Gates `aivyx-checkpoint`'s git-ref snapshot: the turn loop
     /// checkpoints `fs_root`'s worktree immediately before executing any

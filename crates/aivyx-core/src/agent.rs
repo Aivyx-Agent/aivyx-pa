@@ -843,8 +843,17 @@ impl ConcreteAgent {
                         extracted_from_text,
                         operator_approved: false,
                     };
+                    // A19 — a tool waiting on another party with its own
+                    // bound pauses the turn deadline while it runs.
+                    let pause = self.pauses_deadline(tool_id);
+                    if pause {
+                        deadline.pause();
+                    }
                     let (mut observation, mut outcome, mut injection_reason) =
                         self.run_tool_call(&env, req).await;
+                    if pause {
+                        deadline.resume();
+                    }
                     if let ToolOutcome::RequiresEscalation { reason, .. } = &outcome
                         && injection_reason.is_none()
                     {
@@ -944,11 +953,18 @@ impl ConcreteAgent {
                     };
                     let inputs: Vec<(ToolId, serde_json::Value)> =
                         batch.iter().map(|r| (r.tool_id, r.input.clone())).collect();
+                    let pause = batch.iter().any(|r| self.pauses_deadline(r.tool_id));
                     let futures: Vec<_> = batch
                         .into_iter()
                         .map(|req| self.run_tool_call(&env, req))
                         .collect();
+                    if pause {
+                        deadline.pause();
+                    }
                     let results = join_all(futures).await;
+                    if pause {
+                        deadline.resume();
+                    }
 
                     tool_calls_made += results.len();
                     let mut escalated: Option<(String, ToolId, Option<Scope>)> = None;
@@ -1267,6 +1283,9 @@ impl TurnDeadline {
         d
     }
     fn resume(&mut self) {
+        if self.task.is_some() {
+            return;
+        }
         let (fired, token, remaining) =
             (Arc::clone(&self.fired), self.token.clone(), self.remaining);
         self.started = Instant::now();
@@ -1642,6 +1661,12 @@ struct TurnCallEnv<'a> {
 }
 
 impl ConcreteAgent {
+    /// A19 — whether `tool_id`'s tool pauses the turn deadline while it runs
+    /// ([`Tool::pauses_turn_deadline`]).
+    fn pauses_deadline(&self, tool_id: ToolId) -> bool {
+        self.tools.get(tool_id).is_some_and(|t| t.pauses_turn_deadline())
+    }
+
     /// A call came back `RequiresEscalation`: ask the operator through the
     /// channel. `Some(result)` replaces the escalation (approved re-run, or a
     /// "declined" / "no answer" tool result the model sees); `None` keeps it
@@ -1695,19 +1720,28 @@ impl ConcreteAgent {
             outcome: outcome_label.to_string(),
         });
         match answer {
-            crate::Approval::Approved => Some(
-                self.run_tool_call(
-                    env,
-                    crate::planner::ToolCallRequest {
-                        tool_id,
-                        input: shown,
-                        auto_corrected_from: None,
-                        extracted_from_text: None,
-                        operator_approved: true,
-                    },
-                )
-                .await,
-            ),
+            crate::Approval::Approved => {
+                let pause = self.pauses_deadline(tool_id);
+                if pause {
+                    deadline.pause();
+                }
+                let result = self
+                    .run_tool_call(
+                        env,
+                        crate::planner::ToolCallRequest {
+                            tool_id,
+                            input: shown,
+                            auto_corrected_from: None,
+                            extracted_from_text: None,
+                            operator_approved: true,
+                        },
+                    )
+                    .await;
+                if pause {
+                    deadline.resume();
+                }
+                Some(result)
+            }
             _ => {
                 let detail = match &answer {
                     crate::Approval::TimedOut => {
@@ -3681,6 +3715,76 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// A19 — a tool that sleeps past the turn timeout, ignoring cancellation
+    /// (it finishes, then the loop decides); `pauses` sets
+    /// `pauses_turn_deadline`.
+    struct SlowTool {
+        id: ToolId,
+        pauses: bool,
+        schema: Value,
+    }
+
+    #[async_trait]
+    impl Tool for SlowTool {
+        fn id(&self) -> ToolId {
+            self.id
+        }
+        fn name(&self) -> &str {
+            "slow.wait"
+        }
+        fn description(&self) -> &str {
+            "waits"
+        }
+        fn input_schema(&self) -> &Value {
+            &self.schema
+        }
+        fn required_scope(&self, _input: &Value) -> Scope {
+            Scope::parse("memory.read").unwrap()
+        }
+        async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            ToolOutcome::Completed { output: json!("the slow result"), verified: Verification::NotApplicable }
+        }
+        fn pauses_turn_deadline(&self) -> bool {
+            self.pauses
+        }
+    }
+
+    async fn run_slow(pauses: bool) -> TurnOutcome {
+        let tool = Arc::new(SlowTool { id: ToolId::new(), pauses, schema: json!({}) });
+        let tool_id = tool.id;
+        let agent = make_agent(
+            CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+            vec![tool],
+            Arc::new(NullAuditHook),
+            vec![
+                NextStep::ToolCall {
+                    tool_id,
+                    input: json!({}),
+                    auto_corrected_from: None,
+                    extracted_from_text: None,
+                },
+                NextStep::FinalMessage("done".into()),
+            ],
+        )
+        .with_turn_timeout(Duration::from_secs(1));
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        agent.turn(Message::text(channel.session, "wait"), &channel).await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_tool_that_pauses_the_deadline_outlives_a_short_turn_timeout() {
+        match run_slow(true).await {
+            TurnOutcome::Completed { final_message, tool_calls_made, .. } => {
+                assert_eq!(tool_calls_made, 1);
+                assert_eq!(final_message, "done");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        // Control: the same tool without the hook times the turn out.
+        assert!(matches!(run_slow(false).await, TurnOutcome::TimedOut { .. }));
     }
 
     /// Chapter Bridle (BR.4) — `with_turn_timeout` honors a *custom*

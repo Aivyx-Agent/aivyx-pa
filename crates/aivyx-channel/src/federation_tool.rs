@@ -21,7 +21,7 @@ use std::time::Duration;
 use aivyx_audit::{AuditWriter, PersistentAuditLog};
 use aivyx_capability::Scope;
 use aivyx_config::FederationVerb;
-use aivyx_core::{AivyxError, Tool, ToolContext, ToolId, ToolOutcome, Verification};
+use aivyx_core::{AivyxError, CancellationToken, Tool, ToolContext, ToolId, ToolOutcome, Verification};
 use aivyx_federation::identity::Identity;
 use aivyx_federation::relay::{Crossing, CrossingDirection, CrossingOutcome};
 use aivyx_federation_net::{NetError, ResponseFrame, TransportKey};
@@ -45,6 +45,7 @@ const BAD_REPLY: &str = "the peer's reply could not be read";
 const WRONG_REPLY: &str = "the peer replied to a different verb";
 const BAD_CARD: &str = "the peer's card does not verify";
 const NOT_SIGNED: &str = "the request could not be signed";
+const CANCELLED: &str = "cancelled before the reply";
 /// Recorded (and shown) in place of a reason this build does not know.
 pub(crate) const PEER_REASON_UNKNOWN: &str = "refused by the peer (reason not recognised)";
 
@@ -72,9 +73,10 @@ pub fn relay_request(verb: FederationVerb, text: &str) -> RelayRequest {
     }
 }
 
-/// The fixed audit reason for a transport failure, and the operator-facing
-/// text (which may carry the error's own detail; it never reaches the chain).
-fn net_failure(peer: &FederationPeer, e: &NetError) -> (&'static str, String) {
+/// The fixed reason for a transport failure: what the audit chain and the
+/// caller (the model, or the CLI) see. The error's own detail goes to
+/// stderr only.
+fn net_failure(peer: &FederationPeer, e: &NetError) -> &'static str {
     let reason = match e {
         NetError::Io(_) => UNREACHABLE,
         NetError::Timeout("reply") => NO_REPLY,
@@ -85,16 +87,15 @@ fn net_failure(peer: &FederationPeer, e: &NetError) -> (&'static str, String) {
         NetError::Key(_) => NOT_SIGNED,
         NetError::Denied(_) => PEER_REASON_UNKNOWN,
     };
-    let shown = match e {
-        NetError::Io(_) => format!("{UNREACHABLE} at {} ({e})", peer.address),
-        _ => format!("{reason} ({e})"),
-    };
-    (reason, shown)
+    eprintln!("aivyx-pa federation: peer `{}` at {}: {reason}: {e}", peer.id, peer.address);
+    reason
 }
 
 /// Send `verb` + `text` to `peer` and wait for the reply; write the
 /// outbound crossing to `audit` whatever happens. `Ok` is the reply text
-/// (a search's results one per line); `Err` reads `peer <id>: <why>`.
+/// (a search's results one per line); `Err` reads `peer <id>: <why>`, with
+/// a fixed `<why>`. `cancel` firing first ends the wait (denied,
+/// "cancelled before the reply").
 pub async fn relay(
     peer: &FederationPeer,
     identity: &Identity,
@@ -102,20 +103,29 @@ pub async fn relay(
     verb: FederationVerb,
     text: &str,
     audit: &PersistentAuditLog,
+    cancel: Option<&CancellationToken>,
 ) -> Result<String, String> {
     let request = relay_request(verb, text);
-    let sent = aivyx_federation_net::request(
+    let send = aivyx_federation_net::request(
         &peer.address,
         key,
         &peer.card,
         identity,
         &request,
         reply_timeout(peer, verb),
-    )
-    .await;
+    );
+    let sent = match cancel {
+        Some(cancel) => tokio::select! {
+            biased;
+            _ = cancel.cancelled() => None,
+            sent = send => Some(sent),
+        },
+        None => Some(send.await),
+    };
     // (reply, None) or (operator text, Some(fixed audit reason)).
     let (result, denied): (Result<String, String>, Option<&'static str>) = match sent {
-        Ok(ResponseFrame::Ok { response }) => match (verb, response) {
+        None => (Err(CANCELLED.to_string()), Some(CANCELLED)),
+        Some(Ok(ResponseFrame::Ok { response })) => match (verb, response) {
             (FederationVerb::Chat, RelayResponse::Chat { reply }) => (Ok(reply), None),
             (FederationVerb::Task, RelayResponse::Task { accepted: true, detail }) => (Ok(detail), None),
             (FederationVerb::Task, RelayResponse::Task { accepted: false, detail }) => {
@@ -125,13 +135,13 @@ pub async fn relay(
             (FederationVerb::Search, RelayResponse::Search { results }) => (Ok(results.join("\n")), None),
             _ => (Err(WRONG_REPLY.to_string()), Some(WRONG_REPLY)),
         },
-        Ok(ResponseFrame::Denied { reason }) => {
+        Some(Ok(ResponseFrame::Denied { reason })) => {
             let reason = peer_reason(&reason);
             (Err(reason.to_string()), Some(reason))
         }
-        Err(e) => {
-            let (reason, shown) = net_failure(peer, &e);
-            (Err(shown), Some(reason))
+        Some(Err(e)) => {
+            let reason = net_failure(peer, &e);
+            (Err(reason.to_string()), Some(reason))
         }
     };
     let crossing = Crossing {
@@ -279,7 +289,7 @@ impl Tool for FederationRelayTool {
         Scope::parse(&raw).unwrap_or_else(|| Scope::parse("federation.relay").expect("known base"))
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
         let peer_id = input.get("peer").and_then(Value::as_str).unwrap_or("");
         let Some(text) = input.get("text").and_then(Value::as_str).filter(|t| !t.trim().is_empty()) else {
             return self.fail(format!("{}: `text` must be a non-empty string", self.name));
@@ -292,7 +302,7 @@ impl Tool for FederationRelayTool {
                 ids.join(", ")
             ));
         };
-        match relay(peer, &self.identity, &self.key, self.verb, text, &self.audit).await {
+        match relay(peer, &self.identity, &self.key, self.verb, text, &self.audit, Some(ctx.cancellation)).await {
             Ok(reply) => ToolOutcome::Completed {
                 output: json!({ "peer": peer.id, "verb": self.verb.as_str(), "reply": reply }),
                 verified: Verification::NotApplicable,
@@ -304,6 +314,13 @@ impl Tool for FederationRelayTool {
     fn output_is_untrusted(&self) -> bool {
         true
     }
+
+    /// A task's reply may take the peer's `task_timeout` (default 15 min),
+    /// far past the turn's deadline: the reply timeout bounds the wait,
+    /// and `ctx.cancellation` still ends it.
+    fn pauses_turn_deadline(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -311,7 +328,7 @@ mod tests {
     use super::*;
     use crate::federation_server::tests::{PeerSetup, RecordingAgent, crossings, start, test_context};
     use aivyx_config::{AutonomyLevel, FederationConfig, FederationPeerConfig, FederationVerb};
-    use aivyx_core::{AgentId, ChannelContext, NullAuditHook, SessionId, TurnId};
+    use aivyx_core::{AgentId, NullAuditHook, SessionId, TurnId};
     use aivyx_crypto::MasterKey;
     use aivyx_storage::{RedbStorage, Storage, StorageConfig};
     use std::path::PathBuf;
@@ -357,8 +374,16 @@ mod tests {
     }
 
     async fn run(tool: &FederationRelayTool, input: serde_json::Value, parker: &Arc<crate::parked_steps::StepParker>) -> ToolOutcome {
+        run_with(tool, input, parker, CancellationToken::new()).await
+    }
+
+    async fn run_with(
+        tool: &FederationRelayTool,
+        input: serde_json::Value,
+        parker: &Arc<crate::parked_steps::StepParker>,
+        token: CancellationToken,
+    ) -> ToolOutcome {
         let ch = test_context(parker);
-        let token = ch.cancellation_token();
         let ctx = ToolContext {
             agent_id: AgentId::new(),
             session_id: SessionId::new(),
@@ -477,10 +502,36 @@ mod tests {
         let peers = desktop_peer(&f.server_card, &addr);
         let tool = FederationRelayTool::new(FederationVerb::Chat, peers, f.client_id.clone(), f.client_key.clone(), r.audit.clone());
         let err = failure(run(&tool, serde_json::json!({"peer": "desktop", "text": "hi"}), &f.parker).await);
-        assert!(err.starts_with("peer desktop: the peer could not be reached at "), "{err}");
+        assert_eq!(err, "peer desktop: the peer could not be reached", "a fixed reason, no error detail");
         assert_eq!(
             crossings(&r.audit),
             vec![["desktop", "outbound", "chat", "denied", "the peer could not be reached"].map(String::from)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_request_returns_promptly_and_writes_a_denied_crossing() {
+        // A task the peer's operator never approves: the reply would take
+        // the peer's whole task timeout (30 s here).
+        let setup = PeerSetup { allowed: vec!["fs.read"], ..PeerSetup::default() };
+        let f = start(Arc::new(RecordingAgent::new("x")), setup, no_persona()).await;
+        let r = requester_audit().await;
+        let peers = desktop_peer(&f.server_card, &f.addr);
+        let tool = FederationRelayTool::new(FederationVerb::Task, peers, f.client_id.clone(), f.client_key.clone(), r.audit.clone());
+        assert!(tool.pauses_turn_deadline());
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            cancel.cancel();
+        });
+        let started = std::time::Instant::now();
+        let err = failure(run_with(&tool, serde_json::json!({"peer": "desktop", "text": "do it"}), &f.parker, token).await);
+        assert!(started.elapsed() < Duration::from_secs(5), "returned promptly");
+        assert_eq!(err, "peer desktop: cancelled before the reply");
+        assert_eq!(
+            crossings(&r.audit),
+            vec![["desktop", "outbound", "task", "denied", "cancelled before the reply"].map(String::from)]
         );
     }
 

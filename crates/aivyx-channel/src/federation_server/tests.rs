@@ -14,6 +14,7 @@ use aivyx_federation_net::{fingerprint, ping, request};
 use aivyx_ipc::federation::RelayResponse;
 use aivyx_llm::{LlmError, LlmProvider, LlmRequest, LlmStepEnd, LlmStream, LlmStreamEvent, LlmUsage};
 use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -758,4 +759,51 @@ fn crossing_events_carry_only_metadata() {
             reason: "busy".into(),
         }
     );
+}
+
+/// Drift guard: every reason the listener sends a peer (each `denied(..)` /
+/// `task_refused(..)` argument, and every reason `verify` returns) is one of
+/// `REPLY_REASONS`, the list the requester accepts. A new reply reason
+/// that is not added there fails here.
+#[test]
+fn every_reason_sent_to_a_peer_is_in_reply_reasons() {
+    let src = include_str!("mod.rs");
+    let mut consts: HashMap<&str, &str> = HashMap::new();
+    for line in src.lines() {
+        let Some(rest) = line.trim().strip_prefix("const ") else { continue };
+        let Some((name, value)) = rest.split_once(": &str = \"") else { continue };
+        consts.insert(name, value.trim_end_matches("\";"));
+    }
+    consts.insert("TIMED_OUT_RESULT", TIMED_OUT_RESULT);
+    let check = |name: &str, site: &str| {
+        let value = consts.get(name).unwrap_or_else(|| panic!("`{site}` sends `{name}`, not a fixed reason const"));
+        assert!(REPLY_REASONS.contains(value), "`{name}` ({value:?}) is sent but missing from REPLY_REASONS");
+    };
+    let mut sent = 0;
+    for call in ["denied(", "task_refused("] {
+        for (at, _) in src.match_indices(call) {
+            let before = &src[..at];
+            if before.ends_with("fn ") || before.ends_with("inbound_") {
+                continue;
+            }
+            let args = &src[at + call.len()..];
+            let args = &args[..args.find(')').unwrap()];
+            let last = args.rsplit(',').next().unwrap().trim();
+            if last == "reason" {
+                continue; // `verify`'s reasons, checked below
+            }
+            check(last, call);
+            sent += 1;
+        }
+    }
+    let body = &src[src.find("fn verify(").unwrap()..];
+    let body = &body[..body.find("\n}\n").unwrap()];
+    let mut from_verify = 0;
+    for word in body.split(|c: char| !(c.is_ascii_uppercase() || c == '_')) {
+        if word.len() > 2 && consts.contains_key(word) {
+            check(word, "verify");
+            from_verify += 1;
+        }
+    }
+    assert!(sent >= 9 && from_verify >= 4, "scan found too few sites ({sent}, {from_verify})");
 }

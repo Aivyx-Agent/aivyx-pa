@@ -1735,14 +1735,7 @@ fn run() -> Result<(), String> {
     // lives on the stack until it's handed to the persistent audit
     // log, where it's cloned into an HMAC key and zeroed on drop by
     // the log itself.
-    let audit_chain_key: [u8; 32] = {
-        let subkey = master_key
-            .derive_subkey(b"audit")
-            .map_err(|e| format!("failed to derive audit chain key: {e}"))?;
-        let mut out = [0u8; 32];
-        out.copy_from_slice(subkey.as_bytes());
-        out
-    };
+    let audit_chain_key: [u8; 32] = audit_chain_key_for(&master_key)?;
     // Phase 59 — derive the Persona chain HMAC key from the same
     // master, against `KeyDomain::Persona::as_bytes()`. Same pattern
     // as the audit chain key above; raw bytes live on the stack
@@ -1786,8 +1779,11 @@ fn run() -> Result<(), String> {
     let matrix_keys = aivyx_matrix::credentials::MatrixKeys::derive(&master_key)?;
     // A19 — the federation keys are sealed under the master key; they load
     // once the store has opened with it (below), so a wrong key never seals
-    // a new key file. Only when `[federation]` is configured.
-    let federation_master = config.federation.as_ref().map(|_| master_key.clone());
+    // a new key file. Only for the daemon with `[federation]` configured.
+    // Only the daemon serves federation, so only the daemon holds this
+    // second copy of the key (like `card_unlock` below, A18).
+    let federation_master =
+        (is_daemon && config.federation.is_some()).then(|| master_key.clone());
 
     // A18 — `EnrollCard` and `Lock` in the running daemon. Built before
     // `RedbStorage::open` consumes `master_key`; only for the daemon, so
@@ -2348,6 +2344,17 @@ fn truncate_for_log(s: &str, max: usize) -> String {
 /// run, writes to. We deliberately do *not* use `Path::with_extension`
 /// here: `with_extension("salt")` would turn `store.redb` into
 /// `store.salt`, losing the "this belongs to the redb store" signal.
+/// The audit chain's HMAC key: the master key's `audit` subkey. One helper
+/// for every opener of the chain (start-up, `federation send`).
+fn audit_chain_key_for(master: &aivyx_crypto::MasterKey) -> Result<[u8; 32], String> {
+    let subkey = master
+        .derive_subkey(b"audit")
+        .map_err(|e| format!("failed to derive audit chain key: {e}"))?;
+    let mut out = [0u8; 32];
+    out.copy_from_slice(subkey.as_bytes());
+    Ok(out)
+}
+
 fn salt_path_for(store_path: &std::path::Path) -> PathBuf {
     let mut os = store_path.as_os_str().to_owned();
     os.push(".salt");
@@ -10519,7 +10526,7 @@ async fn run_async(
     // already does via `bind_lead_scopes`). All of this function's inputs
     // are already computed above this point.
     let tool_scope_bases: Vec<Scope> = tool_scope_bases_for_floor(&tool_list);
-    let backcompat_floor: Vec<Scope> = compute_backcompat_floor(
+    let mut backcompat_floor: Vec<Scope> = compute_backcompat_floor(
         fs_read_scope,
         fs_write_scope,
         fs_metadata_scope,
@@ -10531,6 +10538,13 @@ async fn run_async(
         loop_state.is_some(),
         !config_tool_processes.is_empty(),
     );
+    // A19 — `peer add` is the grant: each configured peer adds
+    // `federation.relay:<id>` to the default agent wherever the tools are
+    // registered. The base is irreversible, so `assisted` still confirms
+    // every send.
+    if let Some(fed) = &federation_start {
+        backcompat_floor.extend(federation_peer::relay_grants(&fed.peers));
+    }
 
     // Chapter J — `aivyx-pa team run "<mission>"`. We now hold the live provider,
     // the persistent HMAC audit hook, AND the daemon's full `tool_list` — so

@@ -294,6 +294,15 @@ pub fn load_for_start(cfg: &FederationConfig, master: &MasterKey) -> Result<Fede
     })
 }
 
+/// The default agent's grants for the federation tools: one
+/// `federation.relay:<id>` per configured peer (`peer add` is the grant).
+pub fn relay_grants(peers: &[FederationPeer]) -> Vec<aivyx_capability::Scope> {
+    peers
+        .iter()
+        .filter_map(|p| aivyx_capability::Scope::parse(&format!("federation.relay:{}", p.id)))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // card
 // ---------------------------------------------------------------------------
@@ -399,8 +408,13 @@ pub fn peer_write(args: &PeerAddArgs) -> Result<(FederationPeerWrite, String), S
 
 fn run_peer_add(toml: &Path, args: &PeerAddArgs) -> Result<(), String> {
     let (write, fp) = peer_write(args)?;
+    let replacing = read_federation_peers(toml)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|p| p.id == write.id);
     write_federation_peer(toml, &write).map_err(|e| e.to_string())?;
-    println!("Added peer `{}` (key {fp}) at {}.", write.id, write.address);
+    let verb = if replacing { "Replaced" } else { "Added" };
+    println!("{verb} peer `{}` (key {fp}) at {}.", write.id, write.address);
     println!("  It may ask this instance for: {}", write.verbs.join(", "));
     if !write.allowed_scopes.is_empty() {
         println!("  Its tasks may use at most: {}", write.allowed_scopes.join(", "));
@@ -561,12 +575,7 @@ fn run_send(peer_id: &str, verb: FederationVerb, text: &str) -> Result<(), Strin
     let peer = find_peer(fed, peer_id)?;
     let (master, store) = master_key(&cfg)?;
     let (identity, key) = existing_keys(&fed.id, &federation_dir()?, &master)?.ok_or(NO_KEYS)?;
-    let audit_key: [u8; 32] = {
-        let sub = master.derive_subkey(b"audit").map_err(|e| format!("failed to derive the audit key: {e}"))?;
-        let mut out = [0u8; 32];
-        out.copy_from_slice(sub.as_bytes());
-        out
-    };
+    let audit_key = crate::audit_chain_key_for(&master)?;
     let reply = rt.block_on(async {
         let storage: Arc<dyn Storage> = RedbStorage::open(StorageConfig::new(store.clone()), master)
             .await
@@ -574,7 +583,7 @@ fn run_send(peer_id: &str, verb: FederationVerb, text: &str) -> Result<(), Strin
         let audit = PersistentAuditLog::open(storage, audit_key)
             .await
             .map_err(|e| format!("failed to open the audit log: {e}"))?;
-        aivyx_channel::federation_tool::relay(&peer, &identity, &key, verb, text, &audit).await
+        aivyx_channel::federation_tool::relay(&peer, &identity, &key, verb, text, &audit, None).await
     })?;
     println!("{reply}");
     Ok(())
@@ -682,6 +691,33 @@ mod tests {
                 "the peer knows this instance … skipped",
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn every_configured_peer_is_granted_its_relay_scope() {
+        let (desk, _) = card_for("desktop").await;
+        let (phone, _) = card_for("phone").await;
+        let peer = |id: &str, card: &PeerCard| aivyx_config::FederationPeerConfig {
+            id: id.into(),
+            card: card.encode(),
+            address: "h:1".into(),
+            verbs: vec![FederationVerb::Chat],
+            allowed_scopes: vec![],
+            ceiling: aivyx_config::AutonomyLevel::Manual,
+            task_timeout: Duration::from_secs(900),
+        };
+        let cfg = FederationConfig {
+            id: "laptop".into(),
+            listen: None,
+            peers: vec![peer("desktop", &desk), peer("phone", &phone)],
+        };
+        let grants = relay_grants(&load_peers(&cfg).unwrap());
+        let held = aivyx_capability::CapabilitySet::from_scopes(grants.clone());
+        let need = |id: &str| aivyx_capability::Scope::parse(&format!("federation.relay:{id}")).unwrap();
+        assert_eq!(grants.len(), 2);
+        assert!(held.grants(&need("desktop")) && held.grants(&need("phone")));
+        assert!(!held.grants(&need("kitchen")), "only configured peers");
+        assert!(aivyx_capability::is_irreversible_base("federation.relay"), "assisted still confirms");
     }
 
     #[test]

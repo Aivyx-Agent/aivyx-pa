@@ -76,6 +76,14 @@ A19 adds a `Peer` value to `MessageOrigin`, and two methods on
 
 Every existing channel keeps its current behavior.
 
+A third default-off hook sits on the `Tool` trait:
+`pauses_turn_deadline() -> bool` (default `false`). When it returns `true`,
+the turn's wall-clock deadline pauses while that tool runs, as it does
+while an approval waits. The three outbound federation tools return
+`true`, because a task's reply is bounded by the peer's `task_timeout`
+and not by the turn's 120 seconds. They still stop when the turn is
+cancelled.
+
 ## Privacy line
 
 A turn started by a peer gets no automatic memory recall, no persona or

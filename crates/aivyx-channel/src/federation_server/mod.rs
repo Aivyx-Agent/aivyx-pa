@@ -357,11 +357,15 @@ pub(crate) async fn handle_connection(serve: &FederationServe, stream: TcpStream
     record(&serve.audit, &crossing);
 }
 
+/// Every reason a peer is sent goes through [`denied`] or [`task_refused`],
+/// and must be one of [`REPLY_REASONS`] (the requester records only those).
 fn denied(verb: &'static str, reason: &'static str) -> (&'static str, ResponseFrame, Option<&'static str>) {
+    debug_assert!(REPLY_REASONS.contains(&reason), "unlisted reply reason: {reason}");
     (verb, ResponseFrame::Denied { reason: reason.into() }, Some(reason))
 }
 
 fn task_refused(reason: &'static str) -> (&'static str, ResponseFrame, Option<&'static str>) {
+    debug_assert!(REPLY_REASONS.contains(&reason), "unlisted reply reason: {reason}");
     let response = RelayResponse::Task { accepted: false, detail: reason.into() };
     ("task", ResponseFrame::Ok { response }, Some(reason))
 }
