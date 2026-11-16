@@ -15,10 +15,13 @@
 //!
 //! This is the **substrate only** — identity, per-peer trust + attenuation, the
 //! relay protocol *shape*, peer-content provenance/sandboxing, and operator
-//! consent gating. Everything **network-shaped** — peer discovery, a transport
-//! / relay server, reputation, and the agent-hiring economics — is the *private
-//! Nexus product*, built last on an installed base (`docs/FEDERATION.md` §10).
-//! Nothing here assumes a transport or a topology.
+//! consent gating. Nothing here assumes a transport or a topology. The
+//! transport between one operator's own instances lives elsewhere (amendment
+//! A19): the Noise link and peer cards in `aivyx-federation-net`, the
+//! listener and outbound tools in `aivyx-channel`. The rest of what is
+//! **network-shaped** — peer discovery, a relay server for other operators,
+//! reputation, and the agent-hiring economics — is the *private Nexus
+//! product*, built last on an installed base (`docs/FEDERATION.md` §10).
 //!
 //! ## Modernization (Chapter Passport PP.0)
 //!
@@ -26,7 +29,9 @@
 //! core:
 //! - old `aivyx_core::AutonomyTier` → Reins [`AutonomyLevel`](aivyx_config) ceiling;
 //! - old free-string scopes → [`aivyx_capability::Scope`];
-//! - old HTTP relay/client → deferred (transport is the Nexus product);
+//! - old HTTP relay/client → replaced by A19's Noise link between one
+//!   operator's instances (`aivyx-federation-net`); a relay for other
+//!   operators stays deferred (the Nexus product);
 //! - every crossing routes onto `aivyx-audit` (PP.3).
 //!
 //! ## Module map (filled phase by phase)
@@ -37,7 +42,7 @@
 //!   cross-operator attenuation (`effective = asked ∩ policy ∩ ceiling ∩ cap`).
 //! - [`relay`] — PP.3: compose the wasm-clean relay verbs
 //!   ([`aivyx_ipc::federation`]) with the signing envelope; the auditable
-//!   [`Crossing`](relay::Crossing) shape (live emission deferred with transport).
+//!   [`Crossing`](relay::Crossing) shape (emitted live since A19).
 //! - [`received`] — PP.4: peer content as untrusted input —
 //!   [`PeerContent`](received::PeerContent) binds a verified request to its
 //!   provenance + attenuated authority; validates it; gates execution to

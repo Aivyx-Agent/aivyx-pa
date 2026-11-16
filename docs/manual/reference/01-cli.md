@@ -636,7 +636,8 @@ aivyx-pa audit export [--from <seq>] [--limit <N>] [--event-type <type>]
 
 `--event-type` keeps one kind of event: `tool_call`, `scope_denied`,
 `turn_started`, `turn_ended`, `memory_access`, `auto_notify_dispatched`,
-`skill_auto_proposal`, `skill_invocation` or `store_unlocked` (the older CamelCase names,
+`skill_auto_proposal`, `skill_invocation`, `store_unlocked` or
+`federation_crossing` (the older CamelCase names,
 such as `ToolCall`, still work).
 
 To verify the chain instead, run `aivyx-pa --verify-only`.
@@ -672,6 +673,41 @@ aivyx-pa identity import <path> [--force]
 ```
 
 ### `aivyx-pa federation`
+
+Federation between your own PA instances, such as a laptop and a desktop
+(preview: not covered by the 1.x compatibility promise yet). Step by step:
+[`docs/FEDERATION_SETUP.md`](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/FEDERATION_SETUP.md).
+
+```
+aivyx-pa federation card
+aivyx-pa federation peer add <id> <card> --address <host:port>
+    [--verbs chat,task,search] [--scopes <scope,...>]
+    [--ceiling manual|assisted] [--task-timeout-secs <N>]
+aivyx-pa federation peer list
+aivyx-pa federation peer remove <id>
+aivyx-pa federation ping <peer>
+aivyx-pa federation send <peer> <chat|task|search> <text>
+```
+
+- `card` prints this instance's peer card (`aivyx-peer-v1:…`) to paste
+  on the other machine. The first run asks for the instance's federation
+  id (or set `[federation] id` first when there is no terminal) and
+  creates the keys. That first run refuses while a daemon holds the store:
+  stop the daemon first. Once the keys exist, `card` works while the
+  daemon runs.
+- `peer add` checks the card and writes a `[[federation.peers]]` entry.
+  It is also the grant: the default agent may send to every configured
+  peer. `--verbs` is what the peer may ask this instance for (default
+  `chat`). `--scopes` is the most a peer's task may use; a task needs at
+  least one. `--ceiling` is `manual` (default) or `assisted`.
+  `--task-timeout-secs` defaults to 900. Restart the daemon after
+  `peer add` or `peer remove`.
+- `ping` checks the link step by step (connect, handshake, key matches
+  the card, the peer knows this instance) and writes nothing to the audit
+  log. It works while the daemon runs.
+- `send` sends one request and prints the reply. It refuses while a
+  daemon runs on this instance; then use the federation tools from a
+  session (Studio, terminal chat or a chat app) instead.
 
 Bind the federation identity to a YubiKey so the key never leaves the
 hardware. Only in a build with the `yubikey` feature (release binaries

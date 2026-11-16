@@ -20,6 +20,7 @@ layout is used on Linux, macOS and WSL.
 | Layout version of the instance (`1`; a newer aivyx-pa's layout is refused) | `~/.local/share/aivyx-pa/layout-version` | — |
 | Saved passphrase, when there's no OS keyring | `~/.config/aivyx-pa/daemon.env` (mode `0600`) | delete it to be asked each time |
 | YubiKey unlock entries: the wrapped master key for each enrolled card (useless without the card; back it up with your config) | `~/.config/aivyx-pa/card-unlock.toml` (mode `0600`) | `aivyx-pa card add` / `remove` |
+| Federation keys (preview): the Ed25519 identity and the X25519 transport key, each sealed under the master key | `~/.local/share/aivyx-pa/federation/identity.key`, `transport.key` | created by the first `aivyx-pa federation card`; peers are in the config file's `[[federation.peers]]` |
 | Daemon socket and PID file | `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock`, `daemon.pid` — else `~/.local/share/aivyx-pa/` | — |
 | Log of a daemon started on demand | `daemon.log`, next to the socket | — |
 | Log of a daemon running as a service | the system journal: `journalctl --user -u aivyx-pa-daemon -f` | — |
@@ -43,6 +44,7 @@ of everything. The default instance's paths never change.
 | Config file | `~/.config/aivyx-pa/instances/<n>/aivyx-pa.toml` |
 | Saved passphrase | `~/.config/aivyx-pa/instances/<n>/daemon.env` |
 | Store, Studio token | `~/.local/share/aivyx-pa/instances/<n>/` |
+| Federation keys (preview) | `~/.local/share/aivyx-pa/instances/<n>/federation/` |
 | Daemon socket, PID file, log | `$XDG_RUNTIME_DIR/aivyx-pa/instances/<n>/` — else `~/.local/share/aivyx-pa/instances/<n>/` |
 | Your files at `sandbox` | `~/aivyx-pa-sandbox-<n>` |
 | Workspace, integration settings | `~/.aivyx-pa/instances/<n>/` |
@@ -66,6 +68,9 @@ with your passphrase. Back up:
    the salt is needed to turn your passphrase into the key, so a store
    without it can't be opened,
 2. the config file (and `team.toml`, if you use one),
+   and, if you use federation, the `federation/` folder next to the store
+   (without it, `card` makes new keys and every peer must re-add the new
+   card),
 3. your passphrase, somewhere safe and separate — without it the store
    can't be opened.
 
@@ -76,7 +81,7 @@ To carry only your Profile and Persona to another install, use
 ## What the agent can't read
 
 Ward, the sensitive-path guard, blocks the agent's own file and shell tools
-from reading the store, `daemon.env`, the Studio token and the KV-cache
-directory, along with your SSH keys, cloud credentials and `.env` files —
+from reading the store, `daemon.env`, the Studio token, the KV-cache
+directory and the federation `.key` files, along with your SSH keys, cloud credentials and `.env` files —
 whatever the access level. See
 [Security and privacy](../../guide/17-security-and-privacy.md).

@@ -3,7 +3,33 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
-## [Unreleased]
+## [Unreleased] — 1.1.0
+
+### Added
+
+- **Federation between your own machines (preview).** Your PA instances,
+  such as a laptop and a desktop, can now talk to each other.
+  `aivyx-pa federation card` prints this instance's peer card
+  (`aivyx-peer-v1:…`); `federation peer add` on the other machine pastes
+  it, says what that peer may ask for (`--verbs chat,task,search`,
+  `--scopes`, `--ceiling manual|assisted`, `--task-timeout-secs`) and lets
+  this instance send to it. `federation ping` checks the link step by step,
+  and `federation send` sends one request from the command line. The
+  daemon listens on `[federation] listen` (off by default; a wildcard
+  address needs `listen_any = true`) and the assistant gets three tools,
+  `federation.chat`, `federation.task` and `federation.search`, which ask
+  before each send at the default `assisted` level. Every incoming task
+  needs your approval, as a waiting step in `aivyx-pa review` or the
+  Studio. A peer's turn gets no memory, persona or profile, and only the
+  scopes you allowed. The link is TCP with Noise `XX` encryption, between
+  machines you can already reach (a tailnet or a LAN); there is no relay
+  or discovery. Every request, reply and refusal is written to the audit
+  log on both sides as a `FederationCrossing`. Federation runs only in the
+  daemon. A preview: it is tested on one machine with two instances, not
+  yet on two real machines, so it is outside the 1.x stability promise
+  until `docs/checklists/federation-two-machines.md` passes. Set-up guide:
+  `docs/FEDERATION_SETUP.md`. Amendment A19.
+- `aivyx-pa audit export --event-type federation_crossing`.
 
 ## [1.0.0] — 2026-11-15
 

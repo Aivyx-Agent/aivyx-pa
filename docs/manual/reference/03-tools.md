@@ -129,6 +129,16 @@ Missions, routines, reminders, skills, reflection and the like — the agent man
 | `webhook.delete` | Delete a webhook trigger by ID. The webhook will no longer fire. |
 | `webhook.list` | List all webhook triggers. |
 
+## Federation (preview)
+
+Talk to your other Aivyx PA instances. Only in the daemon, and only when a peer is configured (`aivyx-pa federation peer add`). See [FEDERATION_SETUP.md](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/FEDERATION_SETUP.md).
+
+| Tool | What it does |
+|---|---|
+| `federation.chat` | Send a chat message to another of your operator's own Aivyx PA instances (a federation peer) and return its reply. The peer answers with no tools. |
+| `federation.search` | Search another of your operator's own Aivyx PA instances (a federation peer) for learned skills matching a query; returns one JSON result per line (name, trigger, procedure). |
+| `federation.task` | Ask another of your operator's own Aivyx PA instances (a federation peer) to do a task, and return its result. The peer's operator approves the task first, and the peer works only within the scopes its operator granted. |
+
 ## Toolkit
 
 Everyday utilities — tasks, budget, dates, units, health checks. A tool process: install `aivyx-toolkit` and add it as a `[[tool_process]]` (see [INSTALL.md](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/INSTALL.md)).

@@ -172,11 +172,24 @@ base, Trusted-tier only. See the Lattice addendum in
 | `remind.set` / `.list` / `.cancel` | `remind.write`, `remind.read` | Trusted | reminders (everyday-PA) |
 | *(each MCP server's tools)* | `mcp.call` | Trusted | an MCP server's tools appear under their own names; each call needs `mcp.call:<server>:<tool>` |
 
-## Federation (infrastructure)
+## Federation (infrastructure, preview)
+
+Registered only in the daemon, and only when at least one
+`[[federation.peers]]` is configured (the in-process chat and `--headless`
+don't get them). See [`FEDERATION_SETUP.md`](FEDERATION_SETUP.md).
 
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
-| `federation.task` / `federation.chat` / `federation.search` (land later in the FED.3 chapter) | `federation.relay:<peer>` | Trusted | send a request to another of the operator's own instances; irreversible, so confirmed per request at `assisted` (amendment A19) |
+| `federation.chat` | `federation.relay:<peer>` | Trusted | send a chat message to one of the operator's own instances; the peer answers with no tools |
+| `federation.task` | `federation.relay:<peer>` | Trusted | ask a peer to do a task; the peer's operator approves it first, and it runs within the scopes that operator granted the peer; waits up to the peer's `task_timeout_secs` + 60 s |
+| `federation.search` | `federation.relay:<peer>` | Trusted | search a peer's learned skills (name, trigger, procedure only) |
+
+All three: `federation.relay` is an **irreversible** base, so at the default
+`assisted` level each send asks first; headless runs, routines and team
+runs park or escalate it rather than send. `peer add` is the grant: each
+configured peer gives the default agent `federation.relay:<id>`. A role
+that declares its own `capability_scopes` must list it. The reply is
+**untrusted output** (Picket scans it, Bulwark fences it). Amendment A19.
 
 ## Local-model management (infrastructure)
 

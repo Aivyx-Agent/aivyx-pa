@@ -37,6 +37,18 @@ GROUPS = {
     "aivyx-vision": ("Images", "A tool process: add `aivyx-vision` as a `[[tool_process]]`. `vision.generate_image` needs an image backend configured."),
     "aivyx-kitchen-toolkit": ("Kitchen pack (example vertical)", "Only with the kitchen vertical pack installed."),
 }
+# Tools whose names are built at run time, so `collect()` skips them. Each
+# section is printed right after the crate it follows. Keep the text in step
+# with the tool's `description()`.
+DYNAMIC = {
+    "aivyx-channel": ("Federation (preview)",
+                      "Talk to your other Aivyx PA instances. Only in the daemon, and only when a peer is configured (`aivyx-pa federation peer add`). See [FEDERATION_SETUP.md](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/FEDERATION_SETUP.md).",
+                      {
+                          "federation.chat": "Send a chat message to another of your operator's own Aivyx PA instances (a federation peer) and return its reply. The peer answers with no tools.",
+                          "federation.search": "Search another of your operator's own Aivyx PA instances (a federation peer) for learned skills matching a query; returns one JSON result per line (name, trigger, procedure).",
+                          "federation.task": "Ask another of your operator's own Aivyx PA instances (a federation peer) to do a task, and return its result. The peer's operator approves the task first, and the peer works only within the scopes its operator granted.",
+                      }),
+}
 # Crates whose `impl Tool` blocks are test fixtures or wrappers, not tools.
 IGNORED_CRATES = {"aivyx-tool", "aivyx-mcp", "aivyx-cli", "aivyx-slack", "aivyx-discord"}
 
@@ -178,6 +190,12 @@ def main():
         out.append("| Tool | What it does |\n|---|---|")
         for name in sorted(tools[crate]):
             out.append(f"| `{name}` | {tools[crate][name]} |")
+        if crate in DYNAMIC:
+            title, intro, extra = DYNAMIC[crate]
+            out.append(f"\n## {title}\n\n{intro}\n")
+            out.append("| Tool | What it does |\n|---|---|")
+            for name in sorted(extra):
+                out.append(f"| `{name}` | {summary(extra[name])} |")
     missing = [g for g in GROUPS if g not in tools]
     if missing:
         sys.exit(f"no tools found for {missing} — remove them from GROUPS or fix the parser")

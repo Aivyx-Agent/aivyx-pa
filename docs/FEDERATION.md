@@ -168,16 +168,18 @@ layer).
 | **FED.0** | This design contract. | ✅ |
 | **FED.1** | Identity: operator-owned Ed25519 keypair + the signed, replay-guarded request envelope (modernized `FederationAuth`/`SignedHeader`). | ✅ `aivyx-federation::identity` |
 | **FED.2** | `TrustPolicy` + the cross-operator attenuation — generalize NT-02's intersection over `Scope`/`CapabilitySet` + the Reins autonomy ceiling. | ✅ `::trust` |
-| **FED.3** | The relay protocol in `aivyx-ipc` (one shape, local + remote) + auditing every crossing. | ◑ verbs + audit *shape* (`aivyx-ipc::federation`, `::relay::Crossing`); the `AuditEvent` variant + live emission land with transport |
+| **FED.3** | The relay protocol in `aivyx-ipc` (one shape, local + remote) + auditing every crossing. | ✅ between one operator's own instances (amendment A19, pa 1.1, preview): Noise `XX` over TCP (`aivyx-federation-net`), peer cards, the daemon's listener (`aivyx-channel::federation_server`), the `federation.chat`/`task`/`search` tools, the `aivyx-pa federation` CLI, and a live `AuditEvent::FederationCrossing` on both sides. Setup: [`FEDERATION_SETUP.md`](FEDERATION_SETUP.md) |
 | **FED.4** | The privacy/sandbox boundary for peer content (provenance, attenuated execution). | ✅ `::received` |
 | **FED.5** | Operator-consent gating for peer-initiated effect (reuse confirm-first / approval gates). | ✅ `::consent` |
 
 **Built as Chapter Passport (2026-06-28)** — the open-core trust **substrate**
 in `crates/aivyx-federation`, proven end-to-end by a two-identity in-process
-integration test (`tests/keystone_e2e.rs`). What remains, by design, is
-everything **network-shaped**: a **transport / relay server**, peer
-**discovery**, and the live `AuditEvent::FederationCrossing` emission — plus the
-**Nexus product** on top (reputation, the agent-hiring market and its
+integration test (`tests/keystone_e2e.rs`). **FED.3's transport between one
+operator's own machines** shipped in pa 1.1 as a preview (amendment A19): the
+Noise link, peer cards, the daemon listener and the live
+`AuditEvent::FederationCrossing`. What remains, by design, is the rest of what
+is **network-shaped**: a **relay server** for other operators' instances, peer
+**discovery**, NAT traversal — plus the **Nexus product** on top (reputation, the agent-hiring market and its
 economics), designed privately and built when there's an installed base to
 network (the last link in `VISION.md`'s chain).
 
@@ -197,8 +199,13 @@ and usage.
 - **Discovery** — how do agents *find* each other? (a relay/directory; a private
   Nexus concern, but the identity/trust primitive must not assume a topology).
 - **Reputation** — how earned trust is represented + shared without leaking data.
-- **Transport** — the archive used an HTTP relay; reconsider (libp2p? a hub
-  relay? direct?) against the privacy + NAT realities.
+- **Transport** — *answered for one operator's own machines* (A19): direct
+  TCP between the machines, wrapped in Noise `XX`
+  (`Noise_XX_25519_ChaChaPoly_SHA256`), with each side's transport key bound
+  to its federation identity by a peer card the operator pastes on the other
+  machine. Reaching a machine across NATs is left to the operator's network
+  (a tailnet or a LAN). Still open: a relay for other operators' instances,
+  NAT traversal and discovery.
 - **Key rotation + revocation distribution** — how a rotated/compromised key
   propagates to peers.
 - **Economics** — if agents hire each other, the transaction/settlement layer is

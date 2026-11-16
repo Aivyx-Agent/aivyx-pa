@@ -5,12 +5,14 @@
 //! [`Identity`] signing envelope (PP.1) into a signed frame, and defines the
 //! forensic **shape** of a crossing for the audit chain (FED.0 §6).
 //!
-//! What is **not** here (deferred): a transport / relay server, and the live
-//! `AuditEvent::FederationCrossing` emission. The audit chain has established
-//! forward-compat patterns (serde-default fields), so its *emission* can land
-//! when a crossing actually executes (with transport); the irreversible part —
-//! the wire protocol — is locked now. [`Crossing`] pins the audit *fields* so
-//! that emission is a mechanical wiring step, not a redesign.
+//! What is **not** here: the transport and the live
+//! `AuditEvent::FederationCrossing` emission. Both landed in amendment A19
+//! (FED.3 between one operator's own instances): the Noise link and peer
+//! cards are in `aivyx-federation-net`, and the daemon's listener and the
+//! outbound tools (`aivyx-channel`'s `federation_server` and
+//! `federation_tool`) turn each [`Crossing`] into an audit event. A relay
+//! server for other operators' instances is still deferred
+//! (`docs/FEDERATION.md` §10). [`Crossing`] pins the audit *fields*.
 
 use aivyx_ipc::RelayRequest;
 

@@ -792,6 +792,30 @@ Let the agent see and drive the desktop apps you have open (Linux/X11). Off by d
 | `enabled` | bool |  | Master switch. Default off. |
 | `binary_path` | string |  | Override the `aivyx-apps` binary path (default: `aivyx-apps` on PATH). |
 
+## Your other instances
+
+### `[federation]`
+
+Federation between your own PA instances, such as a laptop and a desktop. Off unless the section is present; the listener is off unless `listen` is set. `aivyx-pa federation card` and `peer add` write this section for you. See [FEDERATION_SETUP.md](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/FEDERATION_SETUP.md). Preview: not covered by the 1.x compatibility promise yet.
+
+| Key | Type | Example | Meaning |
+|---|---|---|---|
+| `id` | string |  | This instance's federation id: the name its peers know it by (ASCII letters, digits, `-`, `_`). Required when the section is present. `aivyx-pa federation card` asks for it the first time. |
+| `listen` | string |  | Where the listener accepts peers, e.g. your Tailscale address `100.64.0.2:7650`. Unset: the listener is off (this instance can still send). Runs only in the daemon, after unlock. |
+| `listen_any` | bool |  | Allow a wildcard `listen` address (`0.0.0.0`, `::`), which listens on every interface. Default `false`: a wildcard is refused. |
+
+#### `[[federation.peers]]`
+
+| Key | Type | Example | Meaning |
+|---|---|---|---|
+| `id` | string |  | The peer's federation id. Must match the id on its card. |
+| `card` | string |  | The peer's card (`aivyx-peer-v1:…`), from `aivyx-pa federation card` on the peer. |
+| `address` | string |  | The peer's `host:port`, e.g. `100.64.0.3:7650`. |
+| `verbs` | list of string |  | What the peer may ask this instance for: `chat`, `task`, `search`. Default `["chat"]`. |
+| `allowed_scopes` | list of string |  | The most a peer's task may use, e.g. `["fs.read"]`. Empty (the default): this peer's tasks are refused. |
+| `ceiling` | string |  | The autonomy a peer's task runs at: `manual` (default, every action asks) or `assisted` (irreversible actions ask). Higher levels are refused. |
+| `task_timeout_secs` | integer |  | How long a peer's task may take, approval included. Default 900 (15 minutes). |
+
 ## Routines and the autonomous loop
 
 ### `[[schedule]]`
