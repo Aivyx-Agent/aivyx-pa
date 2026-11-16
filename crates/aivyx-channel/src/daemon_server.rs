@@ -4418,8 +4418,9 @@ pub async fn run_daemon_compat<C: ChannelContext + Send + Sync + 'static>(
 }
 
 /// A daemon config with every optional subsystem off: what
-/// `run_daemon_compat` runs, and what tests start from.
-fn minimal_daemon_config(
+/// `run_daemon_compat` runs, and what tests start from (the federation
+/// end-to-end tests in `federation_server::e2e_tests` too).
+pub(crate) fn minimal_daemon_config(
     socket_path: &Path,
     agent: Arc<dyn Agent>,
     factory: ChannelFactory,

@@ -638,3 +638,6 @@ impl ChannelContext for FederationContext {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod e2e_tests;

@@ -11,6 +11,12 @@
 //! intersection of both operators' authority, forged/replayed requests are
 //! rejected, deny-by-default holds, revocation narrows reach immediately, and
 //! peer-initiated effect is gated.
+//!
+//! A19 (FED.3) built that transport layer. Its end-to-end proof — two real
+//! daemons on loopback, paired by cards, every verb and refusal through the
+//! real stack, both audit chains verified — is
+//! `crates/aivyx-channel/src/federation_server/e2e_tests.rs` (in-crate, as it
+//! starts daemons with crate-private helpers).
 
 use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_config::AutonomyLevel;
