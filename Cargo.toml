@@ -38,6 +38,7 @@ members = [
     "crates/aivyx-team",
     "crates/aivyx-team-types",
     "crates/aivyx-federation",
+    "crates/aivyx-federation-net",
     "crates/aivyx-ipc",
     "crates/aivyx-vertical-sdk",
     "crates/verticals/aivyx-kitchen",
@@ -99,6 +100,7 @@ default-members = [
     "crates/aivyx-team",
     "crates/aivyx-team-types",
     "crates/aivyx-federation",
+    "crates/aivyx-federation-net",
     "crates/aivyx-ipc",
     "crates/aivyx-vertical-sdk",
     "crates/verticals/aivyx-kitchen",
@@ -162,6 +164,10 @@ tar = "0.4"
 flate2 = "1"
 rand = "0.8"
 hex = "0.4"
+# FED.3 (A19) — the federation transport: Noise XX over TCP between one
+# operator's own instances. Only the primitives the one pattern
+# (Noise_XX_25519_ChaChaPoly_SHA256) needs; no AES/BLAKE2/ring.
+snow = { version = "0.10", default-features = false, features = ["std", "use-curve25519", "use-chacha20poly1305", "use-sha2", "use-getrandom"] }
 
 # LLM provider HTTP transport (feature-gated in aivyx-llm via provider-anthropic)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
