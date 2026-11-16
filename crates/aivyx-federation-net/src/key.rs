@@ -6,6 +6,7 @@ use std::path::Path;
 
 use aivyx_crypto::{MasterKey, NONCE_LEN};
 use snow::resolvers::{CryptoResolver, DefaultResolver};
+use zeroize::Zeroize as _;
 
 use crate::NetError;
 use crate::card::fingerprint;
@@ -38,7 +39,7 @@ impl TransportKey {
             .map_err(|e| NetError::Key(format!("generate keypair: {e}")))?;
         let private: Result<[u8; 32], _> = kp.private.as_slice().try_into();
         let public: Result<[u8; 32], _> = kp.public.as_slice().try_into();
-        kp.private.fill(0);
+        kp.private.zeroize();
         match (private, public) {
             (Ok(private), Ok(public)) => Ok(Self { private, public }),
             _ => Err(NetError::Key("generated key is not 32 bytes".into())),
@@ -80,7 +81,7 @@ impl TransportKey {
                 .open(&data[..NONCE_LEN], KEY_WRAP_AAD, &data[NONCE_LEN..])
                 .map_err(|_| NetError::Key("transport key decryption failed".into()))?;
             let private: Result<[u8; 32], _> = plaintext.as_slice().try_into();
-            plaintext.fill(0);
+            plaintext.zeroize();
             let private =
                 private.map_err(|_| NetError::Key("decrypted key is not 32 bytes".into()))?;
             Self::from_private(private)
@@ -129,10 +130,10 @@ impl std::fmt::Debug for TransportKey {
 
 impl Drop for TransportKey {
     fn drop(&mut self) {
-        // `write_volatile` would need `unsafe`, which this crate forbids;
-        // `black_box` keeps the fill from being optimised away.
-        self.private.fill(0);
-        std::hint::black_box(&self.private);
+        // `zeroize` uses volatile writes the optimiser cannot drop. Known
+        // limit: snow's `Dh25519` keeps its own copy of the private key for
+        // the life of each handshake/transport state, and does not zero it.
+        self.private.zeroize();
     }
 }
 

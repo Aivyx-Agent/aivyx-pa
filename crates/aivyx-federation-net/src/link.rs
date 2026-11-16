@@ -346,6 +346,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_client_that_rejects_msg2_never_sends_msg3() {
+        use tokio::io::AsyncReadExt;
+        let server = TransportKey::generate().unwrap();
+        let client = TransportKey::generate().unwrap();
+        let other = TransportKey::generate().unwrap();
+        let (l, addr) = listener().await;
+        // A hand-driven responder: read msg1, write msg2, then watch for msg3.
+        let srv = tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            let mut hs = builder(&server).unwrap().build_responder().unwrap();
+            let mut msg = vec![0u8; MAX_NOISE_MSG];
+            let mut plain = vec![0u8; MAX_NOISE_MSG];
+            let n = read_msg(&mut s, &mut msg).await.unwrap();
+            hs.read_message(&msg[..n], &mut plain).unwrap();
+            let n = hs.write_message(&[], &mut msg).unwrap();
+            write_msg(&mut s, &msg[..n]).await.unwrap();
+            let mut rest = Vec::new();
+            let read = tokio::time::timeout(Duration::from_secs(5), s.read_to_end(&mut rest))
+                .await
+                .expect("the client closes instead of hanging");
+            // EOF (or a reset) with nothing after msg2: msg3 was never sent.
+            assert!(
+                read.is_err() || rest.is_empty(),
+                "client sent {} bytes after msg2",
+                rest.len()
+            );
+        });
+        let res = Link::connect(&addr, &client, other.public()).await;
+        assert!(matches!(res, Err(NetError::UnknownPeer { .. })), "{res:?}");
+        srv.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn a_frame_over_the_cap_is_refused() {
         let server = TransportKey::generate().unwrap();
         let client = TransportKey::generate().unwrap();
