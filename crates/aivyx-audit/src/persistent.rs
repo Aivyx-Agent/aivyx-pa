@@ -1012,6 +1012,23 @@ mod tests {
         (dir, storage, chain_key)
     }
 
+    /// Reopen the store file with `master`. `Drop for PersistentAuditLog`
+    /// aborts its drain task, but a `spawn_blocking` write the task was
+    /// awaiting (the chain anchor, say) runs on and holds the database
+    /// until it finishes, so the file can still be open for a moment
+    /// ("Database already open"). Retry for up to 2 seconds.
+    async fn reopen(dir: &StoreDir, master: [u8; 32]) -> Arc<dyn Storage> {
+        let mut last = None;
+        for _ in 0..2000 {
+            match RedbStorage::open(StorageConfig::new(dir.path()), MasterKey::from_raw(master)).await {
+                Ok(s) => return s,
+                Err(e) => last = Some(e),
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        panic!("store never reopened: {:?}", last);
+    }
+
     async fn wait_for_disk(storage: &Arc<dyn Storage>, expected: usize) {
         // Drain is async; we don't want to sleep, so we poll the
         // KeyDomain::Audit scan every millisecond up to 2 seconds.
@@ -1061,30 +1078,15 @@ mod tests {
         wait_for_disk(&storage, 1).await;
         drop(log);
         assert!(PersistentAuditLog::key_opens_store(&storage).await.unwrap());
-        // The drain task holds its own clone of the storage and lets go
-        // only once it has seen the closed channel, which can be after
-        // `drop(log)` returns. Wait for that, or the file is still open
-        // (redb: "Database already open") when it is reopened below.
-        for _ in 0..2000 {
-            if Arc::strong_count(&storage) == 1 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-        assert_eq!(Arc::strong_count(&storage), 1, "drain task never let go of the store");
         drop(storage);
 
         // Same file, another master key: the sealed rows don't open.
-        let wrong = RedbStorage::open(StorageConfig::new(dir.path()), MasterKey::from_raw([2u8; 32]))
-            .await
-            .unwrap();
+        let wrong = reopen(&dir, [2u8; 32]).await;
         assert!(!PersistentAuditLog::key_opens_store(&wrong).await.unwrap());
         drop(wrong);
 
         // And the right one still does after a reopen.
-        let right = RedbStorage::open(StorageConfig::new(dir.path()), MasterKey::from_raw([1u8; 32]))
-            .await
-            .unwrap();
+        let right = reopen(&dir, [1u8; 32]).await;
         assert!(PersistentAuditLog::key_opens_store(&right).await.unwrap());
     }
 
