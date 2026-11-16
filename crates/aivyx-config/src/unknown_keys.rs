@@ -291,7 +291,7 @@ mod tests {
             if ty.starts_with("deprecated alias of ") || ty.contains(" (deprecated)") {
                 continue; // never suggested, tagged or not
             }
-            assert!(known.contains(path), "{line:?} lost its key");
+            assert!(known.contains(&path.replace("[]", "")), "{line:?} lost its key");
         }
         assert!(known.iter().all(|k| !k.contains(' ') && !k.contains('(')), "{known:?}");
         let keys = unknown("[graph]\nenabled = true\ninterval_sec = 60\n");

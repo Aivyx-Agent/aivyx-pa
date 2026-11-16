@@ -26,6 +26,7 @@
 //!    manually, call `hydrate_secrets_from_store`, assert the api_key
 //!    now reports `FieldSource::EncryptedStore`.
 
+use crate::FederationVerb;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -13451,6 +13452,7 @@ fn stable_config_keys() {
         matrix,
         proton,
         signal,
+        federation,
         slack,
         git,
         team,
@@ -13522,6 +13524,7 @@ fn stable_config_keys() {
         ("matrix", plain("matrix", &matrix)),
         ("proton", plain("proton", &proton)),
         ("signal", plain("signal", &signal)),
+        ("federation", opt("federation", &federation)),
         ("slack", plain("slack", &slack)),
         ("git", plain("git", &git)),
         ("team", plain("team", &team)),
@@ -14104,6 +14107,7 @@ const DEFAULT_FIELD_KEYS: &[(&str, &str)] = &[
     ("sandbox_default_backend", "sandbox.default_backend"),
     ("schedules", "schedule"),
     ("share_system_tmp", "sandbox.share_system_tmp"),
+    ("federation", "federation"),
     ("signal", "signal"),
     ("skill_authoring", "skill_authoring"),
     ("skill_auto_propose", "skills.auto_propose"),
@@ -14332,5 +14336,98 @@ fn string_keys_match_through_their_value_const() {
         crate::MemoryProfile::Off,
         "an unlisted profile is off, as before"
     );
+    drop(env);
+}
+
+// --- [federation] (FED.3, A19) ------------------------------------------
+
+const FED_HEAD: &str = "[federation]\nid = \"desktop\"\n";
+const FED_PEER: &str = "[[federation.peers]]\nid = \"laptop\"\ncard = \"aivyx-peer-v1:abc\"\naddress = \"100.64.0.3:7650\"\n";
+
+#[test]
+fn no_federation_section_is_none() {
+    let env = EnvScope::new();
+    assert!(load_with_toml("", "fed-absent").federation.is_none());
+    drop(env);
+}
+
+#[test]
+fn a_full_federation_section_loads_with_defaults() {
+    let env = EnvScope::new();
+    let body = format!("[federation]\nid = \"desktop\"\nlisten = \"100.64.0.2:7650\"\n{FED_PEER}");
+    let f = load_with_toml(&body, "fed-full").federation.expect("Some");
+    assert_eq!(f.id, "desktop");
+    assert_eq!(f.listen, Some("100.64.0.2:7650".parse().unwrap()));
+    assert_eq!(f.peers.len(), 1);
+    let p = &f.peers[0];
+    assert_eq!(p.id, "laptop");
+    assert_eq!(p.verbs, vec![FederationVerb::Chat]);
+    assert_eq!(p.ceiling, AutonomyLevel::Manual);
+    assert_eq!(p.task_timeout, std::time::Duration::from_secs(900));
+    assert!(p.allowed_scopes.is_empty());
+    drop(env);
+}
+
+#[test]
+fn federation_peer_explicit_values_load() {
+    let env = EnvScope::new();
+    let body = format!(
+        "{FED_HEAD}{FED_PEER}verbs = [\"chat\", \"task\", \"search\"]\nallowed_scopes = [\"federation.relay:desktop\"]\nceiling = \"assisted\"\ntask_timeout_secs = 60\n"
+    );
+    let f = load_with_toml(&body, "fed-explicit").federation.unwrap();
+    let p = &f.peers[0];
+    assert_eq!(p.verbs, vec![FederationVerb::Chat, FederationVerb::Task, FederationVerb::Search]);
+    assert_eq!(p.ceiling, AutonomyLevel::Assisted);
+    assert_eq!(p.allowed_scopes.len(), 1);
+    assert_eq!(p.task_timeout, std::time::Duration::from_secs(60));
+    assert_eq!(FederationVerb::from_wire("task"), Some(FederationVerb::Task));
+    assert_eq!(FederationVerb::from_wire("teleport"), None);
+    assert_eq!(FederationVerb::Search.as_str(), "search");
+    drop(env);
+}
+
+#[test]
+fn federation_rejects_bad_values() {
+    let env = EnvScope::new();
+    let peer = |extra: &str| format!("{FED_HEAD}{FED_PEER}{extra}");
+    let cases: Vec<(String, &str, &str)> = vec![
+        ("[federation]\n".into(), "federation.id", ""),
+        ("[federation]\nid = \"Bad Id!\"\n".into(), "federation.id", ""),
+        (format!("{FED_HEAD}listen = \"0.0.0.0:7650\"\n"), "federation.listen", "listen_any"),
+        (format!("{FED_HEAD}listen = \"nope\"\n"), "federation.listen", ""),
+        (
+            format!("{FED_HEAD}[[federation.peers]]\nid = \"laptop\"\ncard = \"abc\"\naddress = \"h:1\"\n"),
+            "federation.peers[].card",
+            "peers[0]",
+        ),
+        (peer("verbs = [\"teleport\"]\n"), "federation.peers[].verbs", "peers[0]"),
+        (peer("allowed_scopes = [\"no.such\"]\n"), "federation.peers[].allowed_scopes", "peers[0]"),
+        (peer("ceiling = \"supervised\"\n"), "federation.peers[].ceiling", "FED.5"),
+        (peer("task_timeout_secs = 0\n"), "federation.peers[].task_timeout_secs", "peers[0]"),
+        (format!("{FED_HEAD}{FED_PEER}{FED_PEER}"), "federation.peers[].id", "duplicate"),
+        (
+            "[federation]\nid = \"laptop\"\n".to_string() + FED_PEER,
+            "federation.peers[].id",
+            "own id",
+        ),
+    ];
+    for (body, field, needle) in &cases {
+        match load_with_toml_result(body, "fed-bad") {
+            Err(ConfigError::Invalid { field: f, reason }) => {
+                assert_eq!(f, *field, "for:\n{body}");
+                assert!(reason.contains(needle), "{reason} should contain {needle} for:\n{body}");
+            }
+            other => panic!("expected Invalid for:\n{body}\ngot {other:?}"),
+        }
+    }
+    drop(env);
+}
+
+#[test]
+fn listen_any_allows_a_wildcard() {
+    let env = EnvScope::new();
+    let body = "[federation]\nid = \"desktop\"\nlisten = \"0.0.0.0:7650\"\nlisten_any = true\n";
+    let f = load_with_toml(body, "fed-any").federation.unwrap();
+    assert!(f.listen.unwrap().ip().is_unspecified());
     drop(env);
 }

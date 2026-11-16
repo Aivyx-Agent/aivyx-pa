@@ -7626,6 +7626,8 @@ async fn run_async(
         proton,
         // `[signal]` config consumed by the `ChannelKind::Signal` arm below.
         signal,
+        // `[federation]` is read by the federation daemon wiring (later FED.3 tasks).
+        federation: _,
         // Phase 108 — `slack` config consumed by the
         // `ChannelKind::Slack` dispatch arm below; carries
         // the bot + app tokens through to

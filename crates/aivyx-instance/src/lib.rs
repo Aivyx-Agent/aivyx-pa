@@ -403,6 +403,12 @@ impl InstancePaths {
         self.data_dir().map(|d| d.join("signal"))
     }
 
+    /// `<data_dir>/federation`: this instance's federation state (transport
+    /// key, pinned peer keys).
+    pub fn federation_dir(&self) -> Option<PathBuf> {
+        self.data_dir().map(|d| d.join("federation"))
+    }
+
     /// The directories that hold the state of *every* instance on this
     /// machine (the default instance's dirs, which contain each named
     /// instance's `instances/<n>`): config, data, `~/.aivyx-pa`, the
@@ -733,6 +739,26 @@ mod tests {
         assert_eq!(
             work.signal_dir(),
             Some(PathBuf::from("/h/.local/share/aivyx-pa/instances/work/signal"))
+        );
+    }
+
+    #[test]
+    fn federation_dir_is_under_the_instance_data_dir() {
+        let dirs = BaseDirs {
+            home: Some(PathBuf::from("/h")),
+            xdg_config_home: None,
+            xdg_data_home: None,
+            xdg_runtime_dir: None,
+        };
+        let default = InstancePaths::new(InstanceName::default_instance(), dirs.clone());
+        assert_eq!(
+            default.federation_dir(),
+            Some(PathBuf::from("/h/.local/share/aivyx-pa/federation"))
+        );
+        let laptop = InstancePaths::new(InstanceName::parse("laptop").unwrap(), dirs);
+        assert_eq!(
+            laptop.federation_dir(),
+            Some(PathBuf::from("/h/.local/share/aivyx-pa/instances/laptop/federation"))
         );
     }
 

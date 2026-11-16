@@ -40,6 +40,7 @@ discord = None
 matrix = None
 proton = None
 signal = None
+federation = None
 slack = None
 git = None
 email = None

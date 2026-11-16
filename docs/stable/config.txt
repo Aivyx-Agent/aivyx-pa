@@ -85,6 +85,16 @@ embedding.recall_lexical_weight: f32? (advanced)
 embedding.recall_token_budget: u32? (advanced)
 embedding.recall_wiki_weight: f32? (advanced)
 embedding.recall_window_turns: u64? (advanced)
+federation.id: str? (preview)
+federation.listen: str? (preview)
+federation.listen_any: bool (preview)
+federation.peers[].address: str (preview)
+federation.peers[].allowed_scopes: [str] (preview)
+federation.peers[].card: str (preview)
+federation.peers[].ceiling: str? (preview)
+federation.peers[].id: str (preview)
+federation.peers[].task_timeout_secs: u64? (preview)
+federation.peers[].verbs: [str]? (preview)
 file_watch[].debounce_ms: u64?
 file_watch[].enabled: bool
 file_watch[].name: str

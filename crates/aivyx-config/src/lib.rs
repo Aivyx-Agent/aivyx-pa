@@ -1081,6 +1081,9 @@ pub struct AivyxConfig {
     /// `[signal]` — Signal through the operator's signal-cli daemon. `None`
     /// unless the section sets `account`; see [`SignalConfig`].
     pub signal: Option<SignalConfig>,
+    /// `[federation]` — federation between your own PA instances. `None`
+    /// unless the table is present; see [`FederationConfig`].
+    pub federation: Option<FederationConfig>,
     /// Phase 108 — Slack channel config. `None` when no
     /// Slack field is set. Filled in whenever any Slack
     /// field is set so the startup banner can warn about
@@ -1892,6 +1895,85 @@ pub struct ProtonConfig {
     pub team_trigger_rate_limit: Option<u32>,
     /// The addresses allowed to issue `/team ...` commands. Empty: nobody.
     pub team_command_allowed_senders: Vec<String>,
+}
+
+/// `[federation]` — federation between one operator's own PA instances
+/// (A19, preview). `None` on [`AivyxConfig`] when the table is absent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FederationConfig {
+    /// This instance's federation id (the id peers sign requests for).
+    pub id: String,
+    /// Listener address. `None`: the listener is off.
+    pub listen: Option<std::net::SocketAddr>,
+    /// The peers this instance trusts, from `[[federation.peers]]`.
+    pub peers: Vec<FederationPeerConfig>,
+}
+
+/// One `[[federation.peers]]` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FederationPeerConfig {
+    pub id: String,
+    /// The peer's card (starts with `aivyx-peer-v1:`); verified by the daemon/CLI.
+    pub card: String,
+    /// `host:port`.
+    pub address: String,
+    /// What the peer may ask for. Default `[Chat]`.
+    pub verbs: Vec<FederationVerb>,
+    /// The most a peer's task may be granted.
+    pub allowed_scopes: Vec<Scope>,
+    /// `Manual` (default) or `Assisted` only.
+    pub ceiling: AutonomyLevel,
+    /// From `task_timeout_secs`, default 900.
+    pub task_timeout: std::time::Duration,
+}
+
+/// A request kind a peer may send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FederationVerb {
+    Chat,
+    Task,
+    Search,
+}
+
+impl FederationVerb {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FederationVerb::Chat => "chat",
+            FederationVerb::Task => "task",
+            FederationVerb::Search => "search",
+        }
+    }
+
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "chat" => Some(FederationVerb::Chat),
+            "task" => Some(FederationVerb::Task),
+            "search" => Some(FederationVerb::Search),
+            _ => None,
+        }
+    }
+}
+
+/// Prefix every peer card starts with.
+pub(crate) const FEDERATION_CARD_PREFIX: &str = "aivyx-peer-v1:";
+
+/// Same rule as `aivyx_federation::identity::validate_instance_id` (ASCII
+/// alphanumeric, `-`, `_`, non-empty). Duplicated because aivyx-federation
+/// depends on this crate; keep the two in step.
+pub(crate) fn federation_id_ok(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+pub(crate) const FEDERATION_CEILING_REASON: &str =
+    "a peer's task always asks before irreversible actions (FED.5); use \"manual\" or \"assisted\"";
+
+/// Parse a peer's `ceiling` string. `Err` carries the reason.
+pub(crate) fn federation_ceiling(s: &str) -> Result<AutonomyLevel, String> {
+    match s {
+        "manual" => Ok(AutonomyLevel::Manual),
+        "assisted" => Ok(AutonomyLevel::Assisted),
+        _ => Err(FEDERATION_CEILING_REASON.to_string()),
+    }
 }
 
 /// Signal through the operator's own signal-cli daemon: the channel
@@ -4216,6 +4298,8 @@ struct RawToml {
     #[serde(default)]
     signal: RawSignal,
     #[serde(default)]
+    federation: Option<RawFederation>,
+    #[serde(default)]
     slack: RawSlack,
     #[serde(default)]
     git: RawGit,
@@ -5383,6 +5467,35 @@ struct RawSignal {
     team_trigger_rate_limit: Option<u32>,
     #[serde(default)]
     team_command_allowed_senders: Vec<String>,
+}
+
+/// `[federation]` TOML section. Present when the table exists.
+#[derive(Debug, Default, Deserialize)]
+struct RawFederation {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    listen: Option<String>,
+    #[serde(default)]
+    listen_any: bool,
+    #[serde(default)]
+    peers: Vec<RawFederationPeer>,
+}
+
+/// One `[[federation.peers]]` entry.
+#[derive(Debug, Deserialize)]
+struct RawFederationPeer {
+    id: String,
+    card: String,
+    address: String,
+    #[serde(default)]
+    verbs: Option<Vec<String>>,
+    #[serde(default)]
+    allowed_scopes: Vec<String>,
+    #[serde(default)]
+    ceiling: Option<String>,
+    #[serde(default)]
+    task_timeout_secs: Option<u64>,
 }
 
 /// `+` and 7–15 digits (E.164).
@@ -7401,6 +7514,123 @@ impl AivyxConfig {
             }
         };
 
+        // --- federation (A19) --------------------------------------
+        // Peer errors keep a static field name (`ConfigError::Invalid`
+        // takes `&'static str`) and name the entry in the reason.
+        let federation = match toml.federation.as_ref() {
+            None => None,
+            Some(raw) => {
+                let invalid = |field: &'static str, reason: String| ConfigError::Invalid { field, reason };
+                let id = raw.id.as_deref().unwrap_or("").trim().to_string();
+                if !federation_id_ok(&id) {
+                    return Err(invalid(
+                        "federation.id",
+                        "required: this instance's id (ASCII letters, digits, `-`, `_`), e.g. \"desktop\"".into(),
+                    ));
+                }
+                let listen = match raw.listen.as_deref() {
+                    None => None,
+                    Some(l) => {
+                        let addr: std::net::SocketAddr = l.trim().parse().map_err(|_| {
+                            invalid("federation.listen", "must be an address like 100.64.0.2:7650".into())
+                        })?;
+                        if addr.ip().is_unspecified() && !raw.listen_any {
+                            return Err(invalid(
+                                "federation.listen",
+                                "a wildcard address listens on every interface; bind your Tailscale/LAN \
+                                 address instead, or set `listen_any = true` to accept that"
+                                    .into(),
+                            ));
+                        }
+                        Some(addr)
+                    }
+                };
+                let mut peers: Vec<FederationPeerConfig> = Vec::new();
+                for (i, p) in raw.peers.iter().enumerate() {
+                    let at = format!("peers[{i}]");
+                    if !federation_id_ok(&p.id) {
+                        return Err(invalid(
+                            "federation.peers[].id",
+                            format!("{at}: id must be ASCII letters, digits, `-`, `_`"),
+                        ));
+                    }
+                    if p.id == id {
+                        return Err(invalid(
+                            "federation.peers[].id",
+                            format!("{at}: `{}` is this instance's own id", p.id),
+                        ));
+                    }
+                    if peers.iter().any(|q| q.id == p.id) {
+                        return Err(invalid(
+                            "federation.peers[].id",
+                            format!("{at}: duplicate peer id `{}`", p.id),
+                        ));
+                    }
+                    if !p.card.starts_with(FEDERATION_CARD_PREFIX) {
+                        return Err(invalid(
+                            "federation.peers[].card",
+                            format!("{at}: must start with `{FEDERATION_CARD_PREFIX}` (from `aivyx-pa federation card` on the peer)"),
+                        ));
+                    }
+                    if p.address.trim().is_empty() {
+                        return Err(invalid(
+                            "federation.peers[].address",
+                            format!("{at}: must be host:port"),
+                        ));
+                    }
+                    let verbs = match &p.verbs {
+                        None => vec![FederationVerb::Chat],
+                        Some(list) => list
+                            .iter()
+                            .map(|v| {
+                                FederationVerb::from_wire(v).ok_or_else(|| {
+                                    invalid(
+                                        "federation.peers[].verbs",
+                                        format!("{at}: unknown verb `{v}` (one of: chat, task, search)"),
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    };
+                    let allowed_scopes = p
+                        .allowed_scopes
+                        .iter()
+                        .map(|sc| {
+                            Scope::parse(sc).ok_or_else(|| {
+                                invalid(
+                                    "federation.peers[].allowed_scopes",
+                                    format!("{at}: unknown scope `{sc}`"),
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let ceiling = match p.ceiling.as_deref() {
+                        None => AutonomyLevel::Manual,
+                        Some(c) => federation_ceiling(c).map_err(|r| {
+                            invalid("federation.peers[].ceiling", format!("{at}: {r}"))
+                        })?,
+                    };
+                    let secs = p.task_timeout_secs.unwrap_or(900);
+                    if secs == 0 {
+                        return Err(invalid(
+                            "federation.peers[].task_timeout_secs",
+                            format!("{at}: must be at least 1"),
+                        ));
+                    }
+                    peers.push(FederationPeerConfig {
+                        id: p.id.clone(),
+                        card: p.card.clone(),
+                        address: p.address.trim().to_string(),
+                        verbs,
+                        allowed_scopes,
+                        ceiling,
+                        task_timeout: std::time::Duration::from_secs(secs),
+                    });
+                }
+                Some(FederationConfig { id, listen, peers })
+            }
+        };
+
         // --- slack (Phase 108) -------------------------------------
         // Same shape as Telegram + Discord: SlackConfig is
         // constructed whenever any Slack source fires. Both
@@ -8913,6 +9143,7 @@ impl AivyxConfig {
             matrix,
             proton,
             signal,
+            federation,
             slack,
             git,
             email,

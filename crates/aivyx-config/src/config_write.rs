@@ -59,6 +59,9 @@ pub enum ConfigWriteError {
     /// notify_targets parsing) so a bad write is refused before it
     /// corrupts the next daemon load, same principle as `InvalidMcpServer`.
     InvalidNotifyTarget { reason: String },
+    /// A `[[federation.peers]]` write is invalid, or `[federation] id` is
+    /// not set yet; mirrors the loader's rules.
+    InvalidFederationPeer { reason: String },
     /// The `[email]` section, after this write is merged onto whatever's
     /// already on disk, would leave the loader's all-or-nothing rule
     /// broken — `aivyx-config/src/lib.rs`'s `build_email_config`: if ANY
@@ -120,6 +123,7 @@ impl std::fmt::Display for ConfigWriteError {
             ConfigWriteError::InvalidBudget { reason } => write!(f, "invalid budget: {reason}"),
             ConfigWriteError::InvalidMcpServer { reason } => write!(f, "invalid MCP server entry: {reason}"),
             ConfigWriteError::InvalidNotifyTarget { reason } => write!(f, "invalid notify target entry: {reason}"),
+            ConfigWriteError::InvalidFederationPeer { reason } => write!(f, "invalid federation peer: {reason}"),
             ConfigWriteError::InvalidEmailConfig { reason } => write!(f, "invalid email config: {reason}"),
             ConfigWriteError::InvalidReflectionSchedule { reason } => write!(f, "invalid reflection schedule entry: {reason}"),
             ConfigWriteError::InvalidMemoryProfile { reason } => write!(f, "invalid memory profile: {reason}"),
@@ -643,6 +647,148 @@ fn mcp_server_array_mut(doc: &mut DocumentMut) -> &mut toml_edit::ArrayOfTables 
     doc["mcp_server"]
         .as_array_of_tables_mut()
         .expect("just ensured present")
+}
+
+/// One `[[federation.peers]]` entry as the CLI writes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FederationPeerWrite {
+    pub id: String,
+    pub card: String,
+    pub address: String,
+    pub verbs: Vec<String>,
+    pub allowed_scopes: Vec<String>,
+    pub ceiling: String,
+    pub task_timeout_secs: u64,
+}
+
+/// Add or replace (by `id`) one `[[federation.peers]]` entry, keeping every
+/// other entry, section and comment. Validated like the loader (id, card
+/// prefix, verbs, scopes, ceiling). Needs `[federation] id` to be set
+/// already: the CLI sets that first.
+pub fn write_federation_peer(path: &Path, peer: &FederationPeerWrite) -> Result<(), ConfigWriteError> {
+    let bad = |reason: String| ConfigWriteError::InvalidFederationPeer { reason };
+    if !crate::federation_id_ok(&peer.id) {
+        return Err(bad(format!("peer id {:?} must be ASCII letters, digits, `-`, `_`", peer.id)));
+    }
+    if !peer.card.starts_with(crate::FEDERATION_CARD_PREFIX) {
+        return Err(bad(format!("card must start with `{}`", crate::FEDERATION_CARD_PREFIX)));
+    }
+    if peer.address.trim().is_empty() {
+        return Err(bad("address must be host:port".into()));
+    }
+    for v in &peer.verbs {
+        if crate::FederationVerb::from_wire(v).is_none() {
+            return Err(bad(format!("unknown verb {v:?} (one of: chat, task, search)")));
+        }
+    }
+    for sc in &peer.allowed_scopes {
+        if aivyx_capability::Scope::parse(sc).is_none() {
+            return Err(bad(format!("unknown scope {sc:?}")));
+        }
+    }
+    crate::federation_ceiling(&peer.ceiling).map_err(bad)?;
+    if peer.task_timeout_secs == 0 {
+        return Err(bad("task_timeout_secs must be at least 1".into()));
+    }
+    let mut doc = load_document(path)?;
+    let own = doc
+        .get("federation")
+        .and_then(|f| f.get("id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    match own {
+        None => {
+            return Err(bad(
+                "set `[federation] id` first (this instance's own id), then add peers".into(),
+            ))
+        }
+        Some(own) if own == peer.id => {
+            return Err(bad(format!("`{}` is this instance's own id", peer.id)));
+        }
+        Some(_) => {}
+    }
+    let fed = doc["federation"]
+        .as_table_mut()
+        .ok_or_else(|| bad("`federation` is not a table".into()))?;
+    if fed.get("peers").and_then(toml_edit::Item::as_array_of_tables).is_none() {
+        fed.insert("peers", toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
+    }
+    let arr = fed["peers"].as_array_of_tables_mut().expect("just ensured present");
+    let mut t = toml_edit::Table::new();
+    t["id"] = toml_edit::value(peer.id.as_str());
+    t["card"] = toml_edit::value(peer.card.as_str());
+    t["address"] = toml_edit::value(peer.address.as_str());
+    let strs = |v: &[String]| {
+        let mut a = toml_edit::Array::new();
+        for s in v {
+            a.push(s.as_str());
+        }
+        toml_edit::value(a)
+    };
+    t["verbs"] = strs(&peer.verbs);
+    t["allowed_scopes"] = strs(&peer.allowed_scopes);
+    t["ceiling"] = toml_edit::value(peer.ceiling.as_str());
+    t["task_timeout_secs"] = toml_edit::value(i64::try_from(peer.task_timeout_secs).unwrap_or(i64::MAX));
+    let existing = arr.iter().position(|e| e.get("id").and_then(|v| v.as_str()) == Some(peer.id.as_str()));
+    match existing {
+        Some(i) => *arr.get_mut(i).expect("index from position") = t,
+        None => arr.push(t),
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Remove one `[[federation.peers]]` entry by `id`. A no-op when absent.
+pub fn remove_federation_peer(path: &Path, id: &str) -> Result<(), ConfigWriteError> {
+    let mut doc = load_document(path)?;
+    if let Some(arr) = doc
+        .get_mut("federation")
+        .and_then(|f| f.get_mut("peers"))
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        let idx = arr.iter().position(|t| t.get("id").and_then(|v| v.as_str()) == Some(id));
+        if let Some(i) = idx {
+            arr.remove(i);
+        }
+    }
+    write_toml_0600(path, &doc.to_string())
+}
+
+/// Read every `[[federation.peers]]` entry as written on disk, without
+/// loader validation (a missing file or section reads as empty).
+pub fn read_federation_peers(path: &Path) -> Result<Vec<FederationPeerWrite>, ConfigWriteError> {
+    let doc = load_document(path)?;
+    let Some(arr) = doc
+        .get("federation")
+        .and_then(|f| f.get("peers"))
+        .and_then(toml_edit::Item::as_array_of_tables)
+    else {
+        return Ok(Vec::new());
+    };
+    let strs = |t: &toml_edit::Table, k: &str| -> Vec<String> {
+        t.get(k)
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    Ok(arr
+        .iter()
+        .map(|t| {
+            let s = |k: &str| t.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            FederationPeerWrite {
+                id: s("id"),
+                card: s("card"),
+                address: s("address"),
+                verbs: if t.get("verbs").is_some() { strs(t, "verbs") } else { vec!["chat".into()] },
+                allowed_scopes: strs(t, "allowed_scopes"),
+                ceiling: t.get("ceiling").and_then(|v| v.as_str()).unwrap_or("manual").to_string(),
+                task_timeout_secs: t
+                    .get("task_timeout_secs")
+                    .and_then(|v| v.as_integer())
+                    .and_then(|n| u64::try_from(n).ok())
+                    .unwrap_or(900),
+            }
+        })
+        .collect())
 }
 
 /// One `[[notify_target]]` entry as Studio's write form submits it. A
@@ -3295,6 +3441,76 @@ mod tests {
         .unwrap();
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.contains("enabled = false"));
+    }
+
+    fn fed_peer(id: &str) -> FederationPeerWrite {
+        FederationPeerWrite {
+            id: id.to_string(),
+            card: "aivyx-peer-v1:abc".to_string(),
+            address: "100.64.0.3:7650".to_string(),
+            verbs: vec!["chat".to_string()],
+            allowed_scopes: vec![],
+            ceiling: "manual".to_string(),
+            task_timeout_secs: 900,
+        }
+    }
+
+    #[test]
+    fn federation_peers_write_read_remove_preserving_the_rest() {
+        let path = temp_toml("fed-peers");
+        std::fs::write(
+            &path,
+            "# my config\n[agent]\nprovider = \"ollama\"\n\n[federation]\nid = \"desktop\" # mine\n",
+        )
+        .unwrap();
+        write_federation_peer(&path, &fed_peer("laptop")).unwrap();
+        write_federation_peer(&path, &fed_peer("phone")).unwrap();
+        let peers = read_federation_peers(&path).unwrap();
+        assert_eq!(peers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["laptop", "phone"]);
+        assert_eq!(peers[0], fed_peer("laptop"));
+        remove_federation_peer(&path, "laptop").unwrap();
+        let peers = read_federation_peers(&path).unwrap();
+        assert_eq!(peers.len(), 1);
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("# my config") && out.contains("# mine"), "{out}");
+        assert!(out.contains("provider = \"ollama\""), "{out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn federation_peer_write_replaces_by_id_and_validates() {
+        let path = temp_toml("fed-replace");
+        std::fs::write(&path, "[federation]\nid = \"desktop\"\n").unwrap();
+        write_federation_peer(&path, &fed_peer("laptop")).unwrap();
+        let mut again = fed_peer("laptop");
+        again.address = "100.64.0.9:7650".to_string();
+        write_federation_peer(&path, &again).unwrap();
+        let peers = read_federation_peers(&path).unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].address, "100.64.0.9:7650");
+        for bad in [
+            |p: &mut FederationPeerWrite| p.card = "xyz".into(),
+            |p: &mut FederationPeerWrite| p.verbs = vec!["teleport".into()],
+            |p: &mut FederationPeerWrite| p.ceiling = "supervised".into(),
+            |p: &mut FederationPeerWrite| p.id = "Bad Id".into(),
+        ] {
+            let mut p = fed_peer("x");
+            bad(&mut p);
+            assert!(matches!(
+                write_federation_peer(&path, &p),
+                Err(ConfigWriteError::InvalidFederationPeer { .. })
+            ));
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn federation_peer_write_needs_a_federation_id_first() {
+        let path = temp_toml("fed-noid");
+        std::fs::write(&path, "[agent]\nprovider = \"ollama\"\n").unwrap();
+        let err = write_federation_peer(&path, &fed_peer("laptop")).unwrap_err();
+        assert!(format!("{err}").contains("[federation] id"), "{err}");
+        std::fs::remove_file(&path).ok();
     }
 }
 
