@@ -83,6 +83,52 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// The fixed summary a waiting step gets in the audit chain and in
+/// notifications: the tool and who is waiting (`federation.task from peer
+/// laptop`), never the request's own text (A19 final review m1).
+pub(crate) fn waiting_summary(tool: &str, origin: &str) -> String {
+    format!("{tool} from {origin}")
+}
+
+/// Whether `c` is hidden or reorders text on screen: a control character,
+/// or a Unicode format character (category Cf: the bidi controls such as
+/// U+202E, zero-width characters, the BOM, tag characters). A19 final
+/// review m2: such characters can make a review summary read as something
+/// else, so they never reach it.
+pub(crate) fn is_hidden_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c as u32,
+            0x00AD
+                | 0x0600..=0x0605
+                | 0x061C
+                | 0x06DD
+                | 0x070F
+                | 0x0890..=0x0891
+                | 0x08E2
+                | 0x180E
+                | 0x200B..=0x200F
+                | 0x202A..=0x202E
+                | 0x2060..=0x2064
+                | 0x2066..=0x206F
+                | 0xFEFF
+                | 0xFFF9..=0xFFFB
+                | 0x110BD
+                | 0x110CD
+                | 0x13430..=0x1343F
+                | 0x1BCA0..=0x1BCA3
+                | 0x1D173..=0x1D17A
+                | 0xE0001
+                | 0xE0020..=0xE007F
+        )
+}
+
+/// `text` with every [`is_hidden_char`] replaced by a space, for a summary
+/// the operator reads in review.
+pub(crate) fn review_text(text: &str) -> String {
+    text.chars().map(|c| if is_hidden_char(c) { ' ' } else { c }).collect()
+}
+
 /// Parks needs-approval calls for supervised areas and resolves them.
 pub struct StepParker {
     storage: DomainHandle,
@@ -234,7 +280,7 @@ impl StepParker {
                 if let Some((dispatcher, target)) = &self.notify {
                     let message = format!(
                         "The {origin} is waiting for your approval: {} (aivyx-pa review).",
-                        req.summary
+                        waiting_summary(&req.tool, origin)
                     );
                     if let Err(e) = dispatcher.dispatch(target, &message, None).await {
                         eprintln!("aivyx-pa: couldn't notify `{target}` about a waiting step: {e}");
@@ -243,7 +289,7 @@ impl StepParker {
                 Ok(id)
             }
             Err(e) => {
-                eprintln!("aivyx-pa: couldn't park {} from the {origin}: {e}", req.summary);
+                eprintln!("aivyx-pa: couldn't park {}: {e}", waiting_summary(&req.tool, origin));
                 self.audit(AuditEvent::StepParkFailed {
                     tool: req.tool.clone(),
                     origin: origin.to_string(),
@@ -398,7 +444,7 @@ impl StepParker {
             id: id.clone(),
             tool: req.tool.clone(),
             input: req.input.clone(),
-            summary: req.summary.clone(),
+            summary: review_text(&req.summary),
             reason: req.reason.clone(),
             area: area.clone(),
             origin: origin.to_string(),
@@ -411,10 +457,14 @@ impl StepParker {
             waiting,
         };
         self.write(&step).await?;
+        // A19 final review m1 — a waiting step's summary can hold a peer's
+        // text (the task goal, a tool input). The audit chain gets a fixed
+        // form; the full text stays in the encrypted step for review.
+        let audit_summary = if waiting { waiting_summary(&step.tool, origin) } else { step.summary.clone() };
         self.audit(AuditEvent::StepParked {
             id: id.clone(),
             tool: step.tool.clone(),
-            summary: step.summary.clone(),
+            summary: audit_summary,
             area,
             origin: origin.to_string(),
         });
@@ -1132,6 +1182,20 @@ mod tests {
 
     async fn stored(p: &StepParker, id: &str) -> ParkedStep {
         p.read_all().await.unwrap().into_iter().find(|s| s.id == id).unwrap()
+    }
+
+    /// A19 final review m2 — control and format characters (bidi controls,
+    /// zero-width, BOM, tags) never reach a stored review summary.
+    #[tokio::test]
+    async fn a_parked_summary_drops_hidden_characters() {
+        assert_eq!(review_text("a\u{202E}b\u{200B}c\u{2067}d\u{FEFF}e\u{E0041}f\ng"), "a b c d e f g");
+        assert_eq!(review_text("plain café ✓"), "plain café ✓");
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let mut r = req("fs.delete", "fs.delete", "a.txt");
+        r.summary = "fs.delete \u{202E}txt.exe".into();
+        let id = waiting_id(&p, &r).await;
+        assert_eq!(stored(&p, &id).await.summary, "fs.delete  txt.exe");
     }
 
     #[tokio::test]

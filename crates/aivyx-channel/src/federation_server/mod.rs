@@ -507,7 +507,7 @@ async fn run_task(
     let shown: String = goal
         .chars()
         .take(SUMMARY_GOAL_CHARS)
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| if crate::parked_steps::is_hidden_char(c) { ' ' } else { c })
         .collect();
     let up_front = ApprovalRequest {
         tool: "federation.task".into(),

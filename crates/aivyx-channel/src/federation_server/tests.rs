@@ -114,6 +114,15 @@ impl Tool for CountingTool {
 
 /// A real turn loop whose planner calls `tool` once, then says "done".
 fn one_call_agent(caps: &[&str], tool: &'static str) -> (Arc<dyn Agent>, Arc<AtomicUsize>) {
+    one_call_agent_with(caps, tool, serde_json::json!({}))
+}
+
+/// [`one_call_agent`] with the call's input.
+fn one_call_agent_with(
+    caps: &[&str],
+    tool: &'static str,
+    input: serde_json::Value,
+) -> (Arc<dyn Agent>, Arc<AtomicUsize>) {
     let runs = Arc::new(AtomicUsize::new(0));
     let t = Arc::new(CountingTool {
         id: ToolId::new(),
@@ -128,7 +137,7 @@ fn one_call_agent(caps: &[&str], tool: &'static str) -> (Arc<dyn Agent>, Arc<Ato
         Box::new(VecPlanner::new([
             NextStep::ToolCall {
                 tool_id,
-                input: serde_json::json!({}),
+                input: input.clone(),
                 auto_corrected_from: None,
                 extracted_from_text: None,
             },
@@ -186,11 +195,10 @@ pub(crate) async fn start(agent: Arc<dyn Agent>, setup: PeerSetup, persona: Shar
             .await
             .unwrap();
     let audit = Arc::new(PersistentAuditLog::open(Arc::clone(&storage), [7u8; 32]).await.unwrap());
-    let parker = Arc::new(StepParker::new(
-        storage.domain(KeyDomain::ParkedSteps),
-        aivyx_core::AreaFlags::everywhere(false),
-        7,
-    ));
+    let parker = Arc::new(
+        StepParker::new(storage.domain(KeyDomain::ParkedSteps), aivyx_core::AreaFlags::everywhere(false), 7)
+            .with_audit_log(Arc::clone(&audit)),
+    );
     let server_id = Identity::generate("desktop".into()).unwrap();
     let server_key = TransportKey::generate().unwrap();
     let client_id = Identity::generate("laptop".into()).unwrap();
@@ -525,6 +533,63 @@ async fn manual_ceiling_asks_before_every_change() {
     let (accepted, _) = task_reply(sender.await.unwrap());
     assert!(accepted);
     assert_eq!(runs.load(Ordering::SeqCst), 0, "the operator refused the write");
+}
+
+/// A19 final review m1 — a waiting step's audit entry carries a fixed
+/// summary (`<tool> from peer <id>`), never the peer's goal or tool input;
+/// the full text stays in the encrypted step for review.
+#[tokio::test]
+async fn a_peers_text_never_reaches_the_audit_chain() {
+    let (agent, _runs) = one_call_agent_with(&["fs.write"], "fs.write", serde_json::json!({"path": "zebra-path-77"}));
+    let setup = PeerSetup { allowed: vec!["fs.write"], ..Default::default() };
+    let f = Arc::new(start(agent, setup, no_persona()).await);
+    let sender = {
+        let f = Arc::clone(&f);
+        tokio::spawn(async move { send(&f, task("quokka-goal-42 write a note")).await })
+    };
+    let up_front = waiting_step(&f.parker, "federation.task").await;
+    assert!(up_front.summary.contains("quokka-goal-42"), "review keeps the full text");
+    decide(&f.parker, &up_front.id, true).await;
+    let write = waiting_step(&f.parker, "fs.write").await;
+    decide(&f.parker, &write.id, false).await;
+    assert!(task_reply(sender.await.unwrap()).0);
+
+    let entries = f.audit.entries().unwrap();
+    let parked: Vec<String> = entries
+        .iter()
+        .filter_map(|e| match &e.event {
+            AuditEvent::StepParked { summary, .. } => Some(summary.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(parked, ["federation.task from peer laptop", "fs.write from peer laptop"]);
+    for e in &entries {
+        let text = format!("{:?}", e.event);
+        assert!(!text.contains("quokka-goal-42"), "the goal reached the audit chain: {text}");
+        assert!(!text.contains("zebra-path-77"), "the tool input reached the audit chain: {text}");
+    }
+}
+
+/// A19 final review m2 — bidi controls and other format characters never
+/// reach the summary shown in review.
+#[tokio::test]
+async fn the_review_summary_drops_format_characters() {
+    let agent = Arc::new(RecordingAgent::new("x"));
+    let setup = PeerSetup { allowed: vec!["fs.read"], ..Default::default() };
+    let f = Arc::new(start(agent, setup, no_persona()).await);
+    let sender = {
+        let f = Arc::clone(&f);
+        tokio::spawn(async move { send(&f, task("read \u{202E}txt.exe\u{202C} and \u{200B}\u{2066}notes\u{2069}\u{FEFF}")).await })
+    };
+    let step = waiting_step(&f.parker, "federation.task").await;
+    assert!(
+        !step.summary.chars().any(|c| matches!(c, '\u{202E}' | '\u{202C}' | '\u{200B}' | '\u{2066}' | '\u{2069}' | '\u{FEFF}')),
+        "{:?}",
+        step.summary
+    );
+    assert!(step.summary.contains("txt.exe") && step.summary.contains("notes"), "{:?}", step.summary);
+    decide(&f.parker, &step.id, false).await;
+    sender.await.unwrap();
 }
 
 #[tokio::test]
