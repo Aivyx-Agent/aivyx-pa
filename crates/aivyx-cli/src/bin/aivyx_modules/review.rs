@@ -61,7 +61,7 @@ pub async fn run_review(cmd: ReviewCommand) -> Result<(), String> {
             if let Some(preview) = &step.preview {
                 println!("{preview}");
             }
-            if !yes && !confirm("Run this step now? [y/N] ")? {
+            if !yes && !confirm(approve_prompt(step))? {
                 println!("Left for later.");
                 return Ok(());
             }
@@ -82,6 +82,16 @@ pub async fn run_review(cmd: ReviewCommand) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// What approving does: an ordinary step runs now; a waiting step (A19)
+/// is allowed, and the request waiting on it runs it.
+pub fn approve_prompt(step: &ParkedStep) -> &'static str {
+    if step.waiting {
+        "Allow this step for the waiting request? [y/N] "
+    } else {
+        "Run this step now? [y/N] "
+    }
 }
 
 fn now_unix() -> i64 {
@@ -178,6 +188,16 @@ mod tests {
             preview: None,
             waiting: false,
         }
+    }
+
+    #[test]
+    fn a_waiting_step_is_allowed_not_run() {
+        let mut s = step("ab12cd34", ParkedState::Pending, 0, None);
+        assert_eq!(approve_prompt(&s), "Run this step now? [y/N] ");
+        s.waiting = true;
+        let prompt = approve_prompt(&s);
+        assert!(prompt.contains("waiting request"), "{prompt}");
+        assert!(!prompt.contains("Run this step now"), "{prompt}");
     }
 
     fn argv(words: &[&str]) -> Vec<String> {

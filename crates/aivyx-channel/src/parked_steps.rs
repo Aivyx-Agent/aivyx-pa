@@ -57,6 +57,8 @@ pub const TIMED_OUT_RESULT: &str = "timed out waiting for approval";
 pub const CANCELLED_RESULT: &str = "the waiting run was cancelled";
 /// A waiting step's result once approved: the waiting turn runs the call.
 pub const WAITING_APPROVED_RESULT: &str = "approved; the waiting run carries it out";
+/// A waiting step's result when the daemon restarted under it.
+pub const ORPHANED_RESULT: &str = "lapsed: the daemon restarted while this request waited";
 /// How often a waiting turn re-reads its step. The in-process wake-up
 /// ([`StepParker::resolve`] signals it) is the fast path; this poll catches
 /// a decision written to the store by another `StepParker`.
@@ -320,7 +322,13 @@ impl StepParker {
         step.resolved_at = Some(now_unix());
         step.result = Some(result.to_string());
         if let Err(e) = self.write(&step).await {
+            // Not lapsed in the store, so no `lapsed` audit entry: return
+            // what the store says, or TimedOut when it can't be read.
             eprintln!("aivyx-pa: couldn't lapse the waiting step `{id}`: {e}");
+            return match self.read_one(id).await {
+                Ok(Some(now)) => answer_for(now.state).unwrap_or(Approval::TimedOut),
+                _ => Approval::TimedOut,
+            };
         }
         self.audit(AuditEvent::ParkedStepResolved {
             id: step.id.clone(),
@@ -329,6 +337,34 @@ impl StepParker {
         });
         self.changed.notify_waiters();
         answer
+    }
+
+    /// A19: lapse every pending *waiting* step. Call once when the daemon
+    /// builds its parker: after a restart no turn can be waiting on one, so
+    /// an approval would record a decision nothing carries out. Ordinary
+    /// pending steps are untouched. Returns how many lapsed.
+    pub async fn lapse_orphaned_waiting(&self) -> Result<usize, ParkError> {
+        let _guard = self.lock.lock().await;
+        let mut lapsed = 0;
+        for mut step in self.read_all().await? {
+            if !(step.waiting && step.state == ParkedState::Pending) {
+                continue;
+            }
+            step.state = ParkedState::Lapsed;
+            step.resolved_at = Some(now_unix());
+            step.result = Some(ORPHANED_RESULT.to_string());
+            self.write(&step).await?;
+            self.audit(AuditEvent::ParkedStepResolved {
+                id: step.id.clone(),
+                tool: step.tool.clone(),
+                outcome: ParkedState::Lapsed.as_str().into(),
+            });
+            lapsed += 1;
+        }
+        if lapsed > 0 {
+            self.changed.notify_waiters();
+        }
+        Ok(lapsed)
     }
 
     /// `(id, newly parked?)`. A `waiting` step never dedups, and an
@@ -1221,6 +1257,24 @@ mod tests {
         other.resolve(&id, false, |_| async { panic!("must not run") }).await.unwrap();
         let got = tokio::time::timeout(std::time::Duration::from_secs(3), waiter).await;
         assert_eq!(got.expect("the poll saw the decision").unwrap(), Approval::Denied);
+    }
+
+    #[tokio::test]
+    async fn a_restart_lapses_orphaned_waiting_steps_only() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let ordinary = park_id(&p, &req("fs.delete", "fs.delete", "a.txt")).await;
+        let waiting = waiting_id(&p, &req("fs.delete", "fs.delete", "b.txt")).await;
+        // A waiting step already decided stays as it is.
+        let decided = waiting_id(&p, &req("fs.delete", "fs.delete", "c.txt")).await;
+        p.resolve(&decided, false, |_| async { panic!("must not run") }).await.unwrap();
+        assert_eq!(p.lapse_orphaned_waiting().await.unwrap(), 1);
+        let w = stored(&p, &waiting).await;
+        assert_eq!(w.state, ParkedState::Lapsed);
+        assert_eq!(w.result.as_deref(), Some(ORPHANED_RESULT));
+        assert_eq!(stored(&p, &ordinary).await.state, ParkedState::Pending);
+        assert_eq!(stored(&p, &decided).await.state, ParkedState::Denied);
+        assert_eq!(p.lapse_orphaned_waiting().await.unwrap(), 0);
     }
 
     #[tokio::test]

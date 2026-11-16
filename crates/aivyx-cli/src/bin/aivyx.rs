@@ -11402,6 +11402,15 @@ async fn run_async(
             }
             Arc::new(parker)
         });
+        // A19 — no turn survives a restart, so a step a turn was waiting on
+        // can only lapse now.
+        if let Some(parker) = &step_parker {
+            match parker.lapse_orphaned_waiting().await {
+                Ok(0) => {}
+                Ok(n) => eprintln!("aivyx-pa: lapsed {n} approval request(s) left waiting by the last run"),
+                Err(e) => eprintln!("aivyx-pa: couldn't lapse waiting approval requests: {e}"),
+            }
+        }
         let team_missions = {
             // Chapter Mission Control — share the same broadcaster the
             // desktop-notification path uses (web_ui_broadcaster, built
