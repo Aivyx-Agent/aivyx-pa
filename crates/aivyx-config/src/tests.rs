@@ -14412,6 +14412,10 @@ fn federation_rejects_bad_values() {
         (peer("allowed_scopes = [\"webhook.create\"]\n"), "federation.peers[].allowed_scopes", "outside its limits"),
         (peer("allowed_scopes = [\"file_watch.create\"]\n"), "federation.peers[].allowed_scopes", "outside its limits"),
         (peer("allowed_scopes = [\"fs.read\", \"team.run\"]\n"), "federation.peers[].allowed_scopes", "outside its limits"),
+        // Final review: bases that change this instance's own prompts, tools or settings.
+        (peer("allowed_scopes = [\"role.update\"]\n"), "federation.peers[].allowed_scopes", "prompts, tools or settings"),
+        (peer("allowed_scopes = [\"config.write\"]\n"), "federation.peers[].allowed_scopes", "prompts, tools or settings"),
+        (peer("allowed_scopes = [\"tool.allowlist\"]\n"), "federation.peers[].allowed_scopes", "prompts, tools or settings"),
         (format!("{FED_HEAD}{FED_PEER}{FED_PEER}"), "federation.peers[].id", "duplicate"),
         (
             "[federation]\nid = \"laptop\"\n".to_string() + FED_PEER,

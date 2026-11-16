@@ -588,8 +588,18 @@ impl StepParker {
 }
 
 /// What a step touches, as it is now: for an `fs.*` call with a `path`, the
-/// file's current state; otherwise the arguments.
+/// file's current state; otherwise the arguments. Hidden characters are
+/// dropped (newlines and tabs kept): a waiting step's input carries a
+/// peer's text, and JSON doesn't escape U+202E (A19 final review).
 pub fn preview_for(step: &ParkedStep, root: Option<&Path>) -> Option<String> {
+    preview_unfiltered(step, root).map(|text| {
+        text.chars()
+            .map(|c| if c != '\n' && c != '\t' && is_hidden_char(c) { ' ' } else { c })
+            .collect()
+    })
+}
+
+fn preview_unfiltered(step: &ParkedStep, root: Option<&Path>) -> Option<String> {
     let path = step
         .input
         .get("path")
@@ -1172,6 +1182,24 @@ mod tests {
         assert_eq!(gone.as_deref(), Some("Now: nope.txt doesn't exist."));
         let other = preview_for(&step_for("gmail.send", serde_json::json!({"to": "a@b.c"})), root);
         assert!(other.unwrap().contains("\"to\": \"a@b.c\""));
+    }
+
+    /// A19 final review — the review preview drops hidden characters from
+    /// the arguments (JSON leaves U+202E as is) and from file content, and
+    /// keeps newlines and tabs.
+    #[test]
+    fn the_preview_drops_hidden_characters_but_keeps_layout() {
+        let step = step_for(
+            "federation.task",
+            serde_json::json!({"peer": "laptop", "goal": "read \u{202E}txt.exe\u{2066}x\u{FEFF}"}),
+        );
+        let shown = preview_for(&step, None).unwrap();
+        assert!(!shown.chars().any(|c| matches!(c, '\u{202E}' | '\u{2066}' | '\u{FEFF}')), "{shown:?}");
+        assert!(shown.contains('\n') && shown.contains("txt.exe"), "{shown:?}");
+        let s = Scratch::new();
+        std::fs::write(s.dir.join("n.txt"), "a\tb\nc\u{202E}d").unwrap();
+        let file = preview_for(&step_for("fs.write", serde_json::json!({"path": "n.txt"})), Some(s.dir.as_path()));
+        assert_eq!(file.as_deref(), Some("Now: n.txt (9 bytes)\na\tb\nc d"));
     }
 
     // ---- A19 — waiting steps (a live turn waits on the decision) ----

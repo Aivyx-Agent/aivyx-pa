@@ -1978,9 +1978,20 @@ pub(crate) const FEDERATION_MAX_TASK_TIMEOUT_SECS: u64 = 86_400;
 const FEDERATION_PEER_DENIED_BASE_PREFIXES: &[&str] =
     &["schedule.", "webhook.", "file_watch.", "team."];
 
+/// Exact bases a peer may never hold: they change this instance's own
+/// prompts, tool allowlists or settings for every later operator turn
+/// (`role.update` appends to the prompt and widens a role's allowlist).
+const FEDERATION_PEER_DENIED_BASES: &[&str] = &["role.update", "config.write", "tool.allowlist"];
+
 /// `Some(reason)` when `scope` may not be granted to a peer.
 pub(crate) fn federation_peer_scope_refusal(scope: &Scope) -> Option<String> {
     let base = scope.base();
+    if FEDERATION_PEER_DENIED_BASES.contains(&base) {
+        return Some(format!(
+            "`{}` can't be granted to a peer: this would let a peer change this instance's own prompts, tools or settings",
+            scope.as_str()
+        ));
+    }
     FEDERATION_PEER_DENIED_BASE_PREFIXES
         .iter()
         .any(|p| base.starts_with(p))

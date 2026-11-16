@@ -3589,6 +3589,16 @@ mod tests {
                 other => panic!("{sc}: expected a refusal, got {other:?}"),
             }
         }
+        for sc in ["role.update", "config.write", "tool.allowlist"] {
+            let mut p = fed_peer("laptop");
+            p.allowed_scopes = vec![sc.into()];
+            match write_federation_peer(&path, &p) {
+                Err(ConfigWriteError::InvalidFederationPeer { reason }) => {
+                    assert!(reason.contains("prompts, tools or settings"), "{sc}: {reason}");
+                }
+                other => panic!("{sc}: expected a refusal, got {other:?}"),
+            }
+        }
         let mut p = fed_peer("laptop");
         p.task_timeout_secs = 86_401;
         assert!(matches!(
