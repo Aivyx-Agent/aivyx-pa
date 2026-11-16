@@ -179,6 +179,18 @@ impl Tool for ScheduleCreateTool {
             });
         }
 
+        // A19 final review I1 — a scheduled run executes later as a
+        // System-origin turn with the role's full authority, outside the
+        // peer channel's ceiling, so a peer's request never touches one.
+        if ctx.message_origin == aivyx_core::MessageOrigin::Peer {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.create isn't available to a request from a federation \
+                         peer: a schedule runs later, outside the peer's limits"
+                    .to_string(),
+            });
+        }
+
         if ctx.message_origin == aivyx_core::MessageOrigin::System {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -525,6 +537,18 @@ impl Tool for ScheduleDeleteTool {
             });
         }
 
+        // A19 final review I1 — a scheduled run executes later as a
+        // System-origin turn with the role's full authority, outside the
+        // peer channel's ceiling, so a peer's request never touches one.
+        if ctx.message_origin == aivyx_core::MessageOrigin::Peer {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.delete isn't available to a request from a federation \
+                         peer: a schedule runs later, outside the peer's limits"
+                    .to_string(),
+            });
+        }
+
         if ctx.message_origin == aivyx_core::MessageOrigin::System {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -700,6 +724,18 @@ impl Tool for ScheduleUpdateTool {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
                 detail: "schedule.update requires a non-empty `schedule_id` field".to_string(),
+            });
+        }
+
+        // A19 final review I1 — a scheduled run executes later as a
+        // System-origin turn with the role's full authority, outside the
+        // peer channel's ceiling, so a peer's request never touches one.
+        if ctx.message_origin == aivyx_core::MessageOrigin::Peer {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "schedule.update isn't available to a request from a federation \
+                         peer: a schedule runs later, outside the peer's limits"
+                    .to_string(),
             });
         }
 
@@ -1263,5 +1299,59 @@ mod tests {
             detail.contains("cannot be called from within a triggered or scheduled run"),
             "error should explain the refusal reason: {detail}"
         );
+    }
+
+    /// A19 final review I1 — a federation peer's request can't create,
+    /// update or delete a schedule: the schedule's run would execute later
+    /// as a System turn, outside the peer's ceiling.
+    #[tokio::test]
+    async fn schedule_tools_refuse_a_peer_request() {
+        let create_tool = ScheduleCreateTool::new();
+        let store = schedule_domain().await;
+        create_tool.set_schedule_store(store.clone()).unwrap();
+        create_tool.set_growth(GrowthAdoption::BroadAuto).unwrap();
+        let (ch, audit) = ctx_parts();
+        let peer_ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Peer);
+        let outcome = create_tool
+            .execute(json!({"cron": "0 0 9 * * * *", "prompt": "check"}), &peer_ctx)
+            .await;
+        let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
+            panic!("schedule.create: expected a refusal, got {outcome:?}");
+        };
+        assert!(detail.contains("federation peer"), "{detail}");
+        assert!(
+            schedule::list_schedules(&store).await.unwrap().is_empty(),
+            "a refused create must persist nothing"
+        );
+
+        let create_ctx = make_ctx(&ch, &audit, aivyx_core::MessageOrigin::Operator);
+        let created = create_tool
+            .execute(json!({"cron": "0 0 2 * * * *", "prompt": "do a thing"}), &create_ctx)
+            .await;
+        let ToolOutcome::Completed { output, .. } = created else {
+            panic!("setup failed")
+        };
+        let schedule_id = output["schedule_id"].as_str().unwrap().to_string();
+
+        let update_tool = ScheduleUpdateTool::new();
+        update_tool.set_schedule_store(store.clone()).unwrap();
+        let outcome = update_tool
+            .execute(json!({"schedule_id": schedule_id, "prompt": "something else"}), &peer_ctx)
+            .await;
+        let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
+            panic!("schedule.update: expected a refusal, got {outcome:?}");
+        };
+        assert!(detail.contains("federation peer"), "{detail}");
+
+        let delete_tool = ScheduleDeleteTool::new();
+        delete_tool.set_schedule_store(store.clone()).unwrap();
+        let outcome = delete_tool
+            .execute(json!({"schedule_id": schedule_id}), &peer_ctx)
+            .await;
+        let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
+            panic!("schedule.delete: expected a refusal, got {outcome:?}");
+        };
+        assert!(detail.contains("federation peer"), "{detail}");
+        assert_eq!(schedule::list_schedules(&store).await.unwrap().len(), 1);
     }
 }

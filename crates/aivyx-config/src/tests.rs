@@ -14404,6 +14404,14 @@ fn federation_rejects_bad_values() {
         (peer("allowed_scopes = [\"no.such\"]\n"), "federation.peers[].allowed_scopes", "peers[0]"),
         (peer("ceiling = \"supervised\"\n"), "federation.peers[].ceiling", "FED.5"),
         (peer("task_timeout_secs = 0\n"), "federation.peers[].task_timeout_secs", "peers[0]"),
+        // Final-review m3: at most one day.
+        (peer("task_timeout_secs = 86401\n"), "federation.peers[].task_timeout_secs", "86400"),
+        // Final-review I1: tools that start later runs are never a peer's.
+        (peer("allowed_scopes = [\"schedule.create\"]\n"), "federation.peers[].allowed_scopes", "outside its limits"),
+        (peer("allowed_scopes = [\"schedule.update\"]\n"), "federation.peers[].allowed_scopes", "outside its limits"),
+        (peer("allowed_scopes = [\"webhook.create\"]\n"), "federation.peers[].allowed_scopes", "outside its limits"),
+        (peer("allowed_scopes = [\"file_watch.create\"]\n"), "federation.peers[].allowed_scopes", "outside its limits"),
+        (peer("allowed_scopes = [\"fs.read\", \"team.run\"]\n"), "federation.peers[].allowed_scopes", "outside its limits"),
         (format!("{FED_HEAD}{FED_PEER}{FED_PEER}"), "federation.peers[].id", "duplicate"),
         (
             "[federation]\nid = \"laptop\"\n".to_string() + FED_PEER,

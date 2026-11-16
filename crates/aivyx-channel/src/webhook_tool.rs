@@ -94,7 +94,18 @@ impl Tool for WebhookCreateTool {
         Scope::parse("webhook.create").expect("known base")
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        // A19 final review I1 — a webhook's runs execute later as System
+        // turns with the role's full authority, outside the peer channel's
+        // ceiling, so a federation peer's request never creates one.
+        if ctx.message_origin == aivyx_core::MessageOrigin::Peer {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "webhook.create isn't available to a request from a federation peer: \
+                         a webhook starts runs later, outside the peer's limits"
+                    .to_string(),
+            });
+        }
         let Some(store) = self.store.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -592,5 +603,23 @@ mod tests {
             output["secret"],
             json!("printed to the daemon log at creation time — see stderr/journal")
         );
+    }
+
+    /// A19 final review I1 — a webhook's runs execute later as System
+    /// turns outside the peer's ceiling, so a peer's request can't make one.
+    #[tokio::test]
+    async fn webhook_create_refuses_a_peer_request() {
+        let handle = test_store().await;
+        let tool = WebhookCreateTool::new();
+        tool.set_webhook_store(handle.clone()).unwrap();
+        let (ch, audit) = ctx_parts();
+        let mut ctx = make_ctx(&ch, &audit);
+        ctx.message_origin = aivyx_core::MessageOrigin::Peer;
+        let outcome = tool.execute(json!({ "prompt": "do the thing" }), &ctx).await;
+        let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
+            panic!("expected a refusal, got {outcome:?}");
+        };
+        assert!(detail.contains("federation peer"), "{detail}");
+        assert!(webhook::list_webhooks(&handle).await.unwrap().is_empty());
     }
 }

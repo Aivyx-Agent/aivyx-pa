@@ -1967,6 +1967,31 @@ pub(crate) fn federation_id_ok(id: &str) -> bool {
 pub(crate) const FEDERATION_CEILING_REASON: &str =
     "a peer's task always asks before irreversible actions (FED.5); use \"manual\" or \"assisted\"";
 
+/// Longest `task_timeout_secs` a peer may be given: one day.
+pub(crate) const FEDERATION_MAX_TASK_TIMEOUT_SECS: u64 = 86_400;
+
+/// Scope bases a peer's `allowed_scopes` may never hold: these tools start
+/// runs later (cron, webhook, file watch, team mission) that execute
+/// outside the peer turn's ceiling, with the operator's full authority.
+/// The tools also refuse a peer's request themselves; this keeps the grant
+/// out of the config in the first place.
+const FEDERATION_PEER_DENIED_BASE_PREFIXES: &[&str] =
+    &["schedule.", "webhook.", "file_watch.", "team."];
+
+/// `Some(reason)` when `scope` may not be granted to a peer.
+pub(crate) fn federation_peer_scope_refusal(scope: &Scope) -> Option<String> {
+    let base = scope.base();
+    FEDERATION_PEER_DENIED_BASE_PREFIXES
+        .iter()
+        .any(|p| base.starts_with(p))
+        .then(|| {
+            format!(
+                "`{}` can't be granted to a peer: this would let a peer start runs outside its limits",
+                scope.as_str()
+            )
+        })
+}
+
 /// Parse a peer's `ceiling` string. `Err` carries the reason.
 pub(crate) fn federation_ceiling(s: &str) -> Result<AutonomyLevel, String> {
     match s {
@@ -7596,12 +7621,19 @@ impl AivyxConfig {
                         .allowed_scopes
                         .iter()
                         .map(|sc| {
-                            Scope::parse(sc).ok_or_else(|| {
+                            let scope = Scope::parse(sc).ok_or_else(|| {
                                 invalid(
                                     "federation.peers[].allowed_scopes",
                                     format!("{at}: unknown scope `{sc}`"),
                                 )
-                            })
+                            })?;
+                            match federation_peer_scope_refusal(&scope) {
+                                Some(r) => Err(invalid(
+                                    "federation.peers[].allowed_scopes",
+                                    format!("{at}: {r}"),
+                                )),
+                                None => Ok(scope),
+                            }
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let ceiling = match p.ceiling.as_deref() {
@@ -7615,6 +7647,12 @@ impl AivyxConfig {
                         return Err(invalid(
                             "federation.peers[].task_timeout_secs",
                             format!("{at}: must be at least 1"),
+                        ));
+                    }
+                    if secs > FEDERATION_MAX_TASK_TIMEOUT_SECS {
+                        return Err(invalid(
+                            "federation.peers[].task_timeout_secs",
+                            format!("{at}: must be at most {FEDERATION_MAX_TASK_TIMEOUT_SECS} (one day)"),
                         ));
                     }
                     peers.push(FederationPeerConfig {

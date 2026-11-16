@@ -101,7 +101,18 @@ impl Tool for FileWatchCreateTool {
         Scope::parse("file_watch.create").expect("known base")
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
+    async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        // A19 final review I1 — a file watch's runs execute later as System
+        // turns with the role's full authority, outside the peer channel's
+        // ceiling, so a federation peer's request never creates one.
+        if ctx.message_origin == aivyx_core::MessageOrigin::Peer {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "file_watch.create isn't available to a request from a federation peer: \
+                         a file watch starts runs later, outside the peer's limits"
+                    .to_string(),
+            });
+        }
         let Some(store) = self.store.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,
@@ -448,5 +459,84 @@ mod tests {
         assert_eq!(tool.name(), "file_watch.delete");
         let schema = tool.input_schema();
         assert!(schema["required"].as_array().unwrap().contains(&json!("watch_id")));
+    }
+
+    /// A19 final review I1 — a file watch's runs execute later as System
+    /// turns outside the peer's ceiling, so a peer's request can't make one.
+    #[tokio::test]
+    async fn file_watch_create_refuses_a_peer_request() {
+        use aivyx_core::{
+            AgentId, CancellationToken, ChannelContext, ChannelError, ChannelPlatform, SessionId,
+            StreamEvent, TurnId, TurnOutcome,
+        };
+        use aivyx_crypto::MasterKey;
+        use aivyx_storage::{RedbStorage, StorageConfig};
+
+        struct NoopChannel {
+            session: SessionId,
+            token: CancellationToken,
+        }
+        #[async_trait]
+        impl ChannelContext for NoopChannel {
+            fn session_id(&self) -> SessionId {
+                self.session
+            }
+            fn platform(&self) -> ChannelPlatform {
+                ChannelPlatform::Local
+            }
+            fn channel_name(&self) -> &str {
+                "test"
+            }
+            fn trust_tier(&self) -> aivyx_capability::TrustTier {
+                aivyx_capability::TrustTier::Trusted
+            }
+            async fn stream_event(&self, _event: StreamEvent<'_>) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            async fn finalize(&self, _outcome: &TurnOutcome) -> Result<(), ChannelError> {
+                Ok(())
+            }
+            fn cancellation_token(&self) -> CancellationToken {
+                self.token.clone()
+            }
+        }
+        struct NoopAudit;
+        impl aivyx_core::AuditHook for NoopAudit {
+            fn on_event(&self, _tag: aivyx_core::AuditTag) {}
+        }
+
+        let dir = std::env::temp_dir()
+            .join(format!("aivyx-file-watch-tool-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage = RedbStorage::open(
+            StorageConfig::new(dir.join("store.redb")),
+            MasterKey::from_raw([12u8; 32]),
+        )
+        .await
+        .unwrap();
+        let handle = storage.domain(KeyDomain::FileWatches);
+        let tool = FileWatchCreateTool::new();
+        tool.set_file_watch_store(handle.clone()).unwrap();
+
+        let ch = NoopChannel { session: SessionId::new(), token: CancellationToken::new() };
+        let audit = NoopAudit;
+        let ctx = ToolContext {
+            agent_id: AgentId::new(),
+            session_id: ch.session,
+            turn_id: TurnId::new(),
+            channel: &ch,
+            audit: &audit,
+            cancellation: &ch.token,
+            message_origin: aivyx_core::MessageOrigin::Peer,
+        };
+        let outcome = tool
+            .execute(json!({ "path": dir.to_string_lossy(), "prompt": "summarise it" }), &ctx)
+            .await;
+        let ToolOutcome::Failed(AivyxError::Tool { detail, .. }) = outcome else {
+            panic!("expected a refusal, got {outcome:?}");
+        };
+        assert!(detail.contains("federation peer"), "{detail}");
+        assert!(file_watch::list_file_watches(&handle).await.unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -682,13 +682,22 @@ pub fn write_federation_peer(path: &Path, peer: &FederationPeerWrite) -> Result<
         }
     }
     for sc in &peer.allowed_scopes {
-        if aivyx_capability::Scope::parse(sc).is_none() {
+        let Some(scope) = aivyx_capability::Scope::parse(sc) else {
             return Err(bad(format!("unknown scope {sc:?}")));
+        };
+        if let Some(reason) = crate::federation_peer_scope_refusal(&scope) {
+            return Err(bad(reason));
         }
     }
     crate::federation_ceiling(&peer.ceiling).map_err(bad)?;
     if peer.task_timeout_secs == 0 {
         return Err(bad("task_timeout_secs must be at least 1".into()));
+    }
+    if peer.task_timeout_secs > crate::FEDERATION_MAX_TASK_TIMEOUT_SECS {
+        return Err(bad(format!(
+            "task_timeout_secs must be at most {} (one day)",
+            crate::FEDERATION_MAX_TASK_TIMEOUT_SECS
+        )));
     }
     let mut doc = load_document(path)?;
     let own = doc
@@ -3553,6 +3562,42 @@ mod tests {
                 Err(ConfigWriteError::InvalidFederationPeer { .. })
             ));
         }
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Final-review I1 + m3: `peer add` refuses scopes for tools that start
+    /// runs later (they would run outside the peer's limits) and a task
+    /// timeout over one day.
+    #[test]
+    fn federation_peer_write_refuses_deferred_run_scopes_and_long_timeouts() {
+        let path = temp_toml("fed-deferred");
+        std::fs::write(&path, "[federation]\nid = \"desktop\"\n").unwrap();
+        for sc in [
+            "schedule.create",
+            "schedule.update",
+            "webhook.create",
+            "file_watch.create",
+            "team.run",
+            "team.run.channel",
+        ] {
+            let mut p = fed_peer("laptop");
+            p.allowed_scopes = vec!["fs.read".into(), sc.into()];
+            match write_federation_peer(&path, &p) {
+                Err(ConfigWriteError::InvalidFederationPeer { reason }) => {
+                    assert!(reason.contains("outside its limits"), "{sc}: {reason}");
+                }
+                other => panic!("{sc}: expected a refusal, got {other:?}"),
+            }
+        }
+        let mut p = fed_peer("laptop");
+        p.task_timeout_secs = 86_401;
+        assert!(matches!(
+            write_federation_peer(&path, &p),
+            Err(ConfigWriteError::InvalidFederationPeer { .. })
+        ));
+        p.task_timeout_secs = 86_400;
+        p.allowed_scopes = vec!["fs.read".into()];
+        write_federation_peer(&path, &p).unwrap();
         std::fs::remove_file(&path).ok();
     }
 
