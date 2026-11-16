@@ -3,7 +3,7 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
-## [Unreleased] — 1.1.0
+## [1.1.0] — 2026-11-16
 
 ### Added
 
@@ -21,7 +21,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
   before each send at the default `assisted` level. Every incoming task
   needs your approval, as a waiting step in `aivyx-pa review` or the
   Studio. A peer's turn gets no memory, persona or profile, and only the
-  scopes you allowed. The link is TCP with Noise `XX` encryption, between
+  scopes you allowed. A peer can never be granted scopes that start runs
+  outside its limits (`schedule.*`, `webhook.*`, `file_watch.*`, `team.*`)
+  or change this instance's prompts, tools or settings (`role.update`,
+  `config.write`, `tool.allowlist`). The link is TCP with Noise `XX` encryption, between
   machines you can already reach (a tailnet or a LAN); there is no relay
   or discovery. Every request, reply and refusal is written to the audit
   log on both sides as a `FederationCrossing`. Federation runs only in the
@@ -30,6 +33,13 @@ All notable changes to Aivyx are recorded here. This project adheres to
   until `docs/checklists/federation-two-machines.md` passes. Set-up guide:
   `docs/FEDERATION_SETUP.md`. Amendment A19.
 - `aivyx-pa audit export --event-type federation_crossing`.
+
+### Changed
+
+- The approval prompt for an integration that sends something out now
+  says "an outbound action" instead of "a third-party action", since it
+  also covers federation sends. Nothing else changes for setups without
+  `[federation]`.
 
 ## [1.0.0] — 2026-11-15
 
