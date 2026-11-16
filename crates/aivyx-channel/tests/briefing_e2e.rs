@@ -187,6 +187,7 @@ async fn operator_actions_are_stamped_over_ipc_but_looking_is_not() {
         notify_targets: Vec::new(),
         schedule_store: None,
         webhook_store: None,
+        federation: None,
         file_watch_store: None,
         webhook_port: None,
         web_ui_port: None,

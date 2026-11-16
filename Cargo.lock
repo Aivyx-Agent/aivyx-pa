@@ -217,6 +217,8 @@ dependencies = [
  "aivyx-cost",
  "aivyx-crypto",
  "aivyx-discord",
+ "aivyx-federation",
+ "aivyx-federation-net",
  "aivyx-instance",
  "aivyx-ipc",
  "aivyx-kvcache",

@@ -12009,6 +12009,8 @@ async fn run_async(
             notify_targets: config_notify_targets.clone(),
             schedule_store: Some(schedule_domain),
             webhook_store: Some(webhook_domain),
+            // A19 — the federation listener is built from `[federation]` in Task 8.
+            federation: None,
             file_watch_store: Some(file_watch_domain),
             webhook_port: config_webhook_port,
             web_ui_port: studio_port,

@@ -179,6 +179,9 @@ pub struct DaemonConfig {
     pub schedule_store: Option<DomainHandle>,
     /// Optional encrypted storage domain for webhook triggers.
     pub webhook_store: Option<DomainHandle>,
+    /// A19 (FED.3) — the inbound federation listener. `None` (the default,
+    /// and whenever `[federation] listen` is unset): no listener.
+    pub federation: Option<crate::federation_server::FederationServe>,
     /// Optional encrypted storage domain for file-watch triggers.
     pub file_watch_store: Option<DomainHandle>,
     /// Port for the localhost-only webhook HTTP listener.
@@ -788,6 +791,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         notify_targets,
         schedule_store,
         webhook_store,
+        federation,
         file_watch_store,
         webhook_port,
         web_ui_port,
@@ -1053,6 +1057,16 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
                     .await
             {
                 eprintln!("aivyx-pa webhook listener error: {e}");
+            }
+        })
+    });
+
+    // A19 — spawn the federation listener when `[federation] listen` is set.
+    let _federation_handle = federation.map(|serve| {
+        let fed_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::federation_server::run_federation_listener(serve, fed_shutdown).await {
+                eprintln!("aivyx-pa federation listener error: {e}");
             }
         })
     });
@@ -4422,6 +4436,7 @@ fn minimal_daemon_config(
         notify_targets: Vec::new(),
         schedule_store: None,
         webhook_store: None,
+        federation: None,
         file_watch_store: None,
         webhook_port: None,
         web_ui_port: None,
@@ -4764,6 +4779,7 @@ pub fn to_wire_channel_platform(platform: aivyx_core::ChannelPlatform) -> WireCh
         aivyx_core::ChannelPlatform::Signal => WireChannelPlatform::Signal,
         aivyx_core::ChannelPlatform::Rest => WireChannelPlatform::Rest,
         aivyx_core::ChannelPlatform::Voice => WireChannelPlatform::Voice,
+        aivyx_core::ChannelPlatform::Federation => WireChannelPlatform::Federation,
     }
 }
 

@@ -120,6 +120,11 @@ aivyx-team = { path = "../aivyx-team" }
 # moved here (shared with the browser app); aivyx-channel re-exports + adds the
 # encrypted storage CRUD over them.
 aivyx-ipc = { path = "../aivyx-ipc" }
+# A19 (FED.3) — the inbound federation listener (`federation_server.rs`):
+# request verification, trust/attenuation and consent classification, and
+# the Noise link + peer cards it accepts over.
+aivyx-federation = { path = "../aivyx-federation" }
+aivyx-federation-net = { path = "../aivyx-federation-net" }
 # POLISH_WAVES.md sub-project 7, item B — the test-connection probe reuses
 # the same McpServerBridge/transport connect calls aivyx-cli's own boot-time
 # startup loop uses.

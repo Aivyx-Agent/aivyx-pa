@@ -49,6 +49,7 @@ pub mod trigger;
 pub mod webhook;
 pub mod webhook_listener;
 pub mod webhook_tool;
+pub mod federation_server;
 pub mod file_watch;
 pub mod file_watch_tool;
 pub mod file_watcher;
