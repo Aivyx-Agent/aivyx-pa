@@ -450,7 +450,7 @@ pub const COMMANDS: &[CommandHelp] = &[
             "    [--event-type <type>]",
             "    (type: tool_call, scope_denied, turn_started, turn_ended,",
             "     memory_access, auto_notify_dispatched, skill_auto_proposal,",
-            "     skill_invocation, store_unlocked)",
+            "     skill_invocation, store_unlocked, federation_crossing)",
         ],
     },
     CommandHelp {
