@@ -27,7 +27,7 @@ passes. The design record is
 - Each request is signed, checked against replay, and limited to what you
   allowed for that peer. Every request, reply and refusal is written to the
   audit log on both sides as a `FederationCrossing` event (peer, direction,
-  verb and outcome; never the text).
+  verb, outcome and a fixed reason; never the text).
 
 There are three kinds of request (verbs):
 
@@ -47,7 +47,8 @@ There are three kinds of request (verbs):
   too. PA does no NAT traversal.
 - Federation runs only in the **daemon**. The listener and the federation
   tools load after the daemon unlocks the store. The in-process chat
-  (`aivyx-pa --no-daemon`) does not get the federation tools.
+  (`aivyx-pa --no-daemon`) does not get the federation tools;
+  `aivyx-pa --headless` runs over the daemon, so it does.
 
 The examples use two machines, `desktop` (`100.64.0.2`) and `laptop`
 (`100.64.0.3`), and port `7650` on both.
@@ -117,9 +118,9 @@ The options:
 |---|---|---|
 | `--address <host:port>` | required | Where the peer's listener is. |
 | `--verbs chat,task,search` | `chat` | What the peer may ask **this** instance for. |
-| `--scopes <scope,...>` | none | The most a peer's task may use here, such as `fs.read` (read a file) and `fs.metadata` (list a folder). With none, every task from the peer is refused. |
+| `--scopes <scope,...>` | none | The most a peer's task may use here, such as `fs.read` (read a file) and `fs.metadata` (list a folder). With none, every task from the peer is refused. Warning: writes that persist (`memory.write`, `skills.write`, `persona.*`) let a peer shape your later turns. `schedule.*`, `webhook.*`, `file_watch.*` and `team.*` are refused: they would let a peer start runs outside its limits. |
 | `--ceiling manual\|assisted` | `manual` | How the peer's task asks you. `manual`: every action that changes something asks. `assisted`: only irreversible actions ask. Higher levels are refused. "Irreversible" at `assisted` means what this instance's own `assisted` level asks about: a granted `shell.exec`, for example, runs commands that delete or overwrite nothing without asking. If this instance doesn't ask before deletes and overwrites somewhere (an `unleashed` level or area override, or `[access] confirm_destructive = false`), every `assisted` peer runs as `manual`, and the daemon says so when it starts. |
-| `--task-timeout-secs <N>` | `900` | How long a peer's task may take on this machine, approval included. |
+| `--task-timeout-secs <N>` | `900` | How long a peer's task may take on this machine, approval included. At most `86400` (one day). |
 
 `peer add` refuses a card whose signature does not verify, or whose id is
 not the id you typed. Adding a peer with an id that already exists
@@ -176,10 +177,12 @@ nothing to the audit log. If a step fails, see
 (`aivyx-pa`) or a chat app, ask the assistant, for example "ask the
 desktop which files are in its sandbox". It uses one of three tools:
 `federation.chat`, `federation.task` or `federation.search`.
-`federation.relay` is an irreversible capability, so at the default
-`assisted` level each outbound request asks you first. Headless runs
+`federation.relay` is an irreversible, outbound capability, so each
+outbound request asks you first, at every autonomy level. Headless runs
 (`aivyx-pa --headless`), routines and team runs can't ask, so they park or
-escalate the request instead of sending it.
+escalate the request instead of sending it. Only an explicit
+`[access] confirm_destructive = false` lets a granted request go without
+asking.
 
 **From the command line.** `send` sends one request and prints the reply:
 
@@ -222,8 +225,10 @@ nothing runs, and the peer can ask again.
 A peer's turn starts with a fixed system prompt on a fresh session. It
 gets **no** memory recall, **no** persona or profile and **no** skill
 triggers, and it never sees your conversations. What a peer can learn is
-only what the tools you allowed for it return, and, for `search`, the
-names, triggers and steps of matching learned skills.
+what the tools you allowed for it return; for `search`, the names,
+triggers and steps of matching learned skills; and, because its model is
+offered this instance's tools, their names and descriptions, including
+the ids of your configured peers in the `federation.*` tools.
 
 The reply that comes back is untrusted text from another instance. The
 sending assistant treats it as data: it is scanned for prompt-injection
@@ -273,6 +278,24 @@ record it:
 | `replayed request` | A request was sent twice. |
 | `a request field is too long` | The text is too long. |
 
+A request that fails on the sending side never reaches the peer's
+operator. It prints one of these, and only the sending machine's audit
+log records it. For each, run `aivyx-pa federation ping <peer>` and see
+[By `ping` step](#by-ping-step):
+
+| Reason | Meaning |
+|---|---|
+| `the peer could not be reached` | Nothing answered at the peer's address, or the peer closed the link because it hasn't added this machine's card. |
+| `the handshake with the peer failed` | Something answered, but the encrypted handshake didn't finish. |
+| `the peer presented a key its card does not vouch for` | The peer has made new keys; add its new card. |
+| `the peer's card does not verify` | The card stored for that peer is damaged; add it again. |
+| `the request could not be signed` | This machine's identity key couldn't sign the request. |
+| `the peer did not reply in time` | The link worked but no reply came within the wait in [Limits](#limits). |
+| `the peer's reply could not be read` | The reply was garbled or too large. |
+| `the peer replied to a different verb` | The reply didn't match the request. |
+| `cancelled before the reply` | You cancelled the turn before the reply came. |
+| `refused by the peer (reason not recognised)` | The peer sent a reason this version doesn't know (a newer peer, say). |
+
 On the receiving side, a connection from a key no configured peer has is
 recorded as `unknown:<fingerprint>` with `unknown transport key`.
 
@@ -297,4 +320,6 @@ aivyx-pa audit export --event-type federation_crossing
 ```
 
 Each line shows the peer, `inbound` or `outbound`, the verb, and `relayed`
-or `denied` with its reason.
+or `denied` with its reason. A request cancelled after it was sent is
+`denied` with `cancelled before the reply` on the sending side, while the
+peer may still record it as `relayed`.

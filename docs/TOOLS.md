@@ -175,8 +175,9 @@ base, Trusted-tier only. See the Lattice addendum in
 ## Federation (infrastructure, preview)
 
 Registered only in the daemon, and only when at least one
-`[[federation.peers]]` is configured (the in-process chat and `--headless`
-don't get them). See [`FEDERATION_SETUP.md`](FEDERATION_SETUP.md).
+`[[federation.peers]]` is configured. The in-process chat (`--no-daemon`)
+doesn't get them; `--headless` runs its turn over the daemon, so it does.
+See [`FEDERATION_SETUP.md`](FEDERATION_SETUP.md).
 
 | Tool | Scope | Min tier | Notes |
 |---|---|---|---|
@@ -184,9 +185,11 @@ don't get them). See [`FEDERATION_SETUP.md`](FEDERATION_SETUP.md).
 | `federation.task` | `federation.relay:<peer>` | Trusted | ask a peer to do a task; the peer's operator approves it first, and it runs within the scopes that operator granted the peer; waits up to the peer's `task_timeout_secs` + 60 s |
 | `federation.search` | `federation.relay:<peer>` | Trusted | search a peer's learned skills (name, trigger, procedure only) |
 
-All three: `federation.relay` is an **irreversible** base, so at the default
-`assisted` level each send asks first; headless runs, routines and team
-runs park or escalate it rather than send. `peer add` is the grant: each
+All three: `federation.relay` is an **irreversible**, outbound base, so each
+send asks first at every autonomy level, `unleashed` included; headless
+runs, routines and team runs park or escalate it rather than send. The one
+exception is an explicit `[access] confirm_destructive = false`: then a
+granted send goes without asking. `peer add` is the grant: each
 configured peer gives the default agent `federation.relay:<id>`. A role
 that declares its own `capability_scopes` must list it. The reply is
 **untrusted output** (Picket scans it, Bulwark fences it). Amendment A19.

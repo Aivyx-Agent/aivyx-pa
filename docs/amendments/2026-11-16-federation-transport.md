@@ -82,14 +82,17 @@ the turn's wall-clock deadline pauses while that tool runs, as it does
 while an approval waits. The three outbound federation tools return
 `true`, because a task's reply is bounded by the peer's `task_timeout`
 and not by the turn's 120 seconds. They still stop when the turn is
-cancelled.
+cancelled. A pausing tool in a parallel batch lifts the deadline for that
+whole batch.
 
 ## Privacy line
 
 A turn started by a peer gets no automatic memory recall, no persona or
 profile context and no skill-trigger injection. It runs with a fixed peer
-system prompt. What a peer can learn about the operator is only what the
-tools it is allowed to call return.
+system prompt. What a peer can learn about the operator is what the tools
+it is allowed to call return, plus the names and descriptions of the tools
+its model is offered (the `federation.*` descriptions name the configured
+peer ids).
 
 ## Consent
 
@@ -97,13 +100,24 @@ Each inbound task needs an up-front approval from the operator, such as
 "Run a task from peer laptop: ...". After that, the turn's own gates
 apply. Approvals are parked as "waiting" steps in the existing queue. The
 peer's turn waits for the decision. Resolving a waiting step records the
-decision and does not run the call; the waiting turn runs it.
+decision and does not run the call; the waiting turn runs it. A waiting
+step's audit entry carries a fixed summary (`<tool> from peer <id>`); the
+peer's text stays in the encrypted step.
+
+A peer's `assisted` ceiling defers to the receiving instance's own gates.
+When those skip the delete and overwrite question in any area (an
+`unleashed` level or override, or `[access] confirm_destructive = false`),
+every `assisted` peer runs as `manual`. A peer's request never starts a
+run for later (`schedule.*`, `webhook.create`, `file_watch.create`,
+`team.run`), and those scopes can't be granted to a peer, because such a
+run would execute outside the peer's ceiling.
 
 ## Audit
 
-A new event, `FederationCrossing { peer_id, direction, verb, outcome }`,
-is written on both sides for every request, reply and refusal. It never
-holds payload text or key material.
+A new event, `FederationCrossing { peer_id, direction, verb, outcome, reason }`,
+is written on both sides for every request, reply and refusal. `reason`
+is empty for a relayed request and one of a fixed set of strings for a
+refusal. The event never holds payload text or key material.
 
 ## Replay
 
