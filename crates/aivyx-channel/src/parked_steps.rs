@@ -840,6 +840,7 @@ mod tests {
         assert_eq!(plain.capability_ceiling(), None);
         assert!(!plain.confirm_every_action());
         let peer = ParkingChannel::new(Arc::new(PeerLike), Arc::clone(&p), "x");
+        assert!(peer.capability_ceiling().is_some());
         assert_eq!(peer.capability_ceiling(), PeerLike.capability_ceiling());
         assert!(peer.confirm_every_action());
     }

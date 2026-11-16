@@ -302,7 +302,15 @@ impl Tool for RoleSwitchTool {
         // identity; the clean slate is the child's planner starting
         // with no prior observed steps, which is what
         // `ConcreteAgent::turn` already does on every invocation.
-        let child_message = Message::text(ctx.session_id, task.clone());
+        //
+        // A19 — a federation peer's request stays a peer's request in the
+        // child turn: no operator profile, recall, skill injection or
+        // refiner, and no `team.run`. Operator and System parents are
+        // unchanged (the child is Operator-origin, as before).
+        let mut child_message = Message::text(ctx.session_id, task.clone());
+        if ctx.message_origin == crate::MessageOrigin::Peer {
+            child_message = child_message.from_peer();
+        }
         let child_outcome = child.turn(child_message, ctx.channel).await;
 
         // Translate the child's `TurnOutcome` into a parent-facing

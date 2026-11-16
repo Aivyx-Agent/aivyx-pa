@@ -7027,6 +7027,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn confirm_every_action_asks_in_an_operator_turn_too() {
+        // The channel hook alone forces the ask: no `manual` autonomy on the
+        // agent and an Operator-origin message.
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let tool = Arc::new(FakeTool::new_capturing("memory.write", json!({}), ran.clone()));
+        let caps = CapabilitySet::from_scopes([Scope::parse("memory.write").unwrap()]);
+        let agent = make_agent(caps.clone(), vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()));
+        let channel = CeilingChannel {
+            inner: ApprovingChannel::new(&[crate::Approval::Denied]),
+            ceiling: caps,
+            confirm_all: true,
+        };
+        let _ = agent.turn(Message::text(channel.session_id(), "note it"), &channel).await;
+        let asked = channel.inner.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(asked[0].tool, "memory.write");
+        assert!(ran.lock().unwrap().is_empty(), "a denied call never runs");
+    }
+
+    #[tokio::test]
     async fn confirm_every_action_doesnt_ask_about_reads() {
         let tool = Arc::new(FakeTool::new_bare("fs.read", "fs.read"));
         let agent = make_agent(fs_read_caps(), vec![tool.clone()], RecordingAudit::new(), one_call_plan(tool.id()));
@@ -7804,6 +7824,73 @@ mod tests {
         let msg = Message::text(channel.session, "hi"); // no .system_originated()
         agent.turn(msg, &channel).await;
         assert_eq!(*observed.lock().unwrap(), Some(MessageOrigin::Operator));
+    }
+
+    /// A19 — runs a parent turn with `parent` that calls `role.switch`;
+    /// returns the origin the child turn's tool call observed.
+    async fn role_switch_child_origin(parent: Message, channel: &FakeChannel) -> Option<MessageOrigin> {
+        let observed = Arc::new(Mutex::new(None));
+        let probe = Arc::new(OriginCapturingTool::new(Arc::clone(&observed)));
+        let probe_id = probe.id();
+        let role_switch = Arc::new(RoleSwitchTool::new());
+        let role_switch_id = role_switch.id();
+        let audit = RecordingAudit::new();
+        let tools: Arc<ToolRegistry> = Arc::new(ToolRegistry::new(vec![
+            Arc::clone(&role_switch) as Arc<dyn Tool>,
+            probe as Arc<dyn Tool>,
+        ]));
+        let child_tools = Arc::clone(&tools);
+        let child_audit = Arc::clone(&audit);
+        let factory: Arc<ChildAgentFactory> = Arc::new(move |_target: &str| {
+            Ok(build_child_agent(
+                Arc::clone(&child_tools),
+                Arc::clone(&child_audit),
+                CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+                vec![
+                    NextStep::ToolCall {
+                        tool_id: probe_id,
+                        input: json!({}),
+                        auto_corrected_from: None,
+                        extracted_from_text: None,
+                    },
+                    NextStep::FinalMessage("child done".into()),
+                ],
+            ))
+        });
+        assert!(role_switch.set_child_factory(factory).is_ok());
+        let parent_plan = Arc::new(vec![
+            NextStep::ToolCall {
+                tool_id: role_switch_id,
+                input: json!({"target": "researcher", "task": "look it up"}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+            NextStep::FinalMessage("parent done".into()),
+        ]);
+        let parent_agent = ConcreteAgent::new(
+            AgentId::new(),
+            CapabilitySet::from_scopes([Scope::parse("role.switch:researcher").unwrap()]),
+            Arc::clone(&tools),
+            Arc::clone(&audit) as Arc<dyn AuditHook>,
+            move || Box::new(crate::planner::VecPlanner::new((*parent_plan).clone())),
+        );
+        let out = parent_agent.turn(parent, channel).await;
+        assert!(matches!(out, TurnOutcome::Completed { .. }), "{out:?}");
+        *observed.lock().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_peer_parents_role_switch_child_is_a_peer_turn() {
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let msg = Message::text(channel.session, "go").from_peer();
+        assert_eq!(role_switch_child_origin(msg, &channel).await, Some(MessageOrigin::Peer));
+    }
+
+    #[tokio::test]
+    async fn an_operator_parents_role_switch_child_stays_operator() {
+        let channel = FakeChannel::new(ChannelPlatform::Local, TrustTier::Trusted);
+        let msg = Message::text(channel.session, "go");
+        assert_eq!(role_switch_child_origin(msg, &channel).await, Some(MessageOrigin::Operator));
     }
 
     // ---- Model routing Part 3b: taint marking ----
