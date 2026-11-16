@@ -570,6 +570,26 @@ pub enum AuditEvent {
         /// `"passphrase"`, or `"card <serial>"` (e.g. `"card S1"`).
         method: String,
     },
+
+    /// A19 (FED.3) — one federation request, reply or refusal crossing the
+    /// boundary between two of the operator's own instances. Mirrors the
+    /// fields of `aivyx_federation::relay::Crossing` (the conversion lives
+    /// in `aivyx-channel`, so this crate needs no federation dependency).
+    /// Records who, which way, which verb and what happened — never
+    /// payload text or key material. A ping is never recorded.
+    FederationCrossing {
+        /// The peer's instance id, or `unknown:<16 hex>` for an unknown key.
+        peer_id: String,
+        /// `"inbound"` | `"outbound"`.
+        direction: String,
+        /// `"chat"` | `"task"` | `"search"`.
+        verb: String,
+        /// `"relayed"` | `"denied"`.
+        outcome: String,
+        /// Operator-readable; empty when relayed.
+        #[serde(default)]
+        reason: String,
+    },
 }
 
 /// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].
@@ -3186,5 +3206,51 @@ mod tests {
         assert!(json.contains(r#""method":"card S1""#), "{json}");
         let back: AuditEvent = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(event, back);
+    }
+
+    // ---- A19 — FederationCrossing variant ----
+
+    fn sample_crossing() -> AuditEvent {
+        AuditEvent::FederationCrossing {
+            peer_id: "laptop".into(),
+            direction: "inbound".into(),
+            verb: "task".into(),
+            outcome: "denied".into(),
+            reason: "verb not allowed".into(),
+        }
+    }
+
+    #[test]
+    fn federation_crossing_round_trips_and_carries_no_payload() {
+        let e = sample_crossing();
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("FederationCrossing"), "{json}");
+        assert_eq!(serde_json::from_str::<AuditEvent>(&json).unwrap(), e);
+        // Only the five metadata fields are carried: no payload, no key.
+        let v = serde_json::to_value(&e).unwrap();
+        let mut fields: Vec<&String> = v.as_object().unwrap().keys().collect();
+        fields.sort();
+        assert_eq!(fields, ["direction", "kind", "outcome", "peer_id", "reason", "verb"]);
+    }
+
+    #[test]
+    fn federation_crossing_decodes_without_a_reason() {
+        let json = r#"{"kind":"FederationCrossing","peer_id":"laptop","direction":"outbound","verb":"chat","outcome":"relayed"}"#;
+        match serde_json::from_str::<AuditEvent>(json).unwrap() {
+            AuditEvent::FederationCrossing { reason, outcome, .. } => {
+                assert_eq!(reason, "");
+                assert_eq!(outcome, "relayed");
+            }
+            other => panic!("expected FederationCrossing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn federation_crossing_can_be_hmac_chained() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        log.append(sample_crossing()).unwrap();
+        log.verify().unwrap();
+        assert_eq!(AuditLog::len(&log), 2);
     }
 }

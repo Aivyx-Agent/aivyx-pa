@@ -176,6 +176,7 @@ mod tests {
             resolved_at,
             result: None,
             preview: None,
+            waiting: false,
         }
     }
 

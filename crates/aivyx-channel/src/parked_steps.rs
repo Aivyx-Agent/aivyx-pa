@@ -13,10 +13,17 @@
 //! Key layout: the step's short id is the key; the value is the
 //! [`ParkedStep`] as JSON (without its `preview`, which is computed when
 //! listed).
+//!
+//! A19 (FED.3) adds *waiting* steps: a live turn (a peer instance's task)
+//! parks its approval with [`StepParker::park_waiting`] and blocks in
+//! [`StepParker::await_decision`] until the operator decides in the same
+//! review queue, or a timeout passes. Resolving a waiting step only records
+//! the decision — it never runs the call; the waiting turn does.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use aivyx_audit::{AuditEvent, AuditWriter, PersistentAuditLog};
 use aivyx_capability::TrustTier;
@@ -44,6 +51,16 @@ const PREVIEW_CHARS: usize = 1500;
 /// Bytes read to build a preview (UTF-8 can take 4 bytes a character).
 const PREVIEW_BYTES: u64 = 4 * PREVIEW_CHARS as u64;
 const DAY_SECS: i64 = 24 * 3600;
+/// A waiting step's result when its timeout passed undecided.
+pub const TIMED_OUT_RESULT: &str = "timed out waiting for approval";
+/// A waiting step's result when its run was cancelled undecided.
+pub const CANCELLED_RESULT: &str = "the waiting run was cancelled";
+/// A waiting step's result once approved: the waiting turn runs the call.
+pub const WAITING_APPROVED_RESULT: &str = "approved; the waiting run carries it out";
+/// How often a waiting turn re-reads its step. The in-process wake-up
+/// ([`StepParker::resolve`] signals it) is the fast path; this poll catches
+/// a decision written to the store by another `StepParker`.
+const WAIT_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParkError {
@@ -77,6 +94,19 @@ pub struct StepParker {
     /// Held for a whole resolve (and while lapsing), so two decisions on
     /// the same step can't both run it.
     lock: tokio::sync::Mutex<()>,
+    /// Signalled whenever a step is resolved or lapses, waking any turn in
+    /// [`StepParker::await_decision`].
+    changed: tokio::sync::Notify,
+}
+
+/// What a waiting turn is told for a step in `state`; `None` while pending.
+fn answer_for(state: ParkedState) -> Option<Approval> {
+    match state {
+        ParkedState::Pending => None,
+        ParkedState::Approved => Some(Approval::Approved),
+        ParkedState::Denied | ParkedState::Failed => Some(Approval::Denied),
+        ParkedState::Lapsed => Some(Approval::TimedOut),
+    }
 }
 
 impl StepParker {
@@ -91,6 +121,7 @@ impl StepParker {
             notify: None,
             preview_root: None,
             lock: tokio::sync::Mutex::new(()),
+            changed: tokio::sync::Notify::new(),
         }
     }
 
@@ -139,6 +170,18 @@ impl StepParker {
         Ok(steps)
     }
 
+    async fn read_one(&self, id: &str) -> Result<Option<ParkedStep>, ParkError> {
+        let Some(value) = self
+            .storage
+            .get(id.as_bytes())
+            .await
+            .map_err(|e| ParkError::Storage(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+        serde_json::from_slice(&value).map(Some).map_err(|e| ParkError::Storage(e.to_string()))
+    }
+
     async fn write(&self, step: &ParkedStep) -> Result<(), ParkError> {
         let mut stored = step.clone();
         stored.preview = None;
@@ -154,7 +197,7 @@ impl StepParker {
     /// failure is audited and the call is refused as before
     /// ([`Approval::Unavailable`]).
     pub async fn park(&self, req: &ApprovalRequest, origin: &str) -> Approval {
-        match self.try_park(req, origin).await {
+        match self.try_park(req, origin, false).await {
             Ok((id, newly)) => {
                 if newly && let Some((dispatcher, target)) = &self.notify {
                     let message = format!(
@@ -179,13 +222,130 @@ impl StepParker {
         }
     }
 
-    /// `(id, newly parked?)`.
-    async fn try_park(&self, req: &ApprovalRequest, origin: &str) -> Result<(String, bool), ParkError> {
+    /// A19: park `req` as a *waiting* step for the live turn named `origin`
+    /// (`peer laptop`), which then calls [`Self::await_decision`] with the
+    /// id. Never dedups — each waiting turn gets its own step — and counts
+    /// toward [`MAX_PENDING`]. A failure is audited and returned.
+    pub async fn park_waiting(&self, req: &ApprovalRequest, origin: &str) -> Result<String, ParkError> {
+        match self.try_park(req, origin, true).await {
+            Ok((id, _)) => {
+                if let Some((dispatcher, target)) = &self.notify {
+                    let message = format!(
+                        "The {origin} is waiting for your approval: {} (aivyx-pa review).",
+                        req.summary
+                    );
+                    if let Err(e) = dispatcher.dispatch(target, &message, None).await {
+                        eprintln!("aivyx-pa: couldn't notify `{target}` about a waiting step: {e}");
+                    }
+                }
+                Ok(id)
+            }
+            Err(e) => {
+                eprintln!("aivyx-pa: couldn't park {} from the {origin}: {e}", req.summary);
+                self.audit(AuditEvent::StepParkFailed {
+                    tool: req.tool.clone(),
+                    origin: origin.to_string(),
+                    reason: e.to_string(),
+                });
+                Err(e)
+            }
+        }
+    }
+
+    /// A19: wait for the operator's decision on the waiting step `id`.
+    /// Returns [`Approval::Approved`] / [`Approval::Denied`] as decided.
+    /// When `timeout` passes first the step lapses with
+    /// [`TIMED_OUT_RESULT`] and this returns [`Approval::TimedOut`]; when
+    /// `cancel` fires first it lapses with [`CANCELLED_RESULT`] and this
+    /// returns [`Approval::Denied`]. A decision stored in the same instant
+    /// wins over either. Woken by [`Self::resolve`]; also re-reads the store
+    /// every 250 ms, so a decision written by another parker is seen too.
+    pub async fn await_decision(&self, id: &str, timeout: Duration, cancel: &CancellationToken) -> Approval {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut warned = false;
+        loop {
+            // Registered before the read, so a resolve between the read and
+            // the select still wakes this turn.
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            match self.read_one(id).await {
+                Ok(Some(step)) => {
+                    if let Some(answer) = answer_for(step.state) {
+                        return answer;
+                    }
+                }
+                Ok(None) => {
+                    eprintln!("aivyx-pa: the waiting step `{id}` is gone; treating it as denied");
+                    return Approval::Denied;
+                }
+                Err(e) => {
+                    if !warned {
+                        eprintln!("aivyx-pa: couldn't read the waiting step `{id}` (still waiting): {e}");
+                        warned = true;
+                    }
+                }
+            }
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    return self.lapse_waiting(id, CANCELLED_RESULT, Approval::Denied).await;
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    return self.lapse_waiting(id, TIMED_OUT_RESULT, Approval::TimedOut).await;
+                }
+                _ = &mut changed => {}
+                _ = tokio::time::sleep(WAIT_POLL) => {}
+            }
+        }
+    }
+
+    /// Lapse the waiting step `id` with `result` and return `answer` — unless
+    /// the store (re-read under the lock) already holds a decision, which
+    /// then wins and is returned instead.
+    async fn lapse_waiting(&self, id: &str, result: &str, answer: Approval) -> Approval {
+        let _guard = self.lock.lock().await;
+        let mut step = match self.read_one(id).await {
+            Ok(Some(step)) => step,
+            Ok(None) => return answer,
+            Err(e) => {
+                eprintln!("aivyx-pa: couldn't lapse the waiting step `{id}`: {e}");
+                return answer;
+            }
+        };
+        if let Some(decided) = answer_for(step.state) {
+            return decided;
+        }
+        step.state = ParkedState::Lapsed;
+        step.resolved_at = Some(now_unix());
+        step.result = Some(result.to_string());
+        if let Err(e) = self.write(&step).await {
+            eprintln!("aivyx-pa: couldn't lapse the waiting step `{id}`: {e}");
+        }
+        self.audit(AuditEvent::ParkedStepResolved {
+            id: step.id.clone(),
+            tool: step.tool.clone(),
+            outcome: ParkedState::Lapsed.as_str().into(),
+        });
+        self.changed.notify_waiters();
+        answer
+    }
+
+    /// `(id, newly parked?)`. A `waiting` step never dedups, and an
+    /// ordinary one never dedups into a waiting one.
+    async fn try_park(
+        &self,
+        req: &ApprovalRequest,
+        origin: &str,
+        waiting: bool,
+    ) -> Result<(String, bool), ParkError> {
         let _guard = self.lock.lock().await;
         let existing = self.read_all().await?;
-        if let Some(same) = existing.iter().find(|s| {
-            s.state == ParkedState::Pending && s.tool == req.tool && s.input == req.input
-        }) {
+        if !waiting
+            && let Some(same) = existing.iter().find(|s| {
+                s.state == ParkedState::Pending && !s.waiting && s.tool == req.tool && s.input == req.input
+            })
+        {
             return Ok((same.id.clone(), false));
         }
         if existing.iter().filter(|s| s.state == ParkedState::Pending).count() >= MAX_PENDING {
@@ -212,6 +372,7 @@ impl StepParker {
             resolved_at: None,
             result: None,
             preview: None,
+            waiting,
         };
         self.write(&step).await?;
         self.audit(AuditEvent::StepParked {
@@ -230,6 +391,7 @@ impl StepParker {
     async fn tidy(&self, now: i64) -> Result<Vec<ParkedStep>, ParkError> {
         let mut steps = self.read_all().await?;
         let days = self.expiry_secs / DAY_SECS;
+        let mut lapsed = false;
         for step in steps.iter_mut() {
             if step.state == ParkedState::Pending && now - step.parked_at > self.expiry_secs {
                 step.state = ParkedState::Lapsed;
@@ -244,7 +406,11 @@ impl StepParker {
                     tool: step.tool.clone(),
                     outcome: "lapsed".into(),
                 });
+                lapsed = true;
             }
+        }
+        if lapsed {
+            self.changed.notify_waiters();
         }
         let mut resolved: Vec<&ParkedStep> =
             steps.iter().filter(|s| s.state != ParkedState::Pending).collect();
@@ -289,7 +455,9 @@ impl StepParker {
     /// Resolve one pending step. On approve, `run` executes it — once — and
     /// its `Ok` / `Err` becomes `approved` / `failed` with the text as the
     /// result. Resolving a step that isn't pending (or doesn't exist) is an
-    /// error and runs nothing.
+    /// error and runs nothing. A19: a *waiting* step never runs here —
+    /// whatever `run` is — the decision is recorded and the waiting turn
+    /// (woken now) carries the call out.
     pub async fn resolve<F, Fut>(&self, id: &str, approve: bool, run: F) -> Result<ParkedStep, ParkError>
     where
         F: FnOnce(ParkedStep) -> Fut,
@@ -304,7 +472,13 @@ impl StepParker {
         if step.state != ParkedState::Pending {
             return Err(ParkError::NotPending { id: id.to_string(), state: step.state.as_str() });
         }
-        let (state, result) = if approve {
+        let (state, result) = if step.waiting {
+            if approve {
+                (ParkedState::Approved, Some(WAITING_APPROVED_RESULT.to_string()))
+            } else {
+                (ParkedState::Denied, None)
+            }
+        } else if approve {
             match run(step.clone()).await {
                 Ok(out) => (ParkedState::Approved, Some(out)),
                 Err(why) => (ParkedState::Failed, Some(why)),
@@ -321,6 +495,7 @@ impl StepParker {
             tool: step.tool.clone(),
             outcome: state.as_str().into(),
         });
+        self.changed.notify_waiters();
         self.tidy(now_unix()).await?;
         Ok(step)
     }
@@ -580,6 +755,7 @@ mod tests {
             resolved_at: None,
             result: None,
             preview: None,
+            waiting: false,
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -726,6 +902,7 @@ mod tests {
                 resolved_at: Some(base + i as i64),
                 result: None,
                 preview: None,
+                waiting: false,
             };
             p.write(&step).await.unwrap();
         }
@@ -874,6 +1051,7 @@ mod tests {
             resolved_at: None,
             result: None,
             preview: None,
+            waiting: false,
         }
     }
 
@@ -891,5 +1069,210 @@ mod tests {
         assert_eq!(gone.as_deref(), Some("Now: nope.txt doesn't exist."));
         let other = preview_for(&step_for("gmail.send", serde_json::json!({"to": "a@b.c"})), root);
         assert!(other.unwrap().contains("\"to\": \"a@b.c\""));
+    }
+
+    // ---- A19 — waiting steps (a live turn waits on the decision) ----
+
+    async fn waiting_id(p: &StepParker, r: &ApprovalRequest) -> String {
+        p.park_waiting(r, "peer laptop").await.expect("park_waiting")
+    }
+
+    async fn stored(p: &StepParker, id: &str) -> ParkedStep {
+        p.read_all().await.unwrap().into_iter().find(|s| s.id == id).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_waiting_step_returns_the_operators_approval() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let p = Arc::new(p);
+        let id = waiting_id(&p, &req("fs.delete", "fs.delete", "a.txt")).await;
+        assert!(stored(&p, &id).await.waiting);
+        let waiter = {
+            let (p, id) = (p.clone(), id.clone());
+            tokio::spawn(async move {
+                p.await_decision(&id, std::time::Duration::from_secs(5), &CancellationToken::new()).await
+            })
+        };
+        tokio::task::yield_now().await;
+        let done = p
+            .resolve(&id, true, |_| async { panic!("a waiting step must not run on resolve") })
+            .await
+            .unwrap();
+        assert_eq!(done.state, ParkedState::Approved);
+        assert_eq!(waiter.await.unwrap(), Approval::Approved);
+        let step = stored(&p, &id).await;
+        assert_eq!(step.state, ParkedState::Approved);
+        assert_eq!(step.result.as_deref(), Some("approved; the waiting run carries it out"));
+    }
+
+    #[tokio::test]
+    async fn a_waiting_step_returns_denied_on_deny() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let p = Arc::new(p);
+        let id = waiting_id(&p, &req("fs.delete", "fs.delete", "a.txt")).await;
+        let waiter = {
+            let (p, id) = (p.clone(), id.clone());
+            tokio::spawn(async move {
+                p.await_decision(&id, std::time::Duration::from_secs(5), &CancellationToken::new()).await
+            })
+        };
+        let done = p
+            .resolve(&id, false, |_| async { panic!("a denied step must not run") })
+            .await
+            .unwrap();
+        assert_eq!(done.state, ParkedState::Denied);
+        assert_eq!(done.result, None);
+        assert_eq!(waiter.await.unwrap(), Approval::Denied);
+    }
+
+    #[tokio::test]
+    async fn a_waiting_step_lapses_after_its_timeout() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let p = Arc::new(p);
+        let id = waiting_id(&p, &req("fs.delete", "fs.delete", "a.txt")).await;
+        tokio::time::pause();
+        let waiter = {
+            let (p, id) = (p.clone(), id.clone());
+            tokio::spawn(async move {
+                p.await_decision(&id, std::time::Duration::from_secs(900), &CancellationToken::new()).await
+            })
+        };
+        tokio::time::advance(std::time::Duration::from_secs(901)).await;
+        assert_eq!(waiter.await.unwrap(), Approval::TimedOut);
+        let step = stored(&p, &id).await;
+        assert_eq!(step.state, ParkedState::Lapsed);
+        assert_eq!(step.result.as_deref(), Some("timed out waiting for approval"));
+        let err = p
+            .resolve(&id, true, |_| async { panic!("a lapsed step must not run") })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ParkError::NotPending { state: "lapsed", .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_wait_lapses_the_step_and_denies() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let p = Arc::new(p);
+        let id = waiting_id(&p, &req("fs.delete", "fs.delete", "a.txt")).await;
+        let cancel = CancellationToken::new();
+        let waiter = {
+            let (p, id, cancel) = (p.clone(), id.clone(), cancel.clone());
+            tokio::spawn(async move { p.await_decision(&id, std::time::Duration::from_secs(60), &cancel).await })
+        };
+        cancel.cancel();
+        assert_eq!(waiter.await.unwrap(), Approval::Denied);
+        let step = stored(&p, &id).await;
+        assert_eq!(step.state, ParkedState::Lapsed);
+        assert_eq!(step.result.as_deref(), Some("the waiting run was cancelled"));
+    }
+
+    #[tokio::test]
+    async fn resolve_wakes_the_waiting_turn_without_the_poll() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let p = Arc::new(p);
+        let id = waiting_id(&p, &req("fs.delete", "fs.delete", "a.txt")).await;
+        tokio::time::pause();
+        let start = tokio::time::Instant::now();
+        let waiter = {
+            let (p, id) = (p.clone(), id.clone());
+            tokio::spawn(async move {
+                p.await_decision(&id, std::time::Duration::from_secs(900), &CancellationToken::new()).await
+            })
+        };
+        tokio::task::yield_now().await;
+        p.resolve(&id, true, |_| async { panic!("must not run") }).await.unwrap();
+        assert_eq!(waiter.await.unwrap(), Approval::Approved);
+        assert!(start.elapsed() < WAIT_POLL, "woken by resolve, not by the poll: {:?}", start.elapsed());
+    }
+
+    #[tokio::test]
+    async fn a_decision_already_stored_wins_over_a_timeout() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let id = waiting_id(&p, &req("fs.delete", "fs.delete", "a.txt")).await;
+        p.resolve(&id, true, |_| async { panic!("must not run") }).await.unwrap();
+        // The timeout fires in the same instant the operator approved:
+        // the lapse re-reads under the lock and returns the stored answer.
+        assert_eq!(p.lapse_waiting(&id, TIMED_OUT_RESULT, Approval::TimedOut).await, Approval::Approved);
+        assert_eq!(stored(&p, &id).await.state, ParkedState::Approved);
+    }
+
+    #[tokio::test]
+    async fn a_waiting_step_resolved_by_another_parker_is_seen_by_polling() {
+        // As when another process writes the same store: no in-process
+        // wake-up, only the storage poll.
+        let s = Scratch::new();
+        let (p, store) = parker(&s).await;
+        let other = StepParker::new(store.domain(KeyDomain::ParkedSteps), supervised_fs(), 7);
+        let p = Arc::new(p);
+        let id = waiting_id(&p, &req("fs.delete", "fs.delete", "a.txt")).await;
+        let waiter = {
+            let (p, id) = (p.clone(), id.clone());
+            tokio::spawn(async move {
+                p.await_decision(&id, std::time::Duration::from_secs(10), &CancellationToken::new()).await
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        other.resolve(&id, false, |_| async { panic!("must not run") }).await.unwrap();
+        let got = tokio::time::timeout(std::time::Duration::from_secs(3), waiter).await;
+        assert_eq!(got.expect("the poll saw the decision").unwrap(), Approval::Denied);
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_parked_step_still_runs_on_approve() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let id = park_id(&p, &req("fs.delete", "fs.delete", "a.txt")).await;
+        assert!(!stored(&p, &id).await.waiting);
+        let runs = AtomicUsize::new(0);
+        let done = p
+            .resolve(&id, true, |_| {
+                runs.fetch_add(1, Ordering::SeqCst);
+                async { Ok("deleted".to_string()) }
+            })
+            .await
+            .unwrap();
+        assert_eq!(done.state, ParkedState::Approved);
+        assert_eq!(done.result.as_deref(), Some("deleted"));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn waiting_and_ordinary_steps_never_dedup_into_each_other() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        let r = req("fs.delete", "fs.delete", "a.txt");
+        let ordinary = park_id(&p, &r).await;
+        let waiting = waiting_id(&p, &r).await;
+        let waiting_again = waiting_id(&p, &r).await;
+        assert_ne!(ordinary, waiting);
+        assert_ne!(waiting, waiting_again, "each waiting turn has its own step");
+        assert_eq!(park_id(&p, &r).await, ordinary);
+    }
+
+    #[tokio::test]
+    async fn waiting_steps_count_toward_max_pending() {
+        let s = Scratch::new();
+        let (p, _store) = parker(&s).await;
+        for i in 0..MAX_PENDING / 2 {
+            park_id(&p, &req("fs.delete", "fs.delete", &format!("{i}.txt"))).await;
+        }
+        for i in MAX_PENDING / 2..MAX_PENDING {
+            waiting_id(&p, &req("fs.delete", "fs.delete", &format!("{i}.txt"))).await;
+        }
+        let err = p
+            .park_waiting(&req("fs.delete", "fs.delete", "one-more.txt"), "peer laptop")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ParkError::Full), "{err:?}");
+        assert_eq!(
+            p.park(&req("fs.delete", "fs.delete", "one-more.txt"), "routine tidy").await,
+            Approval::Unavailable
+        );
     }
 }

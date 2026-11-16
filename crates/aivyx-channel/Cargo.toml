@@ -240,7 +240,7 @@ tempfile = "3"
 # against an in-memory Vec<u8> sink; tokio drives #[tokio::test] and
 # serde_json builds the tool-call inputs the tests feed in.
 # Phase 16 Task 3 — added "net", "time" for the daemon_roundtrip_e2e integration test.
-tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time", "test-util"] }
 serde_json = { workspace = true }
 
 # Phase 185 — the `aivyx` binary was extracted to the `aivyx-cli`

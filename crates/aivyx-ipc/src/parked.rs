@@ -63,6 +63,12 @@ pub struct ParkedStep {
     /// stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    /// A19: a live turn (a peer instance's task) waits on this decision.
+    /// Resolving a waiting step records the decision and never runs the
+    /// call — the waiting turn runs it. Absent (false) on ordinary steps
+    /// and on steps stored before FED.3.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub waiting: bool,
 }
 
 #[cfg(test)]
@@ -85,6 +91,7 @@ mod tests {
             resolved_at: None,
             result: None,
             preview: Some("Now: old.txt (3 bytes)".into()),
+            waiting: false,
         }
     }
 
@@ -116,5 +123,25 @@ mod tests {
         let back: ParkedStep = serde_json::from_value(v).unwrap();
         assert_eq!(back.preview, None);
         assert_eq!(ParkedState::Lapsed.as_str(), "lapsed");
+    }
+
+    /// A19: a step stored before `waiting` existed still decodes, as an
+    /// ordinary (non-waiting) step; an ordinary step is stored without it.
+    #[test]
+    fn a_step_stored_without_waiting_decodes_as_ordinary() {
+        let json = r#"{"id":"ab12cd34","tool":"fs.delete","input":{"path":"old.txt"},
+            "summary":"fs.delete old.txt","reason":"deleting can't be undone","area":"fs",
+            "origin":"routine tidy","trust_tier":"Trusted","parked_at":1000,"state":"pending",
+            "resolved_at":null,"result":null}"#;
+        let step: ParkedStep = serde_json::from_str(json).unwrap();
+        assert!(!step.waiting);
+        assert_eq!(step.state, ParkedState::Pending);
+        let v = serde_json::to_value(&step).unwrap();
+        assert!(v.get("waiting").is_none(), "{v}");
+        let mut w = sample();
+        w.waiting = true;
+        let v = serde_json::to_value(&w).unwrap();
+        assert_eq!(v["waiting"], true);
+        assert_eq!(serde_json::from_value::<ParkedStep>(v).unwrap(), w);
     }
 }

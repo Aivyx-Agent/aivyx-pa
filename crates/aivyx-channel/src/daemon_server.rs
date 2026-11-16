@@ -8479,6 +8479,7 @@ fn audit_entry_summary_from_signed(entry: aivyx_audit::SignedEntry) -> AuditEntr
         aivyx_audit::AuditEvent::TeamMissionChannelTriggered { .. } => "TeamMissionChannelTriggered",
         aivyx_audit::AuditEvent::TeamMissionChannelDenied { .. } => "TeamMissionChannelDenied",
         aivyx_audit::AuditEvent::StoreUnlocked { .. } => "StoreUnlocked",
+        aivyx_audit::AuditEvent::FederationCrossing { .. } => "FederationCrossing",
     }
     .to_string();
 
