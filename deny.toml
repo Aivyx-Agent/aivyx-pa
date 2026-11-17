@@ -147,6 +147,30 @@ ignore = [
     # to pa's state. Remove this entry, and pin aivyx-kvcache back to
     # master, when matrix-sdk-sqlite accepts rusqlite 0.41.
     { id = "RUSTSEC-2026-0459", reason = "bundled SQLite -wal memory exposure; fix blocked by matrix-sdk-sqlite 0.19.1 (rusqlite ^0.40.2); pa opens only its own DB files in its data dir; revisit on the next matrix-sdk release" },
+
+    # chrono — RUSTSEC-2026-0543 (accepted 2026-11-18): the crate is
+    # unmaintained (chronotope/chrono#1768); every version is affected and
+    # there is no replacement release. An unmaintained notice, not a
+    # vulnerability. chrono is direct (calendar, channel, drive, toolkit) and
+    # transitive (cron, chrono-tz, lopdf, async-imap, mistralrs-core).
+    # Revisit when the ecosystem settles on a successor (jiff / time).
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, not vulnerable; no safe upgrade exists; direct and transitive (cron, lopdf, async-imap); revisit when a successor is adopted" },
+
+    # zip 7.x — RUSTSEC-2026-0545/0546/0547/0548 (accepted 2026-11-18):
+    # AES MAC skipped on short data, symlink escape in ZipArchive::extract,
+    # legacy-decoder preallocation, ZipStreamReader name mismatch; fixed in
+    # zip 9.x. Reachable only through the opt-in `provider-mistral-rs`
+    # feature (mistralrs 0.8.1 -> candle 0.10 -> zip 7), which no shipped
+    # build enables; it reads model archives the operator chose. Remove when
+    # mistralrs moves to candle with zip 9.
+    { id = "RUSTSEC-2026-0545", reason = "zip 7 AES MAC; only via opt-in provider-mistral-rs (mistralrs 0.8.1 -> candle 0.10); not in shipped builds; revisit on the next mistralrs release" },
+    { id = "RUSTSEC-2026-0546", reason = "zip 7 extract symlink escape; only via opt-in provider-mistral-rs; not in shipped builds; revisit on the next mistralrs release" },
+    { id = "RUSTSEC-2026-0547", reason = "zip 7 legacy decoder preallocation; only via opt-in provider-mistral-rs; not in shipped builds; revisit on the next mistralrs release" },
+    { id = "RUSTSEC-2026-0548", reason = "zip 7 ZipStreamReader name mismatch; only via opt-in provider-mistral-rs; not in shipped builds; revisit on the next mistralrs release" },
+
+    # chrono-tz — RUSTSEC-2026-0555 (accepted 2026-11-18): unmaintained,
+    # not vulnerable, no safe upgrade; same situation as chrono above.
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained, not vulnerable; no safe upgrade exists; revisit with chrono" },
     # NOTE: glib RUSTSEC-2024-0429 (GHSA-wrw7-89jp-8q8g, GitHub Dependabot
     # alert #6) — a `glib::VariantStrIter` Iterator/DoubleEndedIterator
     # *unsoundness*, same aivyx-desktop GTK3 root cause (glib 0.18, patched

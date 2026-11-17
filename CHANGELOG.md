@@ -3,7 +3,7 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
-## [Unreleased]
+## [1.2.0] — 2026-11-18
 
 ### Changed
 

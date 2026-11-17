@@ -81,17 +81,10 @@ pub const PACK_TOOLS: &[(&str, &str)] = &[
     ("read_message", "team.message"),
 ];
 
-/// The team tools (not in the generated tools reference).
+/// The team tools (not in the generated tools reference): one list, shared
+/// with `aivyx-pack check`'s `checks.toml` rules.
 #[cfg(test)]
-const TEAM_TOOLS: &[&str] = &[
-    "decompose_task",
-    "delegate_task",
-    "query_agent",
-    "verify_output",
-    "synthesize_results",
-    "send_message",
-    "read_message",
-];
+const TEAM_TOOLS: &[&str] = aivyx_pack::checks::PA_TEAM_TOOLS;
 
 pub fn tool_scope(tool: &str) -> Option<&'static str> {
     PACK_TOOLS.iter().find(|(t, _)| *t == tool).map(|(_, s)| *s)
@@ -137,6 +130,15 @@ pub fn tool_lints(who: &str, tools: &[String], scopes: &[String]) -> Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every team tool is in the table, with a `team.*` scope.
+    #[test]
+    fn every_team_tool_has_a_team_scope() {
+        for tool in TEAM_TOOLS {
+            let scope = tool_scope(tool).unwrap_or_else(|| panic!("{tool} isn't in PACK_TOOLS"));
+            assert!(scope.starts_with("team."), "{tool}: {scope}");
+        }
+    }
 
     /// Every tool here exists: in the generated reference, or a team tool.
     #[test]

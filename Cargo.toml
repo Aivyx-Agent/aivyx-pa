@@ -112,7 +112,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "1.1.1"
+version = "1.2.0"
 edition = "2024"
 rust-version = "1.85"
 # Chapter Charter (CR.2): relicensed MIT -> BUSL-1.1 (docs/LICENSING.md).
@@ -360,7 +360,7 @@ aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "d1089
 # Extracted from crates/aivyx-pack into its own repo 2026-10-07. Not on
 # crates.io — pinned by commit SHA, same as the shared crates above.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "b2fa693d1a61d45979b4cb399c0b25a48bb481bf" }
+aivyx-pack = { git = "https://github.com/Aivyx-Agent/aivyx-pack", rev = "5865f02211c96293c2c713f13b84ab5dccfb71a9" }
 
 # Shared tool-call grammar (Chapters Stencil/Emboss), extracted 2026-10-18.
 # MUST stay a public repo — see the aivyx-confine entry above for why.

@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-apps"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-audit"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-auth-cli"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-instance",
  "serde",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-calendar"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-capability"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "globset",
  "serde",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-card-helper"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-yubi",
  "base64 0.22.1",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-channel"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-cli"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-config"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-cost",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-contacts"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-core"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-checkpoint",
@@ -427,7 +427,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-cost"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-crypto"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "argon2",
  "chacha20poly1305 0.10.1",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-dataread"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-desktop"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-instance",
  "aivyx-ipc",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-discord"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -505,7 +505,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-drive"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-federation"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-config",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-federation-net"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-crypto",
  "aivyx-federation",
@@ -568,7 +568,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-gmail"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-google-oauth"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-instance",
  "reqwest 0.12.28",
@@ -605,14 +605,14 @@ source = "git+https://github.com/Aivyx-Agent/aivyx-injection-guard?rev=a3eb989ea
 
 [[package]]
 name = "aivyx-instance"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "aivyx-ipc"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-instance",
@@ -623,14 +623,14 @@ dependencies = [
 
 [[package]]
 name = "aivyx-kitchen"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-vertical-sdk",
 ]
 
 [[package]]
 name = "aivyx-kitchen-toolkit"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-llm"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-route",
  "aivyx-stencil",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-matrix"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-mcp"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -726,7 +726,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-memory"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-n8n"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-notion"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -779,7 +779,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-obsidian"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-auth-cli",
  "aivyx-capability",
@@ -796,7 +796,7 @@ dependencies = [
 [[package]]
 name = "aivyx-pack"
 version = "0.1.0"
-source = "git+https://github.com/Aivyx-Agent/aivyx-pack?rev=b2fa693d1a61d45979b4cb399c0b25a48bb481bf#b2fa693d1a61d45979b4cb399c0b25a48bb481bf"
+source = "git+https://github.com/Aivyx-Agent/aivyx-pack?rev=5865f02211c96293c2c713f13b84ab5dccfb71a9#5865f02211c96293c2c713f13b84ab5dccfb71a9"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-proton"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-signal"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-slack"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -918,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-storage"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-crypto",
  "async-trait",
@@ -930,7 +930,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-team"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-checkpoint",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-team-types"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "serde",
@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-telegram"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-audit",
  "aivyx-capability",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-tool"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-toolkit"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -1016,7 +1016,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-tui"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-channel",
  "crossterm 0.29.0",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-vertical-sdk"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -1037,11 +1037,11 @@ dependencies = [
 
 [[package]]
 name = "aivyx-verticals-placeholder"
-version = "1.1.1"
+version = "1.2.0"
 
 [[package]]
 name = "aivyx-vision"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-voice"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-capability",
  "aivyx-core",
@@ -1130,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "aivyx-web"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "aivyx-ipc",
  "console_error_panic_hook",
@@ -1266,7 +1266,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1277,7 +1277,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4088,7 +4088,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4482,7 +4482,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8459,7 +8459,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10902,7 +10902,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10982,7 +10982,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 1.0.11",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -12010,7 +12010,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -12593,7 +12593,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -12624,7 +12624,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13592,7 +13592,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -14506,7 +14506,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
