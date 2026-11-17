@@ -99,7 +99,8 @@ pub fn tool_scope(tool: &str) -> Option<&'static str> {
 
 /// Problems with one role's or member's tools against its scopes: a tool
 /// a pack can't use, a tool whose scope isn't granted, and a granted scope
-/// no tool needs (`team.message` is always allowed: the team runtime uses it).
+/// no tool needs. `team.message` is allowed for roles and members alike,
+/// without a tool that needs it: the team runtime uses it.
 pub fn tool_lints(who: &str, tools: &[String], scopes: &[String]) -> Vec<String> {
     let base = |s: &str| s.split(':').next().unwrap_or(s).to_string();
     let granted: Vec<String> = scopes.iter().map(|s| base(s)).collect();
@@ -127,7 +128,9 @@ pub fn tool_lints(who: &str, tools: &[String], scopes: &[String]) -> Vec<String>
             ));
         }
     }
-    problems.dedup();
+    // Each message once, in first-seen order (`dedup` only drops adjacent repeats).
+    let mut seen = std::collections::HashSet::new();
+    problems.retain(|p| seen.insert(p.clone()));
     problems
 }
 
@@ -167,5 +170,18 @@ mod tests {
             ]
         );
         assert!(tool_lints("m", &s(&["send_message"]), &s(&["team.message"])).is_empty());
+    }
+
+    #[test]
+    fn a_repeated_problem_is_reported_once() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let p = tool_lints("m", &s(&["gmail.draft", "x.y", "gmail.draft"]), &s(&[]));
+        assert_eq!(p.len(), 2, "{p:?}");
+        let p = tool_lints(
+            "m",
+            &s(&["memory.read"]),
+            &s(&["memory.read", "a.read:x", "b.read", "a.read:y"]),
+        );
+        assert_eq!(p.len(), 2, "{p:?}");
     }
 }
