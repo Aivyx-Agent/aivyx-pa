@@ -234,6 +234,12 @@ pub fn check_pa_part(dir: &Path) -> Result<PaPartSummary, Vec<String>> {
                 for (name, role) in &cfg.roles {
                     grants.push((format!("role `{name}`"), role.capability_scopes.value.iter().map(|s| s.to_string()).collect()));
                 }
+                for (name, role) in &cfg.roles {
+                    if let aivyx_config::ToolAllowlist::Only(tools) = &role.tool_allowlist.value {
+                        let scopes: Vec<String> = role.capability_scopes.value.iter().map(|s| s.to_string()).collect();
+                        problems.extend(crate::pack_tools::tool_lints(&format!("role `{name}`"), tools, &scopes));
+                    }
+                }
                 routines = cfg.schedules.len();
                 // The config loader accepts any cron text; a bad pattern
                 // would only fail once the scheduler runs, so check here.
@@ -259,6 +265,11 @@ pub fn check_pa_part(dir: &Path) -> Result<PaPartSummary, Vec<String>> {
                     grants.push((
                         format!("team member `{}` (ceiling {:?})", m.name, m.trust_ceiling),
                         m.capability_scopes.clone(),
+                    ));
+                    problems.extend(crate::pack_tools::tool_lints(
+                        &format!("team member `{}`", m.name),
+                        &m.tool_allowlist,
+                        &m.capability_scopes,
                     ));
                 }
             }
@@ -458,7 +469,7 @@ name = "books"
 role = "Books"
 soul = "You keep the books."
 tool_allowlist = ["budget.summary"]
-capability_scopes = ["team.message"]
+capability_scopes = ["budget.read", "team.message"]
 trust_ceiling = "Trusted"
 "#;
 
@@ -686,8 +697,10 @@ trust_ceiling = "Trusted"
         let d = good_pack("listscopes");
         rewrite(&d, "pa/team.toml", |t| {
             t.replace(
-                r#"capability_scopes = ["team.delegate"]"#,
-                r#"capability_scopes = ["team.delegate", "email.write", "memory.read"]"#,
+                r#"tool_allowlist = ["delegate_task"]
+capability_scopes = ["team.delegate"]"#,
+                r#"tool_allowlist = ["delegate_task", "gmail.draft", "memory.read"]
+capability_scopes = ["team.delegate", "email.write", "memory.read"]"#,
             )
         });
         let s = check_pa_part(&d).unwrap();
@@ -695,5 +708,29 @@ trust_ceiling = "Trusted"
         assert!(text.contains("capability scopes asked for"), "{text}");
         assert!(text.contains("team member `manager`") && text.contains("email.write*") && text.contains("memory.read"), "{text}");
         assert!(!text.contains("memory.read*"), "{text}");
+    }
+
+    #[test]
+    fn a_misspelt_tool_is_refused() {
+        let dir = good_pack("misspelt-tool");
+        rewrite(&dir, "pa/team.toml", |t| t.replace("\"budget.summary\"", "\"budget.sumary\""));
+        let problems = check_pa_part(&dir).unwrap_err();
+        assert!(problems.iter().any(|p| p.contains("`budget.sumary`")), "{problems:?}");
+    }
+
+    #[test]
+    fn a_tool_without_its_scope_is_refused() {
+        let dir = good_pack("tool-without-scope");
+        rewrite(&dir, "pa/team.toml", |t| t.replace("tool_allowlist = [\"budget.summary\"]", "tool_allowlist = [\"budget.summary\", \"web.search\"]"));
+        let problems = check_pa_part(&dir).unwrap_err();
+        assert!(problems.iter().any(|p| p.contains("not the `web.search` scope")), "{problems:?}");
+    }
+
+    #[test]
+    fn a_template_cant_turn_off_the_delete_question() {
+        let dir = good_pack("confirm-destructive");
+        rewrite(&dir, "pa/aivyx-pa.toml", |t| format!("{t}\n[access]\nconfirm_destructive = false\n"));
+        let problems = check_pa_part(&dir).unwrap_err();
+        assert!(problems.iter().any(|p| p.contains("[access]")), "{problems:?}");
     }
 }

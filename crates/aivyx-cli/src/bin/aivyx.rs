@@ -162,6 +162,8 @@ mod mcp_recipes;
 mod review;
 #[path = "aivyx_modules/pack_check.rs"]
 mod pack_check;
+#[path = "aivyx_modules/pack_tools.rs"]
+mod pack_tools;
 #[path = "aivyx_modules/mcp_server.rs"]
 mod mcp_server;
 #[path = "aivyx_modules/memory.rs"]

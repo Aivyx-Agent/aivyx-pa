@@ -3,6 +3,12 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [Unreleased]
+
+### Added
+
+- `aivyx-pa pack check` (and `pack install`) now checks each pack role's and team member's tools: a tool must exist and be one a pack can use, its scope must be granted, and no scope may be granted that none of its tools needs. Publishers run it, with the pack's own `checks.toml`, through `aivyx-pack check`.
+
 ## [1.1.1] — 2026-11-17
 
 ### Fixed

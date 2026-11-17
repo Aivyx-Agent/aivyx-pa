@@ -43,6 +43,12 @@ existing KitchenDB.
 > [`manual/developer/05-vertical-packs.md`](manual/developer/05-vertical-packs.md)
 > and the shared [`aivyx-pack`](https://github.com/Aivyx-Agent/aivyx-pack)
 > crate for the format.
+>
+> `aivyx-pa pack check` also lints the tools: every tool a role or team
+> member names must be one a pack can use, and its scope must be granted; a
+> scope that none of the member's tools needs is refused. This runs at
+> `pack install` too, and `aivyx-pack check` runs it together with the
+> pack's own `checks.toml`.
 
 ---
 
