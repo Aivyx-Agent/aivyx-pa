@@ -115,6 +115,7 @@ one list of tagged entries is `NOT_STABLE` in
   pa's own processes; the tool protocol is the one a format 1 pack's
   tools speak (see The pack formats above). Their versions are recorded
   in `docs/stable/formats.txt`, so a change is visible.
+- **The pack checks.** What `pack check` and `pack install` verify may get stricter in a minor release, so a pack that installs today can be refused later. The pack format itself doesn't change.
 - **The tools the model sees.** Their names, arguments and descriptions
   change as models change.
 

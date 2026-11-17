@@ -68,6 +68,14 @@ area) can't go above `supervised`, the team config and skills must load,
 and integrations must be ones Aivyx PA knows (`gmail`, `calendar`, `drive`,
 `contacts`, `notion`, `obsidian`, `n8n`, `toolkit`, `vision`).
 
+It also lints the tools. Each role's and team member's tool must exist and be
+one a pack can use, a tool that needs a capability scope must have that scope
+granted, and a granted scope that none of the tools needs is refused.
+`pack install` runs the same checks and refuses a pack that fails them.
+Publishers start a pack with `aivyx-pack new <folder>` and run
+`aivyx-pack check <folder>` before signing; it runs these checks for the
+products the pack targets.
+
 Every capability scope the pack's `[[role]]` entries and team members ask for
 is listed by `pack check`, `pack inspect` and `pack install` (`*` marks scopes
 that can change things). A pack may ask only for reads, memory, web access,
