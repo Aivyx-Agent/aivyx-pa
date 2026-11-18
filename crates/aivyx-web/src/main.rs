@@ -1736,7 +1736,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                                 let is_open = open_groups().contains(key);
                                 rsx! {
                                     div { class: "nav-row",
-                                        NavItem { icon, label, active: view() == v,
+                                        NavItem { icon, label, active: view() == v, badge: if v == View::Missions { review_badge } else { 0 },
                                             onclick: move |_| { view.set(v); nav_open.set(false); } }
                                         button {
                                             class: if is_open { "nav-caret open" } else { "nav-caret" },
@@ -11161,10 +11161,7 @@ async fn read_task(
                     payload: QueryResponsePayload::Board { snapshot },
                     ..
                 } => {
-                    let mut b = board_ui.write();
-                    b.snapshot = snapshot;
-                    b.loaded = true;
-                    b.error = None;
+                    board_ui.write().on_snapshot(snapshot);
                 }
                 DaemonEnvelope::QueryResponse {
                     payload:
@@ -11179,7 +11176,7 @@ async fn read_task(
                     id,
                     payload: QueryResponsePayload::QueryError { message, .. },
                 } if id.starts_with("board-") => {
-                    board_ui.write().error = Some(message);
+                    board_ui.write().on_error(message);
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::Reminders { reminders },

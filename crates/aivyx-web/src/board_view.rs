@@ -137,6 +137,25 @@ pub struct BoardUi {
     pub error: Option<String>,
 }
 
+impl BoardUi {
+    /// A snapshot arrived. It never clears an error: the one that follows a
+    /// failed action would wipe it before the operator sees it.
+    pub fn on_snapshot(&mut self, snapshot: BoardSnapshot) {
+        self.snapshot = snapshot;
+        self.loaded = true;
+    }
+
+    /// The operator started a new action, so the last error is stale.
+    pub fn begin_action(&mut self) {
+        self.error = None;
+    }
+
+    /// A `board-*` query failed.
+    pub fn on_error(&mut self, message: String) {
+        self.error = Some(message);
+    }
+}
+
 pub fn snapshot_query() -> FrontendMessage {
     FrontendMessage::Query {
         id: "board-snapshot".into(),
@@ -144,13 +163,14 @@ pub fn snapshot_query() -> FrontendMessage {
     }
 }
 
-/// Sends one action, then asks for a fresh snapshot.
-fn act(ws: Sender, id: &str, payload: QueryPayload) {
+/// Sends one action. A new action clears the last error; the refresh comes
+/// from the daemon's Ack/Created/Started reply (see `read_task`).
+fn act(ws: Sender, mut ui: Signal<BoardUi>, id: &str, payload: QueryPayload) {
+    ui.write().begin_action();
     ws.send(FrontendMessage::Query {
         id: format!("board-{id}"),
         payload,
     });
-    ws.send(snapshot_query());
 }
 
 fn opt(s: String) -> Option<String> {
@@ -326,7 +346,7 @@ fn TaskPanel(task: Task) -> Element {
                     button {
                         class: "btn-ghost",
                         disabled: c == "role" && role_name().trim().is_empty(),
-                        onclick: move |_| act(ws, "assign", QueryPayload::BoardAssign {
+                        onclick: move |_| act(ws, ui, "assign", QueryPayload::BoardAssign {
                             task_id: t_assign.clone(),
                             owner: owner_from_choice(&choice(), &role_name()),
                         }),
@@ -336,14 +356,14 @@ fn TaskPanel(task: Task) -> Element {
             }
             div { style: "display:flex; gap:8px; flex-wrap:wrap; margin:8px 0;",
                 if can_start(&task) {
-                    button { class: "btn", onclick: move |_| act(ws, "start", QueryPayload::BoardStart { task_id: t_start.clone() }), "Start" }
+                    button { class: "btn", onclick: move |_| act(ws, ui, "start", QueryPayload::BoardStart { task_id: t_start.clone() }), "Start" }
                 }
                 if can_review(&task) {
-                    button { class: "btn", onclick: move |_| act(ws, "approve", QueryPayload::BoardApprove { task_id: t_approve.clone() }), "Approve" }
+                    button { class: "btn", onclick: move |_| act(ws, ui, "approve", QueryPayload::BoardApprove { task_id: t_approve.clone() }), "Approve" }
                     button { class: "btn-ghost", onclick: move |_| sending_back.toggle(), "Send back" }
                 }
                 if can_cancel(&task) {
-                    button { class: "btn-danger", onclick: move |_| act(ws, "cancel", QueryPayload::BoardCancel { task_id: t_cancel.clone() }), "Cancel" }
+                    button { class: "btn-danger", onclick: move |_| act(ws, ui, "cancel", QueryPayload::BoardCancel { task_id: t_cancel.clone() }), "Cancel" }
                 }
             }
             if sending_back() && can_review(&task) {
@@ -358,7 +378,7 @@ fn TaskPanel(task: Task) -> Element {
                         class: "btn",
                         disabled: why().trim().is_empty(),
                         onclick: move |_| {
-                            act(ws, "send-back", QueryPayload::BoardSendBack {
+                            act(ws, ui, "send-back", QueryPayload::BoardSendBack {
                                 task_id: t_back.clone(),
                                 why: why().trim().to_string(),
                             });
@@ -387,7 +407,7 @@ fn TaskPanel(task: Task) -> Element {
                     class: "btn-ghost",
                     disabled: comment().trim().is_empty(),
                     onclick: move |_| {
-                        act(ws, "comment", QueryPayload::BoardComment {
+                        act(ws, ui, "comment", QueryPayload::BoardComment {
                             task_id: t_comment.clone(),
                             text: comment().trim().to_string(),
                         });
@@ -458,7 +478,7 @@ fn NewTaskForm() -> Element {
                 class: "btn",
                 disabled: !ready,
                 onclick: move |_| {
-                    act(ws, "create-task", QueryPayload::BoardCreateTask {
+                    act(ws, ui, "create-task", QueryPayload::BoardCreateTask {
                         task: NewTask {
                             project_id: chosen_send.clone(),
                             parent_task: None,
@@ -480,6 +500,7 @@ fn NewTaskForm() -> Element {
 #[component]
 fn NewGoalForm() -> Element {
     let ws = use_context::<Sender>();
+    let ui = use_context::<Signal<BoardUi>>();
     let mut title = use_signal(String::new);
     let mut description = use_signal(String::new);
     rsx! {
@@ -491,7 +512,7 @@ fn NewGoalForm() -> Element {
                 class: "btn",
                 disabled: title().trim().is_empty(),
                 onclick: move |_| {
-                    act(ws, "create-goal", QueryPayload::BoardCreateGoal {
+                    act(ws, ui, "create-goal", QueryPayload::BoardCreateGoal {
                         title: title().trim().to_string(),
                         description: description(),
                     });
@@ -540,7 +561,7 @@ fn NewProjectForm() -> Element {
                 class: "btn",
                 disabled: title().trim().is_empty() || chosen.is_empty(),
                 onclick: move |_| {
-                    act(ws, "create-project", QueryPayload::BoardCreateProject {
+                    act(ws, ui, "create-project", QueryPayload::BoardCreateProject {
                         goal_id: chosen_send.clone(),
                         title: title().trim().to_string(),
                         description: description(),
@@ -626,6 +647,18 @@ mod tests {
         assert_eq!(ids(tasks_in(&s, TaskState::Todo, None, Some("p2"))), ["c"]);
         assert!(tasks_in(&s, TaskState::Todo, Some("g1"), Some("p2")).is_empty());
         assert!(tasks_in(&s, TaskState::Done, None, None).is_empty());
+    }
+
+    #[test]
+    fn an_error_survives_the_following_snapshot() {
+        let mut ui = BoardUi::default();
+        ui.begin_action();
+        ui.on_error("board_no_owner".into());
+        ui.on_snapshot(snap());
+        assert!(ui.loaded);
+        assert_eq!(ui.error.as_deref(), Some("board_no_owner"));
+        ui.begin_action();
+        assert_eq!(ui.error, None);
     }
 
     #[test]
