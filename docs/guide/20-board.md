@@ -24,8 +24,11 @@ clear description: it's the brief your assistant works from.
 
 Each task has an **owner**:
 
-- a **role**, such as `default`: one go by your assistant, with that role's
-  permissions. It's quick, at most two minutes, so keep these tasks small;
+- a **role**, such as `default`: one go by your assistant itself, with
+  that role's permissions (the role's own tool list, instructions and
+  model aren't used). It's quick, limited by the turn timeout
+  (`[agent] turn_timeout_secs`, 120 s by default), so keep these tasks
+  small;
 - the **team**: your team of specialists (see [Teams](07-teams.md)), for
   bigger work that needs several steps.
 

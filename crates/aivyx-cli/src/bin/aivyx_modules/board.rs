@@ -581,7 +581,13 @@ pub fn render_task(t: &Task) -> String {
                     RunOutcome::Cancelled => "cancelled".into(),
                     RunOutcome::Interrupted => "interrupted".into(),
                 };
-                let cost = cost_usd.map_or(String::new(), |c| format!(", ${c:.4}"));
+                // No tokens and no cost: unmetered (a team run without a
+                // mission budget counts nothing), not free.
+                let spend = match (tokens, cost_usd) {
+                    (0, None) => "—".to_string(),
+                    (n, None) => format!("{n} tokens"),
+                    (n, Some(c)) => format!("{n} tokens, ${c:.4}"),
+                };
                 let head: String = answer.chars().take(200).collect();
                 // The mission id links the entry to its Missions record. A
                 // failed run has no answer: no dangling `: `.
@@ -591,7 +597,7 @@ pub fn render_task(t: &Task) -> String {
                     format!(": {}", neutralise(&head))
                 };
                 format!(
-                    "run {} {outcome}, {tokens} tokens{cost}{answer}",
+                    "run {} {outcome}, {spend}{answer}",
                     neutralise(mission_id)
                 )
             }
@@ -926,7 +932,7 @@ mod tests {
         }];
         let out = render_task(&t);
         assert!(
-            out.contains("agent  run m-2 failed: it broke, 0 tokens\n"),
+            out.contains("agent  run m-2 failed: it broke, —\n"),
             "{out}"
         );
     }

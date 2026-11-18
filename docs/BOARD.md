@@ -29,9 +29,11 @@ roster, or an installed pack's team), or by nobody yet.
 
 **A role run** is one turn of the daemon's agent:
 
-- One turn: at most 32 steps and 120 seconds. Longer work belongs on a
+- One turn: at most 32 steps and the turn timeout,
+  `[agent] turn_timeout_secs`, 120 s by default. Longer work belongs on a
   team-owned task.
-- It uses the role's **scopes**, not its system prompt. The run is capped
+- It is the daemon agent under the role's **scopes**. The role's
+  `tool_allowlist`, system prompt and model aren't applied. The run is capped
   to the role's resolved envelope (narrowed by its parent chain; the floor
   if the role declares no scopes), then to the role's trust ceiling, and
   then `board.write` is added. Because `board.write` is added after the
@@ -55,7 +57,8 @@ in the review queue instead of waiting at a gate. If the mission stops
 early (a specialist that can't finish its turn, a budget cap), the task
 goes back to To do with the reason. A team run's tokens and cost are
 counted only when a mission budget is set (`[budget] per_mission_tokens` or
-`per_mission_usd`); otherwise its run entry shows 0 tokens.
+`per_mission_usd`); otherwise its run entry shows "—" instead of a token
+count.
 
 ## The brief
 
@@ -99,11 +102,12 @@ To do, Running or Review ──Cancel──▶ Cancelled
 - **Approve** moves it to Done.
 - **Send back** needs a note saying what to change. The task goes back to
   To do, and the note is in the next run's brief.
-- **Cancel** stops a running run (a role run's turn is cancelled, a team
-  run's mission is aborted, or its waiting gate rejected) and closes the
-  task. A team mission **you paused yourself** (from the team view) is not
-  ended by a board Cancel: the task is cancelled, but end the mission from
-  the team view (`aivyx-pa team abort`).
+- **Cancel** stops a running run (a role run's turn is cancelled; a team
+  run's mission is aborted, its waiting gate rejected, or, if you paused it
+  from the team view, halted) and closes the task. A team mission still
+  being planned when you cancel is aborted as soon as it starts running;
+  if it doesn't start within about a minute, the daemon log says so, and
+  `aivyx-pa team abort <id>` ends it.
 
 ## What agents can do
 
@@ -112,7 +116,9 @@ In a role run, and only there, the agent has two tools, both under the
 
 - `board.comment { text }`: add a note to the run's own task;
 - `board.subtask { title, description }`: add an unowned subtask under the
-  run's own task. You assign and start it.
+  run's own task. Its description starts with "(written by an agent) ", so
+  you (and the subtask's own run, which reads it as its brief) can tell it
+  from yours. You assign and start it.
 
 The model never names a task: the board knows which task each role run's
 session is working, and refuses a call from any other session. Agents can't
@@ -139,8 +145,11 @@ notification target: `Task '<title>' is ready for review`, with the subject
 
 When the daemon starts, every task left Running goes back to To do with a
 `Run` entry "interrupted by a daemon restart". A role run's mission record
-is closed as Cancelled; a team run's mission is already halted by the team
-missions' own restart sweep. Start the task again when you're ready.
+is closed as Cancelled. A team run's mission is halted: the team missions'
+own restart sweep halts one that was executing, and the board halts one
+that was paused or waiting at a gate (its gate is dropped), with the reason
+"its board task was interrupted by a daemon restart". Start the task again
+when you're ready.
 
 ## Audit
 
@@ -174,7 +183,8 @@ aivyx-pa board comment <task> "<text>"
 
 Ids are `g-`, `p-` and `t-` followed by eight hex characters. `board show`
 prints the thread; a run entry reads
-`run <mission id> succeeded, <n> tokens: <answer>`.
+`run <mission id> succeeded, <n> tokens: <answer>` (with `—` in place of
+`<n> tokens` when the run wasn't metered).
 
 ## The Studio
 

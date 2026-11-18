@@ -592,10 +592,11 @@ pub enum AuditEvent {
         reason: String,
     },
 
-    /// A20 — one board change: `op` is a fixed word (goal_created,
-    /// project_created, task_created, assigned, started, finished, approved,
-    /// sent_back, cancelled, commented, subtask_added, interrupted); `object`
-    /// is an id; `actor` is operator or agent. Never payload text.
+    /// A20 — one board change: `op` is a fixed word (created, assigned,
+    /// started, finished, approved, sent_back, cancelled, commented,
+    /// subtask_added, interrupted; `created` covers a goal, a project and a
+    /// task, told apart by the id's prefix); `object` is an id; `actor` is
+    /// operator or agent. Never payload text.
     BoardChanged {
         /// The fixed word naming the change.
         op: String,

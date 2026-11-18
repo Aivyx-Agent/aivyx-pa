@@ -80,7 +80,13 @@ pub fn entry_line(e: &EntryKind) -> String {
         } => {
             // The answer is what the operator reviews; the mission id finds
             // the run under Missions.
-            let cost = cost_usd.map(|c| format!(", ${c:.2}")).unwrap_or_default();
+            // No tokens and no cost: unmetered (a team run without a
+            // mission budget counts nothing), not free.
+            let spend = match (tokens, cost_usd) {
+                (0, None) => "—".to_string(),
+                (n, None) => format!("{n} tokens"),
+                (n, Some(c)) => format!("{n} tokens, ${c:.2}"),
+            };
             let outcome = match outcome {
                 RunOutcome::Succeeded => "succeeded".to_string(),
                 RunOutcome::Failed { reason } => format!("failed: {reason}"),
@@ -92,7 +98,7 @@ pub fn entry_line(e: &EntryKind) -> String {
             } else {
                 format!("\n{answer}")
             };
-            format!("run {mission_id} {outcome} ({tokens} tokens{cost}){answer}")
+            format!("run {mission_id} {outcome} ({spend}){answer}")
         }
     }
 }
@@ -747,7 +753,7 @@ mod tests {
             tokens: 0,
             cost_usd: None,
         };
-        assert_eq!(entry_line(&failed), "run m failed: timed out (0 tokens)");
+        assert_eq!(entry_line(&failed), "run m failed: timed out (—)");
         let free = EntryKind::Run {
             mission_id: "m".into(),
             outcome: RunOutcome::Interrupted,
@@ -755,7 +761,7 @@ mod tests {
             tokens: 0,
             cost_usd: None,
         };
-        assert_eq!(entry_line(&free), "run m interrupted (0 tokens)");
+        assert_eq!(entry_line(&free), "run m interrupted (—)");
         assert_eq!(author_label(&Author::Operator), "you");
         assert_eq!(
             author_label(&Author::Agent {
