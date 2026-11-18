@@ -1345,6 +1345,37 @@ impl TeamMissionService {
         Ok(id)
     }
 
+    /// A20 — like [`start_from_goal_for_schedule`](Self::start_from_goal_for_schedule)
+    /// on the daemon's default team, tagged `board:<task_id>` so the board
+    /// can find the task a mission works, and so its specialists run
+    /// `System`-origin (`classify_trigger_origin`).
+    pub async fn start_from_goal_for_board(
+        &self,
+        goal: &str,
+        task_id: &str,
+    ) -> Result<String, MissionDriverError> {
+        let cancel = aivyx_core::CancellationToken::new();
+        let plan = aivyx_team::decompose_goal(
+            self.deps.provider.as_ref(),
+            &self.deps.model,
+            goal,
+            &self.config,
+            &cancel,
+            true,
+        )
+        .await?;
+        let id = register_mission_for_schedule(
+            &self.state,
+            plan,
+            uuid::Uuid::new_v4().to_string(),
+            None,
+            &format!("board:{task_id}"),
+        )
+        .await?;
+        self.spawn_drive(id.clone());
+        Ok(id)
+    }
+
     /// Chapter (Piece C) — like [`start_from_goal`], but the resulting
     /// mission is tagged with the channel that started it
     /// (`triggered_by`). `config` is always `None` from every real
@@ -2218,6 +2249,14 @@ pub(crate) mod tests {
         );
         assert_eq!(
             classify_trigger_origin(Some("agt-abc123")),
+            aivyx_core::MessageOrigin::System
+        );
+    }
+
+    #[test]
+    fn classify_trigger_origin_maps_board_tags_to_system() {
+        assert_eq!(
+            classify_trigger_origin(Some("board:t-1")),
             aivyx_core::MessageOrigin::System
         );
     }

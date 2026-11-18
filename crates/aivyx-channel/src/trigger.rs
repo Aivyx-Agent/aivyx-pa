@@ -303,6 +303,12 @@ impl TriggerDispatch {
         }
     }
 
+    /// A20 — the lock that serializes fired turns, so the board's role runs
+    /// take turns with triggers instead of interleaving.
+    pub fn turn_lock(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.turn_lock)
+    }
+
     /// Supervised batching — park needs-approval calls in `supervised` areas
     /// (headless fires only).
     pub fn with_step_parker(mut self, parker: Arc<crate::parked_steps::StepParker>) -> Self {

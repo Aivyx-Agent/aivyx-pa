@@ -2,4 +2,8 @@
 //! operator plans and assigns, worked by role runs and team missions.
 
 pub mod model;
+pub mod runner;
+pub mod service;
 pub mod store;
+
+pub use service::{BoardDeps, BoardService};
