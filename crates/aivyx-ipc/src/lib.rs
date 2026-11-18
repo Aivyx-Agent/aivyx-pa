@@ -21,6 +21,8 @@ pub mod persona;
 /// Supervised batching — steps unattended runs parked for the operator's
 /// review (`ParkedStep` / `ParkedState`).
 pub mod parked;
+/// A20 — the work board's wire types (goals, projects, tasks).
+pub mod board;
 /// The daemon ↔ client IPC envelope + frame codec (Chapter M.2f): the
 /// `FrontendMessage` / `DaemonMessage` / `QueryPayload` / `QueryResponsePayload`
 /// protocol, the `*Summary` wire structs, and `encode_frame` / `decode_frame`.

@@ -591,6 +591,19 @@ pub enum AuditEvent {
         #[serde(default)]
         reason: String,
     },
+
+    /// A20 — one board change: `op` is a fixed word (goal_created,
+    /// project_created, task_created, assigned, started, finished, approved,
+    /// sent_back, cancelled, commented, subtask_added, interrupted); `object`
+    /// is an id; `actor` is operator or agent. Never payload text.
+    BoardChanged {
+        /// The fixed word naming the change.
+        op: String,
+        /// The goal, project or task id.
+        object: String,
+        /// `"operator"` or `"agent"`.
+        actor: String,
+    },
 }
 
 /// Chapter H — which headless run path produced a [`AuditEvent::HeadlessRefusal`].
@@ -3251,6 +3264,37 @@ mod tests {
         let log = HmacChainLog::new(test_key());
         log.append(sample_tool_call()).unwrap();
         log.append(sample_crossing()).unwrap();
+        log.verify().unwrap();
+        assert_eq!(AuditLog::len(&log), 2);
+    }
+
+    // ---- A20 — BoardChanged variant ----
+
+    fn sample_board_change() -> AuditEvent {
+        AuditEvent::BoardChanged {
+            op: "started".into(),
+            object: "t-1a2b3c4d".into(),
+            actor: "operator".into(),
+        }
+    }
+
+    #[test]
+    fn board_changed_round_trips_and_carries_no_payload() {
+        let e = sample_board_change();
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("BoardChanged"), "{json}");
+        assert_eq!(serde_json::from_str::<AuditEvent>(&json).unwrap(), e);
+        let v = serde_json::to_value(&e).unwrap();
+        let mut fields: Vec<&String> = v.as_object().unwrap().keys().collect();
+        fields.sort();
+        assert_eq!(fields, ["actor", "kind", "object", "op"]);
+    }
+
+    #[test]
+    fn board_changed_can_be_hmac_chained() {
+        let log = HmacChainLog::new(test_key());
+        log.append(sample_tool_call()).unwrap();
+        log.append(sample_board_change()).unwrap();
         log.verify().unwrap();
         assert_eq!(AuditLog::len(&log), 2);
     }

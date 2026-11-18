@@ -636,8 +636,8 @@ aivyx-pa audit export [--from <seq>] [--limit <N>] [--event-type <type>]
 
 `--event-type` keeps one kind of event: `tool_call`, `scope_denied`,
 `turn_started`, `turn_ended`, `memory_access`, `auto_notify_dispatched`,
-`skill_auto_proposal`, `skill_invocation`, `store_unlocked` or
-`federation_crossing` (the older CamelCase names,
+`skill_auto_proposal`, `skill_invocation`, `store_unlocked`,
+`federation_crossing` or `board_changed` (the older CamelCase names,
 such as `ToolCall`, still work).
 
 To verify the chain instead, run `aivyx-pa --verify-only`.

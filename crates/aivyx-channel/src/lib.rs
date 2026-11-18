@@ -28,6 +28,7 @@ pub use aivyx_core::{
     AttachmentKind, ChannelContext, ChannelError, ChannelPlatform, StreamEvent,
 };
 
+pub mod board;
 pub mod card_unlock;
 pub mod daemon_client;
 pub mod daemon_ipc;

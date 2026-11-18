@@ -227,6 +227,7 @@ pub const EVENT_TYPE_FILTERS: &[(&str, &str)] = &[
     ("skill_invocation", "SkillInvocation"),
     ("store_unlocked", "StoreUnlocked"),
     ("federation_crossing", "FederationCrossing"),
+    ("board_changed", "BoardChanged"),
 ];
 
 /// The event label an `--event-type` value selects, from either spelling.
@@ -277,6 +278,7 @@ pub fn event_type_label(event: &aivyx_audit::AuditEvent) -> &'static str {
         AuditEvent::TeamMissionChannelDenied { .. } => "TeamMissionChannelDenied",
         AuditEvent::StoreUnlocked { .. } => "StoreUnlocked",
         AuditEvent::FederationCrossing { .. } => "FederationCrossing",
+        AuditEvent::BoardChanged { .. } => "BoardChanged",
     }
 }
 
@@ -466,6 +468,8 @@ mod tests {
         assert_eq!(event_type_filter("store_unlocked"), Some("StoreUnlocked"));
         assert_eq!(event_type_filter("federation_crossing"), Some("FederationCrossing"));
         assert_eq!(event_type_filter("FederationCrossing"), Some("FederationCrossing"));
+        assert_eq!(event_type_filter("board_changed"), Some("BoardChanged"));
+        assert_eq!(event_type_filter("BoardChanged"), Some("BoardChanged"));
         assert_eq!(event_type_filter("toolcall"), None);
         for (snake, label) in EVENT_TYPE_FILTERS {
             // The snake_case name is the label's own words.

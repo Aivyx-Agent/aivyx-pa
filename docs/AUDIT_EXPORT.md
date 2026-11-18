@@ -93,10 +93,12 @@ aivyx-pa audit export --limit 100 --from 1000   # equivalent to above
 
 Emit only one kind of event: `tool_call`, `scope_denied`, `turn_started`,
 `turn_ended`, `memory_access`, `auto_notify_dispatched`,
-`skill_auto_proposal`, `skill_invocation`, `store_unlocked` or
+`skill_auto_proposal`, `skill_invocation`, `store_unlocked`,
 `federation_crossing` (a request to or from one of your other instances:
 peer, direction, verb, outcome and a fixed reason, never the text; see
-[`FEDERATION_SETUP.md`](FEDERATION_SETUP.md)). The older spellings, the
+[`FEDERATION_SETUP.md`](FEDERATION_SETUP.md)) or `board_changed` (a change on
+the work board: a fixed word such as `started` or `approved`, the id and who
+made it, never a title or comment). The older spellings, the
 event's `kind` (`ToolCall`, ...), still work.
 
 ```bash

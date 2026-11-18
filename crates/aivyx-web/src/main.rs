@@ -2578,6 +2578,7 @@ fn audit_event_label(event_type: &str) -> &str {
         "TeamMissionChannelDenied" => "Mission from chat refused",
         "StoreUnlocked" => "Store unlocked",
         "FederationCrossing" => "Federation request",
+        "BoardChanged" => "Work board changed",
         other => other,
     }
 }
@@ -2598,6 +2599,7 @@ mod audit_event_label_tests {
             "RoleDraftImported", "HeadlessRefusal", "ConfigChanged", "PersonaSeeded",
             "DocumentMutated", "ScheduleMutated", "TeamMissionChannelTriggered",
             "TeamMissionChannelDenied", "StoreUnlocked", "FederationCrossing",
+            "BoardChanged",
         ] {
             assert_ne!(audit_event_label(v), v, "{v} has no readable name");
         }
