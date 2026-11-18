@@ -11682,15 +11682,10 @@ async fn run_async(
         // A20 — the work board. Its role runs take the trigger dispatch's
         // turn lock (`run_daemon` hands the dispatch this one).
         let board = {
-            let board_roles: std::collections::HashMap<String, aivyx_capability::CapabilitySet> = roles
-                .iter()
-                .map(|(name, role)| {
-                    (
-                        name.clone(),
-                        aivyx_capability::CapabilitySet::from_scopes(role.capability_scopes.value.iter().cloned()),
-                    )
-                })
-                .collect();
+            // Each role's resolved envelope (parent chain, floor for an
+            // empty level) capped by its trust ceiling, as `role.switch`
+            // builds a child.
+            let board_roles = aivyx_channel::board_role_scopes(&roles, &backcompat_floor);
             let board = Arc::new(aivyx_channel::board::BoardService::new(aivyx_channel::board::BoardDeps {
                 store: storage.domain(KeyDomain::Board),
                 missions: storage.domain(KeyDomain::Missions),
@@ -11703,8 +11698,11 @@ async fn run_async(
                 notify: Some(Arc::clone(&notify_dispatcher)),
                 notify_target: default_notify_target_name.clone(),
             }));
-            let _ = board_comment_tool.set_service(Arc::clone(&board));
-            let _ = board_subtask_tool.set_service(Arc::clone(&board));
+            // Set outside the assert: `debug_assert!` doesn't evaluate its
+            // argument in a release build.
+            let comment_set = board_comment_tool.set_service(Arc::clone(&board)).is_ok();
+            let subtask_set = board_subtask_tool.set_service(Arc::clone(&board)).is_ok();
+            debug_assert!(comment_set && subtask_set, "board tool service set twice");
             // The restart sweep, before anything can start a task.
             match board.reconcile_at_startup().await {
                 Ok(0) => {}

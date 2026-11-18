@@ -137,6 +137,25 @@ pub fn assemble_role_envelope(
     effective
 }
 
+/// A20 — what each role's board run may do: its resolved envelope (the
+/// parent chain, and the floor for a level that declares no scopes)
+/// capped by the role's own trust ceiling, the same set the `role.switch`
+/// child factory builds. The board adds `board.write` on top as the run's
+/// ceiling.
+pub fn board_role_scopes(
+    roles: &BTreeMap<String, Role>,
+    backcompat_floor: &[Scope],
+) -> std::collections::HashMap<String, CapabilitySet> {
+    roles
+        .iter()
+        .map(|(name, role)| {
+            let envelope = assemble_role_envelope(role, roles, backcompat_floor);
+            let capped = envelope.intersect(role.trust_ceiling.value.default_ceiling());
+            (name.clone(), capped)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     //! Pure-fn unit tests against hand-rolled `Role` values. These
@@ -300,5 +319,41 @@ mod tests {
              so it drops. Only the intersection of floor ∩ parent \
              survives."
         );
+    }
+    fn sorted(set: &CapabilitySet) -> Vec<String> {
+        let mut v: Vec<String> = set.iter().map(|s| s.as_str().to_string()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn a_board_role_run_gets_its_parents_narrowed_fs_read() {
+        let parent = role("parent", vec![scope("fs.read:/data/**")], None);
+        let child = role("child", vec![scope("fs.read"), scope("memory.read")], Some("parent"));
+        let roles = roles_map([parent, child]);
+        let map = board_role_scopes(&roles, &[scope("fs.read"), scope("memory.read")]);
+        assert_eq!(sorted(&map["child"]), ["fs.read:/data/**"]);
+        assert!(!map["child"].grants(&scope("fs.read:/etc/passwd")));
+        assert!(map["child"].grants(&scope("fs.read:/data/q4.csv")));
+    }
+
+    #[test]
+    fn a_board_role_with_no_scopes_gets_the_floor() {
+        let roles = roles_map([role("plain", vec![], None)]);
+        let floor = vec![scope("fs.read"), scope("memory.read"), scope("board.write")];
+        let map = board_role_scopes(&roles, &floor);
+        assert_eq!(sorted(&map["plain"]), ["board.write", "fs.read", "memory.read"]);
+    }
+
+    #[test]
+    fn a_semi_trusted_board_role_loses_trusted_only_bases() {
+        let mut r = role("helper", vec![scope("memory.read"), scope("shell.exec")], None);
+        r.trust_ceiling.value = TrustTier::SemiTrusted;
+        let tier = TrustTier::SemiTrusted.default_ceiling();
+        assert!(!tier.grants(&scope("shell.exec")), "shell.exec must be Trusted-only");
+        assert!(tier.grants(&scope("memory.read")));
+        let map = board_role_scopes(&roles_map([r]), &[]);
+        assert!(!map["helper"].grants(&scope("shell.exec")));
+        assert_eq!(sorted(&map["helper"]), ["memory.read"]);
     }
 }

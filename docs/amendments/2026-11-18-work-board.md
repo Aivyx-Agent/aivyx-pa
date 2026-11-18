@@ -40,8 +40,9 @@ that run's own task and are refused anywhere else. The count moves
 
 ## Runs
 
-- A **role run** is one System-origin agent turn. Its channel's capability
-  ceiling is the role's own scopes plus `board.write`. It is headless: a step
+- A **role run** is one System-origin agent turn. A role run is capped to
+  the role's resolved envelope (its parent's scopes, and the floor if it
+  declares none) and its trust ceiling, plus `board.write`. It is headless: a step
   that needs approval is parked for the operator's review, and the run does
   not block on it.
 - A **team run** is a team mission whose `triggered_by` is `board:<task id>`.

@@ -10,8 +10,8 @@
 //!   register is refused by the tool.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -23,8 +23,9 @@ use aivyx_channel::board::runner::{BoardRunContext, role_ceiling};
 use aivyx_channel::board::tools::{BoardCommentTool, BoardSubtaskTool};
 use aivyx_channel::board::{BoardDeps, BoardService};
 use aivyx_core::{
-    Agent, AgentId, CancellationToken, ConcreteAgent, Message, NextStep, NullAuditHook, SessionId,
-    Tool, ToolContext, ToolId, ToolOutcome, ToolRegistry, VecPlanner, Verification,
+    Agent, AgentId, AivyxError, CancellationToken, ChannelContext, ConcreteAgent, Message,
+    NextStep, NullAuditHook, SessionId, StepObservation, Tool, ToolContext, ToolId, ToolOutcome,
+    ToolRegistry, TurnPlanner, VecPlanner, Verification,
 };
 use aivyx_crypto::MasterKey;
 use aivyx_ipc::board::{Author, EntryKind, NewTask, Owner, Task, TaskState};
@@ -63,11 +64,64 @@ impl Tool for Probe {
     }
 }
 
+/// What the turn loop handed back for one tool call.
+#[derive(Debug, Clone, PartialEq)]
+enum Seen {
+    Completed,
+    Denied,
+    Failed(String),
+    Other(String),
+}
+
+type Outcomes = Arc<Mutex<Vec<(ToolId, Seen)>>>;
+
+/// A scripted planner that keeps every tool outcome the loop observes.
+struct RecordingPlanner {
+    inner: VecPlanner,
+    seen: Outcomes,
+}
+
+#[async_trait]
+impl TurnPlanner for RecordingPlanner {
+    async fn next_step(
+        &mut self,
+        observed: &[StepObservation],
+        channel: &dyn ChannelContext,
+    ) -> NextStep {
+        self.inner.next_step(observed, channel).await
+    }
+    async fn observe_tool_outcome(&mut self, tool_id: ToolId, outcome: &ToolOutcome) {
+        let seen = match outcome {
+            ToolOutcome::Completed { .. } => Seen::Completed,
+            ToolOutcome::Denied { .. } => Seen::Denied,
+            ToolOutcome::Failed(AivyxError::Tool { detail, .. }) => Seen::Failed(detail.clone()),
+            other => Seen::Other(format!("{other:?}")),
+        };
+        self.seen.lock().unwrap().push((tool_id, seen));
+    }
+}
+
 struct Fx {
     _dir: tempfile::TempDir,
     board: Arc<BoardService>,
     agent: Arc<dyn Agent>,
     probe_ran: Arc<AtomicUsize>,
+    probe: ToolId,
+    comment: ToolId,
+    seen: Outcomes,
+}
+
+impl Fx {
+    fn outcome_of(&self, tool: ToolId) -> Seen {
+        let seen = self.seen.lock().unwrap();
+        let hits: Vec<&Seen> = seen
+            .iter()
+            .filter(|(t, _)| *t == tool)
+            .map(|(_, s)| s)
+            .collect();
+        assert_eq!(hits.len(), 1, "{seen:?}");
+        hits[0].clone()
+    }
 }
 
 /// The daemon's wiring in miniature: the tools are made first, the agent
@@ -90,6 +144,7 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
     let comment = Arc::new(BoardCommentTool::new());
     let subtask = Arc::new(BoardSubtaskTool::new());
     let probe_ran = Arc::new(AtomicUsize::new(0));
+    let seen: Outcomes = Arc::new(Mutex::new(Vec::new()));
     let probe = Arc::new(Probe {
         id: ToolId::new(),
         schema: json!({"type": "object"}),
@@ -118,6 +173,7 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
     if floor_has_board_write {
         floor.push(Scope::parse("board.write").unwrap());
     }
+    let (probe_id, comment_id) = (probe.id, comment.id());
     let tools: Vec<Arc<dyn Tool>> = vec![
         comment.clone() as Arc<dyn Tool>,
         subtask.clone() as Arc<dyn Tool>,
@@ -128,7 +184,15 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
         CapabilitySet::from_scopes(floor),
         Arc::new(ToolRegistry::new(tools)),
         Arc::new(NullAuditHook),
-        move || Box::new(VecPlanner::new(plan.clone())),
+        {
+            let seen = Arc::clone(&seen);
+            move || {
+                Box::new(RecordingPlanner {
+                    inner: VecPlanner::new(plan.clone()),
+                    seen: Arc::clone(&seen),
+                })
+            }
+        },
     ));
 
     // The role declares its own scopes and doesn't list `board.write`.
@@ -156,6 +220,9 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
         board,
         agent,
         probe_ran,
+        probe: probe_id,
+        comment: comment_id,
+        seen,
     }
 }
 
@@ -218,6 +285,8 @@ async fn a_role_run_comments_on_its_own_task_through_the_turn_loop() {
         })
         .unwrap();
     assert!(mission.starts_with("b-"), "{mission}");
+    assert_eq!(fx.outcome_of(fx.comment), Seen::Completed);
+    assert_eq!(fx.outcome_of(fx.probe), Seen::Denied, "the ceiling");
     // The ceiling: `fs.read` is in the agent's set but not the role's.
     assert_eq!(
         fx.probe_ran.load(Ordering::SeqCst),
@@ -233,6 +302,11 @@ async fn without_the_floor_grant_the_ceiling_alone_cant_grant_board_write() {
     let task = run(&fx, &id).await;
 
     assert!(agent_comments(&task).is_empty(), "{:?}", task.thread);
+    assert_eq!(
+        fx.outcome_of(fx.comment),
+        Seen::Denied,
+        "a ceiling can't grant"
+    );
     assert_eq!(task.state, TaskState::Review, "the turn itself still ends");
 }
 
@@ -262,4 +336,9 @@ async fn the_same_call_outside_a_board_run_is_refused() {
     let task = fx.board.task(&id).await.unwrap();
     assert_eq!(task.state, TaskState::Todo);
     assert!(task.thread.is_empty(), "{:?}", task.thread);
+    // The scope check passed; the tool itself refused.
+    match fx.outcome_of(fx.comment) {
+        Seen::Failed(detail) => assert!(detail.contains("not in a board run"), "{detail}"),
+        other => panic!("expected the tool's refusal, got {other:?}"),
+    }
 }
