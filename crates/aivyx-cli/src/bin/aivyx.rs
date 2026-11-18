@@ -9843,6 +9843,16 @@ async fn run_async(
         ));
     }
 
+    // A20 — `board.comment|subtask`, daemon only: a role run on the board
+    // is the only caller they serve. The service is set once the daemon
+    // builds the board below.
+    let board_comment_tool = Arc::new(aivyx_channel::board::tools::BoardCommentTool::new());
+    let board_subtask_tool = Arc::new(aivyx_channel::board::tools::BoardSubtaskTool::new());
+    if mode == CliMode::DaemonRun {
+        tool_list.push(Arc::clone(&board_comment_tool) as Arc<dyn Tool>);
+        tool_list.push(Arc::clone(&board_subtask_tool) as Arc<dyn Tool>);
+    }
+
     let file_watch_create_tool: Arc<FileWatchCreateTool> = Arc::new(FileWatchCreateTool::new());
     tool_list.push(Arc::clone(&file_watch_create_tool) as Arc<dyn Tool>);
     let file_watch_list_tool: Arc<FileWatchListTool> = Arc::new(FileWatchListTool::new());
@@ -10570,6 +10580,14 @@ async fn run_async(
     // every send.
     if let Some(fed) = &federation_start {
         backcompat_floor.extend(federation_peer::relay_grants(&fed.peers));
+    }
+    // A20 — the daemon agent holds `board.write`, so a board role run's
+    // ceiling (the role's scopes plus `board.write`) can let it through: a
+    // ceiling only narrows. The tools refuse any session that isn't a
+    // board run, so the grant does nothing outside one. A role with its own
+    // `capability_scopes` must list `board.write` itself.
+    if mode == CliMode::DaemonRun {
+        backcompat_floor.push(Scope::parse("board.write").expect("A20 base"));
     }
 
     // Chapter J — `aivyx-pa team run "<mission>"`. We now hold the live provider,
@@ -11661,6 +11679,41 @@ async fn run_async(
         .apply(daemon_agent);
         let agent: Arc<dyn Agent> = Arc::new(daemon_agent);
 
+        // A20 — the work board. Its role runs take the trigger dispatch's
+        // turn lock (`run_daemon` hands the dispatch this one).
+        let board = {
+            let board_roles: std::collections::HashMap<String, aivyx_capability::CapabilitySet> = roles
+                .iter()
+                .map(|(name, role)| {
+                    (
+                        name.clone(),
+                        aivyx_capability::CapabilitySet::from_scopes(role.capability_scopes.value.iter().cloned()),
+                    )
+                })
+                .collect();
+            let board = Arc::new(aivyx_channel::board::BoardService::new(aivyx_channel::board::BoardDeps {
+                store: storage.domain(KeyDomain::Board),
+                missions: storage.domain(KeyDomain::Missions),
+                audit: Arc::clone(&persistent_audit_for_query),
+                agent: Arc::clone(&agent),
+                turn_lock: Arc::new(tokio::sync::Mutex::new(())),
+                parker: step_parker.clone(),
+                roles: board_roles,
+                team: team_missions.clone(),
+                notify: Some(Arc::clone(&notify_dispatcher)),
+                notify_target: default_notify_target_name.clone(),
+            }));
+            let _ = board_comment_tool.set_service(Arc::clone(&board));
+            let _ = board_subtask_tool.set_service(Arc::clone(&board));
+            // The restart sweep, before anything can start a task.
+            match board.reconcile_at_startup().await {
+                Ok(0) => {}
+                Ok(n) => eprintln!("aivyx-pa: {n} board task(s) were running when the daemon stopped; back to Todo"),
+                Err(e) => eprintln!("aivyx-pa: couldn't check the board's running tasks: {e}"),
+            }
+            board
+        };
+
         // Security-audit fix (Task 10 fix round 2, 2026-09-16) — computed
         // once here, from the same loaded config already in scope, and
         // captured (by value — all three are `bool`, `Copy`) into the
@@ -12034,6 +12087,8 @@ async fn run_async(
             team_missions,
             // Supervised batching — `Some` only when some area is supervised.
             step_parker: step_parker.clone(),
+            // A20 — the work board built above.
+            board: Some(board),
             // Chapter H — the daemon's default gate posture. Interactive for
             // now; the `--headless` flag + operator-absent drivers (H.4/H.5)
             // set RejectAndAbort per run.

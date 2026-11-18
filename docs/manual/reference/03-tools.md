@@ -94,6 +94,8 @@ Missions, routines, reminders, skills, reflection and the like — the agent man
 
 | Tool | What it does |
 |---|---|
+| `board.comment` | Add a note to the board task you are working on, for the operator to read. Only works while you are running a task from the operator's board. |
+| `board.subtask` | Add a subtask under the board task you are working on. The operator assigns and starts it. |
 | `file_watch.create` | Create a new file-watch trigger. The watch fires when files at the specified path are modified. |
 | `file_watch.delete` | Delete a file-watch trigger by ID. The watch will no longer fire. |
 | `file_watch.list` | List all file-watch triggers. |

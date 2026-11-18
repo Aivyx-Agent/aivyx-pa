@@ -103,6 +103,11 @@ impl BoardService {
         }
     }
 
+    /// The lock role runs take; the daemon's trigger dispatch shares it.
+    pub fn turn_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.deps().turn_lock)
+    }
+
     async fn load_task(&self, id: &str) -> Result<Task, BoardError> {
         store::get_task(&self.deps().store, id)
             .await?

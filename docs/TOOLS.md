@@ -194,12 +194,23 @@ configured peer gives the default agent `federation.relay:<id>`. A role
 that declares its own `capability_scopes` must list it. The reply is
 **untrusted output** (Picket scans it, Bulwark fences it). Amendment A19.
 
-## Work board (A20)
+## Board (A20, preview)
 
-Not registered yet: the `board.comment` and `board.subtask` tools land with
-the work board. Their scope base is `board.write`, unqualified, Trusted tier,
-not irreversible. It is useful only in a session the board registered for a
-run, and only on that run's own task. Amendment A20.
+Registered only in the daemon. The in-process chat (`--no-daemon`) doesn't
+get them.
+
+| Tool | Scope | Min tier | Notes |
+|---|---|---|---|
+| `board.comment` | `board.write` | Trusted | a note on the run's own board task (A20) |
+| `board.subtask` | `board.write` | Trusted | an unowned subtask under the run's own board task; the operator assigns and starts it (A20) |
+
+Both act only from a session the board registered for a role run, and only
+on that run's own task: the model never names a task, and any other session
+is refused ("not in a board run"). `board.write` is not irreversible and not
+read-only. The daemon gives the default agent `board.write`, and a role run's
+ceiling is the role's `capability_scopes` plus `board.write`. A role that
+declares its own `capability_scopes` must list `board.write` for its own
+agent to hold it (a ceiling only narrows). Amendment A20.
 
 ## Local-model management (infrastructure)
 
@@ -339,6 +350,7 @@ user-facing; the scope base groups capabilities):
 | `proton.*` | `email.*` | the same scopes as Gmail |
 | `git.status`, `git.diff` | `git.read` | one read base shared by both read tools (A12) |
 | `git.commit` | `git.write` | the destructive write base (A13b, Chapter Forge); separate from `git.read` by invariant |
+| `board.comment`, `board.subtask` | `board.write` | one write base for the two things a board run adds to its own task (A20) |
 | `web.search` | `web.search` | (matches — listed for completeness) |
 
 ---

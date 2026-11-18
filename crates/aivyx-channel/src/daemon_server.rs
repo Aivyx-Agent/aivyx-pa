@@ -496,6 +496,9 @@ pub struct DaemonConfig {
     /// in `supervised` areas, and answers the `GetParkedSteps` /
     /// `ResolveParkedStep` queries. `None` when no area is supervised.
     pub step_parker: Option<Arc<crate::parked_steps::StepParker>>,
+    /// A20 — the work board. `Some` in daemon mode with storage; its role
+    /// runs share the trigger dispatch's turn lock. `None` means no board.
+    pub board: Option<Arc<crate::board::service::BoardService>>,
     /// Chapter H — the daemon's default gate policy. `Interactive` (the
     /// default) parks an escalated turn behind an operator gate and waits;
     /// `RejectAndAbort` (headless) records the refusal and finalizes without a
@@ -850,6 +853,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         loop_config,
         team_missions,
         step_parker,
+        board,
         gate_policy,
         confine_options,
         workspace_journaling_interval,
@@ -958,6 +962,10 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         crate::trigger::TriggerDispatch::new(Arc::clone(&agent), Arc::clone(&channel_factory));
     if let Some(ref ms) = mission_store {
         trigger_dispatch = trigger_dispatch.with_mission_store(ms.clone());
+    }
+    // A20 — the board's role runs and fired turns take one lock.
+    if let Some(ref b) = board {
+        trigger_dispatch = trigger_dispatch.with_turn_lock(b.turn_lock());
     }
     // Phase 63 Task 3 — auto-notify on trigger fire if the
     // operator configured `notify_target` on the trigger.
@@ -1926,6 +1934,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             loop_config: loop_config.clone(),
             team_missions: team_missions.clone(),
             step_parker: step_parker.clone(),
+            board: board.clone(),
             gate_policy,
             channel_trigger_authz,
             config_toml_path: config_toml_path.clone(),
@@ -2235,6 +2244,8 @@ struct ConnectionContext {
     team_missions: Option<crate::team_mission_driver::TeamMissionService>,
     /// Supervised batching — see `DaemonConfig::step_parker`.
     step_parker: Option<Arc<crate::parked_steps::StepParker>>,
+    /// A20 — see `DaemonConfig::board`.
+    board: Option<Arc<crate::board::service::BoardService>>,
     gate_policy: GatePolicy,
     /// Piece C — per-channel-type authorization for `/team run`.
     channel_trigger_authz: ChannelTriggerAuthz,
@@ -2317,6 +2328,8 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         loop_config,
         team_missions,
         step_parker,
+        // A20 — the board's queries (Task 5) read it.
+        board: _board,
         gate_policy,
         channel_trigger_authz,
         config_toml_path,
@@ -4386,6 +4399,7 @@ async fn run_single_connection_daemon(
         loop_config: None,
         team_missions: None,
         step_parker: None,
+        board: None,
         gate_policy: GatePolicy::default(),
         channel_trigger_authz: ChannelTriggerAuthz::default(),
         config_toml_path: None,
@@ -4502,6 +4516,7 @@ pub(crate) fn minimal_daemon_config(
         loop_config: None,
         team_missions: None,
         step_parker: None,
+        board: None,
         gate_policy: GatePolicy::default(),
         confine_options: None,
         pricing: Default::default(),

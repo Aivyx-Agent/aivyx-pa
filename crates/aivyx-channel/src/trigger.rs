@@ -309,6 +309,13 @@ impl TriggerDispatch {
         Arc::clone(&self.turn_lock)
     }
 
+    /// A20 — share a lock made elsewhere (the board's), so its role runs and
+    /// these fires take turns.
+    pub fn with_turn_lock(mut self, lock: Arc<Mutex<()>>) -> Self {
+        self.turn_lock = lock;
+        self
+    }
+
     /// Supervised batching — park needs-approval calls in `supervised` areas
     /// (headless fires only).
     pub fn with_step_parker(mut self, parker: Arc<crate::parked_steps::StepParker>) -> Self {
@@ -1257,6 +1264,14 @@ mod tests {
                 }),
                 channel_factory,
             )
+        }
+
+        #[test]
+        fn a_shared_turn_lock_is_the_one_fires_take() {
+            let lock = Arc::new(Mutex::new(()));
+            let dispatch = tier_test_dispatch(Arc::new(StdMutex::new(None)))
+                .with_turn_lock(Arc::clone(&lock));
+            assert!(Arc::ptr_eq(&dispatch.turn_lock(), &lock));
         }
 
         #[tokio::test]
