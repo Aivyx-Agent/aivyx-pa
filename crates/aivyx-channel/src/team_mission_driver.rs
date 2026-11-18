@@ -1511,7 +1511,10 @@ impl TeamMissionService {
             .state
             .snapshot(id)
             .ok_or_else(|| MissionDriverError::NotFound(id.to_string()))?;
-        if record.phase.is_terminal() {
+        // An `Executing` mission has a live drive: halting it here would race
+        // the drive's own writes. Only Planning, Paused and AwaitingApproval
+        // (nothing driving) are ended this way.
+        if record.phase.is_terminal() || record.phase == TeamMissionPhase::Executing {
             return Ok(false);
         }
         record.phase = TeamMissionPhase::Halted;
