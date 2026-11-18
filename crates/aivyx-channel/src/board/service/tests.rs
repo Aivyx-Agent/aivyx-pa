@@ -571,6 +571,7 @@ async fn agent_tools_work_only_from_the_runs_session() {
     assert_eq!(sub.parent_task.as_deref(), Some(t.as_str()));
     assert_eq!(sub.project_id, parent.project_id);
     assert_eq!(sub.owner, None);
+    assert_eq!(sub.description, "(written by an agent) the PDFs");
     assert!(sub.review_required);
     assert_eq!(sub.state, TaskState::Todo);
 
@@ -1102,5 +1103,136 @@ mod team {
             op_names(&fx.audit)[3..],
             ["started".to_string(), "cancelled".to_string()]
         );
+    }
+
+    /// A board team run's mission parked in `phase`, with no drive, and its
+    /// task Running: what a daemon that stopped leaves behind.
+    async fn parked(
+        fx: &Fx,
+        svc: &TeamMissionService,
+        phase: TeamMissionPhase,
+    ) -> (String, String) {
+        let t = seed(fx, Some(Owner::Team)).await;
+        let mid = format!("m-{}", new_id('x'));
+        let plan = aivyx_team::MissionPlan::new(
+            "g",
+            vec![aivyx_team::Step::delegate("a", "writer", "draft")],
+        );
+        let mut record = TeamMissionRecord::new(mid.clone(), "g", plan);
+        record.phase = phase;
+        if phase == TeamMissionPhase::AwaitingApproval {
+            record.pending_gate = Some("ok".into());
+        }
+        svc.state().put(record).await.unwrap();
+        let mut task = fx.board.task(&t).await.unwrap();
+        model::start(
+            &mut task,
+            RunRef {
+                mission_id: mid.clone(),
+                kind: RunKind::Team,
+            },
+            now_ms(),
+        )
+        .unwrap();
+        store::put_task(&fx.board.inner.deps.store, &task)
+            .await
+            .unwrap();
+        (t, mid)
+    }
+
+    /// The team service's own restart sweep halts only an Executing
+    /// mission; the board's ends a Paused or AwaitingApproval one whose task
+    /// it moves back to Todo, and drops the gate.
+    #[tokio::test]
+    async fn the_restart_sweep_ends_a_parked_team_mission() {
+        for phase in [TeamMissionPhase::Paused, TeamMissionPhase::AwaitingApproval] {
+            let svc = service(deps("unused"), team_domain().await);
+            let fx = fixture_with(Setup {
+                agent: Arc::new(ScriptedAgent::new(Reply::Done("unused".into()))),
+                team: Some(svc.clone()),
+                notify: None,
+            })
+            .await;
+            let (t, mid) = parked(&fx, &svc, phase).await;
+            svc.state().reload().await.unwrap();
+            assert_eq!(svc.snapshot(&mid).unwrap().phase, phase, "reload leaves it");
+
+            assert_eq!(fx.board.reconcile_at_startup().await.unwrap(), 1);
+            let task = fx.board.task(&t).await.unwrap();
+            assert_eq!(task.state, TaskState::Todo);
+            assert_eq!(last_run(&task).1, RunOutcome::Interrupted);
+            let record = svc.snapshot(&mid).unwrap();
+            assert_eq!(record.phase, TeamMissionPhase::Halted, "{phase:?}");
+            assert_eq!(record.pending_gate, None);
+            assert_eq!(
+                record.halt_reason.as_deref(),
+                Some("its board task was interrupted by a daemon restart")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_task_whose_team_mission_is_paused_halts_it() {
+        let p = provider(TWO_STEPS, true);
+        let (started, release) = (Arc::clone(&p.started), Arc::clone(&p.release));
+        let mut d = deps("unused");
+        d.provider = Arc::new(p);
+        let svc = service(d, team_domain().await);
+        let fx = fixture_with(Setup {
+            agent: Arc::new(ScriptedAgent::new(Reply::Done("unused".into()))),
+            team: Some(svc.clone()),
+            notify: None,
+        })
+        .await;
+        let t = seed(&fx, Some(Owner::Team)).await;
+        let mid = fx.board.start(&t).await.unwrap();
+        tokio::time::timeout(WAIT, started.notified())
+            .await
+            .expect("step a started");
+        wait_phase(&svc, &mid, TeamMissionPhase::Executing).await;
+        svc.pause(&mid).unwrap();
+        release.notify_one();
+        wait_phase(&svc, &mid, TeamMissionPhase::Paused).await;
+        assert_eq!(fx.board.task(&t).await.unwrap().state, TaskState::Running);
+
+        fx.board.cancel(&t).await.unwrap();
+        wait_phase(&svc, &mid, TeamMissionPhase::Halted).await;
+        let record = svc.snapshot(&mid).unwrap();
+        assert_eq!(
+            record.halt_reason.as_deref(),
+            Some("its board task was cancelled")
+        );
+        assert!(!record.outputs.contains_key("b"), "step b never ran");
+        assert_eq!(fx.board.task(&t).await.unwrap().state, TaskState::Cancelled);
+    }
+
+    /// A cancel just after a start can find the mission Executing before its
+    /// drive has armed the abort flag; the abort is retried, not dropped.
+    #[tokio::test]
+    async fn an_abort_before_the_drive_arms_its_flag_is_retried() {
+        let svc = service(deps("unused"), team_domain().await);
+        let fx = fixture_with(Setup {
+            agent: Arc::new(ScriptedAgent::new(Reply::Done("unused".into()))),
+            team: Some(svc.clone()),
+            notify: None,
+        })
+        .await;
+        let (_, mid) = parked(&fx, &svc, TeamMissionPhase::Executing).await;
+        assert!(svc.abort(&mid).is_err(), "no flag armed yet");
+
+        let aborting = {
+            let (board, svc, mid) = (fx.board.clone(), svc.clone(), mid.clone());
+            tokio::spawn(async move { board.abort_team(&svc, &mid).await })
+        };
+        // A few polls (20 ms apart) go by with nothing to abort.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!aborting.is_finished(), "gave up before the drive armed");
+
+        let flag = svc.state().arm_abort(&mid);
+        tokio::time::timeout(WAIT, aborting)
+            .await
+            .expect("the retry found the flag")
+            .unwrap();
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

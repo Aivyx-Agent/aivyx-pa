@@ -339,7 +339,7 @@ impl SharedMissionState {
 
     /// Chapter Belay — arm a fresh abort flag for an executing mission and
     /// return it (the drive hands the clone to the observer's `should_halt`).
-    fn arm_abort(&self, id: &str) -> Arc<std::sync::atomic::AtomicBool> {
+    pub(crate) fn arm_abort(&self, id: &str) -> Arc<std::sync::atomic::AtomicBool> {
         let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.abort_flags
             .write()
@@ -1500,13 +1500,32 @@ impl TeamMissionService {
         abort_mission(&self.state, id)
     }
 
-    /// Spawn the background drive for an already-registered/-resumed mission.
-    /// A drive failure leaves the record `Executing` for the operator to
-    /// inspect; we log rather than unwind the detached task.
-    /// Drive a registered mission in the background. A drive failure halts
-    /// the mission with the error as its reason: a record left `Executing`
-    /// with no drive would look live forever and couldn't be aborted (found
-    /// by the A20 board live check, 2026-11-18; applies to every caller).
+    /// End a mission that no drive is working: set it `Halted` with
+    /// `reason` and drop any pending gate. Returns `false` (and changes
+    /// nothing) if it already ended. Only for a mission nothing drives — one
+    /// `Paused` or `AwaitingApproval`, or any mission at startup before a
+    /// drive is spawned; a running mission is stopped with
+    /// [`abort`](Self::abort) instead.
+    pub async fn halt_undriven(&self, id: &str, reason: &str) -> Result<bool, MissionDriverError> {
+        let mut record = self
+            .state
+            .snapshot(id)
+            .ok_or_else(|| MissionDriverError::NotFound(id.to_string()))?;
+        if record.phase.is_terminal() {
+            return Ok(false);
+        }
+        record.phase = TeamMissionPhase::Halted;
+        record.pending_gate = None;
+        record.halt_reason = Some(reason.to_string());
+        self.state.put(record).await?;
+        Ok(true)
+    }
+
+    /// Spawn the background drive for an already-registered or resumed
+    /// mission. A drive failure is logged and halts the mission with the
+    /// error as its reason: a record left `Executing` with no drive would
+    /// look live forever and couldn't be aborted (found by the A20 board
+    /// live check, 2026-11-18; applies to every caller).
     fn spawn_drive(&self, id: String) {
         let this = self.clone();
         tokio::spawn(async move {
@@ -2179,6 +2198,17 @@ impl Tool for TeamRunTool {
         Scope::parse("team.run").expect("known base")
     }
     async fn execute(&self, input: Value, ctx: &ToolContext<'_>) -> ToolOutcome {
+        // A capped channel (a board role run, or a federation peer) must
+        // never start a team mission: the mission runs on its own lead
+        // channel, outside the calling channel's capability ceiling.
+        if ctx.channel.capability_ceiling().is_some() {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: "team.run isn't available inside a capped run (a board role run or a \
+                         federation peer): a team mission would run outside its limits"
+                    .to_string(),
+            });
+        }
         let Some(service) = self.service.get() else {
             return ToolOutcome::Failed(AivyxError::Tool {
                 tool: self.id,

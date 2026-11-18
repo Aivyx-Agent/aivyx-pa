@@ -32,6 +32,20 @@ impl From<StorageError> for BoardError {
 /// How often a team run's poller looks at its mission.
 const TEAM_POLL: Duration = Duration::from_secs(2);
 
+/// How many times a cancel tries to abort a team mission that isn't running
+/// yet (planning, or just started), one [`TEAM_POLL`] apart.
+const ABORT_TRIES: u32 = 30;
+
+/// The prefix of a subtask description `board.subtask` wrote.
+const AGENT_WRITTEN: &str = "(written by an agent) ";
+
+/// The halt reason of a paused team mission whose board task was cancelled.
+const CANCELLED_REASON: &str = "its board task was cancelled";
+
+/// The halt reason of a parked team mission whose board task was running
+/// when the daemon stopped.
+const INTERRUPTED_REASON: &str = "its board task was interrupted by a daemon restart";
+
 /// What the board needs from the daemon.
 pub struct BoardDeps {
     /// `KeyDomain::Board`.
@@ -605,32 +619,45 @@ impl BoardService {
     }
 
     /// Stop a cancelled task's mission. A running mission is aborted; one
-    /// waiting at a gate has the gate rejected; one still planning can't be
-    /// aborted yet, so try again until it runs or ends.
+    /// waiting at a gate has the gate rejected; a paused one is halted. One
+    /// still planning, or `Executing` before its drive has armed the abort
+    /// flag (a cancel just after a start), can't be aborted yet, so try
+    /// again, up to [`ABORT_TRIES`] times, until it runs or ends.
     async fn abort_team(&self, svc: &TeamMissionService, mission_id: &str) {
-        loop {
-            match svc.abort(mission_id) {
-                Ok(_) => return,
-                Err(e) => match svc.snapshot(mission_id).map(|r| (r.phase, r.pending_gate)) {
-                    Some((TeamMissionPhase::Planning, _)) => {
-                        tokio::time::sleep(self.inner.team_poll).await;
+        for _ in 0..ABORT_TRIES {
+            let Err(e) = svc.abort(mission_id) else {
+                return;
+            };
+            match svc.snapshot(mission_id).map(|r| (r.phase, r.pending_gate)) {
+                Some((phase, _)) if phase.is_terminal() => return,
+                Some((TeamMissionPhase::Planning | TeamMissionPhase::Executing, _)) => {
+                    tokio::time::sleep(self.inner.team_poll).await;
+                }
+                Some((TeamMissionPhase::AwaitingApproval, Some(step))) => {
+                    if let Err(e) = svc.resolve(mission_id, &step, false).await {
+                        eprintln!(
+                            "aivyx-pa board: couldn't reject gate {step} of team mission \
+                             {mission_id}: {e}"
+                        );
                     }
-                    Some((TeamMissionPhase::AwaitingApproval, Some(step))) => {
-                        if let Err(e) = svc.resolve(mission_id, &step, false).await {
-                            eprintln!(
-                                "aivyx-pa board: couldn't reject gate {step} of team mission \
-                                 {mission_id}: {e}"
-                            );
-                        }
-                        return;
+                    return;
+                }
+                Some((TeamMissionPhase::Paused, _)) => {
+                    if let Err(e) = svc.halt_undriven(mission_id, CANCELLED_REASON).await {
+                        eprintln!("aivyx-pa board: couldn't halt team mission {mission_id}: {e}");
                     }
-                    _ => {
-                        eprintln!("aivyx-pa board: couldn't abort team mission {mission_id}: {e}");
-                        return;
-                    }
-                },
+                    return;
+                }
+                _ => {
+                    eprintln!("aivyx-pa board: couldn't abort team mission {mission_id}: {e}");
+                    return;
+                }
             }
         }
+        eprintln!(
+            "aivyx-pa board: team mission {mission_id} didn't start running in time to be \
+             aborted; stop it with `aivyx-pa team abort {mission_id}`"
+        );
     }
 
     /// The task and mission a role run's session works, if it is one.
@@ -684,7 +711,9 @@ impl BoardService {
             project_id: parent.project_id.clone(),
             parent_task: Some(parent.id.clone()),
             title: title.trim().into(),
-            description: description.trim().into(),
+            // Marked, so an operator (and the brief of a later run) can tell
+            // an agent's words from their own.
+            description: format!("{AGENT_WRITTEN}{}", description.trim()),
             owner: None,
             review_required: true,
             state: TaskState::Todo,
@@ -698,8 +727,9 @@ impl BoardService {
         Ok(task.id)
     }
 
-    /// The restart sweep: every Running task goes back to Todo, and a role
-    /// run's mission record is closed. Returns how many tasks it moved.
+    /// The restart sweep: every Running task goes back to Todo, a role run's
+    /// mission record is closed, and a team run's mission is ended. Returns
+    /// how many tasks it moved.
     pub async fn reconcile_at_startup(&self) -> Result<usize, BoardError> {
         let _w = self.inner.write_lock.lock().await;
         let mut moved = 0;
@@ -710,11 +740,23 @@ impl BoardService {
             store::put_task(&self.deps().store, &task).await?;
             self.record("interrupted", &task.id, "operator");
             moved += 1;
-            // A team mission is halted by its own `reload()`.
-            if run.kind == RunKind::Role
-                && let Err(e) = self.close_mission(&run.mission_id, false).await
-            {
-                eprintln!("aivyx-pa board: mission {}: {e}", run.mission_id);
+            match run.kind {
+                RunKind::Role => {
+                    if let Err(e) = self.close_mission(&run.mission_id, false).await {
+                        eprintln!("aivyx-pa board: mission {}: {e}", run.mission_id);
+                    }
+                }
+                // The team service's `reload()` (run first) halts only an
+                // Executing mission; a Paused or AwaitingApproval one would
+                // outlive its task, so end whatever is left here. Nothing
+                // drives a mission yet at startup.
+                RunKind::Team => {
+                    if let Some(svc) = &self.deps().team
+                        && let Err(e) = svc.halt_undriven(&run.mission_id, INTERRUPTED_REASON).await
+                    {
+                        eprintln!("aivyx-pa board: team mission {}: {e}", run.mission_id);
+                    }
+                }
             }
         }
         Ok(moved)

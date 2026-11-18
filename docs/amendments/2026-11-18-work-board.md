@@ -27,8 +27,8 @@ decisions that need an architecture change. The code is in
 A new domain, `KeyDomain::Board` (`as_bytes()` = `b"board"`, table
 `aivyx_board_v1`), holds goals, projects and tasks as JSON records. Encrypted
 domains go **28 → 29**. The HKDF subkey is derived like every other domain's.
-The domain's format lines in `docs/stable/formats.txt` are tagged `PREVIEW`
-while the board is a preview.
+The domain's format lines in `docs/stable/formats.txt` are tagged
+`(preview)` while the board is a preview.
 
 ## D4 capability
 
@@ -47,7 +47,11 @@ The count moves **102 → 103**.
   if it declares none) and its trust ceiling, plus `board.write`.
   `board.write` is added after the trust cap, so a SemiTrusted role's run
   still holds it. It is headless: a step that needs approval is parked
-  for the operator's review, and the run does not block on it.
+  for the operator's review, and the run does not block on it. A role run
+  can't call `team.run`: a team mission would run outside the run's
+  ceiling, so the tool refuses any capped channel (a board role run, or a
+  federation peer). `role.update` and `skills.teach` stay reachable from
+  System-origin turns, as they are today; a role run is one.
 - A **team run** is a team mission whose `triggered_by` is `board:<task id>`.
 - Start is refused while a task is running, from a terminal state, and with
   no owner.

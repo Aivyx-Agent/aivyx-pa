@@ -8,6 +8,10 @@
 //!   so a scope the agent holds but the role doesn't is denied in the run;
 //! - the session binding: the same call from a session the board didn't
 //!   register is refused by the tool.
+//!
+//! And one thing that must not happen: a role holding `team.run` can't start
+//! a team mission from its run, since the mission would run outside the
+//! run's ceiling.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,6 +26,7 @@ use aivyx_capability::{CapabilitySet, Scope};
 use aivyx_channel::board::runner::{BoardRunContext, role_ceiling};
 use aivyx_channel::board::tools::{BoardCommentTool, BoardSubtaskTool};
 use aivyx_channel::board::{BoardDeps, BoardService};
+use aivyx_channel::team_mission_driver::TeamRunTool;
 use aivyx_core::{
     Agent, AgentId, AivyxError, CancellationToken, ChannelContext, ConcreteAgent, Message,
     NextStep, NullAuditHook, SessionId, StepObservation, Tool, ToolContext, ToolId, ToolOutcome,
@@ -108,6 +113,7 @@ struct Fx {
     probe_ran: Arc<AtomicUsize>,
     probe: ToolId,
     comment: ToolId,
+    team_run: ToolId,
     seen: Outcomes,
 }
 
@@ -128,6 +134,12 @@ impl Fx {
 /// over a real registry, then the board over the agent, then the tools get
 /// the board. `floor_has_board_write` is the daemon-mode floor grant.
 async fn fixture(floor_has_board_write: bool) -> Fx {
+    fixture_opts(floor_has_board_write, false).await
+}
+
+/// `role_has_team_run`: the agent and the role both hold `team.run`, and the
+/// run calls it before its comment.
+async fn fixture_opts(floor_has_board_write: bool, role_has_team_run: bool) -> Fx {
     let dir = tempfile::tempdir().unwrap();
     let storage: Arc<dyn Storage> = RedbStorage::open(
         StorageConfig::new(dir.path().join("s.redb")),
@@ -143,6 +155,7 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
 
     let comment = Arc::new(BoardCommentTool::new());
     let subtask = Arc::new(BoardSubtaskTool::new());
+    let team_run = Arc::new(TeamRunTool::new());
     let probe_ran = Arc::new(AtomicUsize::new(0));
     let seen: Outcomes = Arc::new(Mutex::new(Vec::new()));
     let probe = Arc::new(Probe {
@@ -150,7 +163,7 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
         schema: json!({"type": "object"}),
         ran: Arc::clone(&probe_ran),
     });
-    let plan = vec![
+    let mut plan = vec![
         NextStep::ToolCall {
             tool_id: probe.id,
             input: json!({}),
@@ -165,6 +178,17 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
         },
         NextStep::FinalMessage("drafted".to_string()),
     ];
+    if role_has_team_run {
+        plan.insert(
+            1,
+            NextStep::ToolCall {
+                tool_id: team_run.id(),
+                input: json!({"goal": "do it all as a team"}),
+                auto_corrected_from: None,
+                extracted_from_text: None,
+            },
+        );
+    }
 
     let mut floor = vec![
         Scope::parse("fs.read").unwrap(),
@@ -173,11 +197,15 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
     if floor_has_board_write {
         floor.push(Scope::parse("board.write").unwrap());
     }
-    let (probe_id, comment_id) = (probe.id, comment.id());
+    if role_has_team_run {
+        floor.push(Scope::parse("team.run").unwrap());
+    }
+    let (probe_id, comment_id, team_run_id) = (probe.id, comment.id(), team_run.id());
     let tools: Vec<Arc<dyn Tool>> = vec![
         comment.clone() as Arc<dyn Tool>,
         subtask.clone() as Arc<dyn Tool>,
         probe as Arc<dyn Tool>,
+        team_run as Arc<dyn Tool>,
     ];
     let agent: Arc<dyn Agent> = Arc::new(ConcreteAgent::new(
         AgentId::new(),
@@ -196,10 +224,14 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
     ));
 
     // The role declares its own scopes and doesn't list `board.write`.
+    let mut role_scopes = vec![Scope::parse("memory.read").unwrap()];
+    if role_has_team_run {
+        role_scopes.push(Scope::parse("team.run").unwrap());
+    }
     let mut roles = HashMap::new();
     roles.insert(
         "writer".to_string(),
-        CapabilitySet::from_scopes([Scope::parse("memory.read").unwrap()]),
+        CapabilitySet::from_scopes(role_scopes),
     );
     let board = Arc::new(BoardService::new(BoardDeps {
         store: storage.domain(KeyDomain::Board),
@@ -222,6 +254,7 @@ async fn fixture(floor_has_board_write: bool) -> Fx {
         probe_ran,
         probe: probe_id,
         comment: comment_id,
+        team_run: team_run_id,
         seen,
     }
 }
@@ -341,4 +374,24 @@ async fn the_same_call_outside_a_board_run_is_refused() {
         Seen::Failed(detail) => assert!(detail.contains("not in a board run"), "{detail}"),
         other => panic!("expected the tool's refusal, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn a_role_holding_team_run_cant_start_a_team_mission_from_its_run() {
+    let fx = fixture_opts(true, true).await;
+    let id = seed(&fx).await;
+    let task = run(&fx, &id).await;
+
+    // The scope check passed (the role holds `team.run`); the tool refused,
+    // because the run is capped.
+    match fx.outcome_of(fx.team_run) {
+        Seen::Failed(detail) => assert!(
+            detail.contains("isn't available inside a capped run"),
+            "{detail}"
+        ),
+        other => panic!("expected the tool's refusal, got {other:?}"),
+    }
+    // The rest of the run went on as usual.
+    assert_eq!(agent_comments(&task), ["found the Q4 numbers"]);
+    assert_eq!(task.state, TaskState::Review, "{:?}", task.thread);
 }

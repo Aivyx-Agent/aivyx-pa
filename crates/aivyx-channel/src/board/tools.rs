@@ -370,7 +370,7 @@ mod tests {
         let sub = fx.board.task(&sub).await.unwrap();
         assert_eq!(sub.parent_task.as_deref(), Some(id.as_str()));
         assert_eq!(sub.title, "Check the totals");
-        assert_eq!(sub.description, "the Q4 column");
+        assert_eq!(sub.description, "(written by an agent) the Q4 column");
         assert_eq!(sub.owner, None);
     }
 
