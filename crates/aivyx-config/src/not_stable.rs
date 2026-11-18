@@ -145,6 +145,9 @@ pub const NOT_STABLE: &[NotStable] = &[
     // speak is not (yet): a 1.x minor stabilises it once a real tool pack
     // exists.
     entry(Snapshot::Formats, "tool.protocol_version", Tag::NotStable),
+    // A20: the work board is a preview.
+    entry(Snapshot::Formats, "storage.record_version.board", PREVIEW),
+    entry(Snapshot::Formats, "storage.table.board", PREVIEW),
     // Defaults that may change in a minor release (docs/COMPATIBILITY.md):
     // the suggested model, the built-in system prompt and the starter
     // persona seed. `aivyx-pa init` writes the user's own choices.

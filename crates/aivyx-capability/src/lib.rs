@@ -396,6 +396,8 @@ const KNOWN_BASES: &[&str] = &[
     "skills.write",
     // A19 — outbound federation relay; qualifier = peer id
     "federation.relay",
+    // A20 — the work board: an agent's comment or subtask on its own board task
+    "board.write",
     // role mutation (Phase 30 — PRODUCT.md P8 completion)
     "role.update",
     // ollama model management (Phase 36 — local LLM story completion)
@@ -1266,6 +1268,8 @@ static CEILING_TRUSTED: LazyLock<CapabilitySet> = LazyLock::new(|| {
         "skills.write",
         // A19 — outbound federation relay (Trusted only; irreversible).
         "federation.relay",
+        // A20 — the work board (Trusted only; not irreversible).
+        "board.write",
         "role.update",
         "ollama.list",
         "ollama.show",
@@ -1614,6 +1618,18 @@ mod tests {
         assert!(TrustTier::Trusted.default_ceiling().grants(&s));
         assert!(!TrustTier::SemiTrusted.default_ceiling().grants(&s));
         assert!(!TrustTier::Untrusted.default_ceiling().grants(&s));
+    }
+
+    // ---- A20 — board.write ----
+
+    #[test]
+    fn board_write_is_a_known_trusted_base_that_changes_things() {
+        assert!(KNOWN_BASES.contains(&"board.write"));
+        let s = Scope::parse("board.write").expect("known base");
+        assert!(TrustTier::Trusted.default_ceiling().grants(&s));
+        assert!(!TrustTier::SemiTrusted.default_ceiling().grants(&s));
+        assert!(!IRREVERSIBLE_BASES.contains(&"board.write"));
+        assert!(!READ_ONLY_BASES.contains(&"board.write"));
     }
 
     // ---- Scope::parse ----
@@ -2578,11 +2594,12 @@ mod tests {
         // (Trusted-only, withheld like email.send).
         // A19 adds federation.relay — the outbound federation relay
         // gate (Trusted-only, irreversible); recorded in A19 itself.
+        // A20 adds board.write (102 -> 103).
         // Any change here means updating the addendum's
         // "Current full enumeration" section in the same PR.
         assert_eq!(
             KNOWN_BASES.len(),
-            102,
+            103,
             "If KNOWN_BASES grew, also update the A3 addendum's \
              latest count + per-base list."
         );

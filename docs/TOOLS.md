@@ -194,6 +194,13 @@ configured peer gives the default agent `federation.relay:<id>`. A role
 that declares its own `capability_scopes` must list it. The reply is
 **untrusted output** (Picket scans it, Bulwark fences it). Amendment A19.
 
+## Work board (A20)
+
+Not registered yet: the `board.comment` and `board.subtask` tools land with
+the work board. Their scope base is `board.write`, unqualified, Trusted tier,
+not irreversible. It is useful only in a session the board registered for a
+run, and only on that run's own task. Amendment A20.
+
 ## Local-model management (infrastructure)
 
 | Tool | Scope | Min tier | Notes |

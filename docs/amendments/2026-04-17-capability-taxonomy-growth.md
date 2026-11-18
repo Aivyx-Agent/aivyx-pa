@@ -897,6 +897,8 @@ total at **101**.
 A19 (2026-11-16) adds `federation.relay` (Trusted-only, irreversible;
 qualifier = peer id): **101 → 102**. The test now pins **102**.
 
+A20 (2026-11-18) adds `board.write` (the work board): **102 -> 103**. The test now pins **103**.
+
 ## Phase 129 addendum — Chapter F #3 Google Drive (2026-06-01)
 
 > *Added at Phase 129 exit. Chapter F's third integration —

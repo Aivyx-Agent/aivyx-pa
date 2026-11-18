@@ -254,6 +254,8 @@ pub enum KeyDomain {
     /// operator's review (areas at the `supervised` autonomy level). One row
     /// per step, keyed by its short id, holding the step as JSON.
     ParkedSteps,
+    /// A20 — the work board: goals, projects, tasks and their threads.
+    Board,
 }
 
 impl KeyDomain {
@@ -293,6 +295,7 @@ impl KeyDomain {
             KeyDomain::ConflictDismissals => b"conflict-dismissals",
             KeyDomain::RoutingTaint => b"routing-taint",
             KeyDomain::ParkedSteps => b"parked-steps",
+            KeyDomain::Board => b"board",
         }
     }
 
@@ -343,6 +346,7 @@ impl KeyDomain {
             }
             KeyDomain::RoutingTaint => "aivyx_routing_taint_v1",
             KeyDomain::ParkedSteps => "aivyx_parked_steps_v1",
+            KeyDomain::Board => "aivyx_board_v1",
         }
     }
 
@@ -359,7 +363,7 @@ impl KeyDomain {
 
     /// All variants, iteration order stable. Used at `open` time to
     /// precompute every subkey and to create the redb tables.
-    pub const ALL: [KeyDomain; 28] = [
+    pub const ALL: [KeyDomain; 29] = [
         KeyDomain::Sessions,
         KeyDomain::Memory,
         KeyDomain::Audit,
@@ -388,6 +392,7 @@ impl KeyDomain {
         KeyDomain::ConflictDismissals,
         KeyDomain::RoutingTaint,
         KeyDomain::ParkedSteps,
+        KeyDomain::Board,
     ];
 }
 
@@ -611,7 +616,7 @@ pub trait Storage: Send + Sync {
 #[derive(Debug)]
 pub struct RedbStorage {
     db: Arc<Database>,
-    subkeys: [SubKey; 28],
+    subkeys: [SubKey; 29],
     // _master held to make the zeroize-on-drop behavior load-bearing:
     // as long as RedbStorage is alive, the master is alive; when the
     // last Arc drops, so does the master.
@@ -709,7 +714,7 @@ impl RedbStorage {
         }))
     }
 
-    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 28], StorageError> {
+    fn derive_all_subkeys(master: &MasterKey) -> Result<[SubKey; 29], StorageError> {
         // `KeyDomain::ALL` is indexed in declaration order; we rely
         // on that to slot each derived subkey into a fixed-size
         // array so `domain()` is an O(1) index-by-discriminant.
@@ -754,6 +759,7 @@ impl RedbStorage {
             )?,
             master.derive_subkey(KeyDomain::RoutingTaint.as_bytes())?,
             master.derive_subkey(KeyDomain::ParkedSteps.as_bytes())?,
+            master.derive_subkey(KeyDomain::Board.as_bytes())?,
         ])
     }
 
@@ -790,6 +796,7 @@ impl RedbStorage {
             KeyDomain::ConflictDismissals => &self.subkeys[25],
             KeyDomain::RoutingTaint => &self.subkeys[26],
             KeyDomain::ParkedSteps => &self.subkeys[27],
+            KeyDomain::Board => &self.subkeys[28],
         }
     }
 }
@@ -1263,7 +1270,7 @@ mod tests {
         // "Encrypted storage domains" row + the `aivyx-storage` line in
         // `README.md`, and the storage-domain figure in
         // `docs/BACKEND_AUDIT_*.md`.**
-        assert_eq!(KeyDomain::ALL.len(), 28, "encrypted storage domain count");
+        assert_eq!(KeyDomain::ALL.len(), 29, "encrypted storage domain count");
     }
 
     #[test]
@@ -1331,7 +1338,8 @@ mod tests {
                 | KeyDomain::LoopState
                 | KeyDomain::ConflictDismissals
                 | KeyDomain::RoutingTaint
-                | KeyDomain::ParkedSteps => {}
+                | KeyDomain::ParkedSteps
+                | KeyDomain::Board => {}
             }
         }
     }
@@ -1594,6 +1602,15 @@ mod tests {
             Some(b"a pair row".to_vec()),
             "CooccurrenceLedger returned the helpfulness value"
         );
+    }
+
+    // ---- A20 — Board domain ----------------------------------------
+
+    #[test]
+    fn board_domain_has_stable_metadata() {
+        assert_eq!(KeyDomain::Board.as_bytes(), b"board");
+        assert_eq!(KeyDomain::Board.table_name(), "aivyx_board_v1");
+        assert!(KeyDomain::ALL.contains(&KeyDomain::Board));
     }
 
     // ---- Supervised batching — ParkedSteps domain -------------------
