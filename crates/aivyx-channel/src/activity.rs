@@ -126,6 +126,10 @@ pub fn is_operator_action(msg: &FrontendMessage) -> bool {
                 | QueryPayload::ResolveParkedStep { .. }
                 | QueryPayload::CompleteReminder { .. }
                 | QueryPayload::SnoozeReminder { .. }
+                | QueryPayload::BoardStart { .. }
+                | QueryPayload::BoardApprove { .. }
+                | QueryPayload::BoardSendBack { .. }
+                | QueryPayload::BoardCancel { .. }
         ),
         _ => false,
     }
@@ -190,6 +194,14 @@ mod tests {
                 id: "x".into(),
                 payload: QueryPayload::ResolveParkedStep { id: "p".into(), approve: false },
             },
+            // A20: the board's decisions are the operator acting.
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardStart { task_id: "t".into() } },
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardApprove { task_id: "t".into() } },
+            FrontendMessage::Query {
+                id: "x".into(),
+                payload: QueryPayload::BoardSendBack { task_id: "t".into(), why: "w".into() },
+            },
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardCancel { task_id: "t".into() } },
         ];
         for m in &yes {
             assert!(is_operator_action(m), "{m:?}");
@@ -205,6 +217,9 @@ mod tests {
             },
             FrontendMessage::Query { id: "x".into(), payload: QueryPayload::GetBriefing },
             FrontendMessage::Query { id: "x".into(), payload: QueryPayload::GetReminders },
+            // Reading the board, or writing a plan, isn't a decision.
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardSnapshot },
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardTask { task_id: "t".into() } },
             FrontendMessage::SetApprovals { enabled: true },
         ];
         for m in &no {

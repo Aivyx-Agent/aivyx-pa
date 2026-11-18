@@ -542,8 +542,10 @@ one of the things the operator actually *does* — `is_operator_action`'s
 list: `SubmitInput` (unless `headless: true` — an automated submit isn't the
 operator), `ResolveApproval`, `ResolveGate`,
 `ResolvePersonaProposal`, and the `Query` variants `ResolveTeamGate`,
-`ResolveParkedStep`, `CompleteReminder`, `SnoozeReminder`. Everything else, `GetBriefing` and
-`GetReminders` included, is a read and never touches the clock.
+`ResolveParkedStep`, `CompleteReminder`, `SnoozeReminder`, and the board's
+decisions `BoardStart`, `BoardApprove`, `BoardSendBack` and `BoardCancel`.
+Everything else, `GetBriefing`, `GetReminders`, the board's reads and its
+creates, assigns and comments included, never touches the clock.
 
 - **Visits.** Actions less than 30 minutes apart (`activity::
   VISIT_GAP_SECS`) are one visit. "Last here" is the end of the

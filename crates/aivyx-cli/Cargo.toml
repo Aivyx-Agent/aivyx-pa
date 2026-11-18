@@ -174,13 +174,13 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 tar = { workspace = true }
 flate2 = { workspace = true }
+# The board CLI renders its wire types and thread times.
+chrono = { workspace = true }
+aivyx-ipc = { path = "../aivyx-ipc" }
 
 [target.'cfg(unix)'.dependencies]
 # Restores the default Ctrl-C action after `init`'s skippable drafting step.
 libc = { workspace = true }
-chrono = { workspace = true }
-# The board CLI renders its wire types.
-aivyx-ipc = { path = "../aivyx-ipc" }
 
 [dev-dependencies]
 tempfile = "3"
