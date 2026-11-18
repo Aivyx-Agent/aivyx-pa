@@ -28,7 +28,7 @@
 | 7 | `board approve` | ✅ |
 | 8 | Stop the daemon mid-run, restart: back in Todo, "interrupted" | ✅ |
 | 9 | Chain verifies; `audit export --event-type board_changed` has no text | ✅ |
-| 10 | Studio click-through (filters, task panel, Start, Approve, Send back; browser console) | ⏳ pending (controller) |
+| 10 | Studio click-through (filters, task panel, Start, Approve, Send back; browser console) | ⏳ deferred: released without it (preview); to do on the released Studio |
 
 ## Notes
 
@@ -157,7 +157,9 @@ comment text appears (grep for the titles and "PINEAPPLE": 0 hits).
 The role run on `t-5985bd52` added a subtask that repeats its own title
 (`t-6b3d2ea6`, unowned): the 9B's choice, harmless.
 
-### 10. Studio (pending: needs a real browser)
+### 10. Studio (deferred)
+
+The operator chose to release 1.3.0 without this step (2026-11-19): the board ships as a preview, and the click-through is done later on the released Studio. The view's helpers have native unit tests, and CI builds and lints the wasm crate.
 
 The daemon is left **stopped**. The config now has `[studio] port = 17843`
 (the operator's daemon holds 7843). The binary embeds the bundle built by
