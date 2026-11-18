@@ -1374,7 +1374,7 @@ impl TeamMissionService {
             &format!("board:{task_id}"),
         )
         .await?;
-        self.spawn_drive_halting_on_error(id.clone());
+        self.spawn_drive(id.clone());
         Ok(id)
     }
 
@@ -1503,28 +1503,11 @@ impl TeamMissionService {
     /// Spawn the background drive for an already-registered/-resumed mission.
     /// A drive failure leaves the record `Executing` for the operator to
     /// inspect; we log rather than unwind the detached task.
+    /// Drive a registered mission in the background. A drive failure halts
+    /// the mission with the error as its reason: a record left `Executing`
+    /// with no drive would look live forever and couldn't be aborted (found
+    /// by the A20 board live check, 2026-11-18; applies to every caller).
     fn spawn_drive(&self, id: String) {
-        let this = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = drive_registered(
-                &this.state,
-                &this.deps,
-                this.config.clone(),
-                &id,
-                this.gate_policy,
-            )
-            .await
-            {
-                eprintln!("aivyx-pa team: mission {id} drive failed — {e}");
-            }
-        });
-    }
-
-    /// A20 — like [`Self::spawn_drive`], but a drive failure halts the
-    /// mission with the error as its reason. A board run waits for its
-    /// mission to end; a record left `Executing` with no drive would keep
-    /// the task Running until the next restart (live check, 2026-11-18).
-    fn spawn_drive_halting_on_error(&self, id: String) {
         let this = self.clone();
         tokio::spawn(async move {
             if let Err(e) = drive_registered(

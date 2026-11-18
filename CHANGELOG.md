@@ -30,6 +30,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
   in the daemon. A preview, outside the 1.x stability promise. Guide:
   `docs/BOARD.md`. Amendment A20.
 
+### Fixed
+
+- A team mission whose run fails (for example, a specialist that can't finish its turn) now halts with the error as its reason. Before, it stayed "executing" with nothing driving it, and abort couldn't end it.
+
 ## [1.2.0] — 2026-11-18
 
 ### Changed

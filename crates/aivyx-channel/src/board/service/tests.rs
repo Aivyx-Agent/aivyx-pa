@@ -1010,6 +1010,21 @@ mod team {
         );
     }
 
+    /// Not only board runs: any team mission whose drive fails halts with
+    /// the error, so it can't sit in Executing with nothing driving it.
+    #[tokio::test]
+    async fn any_team_mission_whose_drive_fails_halts() {
+        let mut p = provider(ONE_STEP, false);
+        p.fail_steps = true;
+        let mut d = deps("unused");
+        d.provider = Arc::new(p);
+        let svc = service(d, team_domain().await);
+        let mid = svc.start_from_goal("write the note", None).await.unwrap();
+        wait_phase(&svc, &mid, TeamMissionPhase::Halted).await;
+        let record = svc.snapshot(&mid).unwrap();
+        assert!(record.halt_reason.is_some_and(|r| !r.is_empty()));
+    }
+
     /// A specialist that can't finish its turn stops the drive with an
     /// error. The mission must not stay Executing (nothing would ever end
     /// it), and the task must leave Running with the reason.
