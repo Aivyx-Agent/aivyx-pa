@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-/// Missions → Mission Control.
+/// Missions → Mission Control, Board.
 pub const MISSIONS: &str = "missions";
 /// Memory → Wiki, Graph.
 pub const MEMORY: &str = "memory";
@@ -22,7 +22,7 @@ pub type OpenGroups = BTreeSet<String>;
 /// have none.
 pub fn group_of(slug: &str) -> Option<&'static str> {
     match slug {
-        "mission-control" => Some(MISSIONS),
+        "mission-control" | "board" => Some(MISSIONS),
         "wiki" | "graph" => Some(MEMORY),
         "gallery" | "voice" | "sessions" | "mcp" | "tools" => Some(MORE),
         _ => None,
@@ -71,6 +71,7 @@ mod tests {
     #[test]
     fn nested_screens_belong_to_their_group() {
         assert_eq!(group_of("mission-control"), Some(MISSIONS));
+        assert_eq!(group_of("board"), Some(MISSIONS));
         assert_eq!(group_of("graph"), Some(MEMORY));
         assert_eq!(group_of("sessions"), Some(MORE));
         assert_eq!(group_of("tools"), Some(MORE));

@@ -36,6 +36,7 @@ use aivyx_ipc::wiki::{WikiPage, WikiPageSummary};
 use aivyx_ipc::graph::{GraphEntity, GraphTriple};
 use std::collections::{HashMap, HashSet};
 
+mod board_view;
 /// The Command Center home screen: a logbook rendered from the daemon's `Briefing`.
 mod command_center;
 mod cron_text;
@@ -96,6 +97,7 @@ const ICON_SCHEDULES: Asset = asset!("/assets/icons/schedules.svg");
 const ICON_LOOP: Asset = asset!("/assets/icons/loop.svg");
 const ICON_MISSION_CONTROL: Asset = asset!("/assets/icons/mission-control.svg");
 const ICON_REMINDERS: Asset = asset!("/assets/icons/reminders.svg");
+const ICON_BOARD: Asset = asset!("/assets/icons/board.svg");
 const ICON_AUDIT: Asset = asset!("/assets/icons/security.svg");
 const ICON_SESSIONS: Asset = asset!("/assets/icons/channels.svg");
 const ICON_NOTIFICATIONS: Asset = asset!("/assets/icons/notifications.svg");
@@ -140,6 +142,8 @@ enum View {
     Notifications,
     Loop,
     Reminders,
+    /// A20 — the Factory work board: goals, projects and tasks in four columns.
+    Board,
     Chat,
     Memory,
     /// Chapter Codex — the knowledge-wiki: synthesized per-topic pages.
@@ -188,7 +192,7 @@ impl View {
     /// `groups`) — reordering this array is a bigger, riskier change than
     /// this comment fix, since other code (e.g. Tab-cycling) may depend on
     /// this exact order.
-    const ALL: [View; 25] = [
+    const ALL: [View; 26] = [
         View::Command,
         View::Chat,
         View::Missions,
@@ -214,6 +218,7 @@ impl View {
         View::Loop,
         View::Reminders,
         View::Models,
+        View::Board,
     ];
 
     /// The URL-hash slug for this view (deep-linking: `…/#memory`).
@@ -244,6 +249,7 @@ impl View {
             View::Sessions => "sessions",
             View::Loop => "loop",
             View::Reminders => "reminders",
+            View::Board => "board",
         }
     }
 
@@ -280,6 +286,7 @@ impl View {
             View::Sessions => "Sessions",
             View::Loop => "Loop",
             View::Reminders => "Reminders",
+            View::Board => "Board",
         }
     }
 }
@@ -1094,6 +1101,7 @@ fn App() -> Element {
     let notifications = use_signal(NotificationsState::default);
     let loop_ui = use_signal(LoopUiState::default);
     let reminders_ui = use_signal(RemindersState::default);
+    let board_ui = use_signal(board_view::BoardUi::default);
     let notify_config_ui = use_signal(NotifyConfigUi::default);
     let mut audit_page = use_signal(AuditState::default);
     let sessions_page = use_signal(SessionsState::default);
@@ -1131,7 +1139,7 @@ fn App() -> Element {
         ws_task(
             rx, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
-            notifications, loop_ui, reminders_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
+            notifications, loop_ui, reminders_ui, board_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info, routing, briefing,
         )
     });
@@ -1158,6 +1166,9 @@ fn App() -> Element {
     use_context_provider(|| notifications);
     use_context_provider(|| loop_ui);
     use_context_provider(|| reminders_ui);
+    // A20 — the Board screen and the sidebar's review badge read this; a
+    // missing provider panics at runtime.
+    use_context_provider(|| board_ui);
     use_context_provider(|| notify_config_ui);
     use_context_provider(|| audit_page);
     use_context_provider(|| sessions_page);
@@ -1294,6 +1305,18 @@ fn App() -> Element {
             TimeoutFuture::new(10_000).await;
         }
     });
+    // A20 — the Board refreshes every 5 s while open; elsewhere every 30 s so
+    // the sidebar's review badge stays roughly current.
+    use_future(move || async move {
+        let mut tick: u32 = 0;
+        loop {
+            if connected() && (view() == View::Board || tick % 6 == 0) {
+                ws.send(board_view::snapshot_query());
+            }
+            tick = tick.wrapping_add(1);
+            TimeoutFuture::new(5_000).await;
+        }
+    });
     // ...and at once on opening the Command Center (or on reconnecting while
     // it is open), so the page doesn't wait for the next tick.
     use_effect(move || {
@@ -1359,6 +1382,7 @@ fn App() -> Element {
         View::Sessions => "Sessions",
         View::Loop => "Autonomous Loop",
         View::Reminders => "Reminders",
+        View::Board => "Board",
     };
 
     rsx! {
@@ -1443,6 +1467,7 @@ fn App() -> Element {
                         View::Skills => rsx! { SkillsPanel {} },
                         View::Loop => rsx! { LoopPanel {} },
                         View::Reminders => rsx! { RemindersPanel {} },
+                        View::Board => rsx! { board_view::BoardPanel {} },
                         View::Settings => rsx! { SettingsPanel {} },
                         View::Agents => rsx! { AgentsPanel {} },
                         View::Teams => rsx! { TeamsPanel {} },
@@ -1586,6 +1611,8 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
         .map(|p| p.assistant_name_source == "toml")
         .unwrap_or(true);
     let mut open_groups = use_signal(nav_state::load);
+    // A20 — tasks waiting for review, shown on the Board entry.
+    let review_badge = board_view::review_count(&use_context::<Signal<board_view::BoardUi>>()().snapshot);
 
     // Landing on a nested screen (from the palette, a link or the URL)
     // opens its group, so the active item is always visible.
@@ -1634,7 +1661,10 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                     entry: (ICON_MISSIONS, "Missions", View::Missions),
                     children: Some((
                         nav_state::MISSIONS,
-                        vec![(ICON_MISSION_CONTROL, "Mission Control", View::MissionControl)],
+                        vec![
+                            (ICON_MISSION_CONTROL, "Mission Control", View::MissionControl),
+                            (ICON_BOARD, "Board", View::Board),
+                        ],
                     )),
                 },
                 NavNode::leaf((ICON_SCHEDULES, "Schedules", View::Schedules)),
@@ -1721,6 +1751,7 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
                                         div { class: "nav-children",
                                             for (icon, label, v) in kids {
                                                 NavItem { icon, label, active: view() == v,
+                                                    badge: if v == View::Board { review_badge } else { 0 },
                                                     onclick: move |_| { view.set(v); nav_open.set(false); } }
                                             }
                                         }
@@ -1755,7 +1786,13 @@ fn Sidebar(view: Signal<View>, nav_open: Signal<bool>) -> Element {
 }
 
 #[component]
-fn NavItem(icon: Asset, label: &'static str, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
+fn NavItem(
+    icon: Asset,
+    label: &'static str,
+    active: bool,
+    #[props(default = 0)] badge: usize,
+    onclick: EventHandler<MouseEvent>,
+) -> Element {
     rsx! {
         button {
             class: if active { "nav-item active" } else { "nav-item" },
@@ -1763,6 +1800,14 @@ fn NavItem(icon: Asset, label: &'static str, active: bool, onclick: EventHandler
             onclick: move |e| onclick.call(e),
             span { class: "ico", style: "--ico: url({icon})" }
             "{label}"
+            if badge > 0 {
+                span {
+                    class: "badge",
+                    "aria-label": "{badge} waiting for review",
+                    style: "margin-left:auto; min-width:16px; height:16px; border-radius:8px; background:var(--danger, #b91c1c); color:#fff; font-size:10px; line-height:16px; text-align:center; padding:0 4px;",
+                    if badge > 9 { "9+" } else { "{badge}" }
+                }
+            }
         }
     }
 }
@@ -1903,7 +1948,8 @@ fn Topbar(
 /// [`guide::PAGES`]) for the topbar "?" help button.
 fn guide_page_for(v: View) -> usize {
     let id = match v {
-        View::Chat | View::Missions => "chat-and-missions",
+        // TODO(Task 7): point Board at its own manual page once it exists.
+        View::Chat | View::Missions | View::Board => "chat-and-missions",
         View::Memory | View::Wiki | View::Lattice => "memory",
         View::Skills | View::Agents => "skills-and-persona",
         View::Teams => "teams",
@@ -10564,6 +10610,7 @@ async fn ws_task(
     notifications: Signal<NotificationsState>,
     loop_ui: Signal<LoopUiState>,
     reminders_ui: Signal<RemindersState>,
+    board_ui: Signal<board_view::BoardUi>,
     notify_config_ui: Signal<NotifyConfigUi>,
     audit_page: Signal<AuditState>,
     sessions_page: Signal<SessionsState>,
@@ -10609,7 +10656,7 @@ async fn ws_task(
         spawn(read_task(
             read, missions, running_overlay, dashboard, memory, memory_ui, wiki, lattice, settings, agents,
             teams, documents, voice, skills, skills_ui, mcp, mcp_config_ui, tools, gallery, schedules_ui,
-            notifications, loop_ui, reminders_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
+            notifications, loop_ui, reminders_ui, board_ui, notify_config_ui, audit_page, sessions_page, connected, session, transcript, streaming,
             gate, mission_ui, server_info, routing, briefing,
         ));
 
@@ -10714,6 +10761,7 @@ async fn read_task(
     mut notifications: Signal<NotificationsState>,
     mut loop_ui: Signal<LoopUiState>,
     mut reminders_ui: Signal<RemindersState>,
+    mut board_ui: Signal<board_view::BoardUi>,
     mut notify_config_ui: Signal<NotifyConfigUi>,
     mut audit_page: Signal<AuditState>,
     mut sessions_page: Signal<SessionsState>,
@@ -11108,6 +11156,30 @@ async fn read_task(
                             "That reminder couldn't be updated — it may already be gone.".to_string(),
                         );
                     }
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::Board { snapshot },
+                    ..
+                } => {
+                    let mut b = board_ui.write();
+                    b.snapshot = snapshot;
+                    b.loaded = true;
+                    b.error = None;
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload:
+                        QueryResponsePayload::BoardAck
+                        | QueryResponsePayload::BoardCreated { .. }
+                        | QueryResponsePayload::BoardStarted { .. },
+                    ..
+                } => {
+                    ws.send(board_view::snapshot_query());
+                }
+                DaemonEnvelope::QueryResponse {
+                    id,
+                    payload: QueryResponsePayload::QueryError { message, .. },
+                } if id.starts_with("board-") => {
+                    board_ui.write().error = Some(message);
                 }
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::Reminders { reminders },
