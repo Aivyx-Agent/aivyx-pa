@@ -138,6 +138,12 @@ pub const PAGES: &[Page] = &[
         body: include_str!("../../../docs/guide/19-packs.md"),
     },
     Page {
+        id: "board",
+        file: "20-board.md",
+        title: "The board",
+        body: include_str!("../../../docs/guide/20-board.md"),
+    },
+    Page {
         id: "troubleshooting",
         file: "10-troubleshooting.md",
         title: "Troubleshooting",

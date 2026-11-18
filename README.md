@@ -38,7 +38,7 @@ verifiable offline.
 | Rust tests | 7,556 passing |
 | Python conformance tests | 24 passing |
 | Clippy warnings | 0 |
-| Capability scope bases | 95 |
+| Capability scope bases | 103 |
 | Encrypted storage domains | 29 |
 
 ## Five-minute setup

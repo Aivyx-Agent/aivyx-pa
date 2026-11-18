@@ -132,6 +132,9 @@ edited freely when a new adapter or subsystem teaches us something new.
   generalized across operators, the procedures-travel-data-never privacy line,
   one delegation protocol for local (Nonagon) and remote (Nexus) — designed now,
   built last. Unlocks both multi-node (Factory) and the agent network (Nexus).
+- [`BOARD.md`](BOARD.md) — **the work board** (A20, preview, Factory's first
+  piece): goals, projects and tasks you plan and assign to a role or the team;
+  role runs and team runs, review, send back, the CLI and the Studio view.
 - [`LOCAL_HOSTING.md`](LOCAL_HOSTING.md) — **running Aivyx PA on a capable GPU box**
   (e.g. a 24GB RTX 3090): VRAM-tiered model + `num_ctx` choices, the
   Ollama-vs-embedded-CUDA tradeoff, tool-calling reliability on local models, and

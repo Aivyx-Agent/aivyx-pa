@@ -1948,8 +1948,8 @@ fn Topbar(
 /// [`guide::PAGES`]) for the topbar "?" help button.
 fn guide_page_for(v: View) -> usize {
     let id = match v {
-        // TODO(Task 7): point Board at its own manual page once it exists.
-        View::Chat | View::Missions | View::Board => "chat-and-missions",
+        View::Chat | View::Missions => "chat-and-missions",
+        View::Board => "board",
         View::Memory | View::Wiki | View::Lattice => "memory",
         View::Skills | View::Agents => "skills-and-persona",
         View::Teams => "teams",
@@ -1962,6 +1962,17 @@ fn guide_page_for(v: View) -> usize {
         _ => "screens",
     };
     guide::PAGES.iter().position(|p| p.id == id).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod guide_page_tests {
+    use super::*;
+
+    #[test]
+    fn the_board_opens_its_own_guide_page() {
+        assert_eq!(guide::PAGES[guide_page_for(View::Board)].id, "board");
+        assert_eq!(guide::PAGES[guide_page_for(View::Missions)].id, "chat-and-missions");
+    }
 }
 
 #[component]

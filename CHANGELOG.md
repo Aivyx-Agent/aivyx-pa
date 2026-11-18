@@ -3,6 +3,33 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [Unreleased]
+
+### Added
+
+- **The work board (preview).** Write down the work you want done and who
+  should do it: goals, projects under them, and tasks in each project,
+  each owned by a role (`role:<name>`) or by the team. `aivyx-pa board`
+  adds them (`goal add`, `project add`, `task add --owner …`), and
+  `board start` runs a task: a role-owned task is one turn of your agent
+  (32 steps, 120 s) with that role's scopes, a team-owned task is a team
+  mission, planned with no human gates. A finished run lands in the task's
+  thread with its answer and token count, and the task waits in Review
+  for `board approve` or `board send-back <task> "<why>"` (the note goes
+  into the next run's brief); you get a "ready for review" notice. A
+  failed run sends the task back to To do with the reason. The
+  Studio has a Board view under Missions: four columns, goal and project
+  filters, a task panel with Start, Approve, Send back and Cancel, and a
+  badge counting the tasks in Review. During a role run the agent gets two
+  tools, `board.comment` and `board.subtask`, which work only on that
+  run's own task. Runs are unattended: a step that needs you parks in
+  `aivyx-pa review`. A daemon restart returns a running task to To do,
+  marked interrupted. Every change is written to the audit log as a
+  `BoardChanged` with no titles or comment text
+  (`aivyx-pa audit export --event-type board_changed`). The board runs only
+  in the daemon. A preview, outside the 1.x stability promise. Guide:
+  `docs/BOARD.md`. Amendment A20.
+
 ## [1.2.0] — 2026-11-18
 
 ### Changed

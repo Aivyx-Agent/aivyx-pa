@@ -18,7 +18,9 @@ what work there is and who should do it. The work board is that place, for
 the operator's own agents: goals, projects and tasks, each task owned by a
 role or by the team, with a thread of comments and run results. The operator
 writes and assigns the work; agents work it. This amendment records the
-decisions that need an architecture change. The code lands in later tasks.
+decisions that need an architecture change. The code is in
+`aivyx-channel::board` and `aivyx-ipc::board`; the operator guide is
+`docs/BOARD.md`.
 
 ## D7 storage
 
@@ -32,19 +34,20 @@ while the board is a preview.
 
 One new base, `board.write`, unqualified. It is Trusted-tier only, **not**
 irreversible and not read-only: it changes things, but only inside the board.
-The daemon agent holds it in daemon mode through the backcompat floor (the
-grant lands in a later task; this amendment only documents it). It is useful
-only in a session the board registered for a run: the tools it gates work on
-that run's own task and are refused anywhere else. The count moves
-**102 → 103**.
+The daemon agent holds it in daemon mode: it is granted through the
+backcompat floor, and only in daemon mode (the in-process chat doesn't get
+it). It is useful only in a session the board registered for a run: the
+tools it gates work on that run's own task and are refused anywhere else.
+The count moves **102 → 103**.
 
 ## Runs
 
 - A **role run** is one System-origin agent turn. A role run is capped to
-  the role's resolved envelope (its parent's scopes, and the floor if it
-  declares none) and its trust ceiling, plus `board.write`. It is headless: a step
-  that needs approval is parked for the operator's review, and the run does
-  not block on it.
+  the role's resolved envelope (narrowed by its parent chain, and the floor
+  if it declares none) and its trust ceiling, plus `board.write`.
+  `board.write` is added after the trust cap, so a SemiTrusted role's run
+  still holds it. It is headless: a step that needs approval is parked
+  for the operator's review, and the run does not block on it.
 - A **team run** is a team mission whose `triggered_by` is `board:<task id>`.
 - Start is refused while a task is running, from a terminal state, and with
   no owner.

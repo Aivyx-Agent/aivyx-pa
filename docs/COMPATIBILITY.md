@@ -86,13 +86,16 @@ one list of tagged entries is `NOT_STABLE` in
   Mail and Signal channels (their config sections, `aivyx-pa matrix
   verify`, `aivyx-pa signal verify` and their `--channel` values) and
   YubiKey card unlock (`aivyx-pa card`, `aivyx-pa unlock` and
-  `aivyx-pa lock`), and federation between your own instances (the
-  `[federation]` section and `aivyx-pa federation card|peer|ping|send`).
+  `aivyx-pa lock`), federation between your own instances (the
+  `[federation]` section and `aivyx-pa federation card|peer|ping|send`),
+  and the work board (`aivyx-pa board`, and the board's storage lines in
+  `formats.txt`).
   A preview can change or be removed in any release.
   A channel's tag comes off when it has been tested with a real client,
-  card unlock's when it has been tested with a real card, and
+  card unlock's when it has been tested with a real card,
   federation's when the two-machine checklist
-  (`docs/checklists/federation-two-machines.md`) passes.
+  (`docs/checklists/federation-two-machines.md`) passes, and the board's
+  when the operator has used it for a while (`docs/BOARD.md`).
 - **Formats not promised yet**, tagged `(not stable)` in `formats.txt`: the
   tool protocol version (`tool.protocol_version`; see The pack formats
   above).

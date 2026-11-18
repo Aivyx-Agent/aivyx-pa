@@ -208,8 +208,10 @@ Both act only from a session the board registered for a role run, and only
 on that run's own task: the model never names a task, and any other session
 is refused ("not in a board run"). `board.write` is not irreversible and not
 read-only. The daemon gives the default agent `board.write`, and a role run's
-ceiling is the role's resolved envelope (its parent's scopes, and the floor
-if it declares none) capped by its trust ceiling, plus `board.write`. A role that
+ceiling is the role's resolved envelope (narrowed by its parent chain, and
+the floor if it declares none) capped by its trust ceiling, plus
+`board.write`. `board.write` is added after the trust cap, so a SemiTrusted
+role's run still holds it. A role that
 declares its own `capability_scopes` must list `board.write` for its own
 agent to hold it (a ceiling only narrows). Amendment A20.
 

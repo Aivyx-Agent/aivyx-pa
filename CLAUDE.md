@@ -141,7 +141,7 @@ frontend crate outside `default-members`.
   `TurnOutcome` model every possible turn result explicitly.
 - **D4 Capability Taxonomy** — `Scope` (`aivyx-capability/src/lib.rs`) is a
   validated string newtype, not an enum: `Scope::parse` rejects any base not
-  in the hardcoded `KNOWN_BASES` list (~90 scope strings), so an unknown
+  in the hardcoded `KNOWN_BASES` list (103 scope bases), so an unknown
   scope fails at parse time, not check time. `Scope::is_granted_by` is the
   *only* authoritative grant check — never compare scope strings ad hoc; it
   includes origin-aware URL-prefix matching specifically to defeat
