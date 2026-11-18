@@ -569,11 +569,11 @@ pub fn render_task(t: &Task) -> String {
                 format!("{} → {}", state_label(*from), state_label(*to))
             }
             EntryKind::Run {
+                mission_id,
                 outcome,
                 answer,
                 tokens,
                 cost_usd,
-                ..
             } => {
                 let outcome = match outcome {
                     RunOutcome::Succeeded => "succeeded".to_string(),
@@ -583,9 +583,16 @@ pub fn render_task(t: &Task) -> String {
                 };
                 let cost = cost_usd.map_or(String::new(), |c| format!(", ${c:.4}"));
                 let head: String = answer.chars().take(200).collect();
+                // The mission id links the entry to its Missions record. A
+                // failed run has no answer: no dangling `: `.
+                let answer = if head.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", neutralise(&head))
+                };
                 format!(
-                    "run {outcome}, {tokens} tokens{cost}: {}",
-                    neutralise(&head)
+                    "run {} {outcome}, {tokens} tokens{cost}{answer}",
+                    neutralise(mission_id)
                 )
             }
         };
@@ -893,11 +900,33 @@ mod tests {
         );
         assert!(out.contains("todo → running"), "{out}");
         assert!(
-            out.contains("agent  run succeeded, 42 tokens, $0.5000: "),
+            out.contains("agent  run m-1 succeeded, 42 tokens, $0.5000: "),
             "{out}"
         );
         assert!(
             out.contains(&"x".repeat(200)) && !out.contains(&"x".repeat(201)),
+            "{out}"
+        );
+
+        // A failed run has no answer: the line ends at the reason.
+        t.thread = vec![ThreadEntry {
+            at: 4_000,
+            author: Author::Agent {
+                mission_id: "m-2".into(),
+            },
+            entry: EntryKind::Run {
+                mission_id: "m-2".into(),
+                outcome: RunOutcome::Failed {
+                    reason: "it broke".into(),
+                },
+                answer: String::new(),
+                tokens: 0,
+                cost_usd: None,
+            },
+        }];
+        let out = render_task(&t);
+        assert!(
+            out.contains("agent  run m-2 failed: it broke, 0 tokens\n"),
             "{out}"
         );
     }

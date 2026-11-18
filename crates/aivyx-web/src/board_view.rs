@@ -1,6 +1,8 @@
 //! A20 — the Studio's Board view: four columns, filters, and a task panel.
 
-use aivyx_ipc::board::{Author, BoardSnapshot, EntryKind, NewTask, Owner, Task, TaskState};
+use aivyx_ipc::board::{
+    Author, BoardSnapshot, EntryKind, NewTask, Owner, RunOutcome, Task, TaskState,
+};
 use aivyx_ipc::protocol::{FrontendMessage, QueryPayload};
 use dioxus::prelude::*;
 
@@ -70,13 +72,27 @@ pub fn entry_line(e: &EntryKind) -> String {
             format!("{} → {}", column_title(*from), column_title(*to))
         }
         EntryKind::Run {
+            mission_id,
             outcome,
+            answer,
             tokens,
             cost_usd,
-            ..
         } => {
+            // The answer is what the operator reviews; the mission id finds
+            // the run under Missions.
             let cost = cost_usd.map(|c| format!(", ${c:.2}")).unwrap_or_default();
-            format!("run {outcome:?} ({tokens} tokens{cost})")
+            let outcome = match outcome {
+                RunOutcome::Succeeded => "succeeded".to_string(),
+                RunOutcome::Failed { reason } => format!("failed: {reason}"),
+                RunOutcome::Cancelled => "cancelled".into(),
+                RunOutcome::Interrupted => "interrupted".into(),
+            };
+            let answer = if answer.is_empty() {
+                String::new()
+            } else {
+                format!("\n{answer}")
+            };
+            format!("run {mission_id} {outcome} ({tokens} tokens{cost}){answer}")
         }
     }
 }
@@ -394,7 +410,7 @@ fn TaskPanel(task: Task) -> Element {
                 p { class: "help", "Nothing here yet." }
             }
             for (i, e) in task.thread.iter().enumerate() {
-                div { key: "{i}", class: "help", "{author_label(&e.author)}: {entry_line(&e.entry)}" }
+                div { key: "{i}", class: "help", style: "white-space:pre-wrap;", "{author_label(&e.author)}: {entry_line(&e.entry)}" }
             }
             div { style: "display:flex; gap:8px; margin-top:8px;",
                 input {
@@ -578,7 +594,7 @@ fn NewProjectForm() -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aivyx_ipc::board::{Goal, Project, RunOutcome};
+    use aivyx_ipc::board::{Goal, Project};
 
     fn task(id: &str, project: &str, state: TaskState, updated: u64) -> Task {
         Task {
@@ -713,7 +729,25 @@ mod tests {
             tokens: 120,
             cost_usd: Some(0.5),
         };
-        assert_eq!(entry_line(&run), "run Succeeded (120 tokens, $0.50)");
+        assert_eq!(entry_line(&run), "run m succeeded (120 tokens, $0.50)");
+        let answered = EntryKind::Run {
+            mission_id: "b-1".into(),
+            outcome: RunOutcome::Succeeded,
+            answer: "Two lines.".into(),
+            tokens: 7,
+            cost_usd: None,
+        };
+        assert_eq!(entry_line(&answered), "run b-1 succeeded (7 tokens)\nTwo lines.");
+        let failed = EntryKind::Run {
+            mission_id: "m".into(),
+            outcome: RunOutcome::Failed {
+                reason: "timed out".into(),
+            },
+            answer: String::new(),
+            tokens: 0,
+            cost_usd: None,
+        };
+        assert_eq!(entry_line(&failed), "run m failed: timed out (0 tokens)");
         let free = EntryKind::Run {
             mission_id: "m".into(),
             outcome: RunOutcome::Interrupted,
@@ -721,7 +755,7 @@ mod tests {
             tokens: 0,
             cost_usd: None,
         };
-        assert_eq!(entry_line(&free), "run Interrupted (0 tokens)");
+        assert_eq!(entry_line(&free), "run m interrupted (0 tokens)");
         assert_eq!(author_label(&Author::Operator), "you");
         assert_eq!(
             author_label(&Author::Agent {

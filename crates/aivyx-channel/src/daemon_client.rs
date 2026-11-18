@@ -1583,8 +1583,11 @@ pub async fn resolve_parked_step(
     }
 }
 
-fn board_err(code: String, message: String) -> DaemonError {
-    DaemonError::Protocol(format!("{code}: {message}"))
+/// A board refusal is an answer for the operator ("can't approve a task
+/// that is Done"), not a protocol fault: show only its message. The code
+/// is for programs, and the CLI prints this error as it is.
+fn board_err(_code: String, message: String) -> DaemonError {
+    DaemonError::Internal(message)
 }
 
 /// A20 — the whole work board.
@@ -2716,6 +2719,12 @@ mod tests {
     use super::*;
     use crate::daemon_ipc::{encode_frame, DaemonEnvelope};
     use tokio::net::UnixListener;
+
+    #[test]
+    fn a_board_refusal_reads_as_its_message() {
+        let e = board_err("board_bad_state".into(), "can't approve a task that is Done".into());
+        assert_eq!(e.to_string(), "can't approve a task that is Done");
+    }
 
     /// A fake daemon: `DaemonReady`, then one canned reply to the request.
     async fn serve_once(replies: Vec<DaemonEnvelope>) -> (std::path::PathBuf, tokio::task::JoinHandle<FrontendMessage>) {
