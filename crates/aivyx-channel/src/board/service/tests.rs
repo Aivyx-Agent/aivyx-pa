@@ -904,6 +904,8 @@ mod team {
         release: Arc<tokio::sync::Notify>,
         /// The planner call's system prompt.
         planner_prompt: Arc<StdMutex<Option<String>>>,
+        /// Every call after the plan fails.
+        fail_steps: bool,
     }
 
     fn provider(plan: &'static str, hold: bool) -> ScriptedProvider {
@@ -914,6 +916,7 @@ mod team {
             started: Arc::new(tokio::sync::Notify::new()),
             release: Arc::new(tokio::sync::Notify::new()),
             planner_prompt: Arc::new(StdMutex::new(None)),
+            fail_steps: false,
         }
     }
 
@@ -933,6 +936,9 @@ mod team {
             if n == 0 {
                 *self.planner_prompt.lock().unwrap() = req.system.map(str::to_string);
                 return Ok(Box::new(OneShot(Some(self.plan.to_string()))));
+            }
+            if self.fail_steps {
+                return Err(LlmError::Transport("scripted step failure".into()));
             }
             if n == 1 && self.hold {
                 self.started.notify_one();
@@ -1002,6 +1008,40 @@ mod team {
             op_names(&fx.audit)[3..],
             ["started".to_string(), "cancelled".to_string()]
         );
+    }
+
+    /// A specialist that can't finish its turn stops the drive with an
+    /// error. The mission must not stay Executing (nothing would ever end
+    /// it), and the task must leave Running with the reason.
+    #[tokio::test]
+    async fn a_team_run_whose_drive_fails_goes_back_to_todo() {
+        let mut p = provider(ONE_STEP, false);
+        p.fail_steps = true;
+        let mut d = deps("unused");
+        d.provider = Arc::new(p);
+        let svc = service(d, team_domain().await);
+        let fx = fixture_with(Setup {
+            agent: Arc::new(ScriptedAgent::new(Reply::Done("unused".into()))),
+            team: Some(svc.clone()),
+            notify: None,
+        })
+        .await;
+        let t = seed(&fx, Some(Owner::Team)).await;
+        let mid = fx.board.start(&t).await.unwrap();
+        wait_phase(&svc, &mid, TeamMissionPhase::Halted).await;
+        let record = svc.snapshot(&mid).unwrap();
+        let reason = record.halt_reason.clone().unwrap_or_default();
+        assert!(reason.contains("writer"), "{reason}");
+
+        let task = wait_not_running(&fx, &t).await;
+        assert_eq!(task.state, TaskState::Todo);
+        let (run_mid, outcome, _, _) = last_run(&task);
+        assert_eq!(run_mid, mid);
+        match outcome {
+            RunOutcome::Failed { reason: r } => assert_eq!(r, reason),
+            other => panic!("{other:?}"),
+        }
+        assert!(fx.board.inner.cancels.lock().unwrap().is_empty());
     }
 
     /// A planner that ignores the instruction and plans a human gate anyway.

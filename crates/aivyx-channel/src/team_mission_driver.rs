@@ -1374,7 +1374,7 @@ impl TeamMissionService {
             &format!("board:{task_id}"),
         )
         .await?;
-        self.spawn_drive(id.clone());
+        self.spawn_drive_halting_on_error(id.clone());
         Ok(id)
     }
 
@@ -1516,6 +1516,37 @@ impl TeamMissionService {
             .await
             {
                 eprintln!("aivyx-pa team: mission {id} drive failed — {e}");
+            }
+        });
+    }
+
+    /// A20 — like [`Self::spawn_drive`], but a drive failure halts the
+    /// mission with the error as its reason. A board run waits for its
+    /// mission to end; a record left `Executing` with no drive would keep
+    /// the task Running until the next restart (live check, 2026-11-18).
+    fn spawn_drive_halting_on_error(&self, id: String) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = drive_registered(
+                &this.state,
+                &this.deps,
+                this.config.clone(),
+                &id,
+                this.gate_policy,
+            )
+            .await
+            {
+                eprintln!("aivyx-pa team: mission {id} drive failed — {e}");
+                if let Some(mut record) = this.state.snapshot(&id)
+                    && !record.phase.is_terminal()
+                {
+                    record.phase = TeamMissionPhase::Halted;
+                    record.pending_gate = None;
+                    record.halt_reason = Some(e.to_string());
+                    if let Err(e) = this.state.put(record).await {
+                        eprintln!("aivyx-pa team: mission {id}: couldn't record the halt — {e}");
+                    }
+                }
             }
         });
     }
