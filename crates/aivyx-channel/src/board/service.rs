@@ -319,6 +319,8 @@ impl BoardService {
             .ok_or(BoardError::NotAllowed("no such role in the config"))?;
         let ceiling = role_ceiling(scopes);
         let mission_id = new_id('b');
+        let session = SessionId::new();
+        let cancel = CancellationToken::new();
 
         let (task, text) = {
             let _w = self.inner.write_lock.lock().await;
@@ -345,21 +347,20 @@ impl BoardService {
             mission::create_mission(&self.deps().missions, &record).await?;
             store::put_task(&self.deps().store, &task).await?;
             self.record("started", task_id, "operator");
+            // Register before the write lock drops, so a cancel queued on
+            // the lock always finds the token.
+            self.inner
+                .runs
+                .lock()
+                .unwrap()
+                .insert(session, (task.id.clone(), mission_id.clone()));
+            self.inner
+                .cancels
+                .lock()
+                .unwrap()
+                .insert(task.id.clone(), cancel.clone());
             (task, text)
         };
-
-        let session = SessionId::new();
-        let cancel = CancellationToken::new();
-        self.inner
-            .runs
-            .lock()
-            .unwrap()
-            .insert(session, (task.id.clone(), mission_id.clone()));
-        self.inner
-            .cancels
-            .lock()
-            .unwrap()
-            .insert(task.id.clone(), cancel.clone());
 
         let this = self.clone();
         let mid = mission_id.clone();
@@ -379,6 +380,11 @@ impl BoardService {
         cancel: CancellationToken,
         text: String,
     ) {
+        let registration = RunRegistration {
+            inner: Arc::clone(&self.inner),
+            session,
+            task_id: task_id.clone(),
+        };
         let ctx = BoardRunContext {
             session,
             ceiling,
@@ -403,8 +409,10 @@ impl BoardService {
                 let msg = Message::text(session, text).system_originated();
                 self.deps().agent.turn(msg, channel.as_ref()).await
             };
-            // The turn lock serializes fired turns, so every `LlmCost` in
-            // the range belongs to this one.
+            // The turn lock serializes fired turns (triggers and board
+            // runs), so every `LlmCost` in the range is this run's, with one
+            // known gap: interactive chat turns don't take the lock, and one
+            // running concurrently adds its tokens to this count.
             let len = audit.len();
             let tokens: u64 = audit
                 .entries_range(pre as u64, len.saturating_sub(pre))
@@ -421,8 +429,7 @@ impl BoardService {
         };
         let (run_outcome, answer) = turn_result(&outcome);
 
-        self.inner.runs.lock().unwrap().remove(&session);
-        self.inner.cancels.lock().unwrap().remove(&task_id);
+        drop(registration);
 
         // The mission record first, so it is closed by the time the task
         // leaves Running.
@@ -514,6 +521,7 @@ impl BoardService {
             .await
             .map_err(|e| BoardError::Storage(format!("team mission: {e}")))?;
 
+        let cancel = CancellationToken::new();
         let started = {
             let _w = self.inner.write_lock.lock().await;
             async {
@@ -531,24 +539,24 @@ impl BoardService {
                 )?;
                 store::put_task(&self.deps().store, &task).await?;
                 self.record("started", task_id, "operator");
+                // Register before the write lock drops (see `start_role`).
+                self.inner
+                    .cancels
+                    .lock()
+                    .unwrap()
+                    .insert(task_id.to_string(), cancel.clone());
                 Ok(())
             }
             .await
         };
         if let Err(e) = started {
-            // The task moved on while the team planned: stop the mission.
-            if let Err(abort) = svc.abort(&mission_id) {
-                eprintln!("aivyx-pa board: couldn't abort team mission {mission_id}: {abort}");
-            }
+            // The task moved on while the team planned: stop the mission
+            // (retrying while it is still planning).
+            let this = self.clone();
+            let mid = mission_id.clone();
+            tokio::spawn(async move { this.abort_team(&svc, &mid).await });
             return Err(e);
         }
-
-        let cancel = CancellationToken::new();
-        self.inner
-            .cancels
-            .lock()
-            .unwrap()
-            .insert(task_id.to_string(), cancel.clone());
         let this = self.clone();
         let (tid, mid) = (task_id.to_string(), mission_id.clone());
         tokio::spawn(async move { this.poll_team(svc, tid, mid, cancel).await });
@@ -591,15 +599,25 @@ impl BoardService {
         self.finish(&task_id, outcome, answer, tokens, cost).await;
     }
 
-    /// Abort a cancelled task's mission. A mission still planning can't be
+    /// Stop a cancelled task's mission. A running mission is aborted; one
+    /// waiting at a gate has the gate rejected; one still planning can't be
     /// aborted yet, so try again until it runs or ends.
     async fn abort_team(&self, svc: &TeamMissionService, mission_id: &str) {
         loop {
             match svc.abort(mission_id) {
                 Ok(_) => return,
-                Err(e) => match svc.snapshot(mission_id).map(|r| r.phase) {
-                    Some(TeamMissionPhase::Planning) => {
+                Err(e) => match svc.snapshot(mission_id).map(|r| (r.phase, r.pending_gate)) {
+                    Some((TeamMissionPhase::Planning, _)) => {
                         tokio::time::sleep(self.inner.team_poll).await;
+                    }
+                    Some((TeamMissionPhase::AwaitingApproval, Some(step))) => {
+                        if let Err(e) = svc.resolve(mission_id, &step, false).await {
+                            eprintln!(
+                                "aivyx-pa board: couldn't reject gate {step} of team mission \
+                                 {mission_id}: {e}"
+                            );
+                        }
+                        return;
                     }
                     _ => {
                         eprintln!("aivyx-pa board: couldn't abort team mission {mission_id}: {e}");
@@ -695,6 +713,25 @@ impl BoardService {
             }
         }
         Ok(moved)
+    }
+}
+
+/// Removes a role run's session and cancel token however its task exits,
+/// a panic included.
+struct RunRegistration {
+    inner: Arc<Inner>,
+    session: SessionId,
+    task_id: String,
+}
+
+impl Drop for RunRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut runs) = self.inner.runs.lock() {
+            runs.remove(&self.session);
+        }
+        if let Ok(mut cancels) = self.inner.cancels.lock() {
+            cancels.remove(&self.task_id);
+        }
     }
 }
 

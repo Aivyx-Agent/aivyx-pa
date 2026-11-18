@@ -1346,9 +1346,9 @@ impl TeamMissionService {
     }
 
     /// A20 — like [`start_from_goal_for_schedule`](Self::start_from_goal_for_schedule)
-    /// on the daemon's default team, tagged `board:<task_id>` so the board
-    /// can find the task a mission works, and so its specialists run
-    /// `System`-origin (`classify_trigger_origin`).
+    /// on the daemon's default team, planned unattended (no gates), tagged
+    /// `board:<task_id>` so the board can find the task a mission works, and
+    /// so its specialists run `System`-origin (`classify_trigger_origin`).
     pub async fn start_from_goal_for_board(
         &self,
         goal: &str,
@@ -1361,7 +1361,9 @@ impl TeamMissionService {
             goal,
             &self.config,
             &cancel,
-            true,
+            // Unattended: a board run never plans a gate. A step that needs
+            // the operator parks in the review queue instead.
+            false,
         )
         .await?;
         let id = register_mission_for_schedule(

@@ -25,6 +25,7 @@ struct Seen {
 enum Reply {
     Done(String),
     Fail(String),
+    Panic,
 }
 
 /// Records each turn, optionally holds until released (or cancelled),
@@ -102,6 +103,7 @@ impl aivyx_core::Agent for ScriptedAgent {
                 duration: Duration::ZERO,
             },
             Reply::Fail(why) => TurnOutcome::Failed(aivyx_core::AivyxError::Internal(why)),
+            Reply::Panic => panic!("scripted agent panic"),
         }
     }
 }
@@ -591,6 +593,29 @@ async fn agent_tools_work_only_from_the_runs_session() {
     assert_chain_verifies(&fx).await;
 }
 
+#[tokio::test]
+async fn a_panicking_run_still_unregisters_its_session() {
+    let agent = Arc::new(ScriptedAgent::new(Reply::Panic));
+    let seen = Arc::clone(&agent.seen);
+    let fx = fixture(agent).await;
+    let t = seed(&fx, writer()).await;
+    fx.board.start(&t).await.unwrap();
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let ran = !seen.lock().unwrap().is_empty();
+        if ran
+            && fx.board.inner.runs.lock().unwrap().is_empty()
+            && fx.board.inner.cancels.lock().unwrap().is_empty()
+        {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "still registered");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let session = seen.lock().unwrap()[0].session;
+    assert_eq!(fx.board.run_binding(&session), None);
+}
+
 // ---- 7. restart sweep ---------------------------------------------------
 
 #[tokio::test]
@@ -831,8 +856,10 @@ mod team {
 
     #[tokio::test]
     async fn a_team_run_finishes_with_the_last_steps_output() {
+        let p = provider(ONE_STEP, false);
+        let planner_prompt = Arc::clone(&p.planner_prompt);
         let mut d = deps("unused");
-        d.provider = Arc::new(provider(ONE_STEP, false));
+        d.provider = Arc::new(p);
         let svc = service(d, team_domain().await);
         let fx = fixture_with(Setup {
             agent: Arc::new(ScriptedAgent::new(Reply::Done("unused".into()))),
@@ -844,6 +871,10 @@ mod team {
         let mid = fx.board.start(&t).await.unwrap();
         let record = svc.snapshot(&mid).expect("registered");
         assert_eq!(record.triggered_by, Some(format!("board:{t}")));
+        // Planned unattended: the planner was told to plan no gates.
+        let prompt = planner_prompt.lock().unwrap().clone().expect("planned");
+        assert!(prompt.contains("runs UNATTENDED"), "{prompt}");
+        assert!(!prompt.contains("Use a \"human\" gate"));
         assert!(record.goal.contains("Draft") && record.goal.contains("Q4 report"));
 
         let task = wait_not_running(&fx, &t).await;
@@ -871,6 +902,8 @@ mod team {
         calls: std::sync::atomic::AtomicUsize,
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
+        /// The planner call's system prompt.
+        planner_prompt: Arc<StdMutex<Option<String>>>,
     }
 
     fn provider(plan: &'static str, hold: bool) -> ScriptedProvider {
@@ -880,6 +913,7 @@ mod team {
             calls: std::sync::atomic::AtomicUsize::new(0),
             started: Arc::new(tokio::sync::Notify::new()),
             release: Arc::new(tokio::sync::Notify::new()),
+            planner_prompt: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -892,11 +926,12 @@ mod team {
     impl LlmProvider for ScriptedProvider {
         async fn chat_stream(
             &self,
-            _req: LlmRequest<'_>,
+            req: LlmRequest<'_>,
             _cancel: &CancellationToken,
         ) -> Result<Box<dyn LlmStream>, LlmError> {
             let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if n == 0 {
+                *self.planner_prompt.lock().unwrap() = req.system.map(str::to_string);
                 return Ok(Box::new(OneShot(Some(self.plan.to_string()))));
             }
             if n == 1 && self.hold {
@@ -946,9 +981,12 @@ mod team {
         fx.board.cancel(&t).await.unwrap();
         assert_eq!(fx.board.task(&t).await.unwrap().state, TaskState::Cancelled);
         assert!(fx.board.inner.cancels.lock().unwrap().is_empty());
-        // The poller wakes on the fired token and requests the abort as soon
-        // as this (single-threaded) test yields; then let `a` end.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The poller wakes on the fired token and requests the abort (a
+        // synchronous call) once this single-threaded test yields; then let
+        // `a` end.
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
         release.notify_one();
 
         wait_phase(&svc, &mid, TeamMissionPhase::Halted).await;
@@ -958,6 +996,51 @@ mod team {
             "step b never ran: {:?}",
             record.outputs
         );
+        let task = fx.board.task(&t).await.unwrap();
+        assert_eq!(task.state, TaskState::Cancelled);
+        assert_eq!(
+            op_names(&fx.audit)[3..],
+            ["started".to_string(), "cancelled".to_string()]
+        );
+    }
+
+    /// A planner that ignores the instruction and plans a human gate anyway.
+    const GATED: &str = r#"{"goal":"g","steps":[{"id":"a","specialist":"writer","prompt":"draft"},{"id":"ok","reviewer":"reviewer","criteria":"fine?","mode":"human","deps":["a"]},{"id":"b","specialist":"writer","prompt":"send","deps":["ok"]}]}"#;
+
+    #[tokio::test]
+    async fn cancelling_a_team_task_at_a_gate_rejects_the_gate() {
+        let mut d = deps("unused");
+        d.provider = Arc::new(provider(GATED, false));
+        let svc = service(d, team_domain().await);
+        let fx = fixture_with(Setup {
+            agent: Arc::new(ScriptedAgent::new(Reply::Done("unused".into()))),
+            team: Some(svc.clone()),
+            notify: None,
+        })
+        .await;
+        let t = seed(&fx, Some(Owner::Team)).await;
+        let mid = fx.board.start(&t).await.unwrap();
+        wait_phase(&svc, &mid, TeamMissionPhase::AwaitingApproval).await;
+        assert_eq!(fx.board.task(&t).await.unwrap().state, TaskState::Running);
+
+        fx.board.cancel(&t).await.unwrap();
+        let deadline = tokio::time::Instant::now() + WAIT;
+        let phase = loop {
+            let phase = svc.snapshot(&mid).unwrap().phase;
+            if phase.is_terminal() {
+                break phase;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "mission still {phase:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert!(
+            matches!(phase, TeamMissionPhase::Rejected | TeamMissionPhase::Halted),
+            "{phase:?}"
+        );
+        assert!(!svc.snapshot(&mid).unwrap().outputs.contains_key("b"));
         let task = fx.board.task(&t).await.unwrap();
         assert_eq!(task.state, TaskState::Cancelled);
         assert_eq!(
