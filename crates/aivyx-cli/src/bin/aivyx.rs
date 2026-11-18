@@ -158,6 +158,8 @@ mod learning;
 mod loop_cli;
 #[path = "aivyx_modules/mcp_recipes.rs"]
 mod mcp_recipes;
+#[path = "aivyx_modules/board.rs"]
+mod board;
 #[path = "aivyx_modules/review.rs"]
 mod review;
 #[path = "aivyx_modules/pack_check.rs"]
@@ -1122,6 +1124,13 @@ fn run() -> Result<(), String> {
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         return rt.block_on(async move { learning::run_learning(window_secs).await });
+    }
+    if let CliMode::Board(cmd) = mode {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
+        return rt.block_on(async move { board::run_board(cmd).await });
     }
     if let CliMode::Review(cmd) = mode {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -2665,6 +2674,8 @@ enum CliMode {
     /// `aivyx-pa review [list] | approve <id> [--yes] | deny <id>`: steps
     /// unattended runs parked for the operator's approval (supervised areas).
     Review(review::ReviewCommand),
+    /// `aivyx-pa board ...`: the work board (preview).
+    Board(board::BoardCommand),
     /// `aivyx-pa tools [--window <secs>]`: Phase 102 read-only
     /// tool-observability view — every registered tool
     /// annotated with audit-derived call/outcome stats.
@@ -4117,6 +4128,20 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
     if !args.is_empty() && args[0] == "review" {
         return Ok(CliArgs {
             mode: CliMode::Review(review::parse(&args[1..])?),
+            channel: ChannelKind::Local,
+            role: None,
+            no_daemon: false,
+            mcp_servers: vec![],
+            mcp_sse_servers: vec![],
+            provider: None,
+            web_ui_port: None,
+        });
+    }
+
+    // A20 — `aivyx-pa board ...` (preview): the work board.
+    if !args.is_empty() && args[0] == "board" {
+        return Ok(CliArgs {
+            mode: CliMode::Board(board::parse(&args[1..])?),
             channel: ChannelKind::Local,
             role: None,
             no_daemon: false,

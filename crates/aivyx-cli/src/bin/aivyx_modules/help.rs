@@ -159,6 +159,27 @@ const FEDERATION_USAGE: &[&str] = &[
     "    [--card <serial>] [--overwrite-existing-key]",
 ];
 
+/// `board`'s usage lines (A20, preview).
+const BOARD_USAGE: &[&str] = &[
+    "aivyx-pa board list [--project <id>]",
+    "    [--state todo|running|review|done|cancelled]",
+    "aivyx-pa board show <task>",
+    "aivyx-pa board goal add \"<title>\"",
+    "    [--description \"<text>\"]",
+    "aivyx-pa board goal list",
+    "aivyx-pa board project add <goal> \"<title>\"",
+    "    [--description \"<text>\"]",
+    "aivyx-pa board project list [--goal <id>]",
+    "aivyx-pa board task add (--project <id> | --parent <task>) \"<title>\"",
+    "    [--description \"<text>\"] [--owner role:<name>|team] [--no-review]",
+    "aivyx-pa board assign <task> role:<name>|team|none",
+    "aivyx-pa board start <task>",
+    "aivyx-pa board approve <task>",
+    "aivyx-pa board send-back <task> \"<why>\"",
+    "aivyx-pa board cancel <task>",
+    "aivyx-pa board comment <task> \"<text>\"",
+];
+
 pub const COMMANDS: &[CommandHelp] = &[
     // ---- Chat and front ends ----------------------------------------
     CommandHelp {
@@ -350,6 +371,12 @@ pub const COMMANDS: &[CommandHelp] = &[
             "aivyx-pa review approve <id> [--yes]",
             "aivyx-pa review deny <id>",
         ],
+    },
+    CommandHelp {
+        name: "board",
+        group: Group::Agent,
+        summary: "The work board: goals, projects and tasks your agents work",
+        usage: BOARD_USAGE,
     },
     CommandHelp {
         name: "memory",

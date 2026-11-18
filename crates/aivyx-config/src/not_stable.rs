@@ -133,6 +133,8 @@ pub const NOT_STABLE: &[NotStable] = &[
     // A19: federation between your own machines. Previews until the
     // two-machine checklist (docs/checklists/federation-two-machines.md) passes.
     entry(C, "federation.", PREVIEW),
+    // A20: the work board. Preview until a real daemon has run it end to end.
+    entry(Cli, "aivyx-pa board", PREVIEW),
     entry(Cli, "aivyx-pa federation card", PREVIEW),
     entry(Cli, "aivyx-pa federation peer", PREVIEW),
     entry(Cli, "aivyx-pa federation ping", PREVIEW),

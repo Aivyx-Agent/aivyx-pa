@@ -393,6 +393,34 @@ the exact call once; `deny` drops it. Unreviewed steps lapse after
 lists the same steps under "Needs you". See
 [Autonomy and routines](../../guide/15-autonomy-and-routines.md#reviewing-parked-steps).
 
+### `aivyx-pa board`
+
+The work board (preview): goals hold projects, projects hold tasks. You
+assign a task to a role or the team, start it, then approve or send back
+what comes back. Needs a running daemon.
+
+```
+aivyx-pa board list [--project <id>] [--state todo|running|review|done|cancelled]
+aivyx-pa board show <task>
+aivyx-pa board goal add "<title>" [--description "<text>"]
+aivyx-pa board goal list
+aivyx-pa board project add <goal> "<title>" [--description "<text>"]
+aivyx-pa board project list [--goal <id>]
+aivyx-pa board task add (--project <id> | --parent <task>) "<title>"
+    [--description "<text>"] [--owner role:<name>|team] [--no-review]
+aivyx-pa board assign <task> role:<name>|team|none
+aivyx-pa board start <task>
+aivyx-pa board approve <task>
+aivyx-pa board send-back <task> "<why>"
+aivyx-pa board cancel <task>
+aivyx-pa board comment <task> "<text>"
+```
+
+`list` groups tasks under `<goal> / <project>`; `show` prints a task and its
+thread (comments, state changes and run results). A task needs `--no-review`
+to go straight to done when its run succeeds; otherwise it waits in review for
+`approve` or `send-back`.
+
 ### `aivyx-pa memory`
 
 What your agent remembers.

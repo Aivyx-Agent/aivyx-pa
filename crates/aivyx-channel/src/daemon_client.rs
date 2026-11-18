@@ -1583,6 +1583,164 @@ pub async fn resolve_parked_step(
     }
 }
 
+fn board_err(code: String, message: String) -> DaemonError {
+    DaemonError::Protocol(format!("{code}: {message}"))
+}
+
+/// A20 — the whole work board.
+pub async fn board_snapshot(
+    socket_path: &Path,
+) -> Result<aivyx_ipc::board::BoardSnapshot, DaemonError> {
+    match send_query(socket_path, "board-snapshot", QueryPayload::BoardSnapshot).await? {
+        QueryResponsePayload::Board { snapshot } => Ok(snapshot),
+        QueryResponsePayload::QueryError { code, message } => Err(board_err(code, message)),
+        other => Err(DaemonError::Protocol(format!("expected Board, got {other:?}"))),
+    }
+}
+
+/// A20 — one task.
+pub async fn board_task(
+    socket_path: &Path,
+    task_id: String,
+) -> Result<aivyx_ipc::board::Task, DaemonError> {
+    match send_query(socket_path, "board-task", QueryPayload::BoardTask { task_id }).await? {
+        QueryResponsePayload::BoardTask { task } => Ok(task),
+        QueryResponsePayload::QueryError { code, message } => Err(board_err(code, message)),
+        other => Err(DaemonError::Protocol(format!(
+            "expected BoardTask, got {other:?}"
+        ))),
+    }
+}
+
+async fn board_create(
+    socket_path: &Path,
+    id: &str,
+    payload: QueryPayload,
+) -> Result<String, DaemonError> {
+    match send_query(socket_path, id, payload).await? {
+        QueryResponsePayload::BoardCreated { id } => Ok(id),
+        QueryResponsePayload::QueryError { code, message } => Err(board_err(code, message)),
+        other => Err(DaemonError::Protocol(format!(
+            "expected BoardCreated, got {other:?}"
+        ))),
+    }
+}
+
+async fn board_ack(socket_path: &Path, id: &str, payload: QueryPayload) -> Result<(), DaemonError> {
+    match send_query(socket_path, id, payload).await? {
+        QueryResponsePayload::BoardAck => Ok(()),
+        QueryResponsePayload::QueryError { code, message } => Err(board_err(code, message)),
+        other => Err(DaemonError::Protocol(format!(
+            "expected BoardAck, got {other:?}"
+        ))),
+    }
+}
+
+/// A20 — add a goal; returns its id.
+pub async fn board_create_goal(
+    socket_path: &Path,
+    title: String,
+    description: String,
+) -> Result<String, DaemonError> {
+    board_create(
+        socket_path,
+        "board-create-goal",
+        QueryPayload::BoardCreateGoal { title, description },
+    )
+    .await
+}
+
+/// A20 — add a project to a goal; returns its id.
+pub async fn board_create_project(
+    socket_path: &Path,
+    goal_id: String,
+    title: String,
+    description: String,
+) -> Result<String, DaemonError> {
+    board_create(
+        socket_path,
+        "board-create-project",
+        QueryPayload::BoardCreateProject { goal_id, title, description },
+    )
+    .await
+}
+
+/// A20 — add a task; returns its id.
+pub async fn board_create_task(
+    socket_path: &Path,
+    task: aivyx_ipc::board::NewTask,
+) -> Result<String, DaemonError> {
+    board_create(
+        socket_path,
+        "board-create-task",
+        QueryPayload::BoardCreateTask { task },
+    )
+    .await
+}
+
+/// A20 — set or clear a task's owner.
+pub async fn board_assign(
+    socket_path: &Path,
+    task_id: String,
+    owner: Option<aivyx_ipc::board::Owner>,
+) -> Result<(), DaemonError> {
+    board_ack(
+        socket_path,
+        "board-assign",
+        QueryPayload::BoardAssign { task_id, owner },
+    )
+    .await
+}
+
+/// A20 — start a task; returns the run's mission id.
+pub async fn board_start(socket_path: &Path, task_id: String) -> Result<String, DaemonError> {
+    match send_query(socket_path, "board-start", QueryPayload::BoardStart { task_id }).await? {
+        QueryResponsePayload::BoardStarted { mission_id } => Ok(mission_id),
+        QueryResponsePayload::QueryError { code, message } => Err(board_err(code, message)),
+        other => Err(DaemonError::Protocol(format!(
+            "expected BoardStarted, got {other:?}"
+        ))),
+    }
+}
+
+/// A20 — approve a task in review.
+pub async fn board_approve(socket_path: &Path, task_id: String) -> Result<(), DaemonError> {
+    board_ack(socket_path, "board-approve", QueryPayload::BoardApprove { task_id }).await
+}
+
+/// A20 — send a task in review back to Todo.
+pub async fn board_send_back(
+    socket_path: &Path,
+    task_id: String,
+    why: String,
+) -> Result<(), DaemonError> {
+    board_ack(
+        socket_path,
+        "board-send-back",
+        QueryPayload::BoardSendBack { task_id, why },
+    )
+    .await
+}
+
+/// A20 — cancel a task.
+pub async fn board_cancel(socket_path: &Path, task_id: String) -> Result<(), DaemonError> {
+    board_ack(socket_path, "board-cancel", QueryPayload::BoardCancel { task_id }).await
+}
+
+/// A20 — comment on a task as the operator.
+pub async fn board_comment(
+    socket_path: &Path,
+    task_id: String,
+    text: String,
+) -> Result<(), DaemonError> {
+    board_ack(
+        socket_path,
+        "board-comment",
+        QueryPayload::BoardComment { task_id, text },
+    )
+    .await
+}
+
 /// Chapter Belay — request that a running team mission halt. Returns the
 /// daemon's status message.
 pub async fn abort_team_mission(

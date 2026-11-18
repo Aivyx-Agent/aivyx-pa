@@ -517,6 +517,23 @@ isn't pending (or doesn't exist) gives `QueryError { code:
 connection loop, like `GetBriefing`; `ResolveParkedStep` is **operator
 activity**.
 
+### The work board (A20, preview)
+
+Eleven queries over `aivyx_ipc::board` types, answered by the connection loop
+before `handle_query` (like the parked steps). Reads: **`BoardSnapshot`** →
+`Board { snapshot }` (goals, projects and tasks) and **`BoardTask { task_id }`**
+→ `BoardTask { task }`. Creates: **`BoardCreateGoal { title, description }`**,
+**`BoardCreateProject { goal_id, title, description }`** and
+**`BoardCreateTask { task }`** (`NewTask`; `review_required` defaults to
+`true`) → `BoardCreated { id }`. Changes: **`BoardAssign { task_id, owner }`**
+(`owner` is `Role { name }`, `Team` or `null`), **`BoardApprove`**,
+**`BoardSendBack { task_id, why }`**, **`BoardCancel`** and
+**`BoardComment { task_id, text }`** → `BoardAck`; **`BoardStart { task_id }`**
+→ `BoardStarted { mission_id }`. Errors are `QueryError` with `code`
+`board_unavailable` (no board service: the daemon has no storage),
+`board_not_found`, `board_not_allowed`, `board_bad_state`, `board_empty` or
+`board_storage`. The CLI is `aivyx-pa board`.
+
 ### Operator activity
 
 The daemon tracks one clock per process (`aivyx-channel::activity::

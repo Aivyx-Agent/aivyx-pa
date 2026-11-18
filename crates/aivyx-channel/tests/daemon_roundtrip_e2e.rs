@@ -3268,6 +3268,30 @@ async fn team_queries_without_service_return_query_error() {
         assert_eq!(code, "parked_steps_unavailable", "query {id}");
     }
 
+    // A20 — with no board service, the board queries say so.
+    for (id, payload) in [
+        ("board-snapshot", QueryPayload::BoardSnapshot),
+        ("board-task", QueryPayload::BoardTask { task_id: "t-x".into() }),
+        ("board-approve", QueryPayload::BoardApprove { task_id: "t-x".into() }),
+    ] {
+        let q = FrontendMessage::Query { id: id.into(), payload };
+        writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();
+        let code = loop {
+            match decode_frame::<DaemonEnvelope>(&buf) {
+                Ok((DaemonEnvelope::QueryResponse { payload, .. }, consumed)) => {
+                    buf.drain(..consumed);
+                    match payload {
+                        QueryResponsePayload::QueryError { code, .. } => break code,
+                        other => panic!("expected QueryError, got {other:?}"),
+                    }
+                }
+                Err(FrameError::IncompleteBuf) => read_more(&mut reader, &mut buf).await,
+                other => panic!("expected QueryResponse, got {other:?}"),
+            }
+        };
+        assert_eq!(code, "board_unavailable", "query {id}");
+    }
+
     let _ = writer
         .write_all(&encode_frame(&FrontendMessage::Disconnect).unwrap())
         .await;

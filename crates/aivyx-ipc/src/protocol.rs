@@ -518,6 +518,41 @@ pub enum QueryPayload {
     /// [`QueryResponsePayload::ParkedStepResolved`], or a `QueryError` when the
     /// step isn't pending.
     ResolveParkedStep { id: String, approve: bool },
+    /// A20 — the whole work board. Responds with
+    /// [`QueryResponsePayload::Board`].
+    BoardSnapshot,
+    /// A20 — one task. Responds with [`QueryResponsePayload::BoardTask`].
+    BoardTask { task_id: String },
+    /// A20 — add a goal. Responds with [`QueryResponsePayload::BoardCreated`].
+    BoardCreateGoal {
+        title: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// A20 — add a project to a goal. Responds with `BoardCreated`.
+    BoardCreateProject {
+        goal_id: String,
+        title: String,
+        #[serde(default)]
+        description: String,
+    },
+    /// A20 — add a task. Responds with `BoardCreated`.
+    BoardCreateTask { task: crate::board::NewTask },
+    /// A20 — set or clear a task's owner. Responds with `BoardAck`.
+    BoardAssign {
+        task_id: String,
+        owner: Option<crate::board::Owner>,
+    },
+    /// A20 — start a task's run. Responds with `BoardStarted`.
+    BoardStart { task_id: String },
+    /// A20 — approve a task in review. Responds with `BoardAck`.
+    BoardApprove { task_id: String },
+    /// A20 — send a task in review back to Todo with a reason. `BoardAck`.
+    BoardSendBack { task_id: String, why: String },
+    /// A20 — cancel a task. Responds with `BoardAck`.
+    BoardCancel { task_id: String },
+    /// A20 — comment on a task as the operator. Responds with `BoardAck`.
+    BoardComment { task_id: String, text: String },
     /// Chapter Belay — request that a running mission halt at its next wave
     /// boundary. Responds with [`QueryResponsePayload::TeamMissionAborted`].
     AbortTeamMission {
@@ -1496,6 +1531,16 @@ pub enum QueryResponsePayload {
     /// Response to [`QueryPayload::ResolveParkedStep`]: the step after the
     /// decision (`approved` / `failed` with its result, or `denied`).
     ParkedStepResolved { step: crate::parked::ParkedStep },
+    /// A20 — response to [`QueryPayload::BoardSnapshot`].
+    Board { snapshot: crate::board::BoardSnapshot },
+    /// A20 — response to [`QueryPayload::BoardTask`].
+    BoardTask { task: crate::board::Task },
+    /// A20 — the id a `BoardCreate*` query made.
+    BoardCreated { id: String },
+    /// A20 — response to [`QueryPayload::BoardStart`]: the run's mission id.
+    BoardStarted { mission_id: String },
+    /// A20 — a board change that returns nothing.
+    BoardAck,
     /// Chapter Belay — response to [`QueryPayload::AbortTeamMission`]. A short
     /// human-readable status (the mission will halt at its next wave boundary).
     TeamMissionAborted {
@@ -3734,6 +3779,81 @@ pub enum DaemonEnvelope {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn board_queries_and_responses_round_trip() {
+        use crate::board::{BoardSnapshot, NewTask, Owner, Task, TaskState};
+        let task = Task {
+            id: "t-1".into(),
+            project_id: "p-1".into(),
+            parent_task: None,
+            title: "x".into(),
+            description: String::new(),
+            owner: None,
+            review_required: true,
+            state: TaskState::Todo,
+            thread: vec![],
+            active_run: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        let queries = vec![
+            QueryPayload::BoardSnapshot,
+            QueryPayload::BoardTask { task_id: "t-1".into() },
+            QueryPayload::BoardCreateGoal { title: "g".into(), description: "d".into() },
+            QueryPayload::BoardCreateProject {
+                goal_id: "g-1".into(),
+                title: "p".into(),
+                description: String::new(),
+            },
+            QueryPayload::BoardCreateTask {
+                task: NewTask {
+                    project_id: "p-1".into(),
+                    parent_task: Some("t-0".into()),
+                    title: "t".into(),
+                    description: String::new(),
+                    owner: Some(Owner::Team),
+                    review_required: false,
+                },
+            },
+            QueryPayload::BoardAssign {
+                task_id: "t-1".into(),
+                owner: Some(Owner::Role { name: "r".into() }),
+            },
+            QueryPayload::BoardAssign { task_id: "t-1".into(), owner: None },
+            QueryPayload::BoardStart { task_id: "t-1".into() },
+            QueryPayload::BoardApprove { task_id: "t-1".into() },
+            QueryPayload::BoardSendBack { task_id: "t-1".into(), why: "w".into() },
+            QueryPayload::BoardCancel { task_id: "t-1".into() },
+            QueryPayload::BoardComment { task_id: "t-1".into(), text: "c".into() },
+        ];
+        for q in queries {
+            let json = serde_json::to_string(&q).unwrap();
+            let back: QueryPayload = serde_json::from_str(&json).unwrap();
+            assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        }
+        let responses = vec![
+            QueryResponsePayload::Board { snapshot: BoardSnapshot::default() },
+            QueryResponsePayload::BoardTask { task },
+            QueryResponsePayload::BoardCreated { id: "g-1".into() },
+            QueryResponsePayload::BoardStarted { mission_id: "m".into() },
+            QueryResponsePayload::BoardAck,
+        ];
+        for r in responses {
+            let json = serde_json::to_string(&r).unwrap();
+            let back: QueryResponsePayload = serde_json::from_str(&json).unwrap();
+            assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        }
+    }
+
+    #[test]
+    fn a_create_task_without_review_required_defaults_to_review() {
+        let json = r#"{"kind":"BoardCreateTask","task":{"project_id":"p-1","title":"t"}}"#;
+        match serde_json::from_str::<QueryPayload>(json).unwrap() {
+            QueryPayload::BoardCreateTask { task } => assert!(task.review_required),
+            other => panic!("{other:?}"),
+        }
+    }
 
     #[test]
     fn pins_and_passphrases_are_redacted_in_debug_but_not_on_the_wire() {

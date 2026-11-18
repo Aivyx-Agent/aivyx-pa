@@ -2329,7 +2329,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         team_missions,
         step_parker,
         // A20 — the board's queries (Task 5) read it.
-        board: _board,
+        board,
         gate_policy,
         channel_trigger_authz,
         config_toml_path,
@@ -3324,6 +3324,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 &channel_factory,
                             )
                             .await
+                            {
+                                r
+                            } else if let Some(r) =
+                                crate::board::ipc::handle_board_query(&payload, board.as_deref())
+                                    .await
                             {
                                 r
                             } else {
@@ -5154,6 +5159,20 @@ async fn handle_query(
                 message: "parked steps are answered by the connection loop".into(),
             }
         }
+        QueryPayload::BoardSnapshot
+        | QueryPayload::BoardTask { .. }
+        | QueryPayload::BoardCreateGoal { .. }
+        | QueryPayload::BoardCreateProject { .. }
+        | QueryPayload::BoardCreateTask { .. }
+        | QueryPayload::BoardAssign { .. }
+        | QueryPayload::BoardStart { .. }
+        | QueryPayload::BoardApprove { .. }
+        | QueryPayload::BoardSendBack { .. }
+        | QueryPayload::BoardCancel { .. }
+        | QueryPayload::BoardComment { .. } => QueryResponsePayload::QueryError {
+            code: "board_unavailable".into(),
+            message: "the board is answered by the connection loop".into(),
+        },
         QueryPayload::AllowCloudEscalation { session_id } => {
             let Ok(uuid) = session_id.parse::<uuid::Uuid>() else {
                 return QueryResponsePayload::QueryError {
