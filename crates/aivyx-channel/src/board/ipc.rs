@@ -4,6 +4,7 @@
 
 use aivyx_ipc::protocol::{QueryPayload, QueryResponsePayload};
 
+use super::heartbeat::BoardHeartbeat;
 use super::model::BoardError;
 use super::service::BoardService;
 
@@ -43,6 +44,7 @@ fn created(r: Result<String, BoardError>) -> QueryResponsePayload {
 pub async fn handle_board_query(
     payload: &QueryPayload,
     board: Option<&BoardService>,
+    heartbeat: Option<&BoardHeartbeat>,
 ) -> Option<QueryResponsePayload> {
     let is_board = matches!(
         payload,
@@ -57,6 +59,13 @@ pub async fn handle_board_query(
             | QueryPayload::BoardSendBack { .. }
             | QueryPayload::BoardCancel { .. }
             | QueryPayload::BoardComment { .. }
+            | QueryPayload::BoardAgents
+            | QueryPayload::BoardCreateAgent { .. }
+            | QueryPayload::BoardEditAgent { .. }
+            | QueryPayload::BoardPauseAgent { .. }
+            | QueryPayload::BoardResumeAgent { .. }
+            | QueryPayload::BoardRemoveAgent { .. }
+            | QueryPayload::BoardWakeAgent { .. }
     );
     if !is_board {
         return None;
@@ -96,6 +105,38 @@ pub async fn handle_board_query(
         QueryPayload::BoardSendBack { task_id, why } => ack(svc.send_back(task_id, why).await),
         QueryPayload::BoardCancel { task_id } => ack(svc.cancel(task_id).await),
         QueryPayload::BoardComment { task_id, text } => ack(svc.comment(task_id, text).await),
+        QueryPayload::BoardAgents => match svc.agents().await {
+            Ok(agents) => QueryResponsePayload::BoardAgents { agents },
+            Err(e) => board_error(&e),
+        },
+        QueryPayload::BoardCreateAgent { agent } => created(svc.create_agent(agent.clone()).await),
+        QueryPayload::BoardEditAgent { name, agent } => {
+            ack(svc.edit_agent(name, agent.clone()).await)
+        }
+        QueryPayload::BoardPauseAgent { name } => ack(svc.set_agent_paused(name, true).await),
+        QueryPayload::BoardResumeAgent { name } => ack(svc.set_agent_paused(name, false).await),
+        QueryPayload::BoardRemoveAgent { name } => ack(svc.remove_agent(name).await),
+        QueryPayload::BoardWakeAgent { name } => {
+            let Some(hb) = heartbeat else {
+                return Some(error(
+                    "board_unavailable",
+                    "the board's heartbeat isn't running on this daemon".into(),
+                ));
+            };
+            let agent = match svc.agent_by_name(name).await {
+                Ok(a) => a,
+                Err(e) => return Some(board_error(&e)),
+            };
+            // A wake runs the agent's tasks one after another and can take
+            // hours: start it and answer, never hold the connection loop.
+            let hb = hb.clone();
+            tokio::spawn(async move {
+                if let Err(e) = hb.wake_now(&agent.id).await {
+                    eprintln!("aivyx-pa board: agent {}'s wake failed: {e}", agent.id);
+                }
+            });
+            QueryResponsePayload::BoardWoke { started: 0 }
+        }
         _ => return None,
     })
 }

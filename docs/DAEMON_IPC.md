@@ -519,20 +519,32 @@ activity**.
 
 ### The work board (A20, preview)
 
-Eleven queries over `aivyx_ipc::board` types, answered by the connection loop
+Eighteen queries over `aivyx_ipc::board` types, answered by the connection loop
 before `handle_query` (like the parked steps). Reads: **`BoardSnapshot`** →
 `Board { snapshot }` (goals, projects and tasks) and **`BoardTask { task_id }`**
 → `BoardTask { task }`. Creates: **`BoardCreateGoal { title, description }`**,
 **`BoardCreateProject { goal_id, title, description }`** and
 **`BoardCreateTask { task }`** (`NewTask`; `review_required` defaults to
 `true`) → `BoardCreated { id }`. Changes: **`BoardAssign { task_id, owner }`**
-(`owner` is `Role { name }`, `Team` or `null`), **`BoardApprove`**,
+(`owner` is `Role { name }`, `Team`, `Agent { id }` or `null`), **`BoardApprove`**,
 **`BoardSendBack { task_id, why }`**, **`BoardCancel`** and
 **`BoardComment { task_id, text }`** → `BoardAck`; **`BoardStart { task_id }`**
 → `BoardStarted { mission_id }`. Errors are `QueryError` with `code`
 `board_unavailable` (no board service: the daemon has no storage),
 `board_not_found`, `board_not_allowed`, `board_bad_state`, `board_empty` or
 `board_storage`. The CLI is `aivyx-pa board`.
+
+Standing agents (A21): **`BoardAgents`** → `BoardAgents { agents }` (the
+snapshot carries them too); **`BoardCreateAgent { agent }`** (`NewAgent`) →
+`BoardCreated { id }`; **`BoardEditAgent { name, agent }`** (`None` keeps a
+field; `clear_heartbeat` / `clear_reports_to` clear it; `agent.name` renames),
+**`BoardPauseAgent { name }`**, **`BoardResumeAgent { name }`** and
+**`BoardRemoveAgent { name }`** → `BoardAck`; **`BoardWakeAgent { name }`** →
+`BoardWoke { started }`. A wake runs the agent's tasks one after another, so
+the daemon starts it in the background and answers at once with
+`started: 0`. `reports_to` and `Owner::Agent { id }` carry ids; the agent
+queries find agents by name. `BoardWakeAgent` answers `board_unavailable` when
+the daemon runs no heartbeat.
 
 ### Operator activity
 

@@ -12121,6 +12121,7 @@ async fn run_async(
             step_parker: step_parker.clone(),
             // A20 — the work board built above.
             board: Some(board),
+            board_heartbeat: Some(board_heartbeat.clone()),
             // Chapter H — the daemon's default gate posture. Interactive for
             // now; the `--headless` flag + operator-absent drivers (H.4/H.5)
             // set RejectAndAbort per run.

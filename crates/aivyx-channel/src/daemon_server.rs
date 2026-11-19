@@ -499,6 +499,9 @@ pub struct DaemonConfig {
     /// A20 — the work board. `Some` in daemon mode with storage; its role
     /// runs share the trigger dispatch's turn lock. `None` means no board.
     pub board: Option<Arc<crate::board::service::BoardService>>,
+    /// A21 — the board's heartbeat, for `BoardWakeAgent`. `None` ⇒ a wake
+    /// answers `board_unavailable`.
+    pub board_heartbeat: Option<crate::board::heartbeat::BoardHeartbeat>,
     /// Chapter H — the daemon's default gate policy. `Interactive` (the
     /// default) parks an escalated turn behind an operator gate and waits;
     /// `RejectAndAbort` (headless) records the refusal and finalizes without a
@@ -854,6 +857,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
         team_missions,
         step_parker,
         board,
+        board_heartbeat,
         gate_policy,
         confine_options,
         workspace_journaling_interval,
@@ -1935,6 +1939,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<(), DaemonError> {
             team_missions: team_missions.clone(),
             step_parker: step_parker.clone(),
             board: board.clone(),
+            board_heartbeat: board_heartbeat.clone(),
             gate_policy,
             channel_trigger_authz,
             config_toml_path: config_toml_path.clone(),
@@ -2246,6 +2251,8 @@ struct ConnectionContext {
     step_parker: Option<Arc<crate::parked_steps::StepParker>>,
     /// A20 — see `DaemonConfig::board`.
     board: Option<Arc<crate::board::service::BoardService>>,
+    /// A21 — see `DaemonConfig::board_heartbeat`.
+    board_heartbeat: Option<crate::board::heartbeat::BoardHeartbeat>,
     gate_policy: GatePolicy,
     /// Piece C — per-channel-type authorization for `/team run`.
     channel_trigger_authz: ChannelTriggerAuthz,
@@ -2330,6 +2337,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
         step_parker,
         // A20 — the board's queries (Task 5) read it.
         board,
+        board_heartbeat,
         gate_policy,
         channel_trigger_authz,
         config_toml_path,
@@ -3327,7 +3335,11 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             {
                                 r
                             } else if let Some(r) =
-                                crate::board::ipc::handle_board_query(&payload, board.as_deref())
+                                crate::board::ipc::handle_board_query(
+                                    &payload,
+                                    board.as_deref(),
+                                    board_heartbeat.as_ref(),
+                                )
                                     .await
                             {
                                 r
@@ -4405,6 +4417,7 @@ async fn run_single_connection_daemon(
         team_missions: None,
         step_parker: None,
         board: None,
+        board_heartbeat: None,
         gate_policy: GatePolicy::default(),
         channel_trigger_authz: ChannelTriggerAuthz::default(),
         config_toml_path: None,
@@ -4522,6 +4535,7 @@ pub(crate) fn minimal_daemon_config(
         team_missions: None,
         step_parker: None,
         board: None,
+        board_heartbeat: None,
         gate_policy: GatePolicy::default(),
         confine_options: None,
         pricing: Default::default(),
@@ -5169,7 +5183,14 @@ async fn handle_query(
         | QueryPayload::BoardApprove { .. }
         | QueryPayload::BoardSendBack { .. }
         | QueryPayload::BoardCancel { .. }
-        | QueryPayload::BoardComment { .. } => QueryResponsePayload::QueryError {
+        | QueryPayload::BoardComment { .. }
+        | QueryPayload::BoardAgents
+        | QueryPayload::BoardCreateAgent { .. }
+        | QueryPayload::BoardEditAgent { .. }
+        | QueryPayload::BoardPauseAgent { .. }
+        | QueryPayload::BoardResumeAgent { .. }
+        | QueryPayload::BoardRemoveAgent { .. }
+        | QueryPayload::BoardWakeAgent { .. } => QueryResponsePayload::QueryError {
             code: "board_unavailable".into(),
             message: "the board is answered by the connection loop".into(),
         },

@@ -233,6 +233,7 @@ async fn operator_actions_are_stamped_over_ipc_but_looking_is_not() {
         team_missions: None,
         step_parker: None,
         board: None,
+        board_heartbeat: None,
         gate_policy: aivyx_core::GatePolicy::default(),
         confine_options: None,
         workspace_journaling_interval: None,

@@ -8,13 +8,15 @@ use std::path::Path;
 
 use aivyx_capability::display::neutralise;
 use aivyx_channel::daemon_client::{
-    board_approve, board_assign, board_cancel, board_comment, board_create_goal,
-    board_create_project, board_create_task, board_send_back, board_snapshot, board_start,
-    board_task, daemon_is_running,
+    board_agents, board_approve, board_assign, board_cancel, board_comment, board_create_agent,
+    board_create_goal, board_create_project, board_create_task, board_edit_agent,
+    board_pause_agent, board_remove_agent, board_resume_agent, board_send_back, board_snapshot,
+    board_start, board_task, board_wake_agent, daemon_is_running,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_ipc::board::{
-    Author, BoardSnapshot, EntryKind, NewTask, Owner, RunOutcome, Task, TaskState,
+    Agent, Author, BoardSnapshot, EntryKind, NewAgent, NewTask, Owner, RunOutcome, Task,
+    TaskState, WorksAs,
 };
 
 pub const USAGE: &str = "usage:
@@ -26,7 +28,14 @@ pub const USAGE: &str = "usage:
   aivyx-pa board project list [--goal <id>]
   aivyx-pa board task add (--project <id> | --parent <task>) \"<title>\"
       [--description \"<text>\"] [--owner role:<name>|team] [--no-review]
-  aivyx-pa board assign <task> role:<name>|team|none
+  aivyx-pa board agent list
+  aivyx-pa board agent add <name> --works-as role:<name>|team [--title \"<t>\"]
+      [--reports-to <agent>] [--heartbeat \"<cron>\"] [--wake-on-assign]
+  aivyx-pa board agent edit <name> [--name <new>] [--title \"<t>\"]
+      [--reports-to <agent>|--no-reports-to] [--works-as role:<name>|team]
+      [--heartbeat \"<cron>\"|--no-heartbeat] [--wake-on-assign|--no-wake-on-assign]
+  aivyx-pa board agent pause|resume|remove|wake <name>
+  aivyx-pa board assign <task> role:<name>|team|agent:<name>|none
   aivyx-pa board start <task>
   aivyx-pa board approve <task>
   aivyx-pa board send-back <task> \"<why>\"
@@ -71,7 +80,37 @@ pub enum BoardCommand {
     },
     Assign {
         task: String,
-        owner: Option<Owner>,
+        owner: AssignTo,
+    },
+    AgentList,
+    AgentAdd {
+        name: String,
+        title: Option<String>,
+        reports_to: Option<String>,
+        works_as: WorksAs,
+        heartbeat: Option<String>,
+        wake_on_assign: bool,
+    },
+    AgentEdit {
+        name: String,
+        new_name: Option<String>,
+        title: Option<String>,
+        reports_to: Change<String>,
+        works_as: Option<WorksAs>,
+        heartbeat: Change<String>,
+        wake_on_assign: Option<bool>,
+    },
+    AgentPause {
+        name: String,
+    },
+    AgentResume {
+        name: String,
+    },
+    AgentRemove {
+        name: String,
+    },
+    AgentWake {
+        name: String,
     },
     Start {
         task: String,
@@ -90,6 +129,24 @@ pub enum BoardCommand {
         task: String,
         text: String,
     },
+}
+
+/// Who `assign` hands a task to. An agent is named; the name becomes an id
+/// when the command runs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssignTo {
+    None,
+    Team,
+    Role(String),
+    Agent(String),
+}
+
+/// What an `agent edit` does to an optional field.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change<T> {
+    Keep,
+    Set(T),
+    Clear,
 }
 
 /// What `list` keeps.
@@ -122,6 +179,32 @@ pub fn parse_owner(s: &str) -> Result<Option<Owner>, String> {
             _ => Err(format!(
                 "unknown owner `{s}` (use role:<name>, team or none)"
             )),
+        },
+    }
+}
+
+/// `role:<name>` | `team` | `agent:<name>` | `none`.
+pub fn parse_assign(s: &str) -> Result<AssignTo, String> {
+    match s {
+        "team" => Ok(AssignTo::Team),
+        "none" => Ok(AssignTo::None),
+        _ => match (s.strip_prefix("role:"), s.strip_prefix("agent:")) {
+            (Some(name), _) if !name.is_empty() => Ok(AssignTo::Role(name.into())),
+            (_, Some(name)) if !name.is_empty() => Ok(AssignTo::Agent(name.into())),
+            _ => Err(format!(
+                "unknown owner `{s}` (use role:<name>, team, agent:<name> or none)"
+            )),
+        },
+    }
+}
+
+/// `role:<name>` | `team`.
+pub fn parse_works_as(s: &str) -> Result<WorksAs, String> {
+    match s {
+        "team" => Ok(WorksAs::Team),
+        _ => match s.strip_prefix("role:") {
+            Some(name) if !name.is_empty() => Ok(WorksAs::Role { name: name.into() }),
+            _ => Err(format!("unknown works-as `{s}` (use role:<name> or team)")),
         },
     }
 }
@@ -204,10 +287,11 @@ pub fn parse(args: &[String]) -> Result<BoardCommand, String> {
         "assign" => match rest {
             [task, owner] => Ok(BoardCommand::Assign {
                 task: task.clone(),
-                owner: parse_owner(owner)?,
+                owner: parse_assign(owner)?,
             }),
             _ => Err(USAGE.to_string()),
         },
+        "agent" => parse_agent(rest),
         "goal" => match rest.split_first() {
             Some((a, r)) if a == "add" => {
                 let s = split(r, &["--description"], &[])?;
@@ -287,6 +371,98 @@ pub fn parse(args: &[String]) -> Result<BoardCommand, String> {
     }
 }
 
+/// An optional field's `--x <v>` / `--no-x` pair.
+fn change(s: &Split, flag: &str, no_flag: &str) -> Result<Change<String>, String> {
+    match (s.value(flag), s.has(no_flag)) {
+        (Some(_), true) => Err(format!("give `{flag}` or `{no_flag}`, not both\n{USAGE}")),
+        (Some(v), false) => Ok(Change::Set(v.into())),
+        (None, true) => Ok(Change::Clear),
+        (None, false) => Ok(Change::Keep),
+    }
+}
+
+fn one_name(rest: &[String]) -> Result<String, String> {
+    match rest {
+        [name] => Ok(name.clone()),
+        _ => Err(USAGE.to_string()),
+    }
+}
+
+fn parse_agent(rest: &[String]) -> Result<BoardCommand, String> {
+    let Some((sub, rest)) = rest.split_first() else {
+        return Err(USAGE.to_string());
+    };
+    match sub.as_str() {
+        "list" if rest.is_empty() => Ok(BoardCommand::AgentList),
+        "pause" => one_name(rest).map(|name| BoardCommand::AgentPause { name }),
+        "resume" => one_name(rest).map(|name| BoardCommand::AgentResume { name }),
+        "remove" => one_name(rest).map(|name| BoardCommand::AgentRemove { name }),
+        "wake" => one_name(rest).map(|name| BoardCommand::AgentWake { name }),
+        "add" => {
+            let s = split(
+                rest,
+                &["--works-as", "--title", "--reports-to", "--heartbeat"],
+                &["--wake-on-assign"],
+            )?;
+            let [name] = s.positional.as_slice() else {
+                return Err(USAGE.to_string());
+            };
+            let Some(works_as) = s.value("--works-as") else {
+                return Err(format!(
+                    "`agent add` needs `--works-as role:<name>|team`\n{USAGE}"
+                ));
+            };
+            Ok(BoardCommand::AgentAdd {
+                name: name.clone(),
+                title: s.value("--title").map(String::from),
+                reports_to: s.value("--reports-to").map(String::from),
+                works_as: parse_works_as(works_as)?,
+                heartbeat: s.value("--heartbeat").map(String::from),
+                wake_on_assign: s.has("--wake-on-assign"),
+            })
+        }
+        "edit" => {
+            let s = split(
+                rest,
+                &["--name", "--title", "--reports-to", "--works-as", "--heartbeat"],
+                &[
+                    "--no-reports-to",
+                    "--no-heartbeat",
+                    "--wake-on-assign",
+                    "--no-wake-on-assign",
+                ],
+            )?;
+            let [name] = s.positional.as_slice() else {
+                return Err(USAGE.to_string());
+            };
+            let wake_on_assign = match (s.has("--wake-on-assign"), s.has("--no-wake-on-assign")) {
+                (true, true) => {
+                    return Err(format!(
+                        "give `--wake-on-assign` or `--no-wake-on-assign`, not both\n{USAGE}"
+                    ));
+                }
+                (true, false) => Some(true),
+                (false, true) => Some(false),
+                (false, false) => None,
+            };
+            let cmd = BoardCommand::AgentEdit {
+                name: name.clone(),
+                new_name: s.value("--name").map(String::from),
+                title: s.value("--title").map(String::from),
+                reports_to: change(&s, "--reports-to", "--no-reports-to")?,
+                works_as: s.value("--works-as").map(parse_works_as).transpose()?,
+                heartbeat: change(&s, "--heartbeat", "--no-heartbeat")?,
+                wake_on_assign,
+            };
+            if s.flags.is_empty() {
+                return Err(format!("`agent edit` needs something to change\n{USAGE}"));
+            }
+            Ok(cmd)
+        }
+        _ => Err(USAGE.to_string()),
+    }
+}
+
 fn one_task(rest: &[String]) -> Result<String, String> {
     match rest {
         [task] => Ok(task.clone()),
@@ -316,7 +492,8 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
         }
         BoardCommand::Show { task } => {
             let t = board_task(&socket, task).await.map_err(e)?;
-            print!("{}", render_task(&t));
+            let agents = board_agents(&socket).await.map_err(e)?;
+            print!("{}", render_task(&t, &agents));
         }
         BoardCommand::GoalAdd { title, description } => {
             let id = board_create_goal(&socket, title, description)
@@ -372,13 +549,106 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
             println!("Added task {}", neutralise(&id));
         }
         BoardCommand::Assign { task, owner } => {
-            board_assign(&socket, task.clone(), owner.clone())
-                .await
-                .map_err(e)?;
+            let (owner, label) = match owner {
+                AssignTo::None => (None, "-".to_string()),
+                AssignTo::Team => (Some(Owner::Team), "team".to_string()),
+                AssignTo::Role(name) => {
+                    let label = format!("role:{name}");
+                    (Some(Owner::Role { name }), label)
+                }
+                AssignTo::Agent(name) => {
+                    let id = resolve_agent(&socket, &name).await?;
+                    (Some(Owner::Agent { id }), format!("agent:{name}"))
+                }
+            };
+            board_assign(&socket, task.clone(), owner).await.map_err(e)?;
             println!(
                 "Task {} is now owned by {}",
                 neutralise(&task),
-                neutralise(&owner_label(owner.as_ref()))
+                neutralise(&label)
+            );
+        }
+        BoardCommand::AgentList => {
+            let agents = board_agents(&socket).await.map_err(e)?;
+            let snap = board_snapshot(&socket).await.map_err(e)?;
+            print!("{}", render_agents(&agents, &snap.tasks));
+        }
+        BoardCommand::AgentAdd {
+            name,
+            title,
+            reports_to,
+            works_as,
+            heartbeat,
+            wake_on_assign,
+        } => {
+            let reports_to = match reports_to {
+                Some(boss) => Some(resolve_agent(&socket, &boss).await?),
+                None => None,
+            };
+            board_create_agent(
+                &socket,
+                NewAgent {
+                    name: Some(name.clone()),
+                    title,
+                    reports_to,
+                    works_as: Some(works_as),
+                    heartbeat,
+                    wake_on_assign: wake_on_assign.then_some(true),
+                    ..NewAgent::default()
+                },
+            )
+            .await
+            .map_err(e)?;
+            println!("Added agent {}", neutralise(&name));
+        }
+        BoardCommand::AgentEdit {
+            name,
+            new_name,
+            title,
+            reports_to,
+            works_as,
+            heartbeat,
+            wake_on_assign,
+        } => {
+            let mut agent = NewAgent {
+                name: new_name.clone(),
+                title,
+                works_as,
+                wake_on_assign,
+                ..NewAgent::default()
+            };
+            match reports_to {
+                Change::Keep => {}
+                Change::Clear => agent.clear_reports_to = true,
+                Change::Set(boss) => agent.reports_to = Some(resolve_agent(&socket, &boss).await?),
+            }
+            match heartbeat {
+                Change::Keep => {}
+                Change::Clear => agent.clear_heartbeat = true,
+                Change::Set(cron) => agent.heartbeat = Some(cron),
+            }
+            board_edit_agent(&socket, name.clone(), agent)
+                .await
+                .map_err(e)?;
+            println!("Updated agent {}", neutralise(new_name.as_deref().unwrap_or(&name)));
+        }
+        BoardCommand::AgentPause { name } => {
+            board_pause_agent(&socket, name.clone()).await.map_err(e)?;
+            println!("Paused agent {}", neutralise(&name));
+        }
+        BoardCommand::AgentResume { name } => {
+            board_resume_agent(&socket, name.clone()).await.map_err(e)?;
+            println!("Resumed agent {}", neutralise(&name));
+        }
+        BoardCommand::AgentRemove { name } => {
+            board_remove_agent(&socket, name.clone()).await.map_err(e)?;
+            println!("Removed agent {}", neutralise(&name));
+        }
+        BoardCommand::AgentWake { name } => {
+            board_wake_agent(&socket, name.clone()).await.map_err(e)?;
+            println!(
+                "Wake requested for agent {} (it runs in the background)",
+                neutralise(&name)
             );
         }
         BoardCommand::Start { task } => {
@@ -413,11 +683,24 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
     Ok(())
 }
 
-fn owner_label(owner: Option<&Owner>) -> String {
+/// An agent's name to its id.
+async fn resolve_agent(socket: &Path, name: &str) -> Result<String, String> {
+    let agents = board_agents(socket).await.map_err(|e| e.to_string())?;
+    agents
+        .into_iter()
+        .find(|a| a.name == name)
+        .map(|a| a.id)
+        .ok_or_else(|| format!("no agent named `{name}`"))
+}
+
+fn owner_label(owner: Option<&Owner>, agents: &[Agent]) -> String {
     match owner {
         Some(Owner::Role { name }) => format!("role:{name}"),
         Some(Owner::Team) => "team".into(),
-        Some(Owner::Agent { id }) => format!("agent:{id}"),
+        Some(Owner::Agent { id }) => agents
+            .iter()
+            .find(|a| a.id == *id)
+            .map_or_else(|| format!("agent:{id}"), |a| format!("agent:{}", a.name)),
         None => "-".into(),
     }
 }
@@ -446,6 +729,7 @@ fn when(at_ms: u64) -> String {
 /// Tasks under `<goal> / <project>` headings, filtered client-side. With a
 /// filter, projects with no matching task are left out.
 pub fn render_list(snap: &BoardSnapshot, filter: &ListFilter) -> String {
+    let agents = snap.agents.as_slice();
     let filtered = filter.project.is_some() || filter.state.is_some();
     let mut out = String::new();
     for project in &snap.projects {
@@ -477,7 +761,7 @@ pub fn render_list(snap: &BoardSnapshot, filter: &ListFilter) -> String {
                 "  {}  {}  {}  {}\n",
                 neutralise(&t.id),
                 state_label(t.state),
-                neutralise(&owner_label(t.owner.as_ref())),
+                neutralise(&owner_label(t.owner.as_ref(), agents)),
                 neutralise(&t.title)
             ));
         }
@@ -486,6 +770,69 @@ pub fn render_list(snap: &BoardSnapshot, filter: &ListFilter) -> String {
         out.push_str("No tasks.\n");
     }
     out
+}
+
+/// The org chart: roots (no boss, or a boss that's gone) first, each with
+/// its reports indented two spaces beneath.
+pub fn render_agents(agents: &[Agent], tasks: &[Task]) -> String {
+    if agents.is_empty() {
+        return "No agents.\n".into();
+    }
+    let mut out = String::new();
+    let mut seen: Vec<&str> = Vec::new();
+    let roots = agents
+        .iter()
+        .filter(|a| !a.reports_to.as_ref().is_some_and(|b| agents.iter().any(|x| x.id == *b)));
+    for root in roots {
+        agent_lines(root, agents, tasks, 0, &mut seen, &mut out);
+    }
+    out
+}
+
+fn agent_lines<'a>(
+    agent: &'a Agent,
+    agents: &'a [Agent],
+    tasks: &[Task],
+    depth: usize,
+    seen: &mut Vec<&'a str>,
+    out: &mut String,
+) {
+    if seen.contains(&agent.id.as_str()) {
+        return;
+    }
+    seen.push(&agent.id);
+    let open = tasks
+        .iter()
+        .filter(|t| matches!(&t.owner, Some(Owner::Agent { id }) if *id == agent.id))
+        .filter(|t| matches!(t.state, TaskState::Todo | TaskState::Running | TaskState::Review))
+        .count();
+    let works_as = match &agent.works_as {
+        WorksAs::Role { name } => format!("role:{name}"),
+        WorksAs::Team => "team".into(),
+    };
+    let mut line = format!("{}{}", "  ".repeat(depth), neutralise(&agent.name));
+    if !agent.title.is_empty() {
+        line.push_str(&format!("  {}", neutralise(&agent.title)));
+    }
+    line.push_str(&format!(
+        "  works as {}  heartbeat {}",
+        neutralise(&works_as),
+        agent.heartbeat.as_deref().map_or_else(|| "—".to_string(), neutralise)
+    ));
+    if agent.paused {
+        line.push_str("  [paused]");
+    }
+    line.push_str(&format!(
+        "  last wake {}  open {open}\n",
+        agent.last_wake.map_or_else(|| "never".to_string(), when)
+    ));
+    out.push_str(&line);
+    for child in agents
+        .iter()
+        .filter(|a| a.reports_to.as_deref() == Some(agent.id.as_str()))
+    {
+        agent_lines(child, agents, tasks, depth + 1, seen, out);
+    }
 }
 
 pub fn render_goals(snap: &BoardSnapshot) -> String {
@@ -524,7 +871,7 @@ pub fn render_projects(snap: &BoardSnapshot, goal: Option<&str>) -> String {
 }
 
 /// The task's fields, then its thread, one entry per line.
-pub fn render_task(t: &Task) -> String {
+pub fn render_task(t: &Task, agents: &[Agent]) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "{}  {}\n",
@@ -534,7 +881,7 @@ pub fn render_task(t: &Task) -> String {
     out.push_str(&format!("  state:    {}\n", state_label(t.state)));
     out.push_str(&format!(
         "  owner:    {}\n",
-        neutralise(&owner_label(t.owner.as_ref()))
+        neutralise(&owner_label(t.owner.as_ref(), agents))
     ));
     out.push_str(&format!("  project:  {}\n", neutralise(&t.project_id)));
     if let Some(p) = &t.parent_task {
@@ -711,23 +1058,28 @@ mod tests {
             p("assign t-1 role:writer").unwrap(),
             BoardCommand::Assign {
                 task: "t-1".into(),
-                owner: Some(Owner::Role {
-                    name: "writer".into()
-                })
+                owner: AssignTo::Role("writer".into())
             }
         );
         assert_eq!(
             p("assign t-1 team").unwrap(),
             BoardCommand::Assign {
                 task: "t-1".into(),
-                owner: Some(Owner::Team)
+                owner: AssignTo::Team
             }
         );
         assert_eq!(
             p("assign t-1 none").unwrap(),
             BoardCommand::Assign {
                 task: "t-1".into(),
-                owner: None
+                owner: AssignTo::None
+            }
+        );
+        assert_eq!(
+            p("assign t-1 agent:ana").unwrap(),
+            BoardCommand::Assign {
+                task: "t-1".into(),
+                owner: AssignTo::Agent("ana".into())
             }
         );
         assert_eq!(
@@ -769,6 +1121,160 @@ mod tests {
         let e = p("assign t-1 bob").unwrap_err();
         assert!(e.contains("role:<name>") && e.contains("team"), "{e}");
         assert!(parse(&[]).is_err());
+    }
+
+    #[test]
+    fn every_agent_form_parses() {
+        assert_eq!(p("agent list").unwrap(), BoardCommand::AgentList);
+        assert_eq!(
+            p("agent add ana --works-as role:writer --title \"Lead writer\" --reports-to boss --heartbeat \"0 9 * * *\" --wake-on-assign").unwrap(),
+            BoardCommand::AgentAdd {
+                name: "ana".into(),
+                title: Some("Lead writer".into()),
+                reports_to: Some("boss".into()),
+                works_as: WorksAs::Role { name: "writer".into() },
+                heartbeat: Some("0 9 * * *".into()),
+                wake_on_assign: true,
+            }
+        );
+        assert_eq!(
+            p("agent add bo --works-as team").unwrap(),
+            BoardCommand::AgentAdd {
+                name: "bo".into(),
+                title: None,
+                reports_to: None,
+                works_as: WorksAs::Team,
+                heartbeat: None,
+                wake_on_assign: false,
+            }
+        );
+        assert_eq!(
+            p("agent edit ana --name anna --title \"T\" --reports-to boss --works-as team --heartbeat \"* * * * *\" --no-wake-on-assign").unwrap(),
+            BoardCommand::AgentEdit {
+                name: "ana".into(),
+                new_name: Some("anna".into()),
+                title: Some("T".into()),
+                reports_to: Change::Set("boss".into()),
+                works_as: Some(WorksAs::Team),
+                heartbeat: Change::Set("* * * * *".into()),
+                wake_on_assign: Some(false),
+            }
+        );
+        assert_eq!(
+            p("agent edit ana --no-reports-to --no-heartbeat --wake-on-assign").unwrap(),
+            BoardCommand::AgentEdit {
+                name: "ana".into(),
+                new_name: None,
+                title: None,
+                reports_to: Change::Clear,
+                works_as: None,
+                heartbeat: Change::Clear,
+                wake_on_assign: Some(true),
+            }
+        );
+        assert_eq!(
+            p("agent pause ana").unwrap(),
+            BoardCommand::AgentPause { name: "ana".into() }
+        );
+        assert_eq!(
+            p("agent resume ana").unwrap(),
+            BoardCommand::AgentResume { name: "ana".into() }
+        );
+        assert_eq!(
+            p("agent remove ana").unwrap(),
+            BoardCommand::AgentRemove { name: "ana".into() }
+        );
+        assert_eq!(
+            p("agent wake ana").unwrap(),
+            BoardCommand::AgentWake { name: "ana".into() }
+        );
+    }
+
+    #[test]
+    fn bad_agent_input_is_refused() {
+        let e = p("agent add ana").unwrap_err();
+        assert!(e.contains("--works-as"), "{e}");
+        assert!(p("agent add ana --works-as nobody").is_err());
+        let e = p("agent edit ana --heartbeat x --no-heartbeat").unwrap_err();
+        assert!(e.contains("not both"), "{e}");
+        let e = p("agent edit ana --reports-to b --no-reports-to").unwrap_err();
+        assert!(e.contains("not both"), "{e}");
+        let e = p("agent edit ana --wake-on-assign --no-wake-on-assign").unwrap_err();
+        assert!(e.contains("not both"), "{e}");
+        let e = p("agent edit ana").unwrap_err();
+        assert!(e.contains("something to change"), "{e}");
+        assert!(p("agent").is_err());
+        assert!(p("agent pause").is_err());
+        assert!(p("agent pause a b").is_err());
+        assert!(p("agent list extra").is_err());
+        assert!(p("agent frob ana").is_err());
+        assert!(p("assign t-1 agent:").is_err());
+    }
+
+    fn agent(id: &str, name: &str, boss: Option<&str>) -> Agent {
+        Agent {
+            id: id.into(),
+            name: name.into(),
+            title: String::new(),
+            reports_to: boss.map(String::from),
+            works_as: WorksAs::Team,
+            heartbeat: None,
+            wake_on_assign: false,
+            paused: false,
+            last_wake: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn the_org_chart_nests_reports_under_their_boss() {
+        let mut boss = agent("a-1", "boss", None);
+        boss.title = "Head".into();
+        boss.heartbeat = Some("0 9 * * *".into());
+        boss.works_as = WorksAs::Role { name: "lead".into() };
+        let mut ana = agent("a-2", "ana", Some("a-1"));
+        ana.paused = true;
+        let deep = agent("a-3", "deep", Some("a-2"));
+        let solo = agent("a-4", "solo", None);
+        let tasks = vec![
+            task("t-1", "p", TaskState::Todo, Some(Owner::Agent { id: "a-2".into() })),
+            task("t-2", "p", TaskState::Review, Some(Owner::Agent { id: "a-2".into() })),
+            task("t-3", "p", TaskState::Done, Some(Owner::Agent { id: "a-2".into() })),
+        ];
+        let out = render_agents(&[boss, ana, deep, solo], &tasks);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 4, "{out}");
+        assert_eq!(
+            lines[0],
+            "boss  Head  works as role:lead  heartbeat 0 9 * * *  last wake never  open 0"
+        );
+        assert_eq!(
+            lines[1],
+            "  ana  works as team  heartbeat —  [paused]  last wake never  open 2"
+        );
+        assert!(lines[2].starts_with("    deep  works as team"), "{out}");
+        assert!(lines[3].starts_with("solo  works as team"), "{out}");
+        assert_eq!(render_agents(&[], &[]), "No agents.\n");
+    }
+
+    #[test]
+    fn agent_text_is_neutralised_and_owners_show_the_name() {
+        let mut a = agent("a-1", "ana", None);
+        a.title = "x\u{1b}[31mred".into();
+        let out = render_agents(&[a.clone()], &[]);
+        assert!(!out.contains('\u{1b}'), "{out}");
+
+        let mut snap = snap();
+        snap.agents = vec![a.clone()];
+        snap.tasks[0].owner = Some(Owner::Agent { id: "a-1".into() });
+        let out = render_list(&snap, &ListFilter::default());
+        assert!(out.contains("t-1  todo  agent:ana  title t-1"), "{out}");
+        let out = render_task(&snap.tasks[0], &[a]);
+        assert!(out.contains("owner:    agent:ana"), "{out}");
+        // A removed agent's id still shows, not nothing.
+        let out = render_task(&snap.tasks[0], &[]);
+        assert!(out.contains("owner:    agent:a-1"), "{out}");
     }
 
     fn task(id: &str, project: &str, state: TaskState, owner: Option<Owner>) -> Task {
@@ -900,7 +1406,7 @@ mod tests {
                 },
             },
         ];
-        let out = render_task(&t);
+        let out = render_task(&t, &[]);
         assert!(out.contains("operator  go"), "{out}");
         assert!(
             !out.contains('\u{1b}'),
@@ -932,7 +1438,7 @@ mod tests {
                 cost_usd: None,
             },
         }];
-        let out = render_task(&t);
+        let out = render_task(&t, &[]);
         assert!(
             out.contains("agent  run m-2 failed: it broke, —\n"),
             "{out}"

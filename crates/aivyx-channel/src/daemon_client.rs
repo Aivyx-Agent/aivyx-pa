@@ -1744,6 +1744,71 @@ pub async fn board_comment(
     .await
 }
 
+/// A21 — the standing agents.
+pub async fn board_agents(socket_path: &Path) -> Result<Vec<aivyx_ipc::board::Agent>, DaemonError> {
+    match send_query(socket_path, "board-agents", QueryPayload::BoardAgents).await? {
+        QueryResponsePayload::BoardAgents { agents } => Ok(agents),
+        QueryResponsePayload::QueryError { code, message } => Err(board_err(code, message)),
+        other => Err(DaemonError::Protocol(format!(
+            "expected BoardAgents, got {other:?}"
+        ))),
+    }
+}
+
+/// A21 — add a standing agent; returns its id.
+pub async fn board_create_agent(
+    socket_path: &Path,
+    agent: aivyx_ipc::board::NewAgent,
+) -> Result<String, DaemonError> {
+    board_create(
+        socket_path,
+        "board-create-agent",
+        QueryPayload::BoardCreateAgent { agent },
+    )
+    .await
+}
+
+/// A21 — change an agent, found by name.
+pub async fn board_edit_agent(
+    socket_path: &Path,
+    name: String,
+    agent: aivyx_ipc::board::NewAgent,
+) -> Result<(), DaemonError> {
+    board_ack(
+        socket_path,
+        "board-edit-agent",
+        QueryPayload::BoardEditAgent { name, agent },
+    )
+    .await
+}
+
+/// A21 — pause an agent.
+pub async fn board_pause_agent(socket_path: &Path, name: String) -> Result<(), DaemonError> {
+    board_ack(socket_path, "board-pause-agent", QueryPayload::BoardPauseAgent { name }).await
+}
+
+/// A21 — resume an agent.
+pub async fn board_resume_agent(socket_path: &Path, name: String) -> Result<(), DaemonError> {
+    board_ack(socket_path, "board-resume-agent", QueryPayload::BoardResumeAgent { name }).await
+}
+
+/// A21 — remove an agent.
+pub async fn board_remove_agent(socket_path: &Path, name: String) -> Result<(), DaemonError> {
+    board_ack(socket_path, "board-remove-agent", QueryPayload::BoardRemoveAgent { name }).await
+}
+
+/// A21 — ask the daemon to wake an agent now. The wake runs in the
+/// background; the answer is the tasks started so far (0).
+pub async fn board_wake_agent(socket_path: &Path, name: String) -> Result<usize, DaemonError> {
+    match send_query(socket_path, "board-wake-agent", QueryPayload::BoardWakeAgent { name }).await? {
+        QueryResponsePayload::BoardWoke { started } => Ok(started),
+        QueryResponsePayload::QueryError { code, message } => Err(board_err(code, message)),
+        other => Err(DaemonError::Protocol(format!(
+            "expected BoardWoke, got {other:?}"
+        ))),
+    }
+}
+
 /// Chapter Belay — request that a running team mission halt. Returns the
 /// daemon's status message.
 pub async fn abort_team_mission(

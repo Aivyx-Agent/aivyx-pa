@@ -553,6 +553,24 @@ pub enum QueryPayload {
     BoardCancel { task_id: String },
     /// A20 — comment on a task as the operator. Responds with `BoardAck`.
     BoardComment { task_id: String, text: String },
+    /// A21 — the standing agents. Responds with `BoardAgents`.
+    BoardAgents,
+    /// A21 — add a standing agent. Responds with `BoardCreated`.
+    BoardCreateAgent { agent: crate::board::NewAgent },
+    /// A21 — change an agent, found by name. Responds with `BoardAck`.
+    BoardEditAgent {
+        name: String,
+        agent: crate::board::NewAgent,
+    },
+    /// A21 — pause an agent. Responds with `BoardAck`.
+    BoardPauseAgent { name: String },
+    /// A21 — resume an agent. Responds with `BoardAck`.
+    BoardResumeAgent { name: String },
+    /// A21 — remove an agent. Responds with `BoardAck`.
+    BoardRemoveAgent { name: String },
+    /// A21 — wake an agent now. The wake runs in the background; responds
+    /// at once with `BoardWoke { started: 0 }`.
+    BoardWakeAgent { name: String },
     /// Chapter Belay — request that a running mission halt at its next wave
     /// boundary. Responds with [`QueryResponsePayload::TeamMissionAborted`].
     AbortTeamMission {
@@ -1541,6 +1559,11 @@ pub enum QueryResponsePayload {
     BoardStarted { mission_id: String },
     /// A20 — a board change that returns nothing.
     BoardAck,
+    /// A21 — response to [`QueryPayload::BoardAgents`].
+    BoardAgents { agents: Vec<crate::board::Agent> },
+    /// A21 — response to [`QueryPayload::BoardWakeAgent`]. `started` is the
+    /// number of tasks started so far: the wake runs on, so it is 0.
+    BoardWoke { started: usize },
     /// Chapter Belay — response to [`QueryPayload::AbortTeamMission`]. A short
     /// human-readable status (the mission will halt at its next wave boundary).
     TeamMissionAborted {
@@ -3782,7 +3805,7 @@ mod tests {
 
     #[test]
     fn board_queries_and_responses_round_trip() {
-        use crate::board::{BoardSnapshot, NewTask, Owner, Task, TaskState};
+        use crate::board::{BoardSnapshot, NewAgent, NewTask, Owner, Task, TaskState, WorksAs};
         let task = Task {
             id: "t-1".into(),
             project_id: "p-1".into(),
@@ -3826,6 +3849,23 @@ mod tests {
             QueryPayload::BoardSendBack { task_id: "t-1".into(), why: "w".into() },
             QueryPayload::BoardCancel { task_id: "t-1".into() },
             QueryPayload::BoardComment { task_id: "t-1".into(), text: "c".into() },
+            QueryPayload::BoardAgents,
+            QueryPayload::BoardCreateAgent {
+                agent: NewAgent {
+                    name: Some("ana".into()),
+                    works_as: Some(WorksAs::Team),
+                    heartbeat: Some("0 9 * * *".into()),
+                    ..NewAgent::default()
+                },
+            },
+            QueryPayload::BoardEditAgent {
+                name: "ana".into(),
+                agent: NewAgent { clear_heartbeat: true, ..NewAgent::default() },
+            },
+            QueryPayload::BoardPauseAgent { name: "ana".into() },
+            QueryPayload::BoardResumeAgent { name: "ana".into() },
+            QueryPayload::BoardRemoveAgent { name: "ana".into() },
+            QueryPayload::BoardWakeAgent { name: "ana".into() },
         ];
         for q in queries {
             let json = serde_json::to_string(&q).unwrap();
@@ -3838,6 +3878,8 @@ mod tests {
             QueryResponsePayload::BoardCreated { id: "g-1".into() },
             QueryResponsePayload::BoardStarted { mission_id: "m".into() },
             QueryResponsePayload::BoardAck,
+            QueryResponsePayload::BoardAgents { agents: vec![] },
+            QueryResponsePayload::BoardWoke { started: 0 },
         ];
         for r in responses {
             let json = serde_json::to_string(&r).unwrap();

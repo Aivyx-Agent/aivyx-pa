@@ -408,7 +408,14 @@ aivyx-pa board project add <goal> "<title>" [--description "<text>"]
 aivyx-pa board project list [--goal <id>]
 aivyx-pa board task add (--project <id> | --parent <task>) "<title>"
     [--description "<text>"] [--owner role:<name>|team] [--no-review]
-aivyx-pa board assign <task> role:<name>|team|none
+aivyx-pa board agent list
+aivyx-pa board agent add <name> --works-as role:<name>|team [--title "<t>"]
+    [--reports-to <agent>] [--heartbeat "<cron>"] [--wake-on-assign]
+aivyx-pa board agent edit <name> [--name <new>] [--title "<t>"]
+    [--reports-to <agent>|--no-reports-to] [--works-as role:<name>|team]
+    [--heartbeat "<cron>"|--no-heartbeat] [--wake-on-assign|--no-wake-on-assign]
+aivyx-pa board agent pause|resume|remove|wake <name>
+aivyx-pa board assign <task> role:<name>|team|agent:<name>|none
 aivyx-pa board start <task>
 aivyx-pa board approve <task>
 aivyx-pa board send-back <task> "<why>"
@@ -420,6 +427,17 @@ aivyx-pa board comment <task> "<text>"
 thread (comments, state changes and run results). A task needs `--no-review`
 to go straight to done when its run succeeds; otherwise it waits in review for
 `approve` or `send-back`.
+
+A standing agent is a named worker on the board: it works as a role or as the
+team, may report to another agent, and picks up the To-do tasks assigned to it
+(`assign <task> agent:<name>`) when it wakes. It wakes on its `--heartbeat`
+cron pattern, shortly after an assignment when `--wake-on-assign` is set, or on
+`agent wake`. `agent list` prints the org chart: agents with no boss at the
+left, each agent's reports indented beneath, with the heartbeat, last wake
+and the number of open tasks. `--reports-to` and `agent:<name>` take names.
+`agent edit --name` renames an agent. A paused agent never wakes; an agent that
+owns an open task can't be removed. `agent wake` only requests the wake (the
+daemon runs it in the background) and prints "wake requested".
 
 ### `aivyx-pa memory`
 
