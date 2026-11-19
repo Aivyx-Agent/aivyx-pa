@@ -9,5 +9,6 @@ pub mod runner;
 pub mod service;
 pub mod store;
 pub mod tools;
+pub mod workspaces;
 
 pub use service::{BoardDeps, BoardService};

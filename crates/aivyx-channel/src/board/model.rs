@@ -278,6 +278,7 @@ pub fn run_kind(owner: &Owner) -> Option<RunKind> {
     match owner {
         Owner::Role { .. } => Some(RunKind::Role),
         Owner::Team => Some(RunKind::Team),
+        Owner::Coder { .. } => Some(RunKind::Coder),
         Owner::Agent { .. } => None,
     }
 }
@@ -686,6 +687,12 @@ mod tests {
         assert_eq!(
             run_kind(&Owner::Role { name: "x".into() }),
             Some(RunKind::Role)
+        );
+        assert_eq!(
+            run_kind(&Owner::Coder {
+                workspace: "w-1".into()
+            }),
+            Some(RunKind::Coder)
         );
         assert_eq!(run_kind(&Owner::Agent { id: "a-1".into() }), None);
         assert!(now_ms() > 0);

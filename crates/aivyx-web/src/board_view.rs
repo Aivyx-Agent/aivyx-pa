@@ -62,6 +62,7 @@ pub fn owner_label(o: Option<&Owner>, agents: &[Agent]) -> String {
         None => "unassigned".into(),
         Some(Owner::Role { name }) => format!("role {name}"),
         Some(Owner::Team) => "team".into(),
+        Some(Owner::Coder { workspace }) => format!("coder:{workspace}"),
         Some(Owner::Agent { id }) => format!("agent {}", agent_name(agents, id)),
     }
 }
@@ -150,6 +151,7 @@ pub fn works_as_label(w: &WorksAs) -> String {
     match w {
         WorksAs::Role { name } => format!("role {name}"),
         WorksAs::Team => "team".into(),
+        WorksAs::Coder { workspace } => format!("coder:{workspace}"),
     }
 }
 
@@ -240,6 +242,7 @@ pub fn owner_choice(o: Option<&Owner>) -> String {
         None => String::new(),
         Some(Owner::Team) => "team".into(),
         Some(Owner::Role { .. }) => "role".into(),
+        Some(Owner::Coder { workspace }) => format!("coder:{workspace}"),
         Some(Owner::Agent { id }) => format!("agent:{id}"),
     }
 }
@@ -253,6 +256,12 @@ pub fn owner_from_choice(choice: &str, role_name: &str) -> Option<Owner> {
             let name = role_name.trim();
             (!name.is_empty()).then(|| Owner::Role { name: name.into() })
         }
+        other if other.starts_with("coder:") => other
+            .strip_prefix("coder:")
+            .filter(|id| !id.is_empty())
+            .map(|id| Owner::Coder {
+                workspace: id.into(),
+            }),
         other => other
             .strip_prefix("agent:")
             .filter(|id| !id.is_empty())
@@ -1015,6 +1024,7 @@ mod tests {
 
     fn snap() -> BoardSnapshot {
         BoardSnapshot {
+            workspaces: vec![],
             agents: vec![],
             goals: vec![Goal {
                 id: "g1".into(),

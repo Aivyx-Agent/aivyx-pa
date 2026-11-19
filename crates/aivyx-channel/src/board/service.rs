@@ -165,15 +165,18 @@ impl BoardService {
         let mut projects = store::list_projects(h).await?;
         let mut tasks = store::list_tasks(h).await?;
         let mut agents = store::list_agents(h).await?;
+        let mut workspaces = store::list_workspaces(h).await?;
         goals.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
         projects.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
         tasks.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
         agents.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        workspaces.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
         Ok(BoardSnapshot {
             goals,
             projects,
             tasks,
             agents,
+            workspaces,
         })
     }
 
@@ -568,6 +571,7 @@ impl BoardService {
                 Ok(match agent.works_as {
                     WorksAs::Role { name } => Owner::Role { name },
                     WorksAs::Team => Owner::Team,
+                    WorksAs::Coder { workspace } => Owner::Coder { workspace },
                 })
             }
             other => Ok(other.clone()),
@@ -634,6 +638,10 @@ impl BoardService {
             Some(stored) => match self.resolve_owner(&stored).await? {
                 Owner::Role { name } => self.start_role(task_id, &name, &stored, actor).await,
                 Owner::Team => self.start_team(task_id, &stored, actor).await,
+                // Until the coder run lands (A22, a later task).
+                Owner::Coder { .. } => Err(BoardError::NotAllowed(
+                    "coder runs land in a later task",
+                )),
                 // resolve_owner never returns an agent.
                 Owner::Agent { .. } => {
                     Err(BoardError::NotAllowed("an agent can't work as an agent"))
@@ -1090,7 +1098,7 @@ impl BoardService {
             self.record("interrupted", &task.id, "operator");
             moved += 1;
             match run.kind {
-                RunKind::Role => {
+                RunKind::Role | RunKind::Coder => {
                     if let Err(e) = self.close_mission(&run.mission_id, false).await {
                         eprintln!("aivyx-pa board: mission {}: {e}", run.mission_id);
                     }

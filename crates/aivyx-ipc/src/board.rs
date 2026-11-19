@@ -35,6 +35,9 @@ pub enum Owner {
     Team,
     /// A standing agent (A21); runs as the agent's works_as.
     Agent { id: String },
+    /// `aivyx-coder` run headless in a registered workspace (A22); `workspace`
+    /// is the workspace id.
+    Coder { workspace: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +61,7 @@ impl TaskState {
 pub enum RunKind {
     Role,
     Team,
+    Coder,
 }
 
 /// The run a Running task is waiting on.
@@ -161,6 +165,19 @@ pub struct BoardSnapshot {
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub agents: Vec<Agent>,
+    #[serde(default)]
+    pub workspaces: Vec<Workspace>,
+}
+
+/// A registered folder `aivyx-coder` may work in (A22). The path is canonical
+/// and absolute; only the operator registers one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    #[serde(default)]
+    pub created_at: u64,
 }
 
 /// How a standing agent's tasks run.
@@ -169,6 +186,8 @@ pub struct BoardSnapshot {
 pub enum WorksAs {
     Role { name: String },
     Team,
+    /// Work as `aivyx-coder` in this workspace id (A22).
+    Coder { workspace: String },
 }
 
 /// A standing agent on the board (A21).
@@ -249,6 +268,30 @@ mod tests {
         let t: Task = serde_json::from_str(old).unwrap();
         assert!(t.review_required, "review defaults on");
         assert!(t.thread.is_empty() && t.owner.is_none());
+    }
+
+    #[test]
+    fn coder_types_round_trip_and_old_rows_decode() {
+        let o = Owner::Coder {
+            workspace: "w-0000000a".into(),
+        };
+        let j = serde_json::to_string(&o).unwrap();
+        assert_eq!(j, r#"{"kind":"coder","workspace":"w-0000000a"}"#);
+        assert_eq!(serde_json::from_str::<Owner>(&j).unwrap(), o);
+        let w = WorksAs::Coder {
+            workspace: "w-1".into(),
+        };
+        let j = serde_json::to_string(&w).unwrap();
+        assert_eq!(serde_json::from_str::<WorksAs>(&j).unwrap(), w);
+        let snap: BoardSnapshot =
+            serde_json::from_str(r#"{"goals":[],"projects":[],"tasks":[]}"#).unwrap();
+        assert!(snap.workspaces.is_empty());
+        let ws: Workspace =
+            serde_json::from_str(r#"{"id":"w-1","name":"x","path":"/a"}"#).unwrap();
+        assert_eq!(ws.created_at, 0);
+        let old = r#"{"id":"t-2","project_id":"p-1","title":"x","state":"todo","owner":{"kind":"role","name":"dev"},"created_at":1,"updated_at":1}"#;
+        let t: Task = serde_json::from_str(old).unwrap();
+        assert_eq!(t.owner, Some(Owner::Role { name: "dev".into() }));
     }
 
     #[test]

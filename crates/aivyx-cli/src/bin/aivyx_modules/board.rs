@@ -709,6 +709,7 @@ fn owner_label(owner: Option<&Owner>, agents: &[Agent]) -> String {
     match owner {
         Some(Owner::Role { name }) => format!("role:{name}"),
         Some(Owner::Team) => "team".into(),
+        Some(Owner::Coder { workspace }) => format!("coder:{workspace}"),
         Some(Owner::Agent { id }) => agents
             .iter()
             .find(|a| a.id == *id)
@@ -838,6 +839,7 @@ fn agent_lines<'a>(
     let works_as = match &agent.works_as {
         WorksAs::Role { name } => format!("role:{name}"),
         WorksAs::Team => "team".into(),
+        WorksAs::Coder { workspace } => format!("coder:{workspace}"),
     };
     let mut line = format!("{}{}", "  ".repeat(depth), neutralise(&agent.name));
     if !agent.title.is_empty() {
@@ -1377,6 +1379,7 @@ mod tests {
     fn snap() -> BoardSnapshot {
         BoardSnapshot {
             agents: vec![],
+            workspaces: vec![],
             goals: vec![Goal {
                 id: "g-1".into(),
                 title: "Launch".into(),

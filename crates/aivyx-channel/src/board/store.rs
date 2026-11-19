@@ -1,7 +1,7 @@
 //! The board's records in `KeyDomain::Board`: `goal\0<id>`, `project\0<id>`,
-//! `task\0<id>`, `agent\0<id>` (A21), each a JSON value.
+//! `task\0<id>`, `agent\0<id>` (A21), `workspace\0<id>` (A22), each a JSON value.
 
-use aivyx_ipc::board::{Agent, Goal, Project, Task};
+use aivyx_ipc::board::{Agent, Goal, Project, Task, Workspace};
 use aivyx_storage::{DomainHandle, KeyDomain, StorageError};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -93,6 +93,22 @@ pub async fn list_agents(h: &DomainHandle) -> Result<Vec<Agent>, StorageError> {
 
 pub async fn delete_agent(h: &DomainHandle, id: &str) -> Result<(), StorageError> {
     h.delete(&key("agent", id)).await
+}
+
+pub async fn put_workspace(h: &DomainHandle, w: &Workspace) -> Result<(), StorageError> {
+    put(h, "workspace", &w.id, w).await
+}
+
+pub async fn get_workspace(h: &DomainHandle, id: &str) -> Result<Option<Workspace>, StorageError> {
+    get(h, "workspace", id).await
+}
+
+pub async fn list_workspaces(h: &DomainHandle) -> Result<Vec<Workspace>, StorageError> {
+    list(h, "workspace").await
+}
+
+pub async fn delete_workspace(h: &DomainHandle, id: &str) -> Result<(), StorageError> {
+    h.delete(&key("workspace", id)).await
 }
 
 #[cfg(test)]
@@ -219,6 +235,36 @@ mod tests {
         assert_eq!(get_agent(&h, "x-1").await.unwrap(), None);
         assert!(list_agents(&h).await.unwrap().is_empty());
         assert_eq!(list_tasks(&h).await.unwrap().len(), 1);
+    }
+
+    fn workspace(id: &str) -> Workspace {
+        Workspace {
+            id: id.into(),
+            name: "proj".into(),
+            path: "/tmp/proj".into(),
+            created_at: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn workspaces_round_trip_and_never_collide_with_agents_or_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = open(dir.path(), 1).await.domain(KeyDomain::Board);
+        assert_eq!(get_workspace(&h, "x-1").await.unwrap(), None);
+        put_workspace(&h, &workspace("x-1")).await.unwrap();
+        put_agent(&h, &agent("x-1")).await.unwrap();
+        put_task(&h, &task("x-1")).await.unwrap();
+        assert_eq!(
+            get_workspace(&h, "x-1").await.unwrap(),
+            Some(workspace("x-1"))
+        );
+        assert_eq!(get_agent(&h, "x-1").await.unwrap(), Some(agent("x-1")));
+        assert_eq!(list_workspaces(&h).await.unwrap(), vec![workspace("x-1")]);
+        assert_eq!(list_agents(&h).await.unwrap().len(), 1);
+        assert_eq!(list_tasks(&h).await.unwrap().len(), 1);
+        delete_workspace(&h, "x-1").await.unwrap();
+        assert_eq!(get_workspace(&h, "x-1").await.unwrap(), None);
+        assert_eq!(list_agents(&h).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
