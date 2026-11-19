@@ -29,7 +29,7 @@
 | 6 | `agent wake` starts a task at once | ✅ |
 | 7 | Removing an agent that owns open tasks is refused | ✅ |
 | 8 | `--verify-only` passes; `audit export --event-type board_changed` shows `woke` and the `agent_*` ops, no text | ✅ |
-| 9 | Studio: the Agents tab, the tree, Pause/Resume, Wake now | ⏳ for the controller (commands below) |
+| 9 | Studio: the Agents tab, the tree, Pause/Resume, Wake now | ⏳ deferred: released without it (preview); to do on the released Studio |
 
 ## Notes
 
@@ -133,7 +133,9 @@ entries, every event exactly `{kind, op, object, actor}`:
 `commented` ×5 (agent). No task title, agent name, title or answer text
 appears (grep: 0 hits).
 
-### 9. Studio (for the controller)
+### 9. Studio (deferred)
+
+The operator chose to release 1.4.0 without this step (2026-11-19), as with the board's own Studio step: the board is a preview. The view's helpers have native unit tests, and CI builds and lints the wasm crate.
 
 The daemon is left **stopped**. The config has `[studio] port = 17853`.
 The binary (`target/debug/aivyx-pa`, built 15:25) embeds the bundle from
