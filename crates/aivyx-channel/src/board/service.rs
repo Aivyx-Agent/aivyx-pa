@@ -491,6 +491,19 @@ impl BoardService {
         Ok(())
     }
 
+    /// The heartbeat records a wake: `last_wake = now`, audited `woke`.
+    /// Returns the agent as saved.
+    pub async fn record_wake(&self, agent_id: &str) -> Result<Agent, BoardError> {
+        let _w = self.inner.write_lock.lock().await;
+        let mut agent = store::get_agent(&self.deps().store, agent_id)
+            .await?
+            .ok_or(BoardError::NotFound("agent"))?;
+        agent.last_wake = Some(now_ms());
+        store::put_agent(&self.deps().store, &agent).await?;
+        self.record("woke", agent_id, "operator");
+        Ok(agent)
+    }
+
     /// The owner a run executes as: a role or team as is; an agent as its
     /// `works_as`.
     async fn resolve_owner(&self, owner: &Owner) -> Result<Owner, BoardError> {
@@ -557,11 +570,17 @@ impl BoardService {
     /// Start a task's run; returns the run's mission id. The run itself is
     /// spawned.
     pub async fn start(&self, task_id: &str) -> Result<String, BoardError> {
+        self.start_as(task_id, "operator").await
+    }
+
+    /// [`start`](Self::start), audited `started` with `actor` (`operator`,
+    /// or `agent` for a start from an agent's wake).
+    pub async fn start_as(&self, task_id: &str, actor: &'static str) -> Result<String, BoardError> {
         let task = self.load_task(task_id).await?;
         match task.owner.clone() {
             Some(stored) => match self.resolve_owner(&stored).await? {
-                Owner::Role { name } => self.start_role(task_id, &name, &stored).await,
-                Owner::Team => self.start_team(task_id, &stored).await,
+                Owner::Role { name } => self.start_role(task_id, &name, &stored, actor).await,
+                Owner::Team => self.start_team(task_id, &stored, actor).await,
                 // resolve_owner never returns an agent.
                 Owner::Agent { .. } => {
                     Err(BoardError::NotAllowed("an agent can't work as an agent"))
@@ -590,6 +609,7 @@ impl BoardService {
         task_id: &str,
         role: &str,
         expected: &Owner,
+        actor: &'static str,
     ) -> Result<String, BoardError> {
         let scopes = self
             .deps()
@@ -621,7 +641,7 @@ impl BoardService {
             mission::transition_to_running(&mut record).map_err(storage_err)?;
             mission::create_mission(&self.deps().missions, &record).await?;
             store::put_task(&self.deps().store, &task).await?;
-            self.record("started", task_id, "operator");
+            self.record("started", task_id, actor);
             // Register before the write lock drops, so a cancel queued on
             // the lock always finds the token.
             self.inner
@@ -769,7 +789,12 @@ impl BoardService {
         }
     }
 
-    async fn start_team(&self, task_id: &str, expected: &Owner) -> Result<String, BoardError> {
+    async fn start_team(
+        &self,
+        task_id: &str,
+        expected: &Owner,
+        actor: &'static str,
+    ) -> Result<String, BoardError> {
         let svc = self
             .deps()
             .team
@@ -813,7 +838,7 @@ impl BoardService {
                     now_ms(),
                 )?;
                 store::put_task(&self.deps().store, &task).await?;
-                self.record("started", task_id, "operator");
+                self.record("started", task_id, actor);
                 // Register before the write lock drops (see `start_role`).
                 self.inner
                     .cancels

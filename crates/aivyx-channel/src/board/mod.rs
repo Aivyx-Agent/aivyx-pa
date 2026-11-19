@@ -2,6 +2,7 @@
 //! operator plans and assigns, worked by role runs and team missions.
 
 pub mod agents;
+pub mod heartbeat;
 pub mod ipc;
 pub mod model;
 pub mod runner;

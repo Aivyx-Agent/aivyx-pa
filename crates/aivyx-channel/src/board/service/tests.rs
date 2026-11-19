@@ -1532,3 +1532,299 @@ mod team {
         assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
     }
 }
+
+// ---- A21 the heartbeat ----------------------------------------------------
+
+use crate::board::heartbeat::{BoardHeartbeat, Durations, MAX_PER_WAKE};
+
+fn fast() -> Durations {
+    Durations {
+        tick: Duration::from_millis(20),
+        assign_delay: Duration::from_millis(100),
+        poll: Duration::from_millis(10),
+        run_ceiling: WAIT,
+    }
+}
+
+/// `n` tasks owned by agent `id`, titled `T0`, `T1`, … oldest first.
+async fn seed_agent_tasks(fx: &Fx, id: &str, n: usize) -> Vec<String> {
+    let g = fx.board.create_goal("Grow sales", "").await.unwrap();
+    let p = fx.board.create_project(&g, "Q4 report", "").await.unwrap();
+    let mut ids = Vec::new();
+    for i in 0..n {
+        ids.push(
+            fx.board
+                .create_task(NewTask {
+                    project_id: p.clone(),
+                    parent_task: None,
+                    title: format!("T{i}"),
+                    description: String::new(),
+                    owner: Some(Owner::Agent { id: id.into() }),
+                    review_required: true,
+                })
+                .await
+                .unwrap(),
+        );
+        // Distinct `created_at`s, so "oldest first" is the creation order.
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    ids
+}
+
+/// The titles the scripted agent saw, in order.
+fn titles_seen(seen: &StdMutex<Vec<Seen>>) -> Vec<String> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (0..10)
+                .map(|i| format!("T{i}"))
+                .find(|t| s.text.contains(t.as_str()))
+                .expect("a task title in the brief")
+        })
+        .collect()
+}
+
+fn comments(t: &Task) -> Vec<String> {
+    t.thread
+        .iter()
+        .filter_map(|e| match (&e.author, &e.entry) {
+            (Author::Operator, EntryKind::Comment { text }) => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_wake_runs_todo_tasks_oldest_first_one_at_a_time() {
+    let mut a = ScriptedAgent::new(Reply::Done("done".into()));
+    a.hold = true;
+    let agent = Arc::new(a);
+    let (seen, started, release) = (
+        Arc::clone(&agent.seen),
+        Arc::clone(&agent.started),
+        Arc::clone(&agent.release),
+    );
+    let fx = fixture(agent).await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let ts = seed_agent_tasks(&fx, &id, 3).await;
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    let wake = {
+        let (hb, id) = (hb.clone(), id.clone());
+        tokio::spawn(async move { hb.wake_now(&id).await })
+    };
+    for i in 0..3 {
+        tokio::time::timeout(WAIT, started.notified()).await.unwrap();
+        // Only task i runs; the later ones haven't started.
+        let states: Vec<_> = task_states(&fx, &ts).await;
+        let mut want = vec![TaskState::Review; i];
+        want.push(TaskState::Running);
+        want.extend(vec![TaskState::Todo; 2 - i]);
+        assert_eq!(states, want, "while task {i} runs");
+        // A second wake while one is in progress is a no-op.
+        assert_eq!(hb.wake_now(&id).await, Ok(0));
+        release.notify_one();
+        wait_not_running(&fx, &ts[i]).await;
+    }
+    assert_eq!(wake.await.unwrap(), Ok(3));
+    assert_eq!(titles_seen(&seen), ["T0", "T1", "T2"]);
+    let a = fx.board.agent_by_name("ann").await.unwrap();
+    assert!(a.last_wake.is_some());
+    // `woke` once, then `started`/`agent` and `finished` per task, in turn.
+    let tail: Vec<_> = ops(&fx.audit)
+        .into_iter()
+        .skip_while(|(op, _)| op != "woke")
+        .collect();
+    let pair = |op: &str, actor: &str| (op.to_string(), actor.to_string());
+    let mut want = vec![pair("woke", "operator")];
+    for _ in 0..3 {
+        want.push(pair("started", "agent"));
+        want.push(pair("finished", "agent"));
+    }
+    assert_eq!(tail, want);
+    assert_chain_verifies(&fx).await;
+}
+
+async fn task_states(fx: &Fx, ids: &[String]) -> Vec<TaskState> {
+    let mut out = Vec::new();
+    for id in ids {
+        out.push(fx.board.task(id).await.unwrap().state);
+    }
+    out
+}
+
+#[tokio::test]
+async fn a_wake_starts_at_most_five_tasks() {
+    let agent = Arc::new(ScriptedAgent::new(Reply::Done("done".into())));
+    let seen = Arc::clone(&agent.seen);
+    let fx = fixture(agent).await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let ts = seed_agent_tasks(&fx, &id, 7).await;
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    assert_eq!(hb.wake_now(&id).await, Ok(MAX_PER_WAKE));
+    for t in &ts[..5] {
+        assert_eq!(wait_not_running(&fx, t).await.state, TaskState::Review);
+    }
+    assert_eq!(
+        task_states(&fx, &ts[5..]).await,
+        [TaskState::Todo, TaskState::Todo]
+    );
+    assert_eq!(titles_seen(&seen), ["T0", "T1", "T2", "T3", "T4"]);
+}
+
+#[tokio::test]
+async fn a_failed_task_goes_back_to_todo_and_isnt_retried_in_the_wake() {
+    let agent = Arc::new(ScriptedAgent::new(Reply::Fail("boom".into())));
+    let seen = Arc::clone(&agent.seen);
+    let fx = fixture(agent).await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let ts = seed_agent_tasks(&fx, &id, 2).await;
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    assert_eq!(hb.wake_now(&id).await, Ok(2));
+    for t in &ts {
+        assert_eq!(wait_not_running(&fx, t).await.state, TaskState::Todo);
+    }
+    // Each ran once: the wake moved on and didn't come back.
+    assert_eq!(titles_seen(&seen), ["T0", "T1"]);
+    // The next wake tries them again.
+    assert_eq!(hb.wake_now(&id).await, Ok(2));
+    for t in &ts {
+        wait_not_running(&fx, t).await;
+    }
+    assert_eq!(titles_seen(&seen), ["T0", "T1", "T0", "T1"]);
+}
+
+#[tokio::test]
+async fn a_refused_start_comments_once_and_the_wake_moves_on() {
+    let agent = Arc::new(ScriptedAgent::new(Reply::Done("done".into())));
+    let seen = Arc::clone(&agent.seen);
+    let fx = fixture(agent).await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let ts = seed_agent_tasks(&fx, &id, 2).await;
+    // The agent's role is gone from the config (changed behind the
+    // service's back, as a config edit and restart would).
+    let mut a = store::get_agent(&fx.board.deps().store, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    a.works_as = WorksAs::Role {
+        name: "ghost".into(),
+    };
+    store::put_agent(&fx.board.deps().store, &a).await.unwrap();
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    assert_eq!(hb.wake_now(&id).await, Ok(0));
+    for t in &ts {
+        let t = fx.board.task(t).await.unwrap();
+        assert_eq!(t.state, TaskState::Todo);
+        assert_eq!(
+            comments(&t),
+            ["the agent couldn't start this task: no such role in the config"]
+        );
+    }
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(!ops(&fx.audit).iter().any(|(op, _)| op == "started"));
+}
+
+#[tokio::test]
+async fn an_assignment_wakes_the_agent_after_the_delay() {
+    let agent = Arc::new(ScriptedAgent::new(Reply::Done("done".into())));
+    let fx = fixture(agent).await;
+    let mut w = writer_agent("eager");
+    w.wake_on_assign = Some(true);
+    let id = fx.board.create_agent(w).await.unwrap();
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    let shutdown = CancellationToken::new();
+    let looping = tokio::spawn(hb.clone().run(shutdown.clone()));
+    let t = seed(&fx, None).await;
+    fx.board
+        .assign(&t, Some(Owner::Agent { id: id.clone() }))
+        .await
+        .unwrap();
+    let due = hb.pending_wake(&id).expect("a pending wake");
+    assert!(due > now_ms(), "the wake waits for the delay");
+    let task = {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            let task = fx.board.task(&t).await.unwrap();
+            if task.state == TaskState::Review {
+                break task;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "never woke");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    assert!(now_ms() >= due);
+    assert_eq!(task.owner, Some(Owner::Agent { id: id.clone() }));
+    assert_eq!(hb.pending_wake(&id), None);
+    shutdown.cancel();
+    tokio::time::timeout(WAIT, looping).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_paused_agent_never_wakes() {
+    let agent = Arc::new(ScriptedAgent::new(Reply::Done("done".into())));
+    let seen = Arc::clone(&agent.seen);
+    let fx = fixture(agent).await;
+    let mut w = writer_agent("ann");
+    w.wake_on_assign = Some(true);
+    w.heartbeat = Some("* * * * * *".into());
+    let id = fx.board.create_agent(w).await.unwrap();
+    fx.board.set_agent_paused("ann", true).await.unwrap();
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    let shutdown = CancellationToken::new();
+    let looping = tokio::spawn(hb.clone().run(shutdown.clone()));
+    let ts = seed_agent_tasks(&fx, &id, 1).await;
+    hb.wake_after(&id, Duration::ZERO);
+    assert_eq!(hb.wake_now(&id).await, Ok(0));
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    shutdown.cancel();
+    looping.await.unwrap();
+    assert!(seen.lock().unwrap().is_empty());
+    assert_eq!(fx.board.task(&ts[0]).await.unwrap().state, TaskState::Todo);
+    assert!(fx.board.agent_by_name("ann").await.unwrap().last_wake.is_none());
+    assert!(!ops(&fx.audit).iter().any(|(op, _)| op == "woke"));
+}
+
+#[tokio::test]
+async fn a_heartbeat_wakes_the_agent_on_its_cron() {
+    let agent = Arc::new(ScriptedAgent::new(Reply::Done("done".into())));
+    let fx = fixture(agent).await;
+    let mut w = writer_agent("ann");
+    // Every second.
+    w.heartbeat = Some("* * * * * *".into());
+    let id = fx.board.create_agent(w).await.unwrap();
+    let ts = seed_agent_tasks(&fx, &id, 1).await;
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    let shutdown = CancellationToken::new();
+    let looping = tokio::spawn(hb.clone().run(shutdown.clone()));
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while fx.board.task(&ts[0]).await.unwrap().state != TaskState::Review {
+        assert!(tokio::time::Instant::now() < deadline, "never woke");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    shutdown.cancel();
+    looping.await.unwrap();
+    assert!(fx.board.agent_by_name("ann").await.unwrap().last_wake.is_some());
+}
+
+#[tokio::test]
+async fn rewake_on_startup_wakes_only_wake_on_assign_agents_with_todo_tasks() {
+    let fx = plain_fx().await;
+    let mut eager = writer_agent("eager");
+    eager.wake_on_assign = Some(true);
+    let eager = fx.board.create_agent(eager).await.unwrap();
+    let mut idle = writer_agent("idle");
+    idle.wake_on_assign = Some(true);
+    let idle = fx.board.create_agent(idle).await.unwrap();
+    let quiet = fx.board.create_agent(writer_agent("quiet")).await.unwrap();
+    seed_agent_tasks(&fx, &eager, 1).await;
+    seed_agent_tasks(&fx, &quiet, 1).await;
+    // `idle`'s only task is cancelled: not To do.
+    let gone = seed_agent_tasks(&fx, &idle, 1).await;
+    fx.board.cancel(&gone[0]).await.unwrap();
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    hb.rewake_on_startup().await;
+    assert!(hb.pending_wake(&eager).is_some());
+    assert_eq!(hb.pending_wake(&idle), None);
+    assert_eq!(hb.pending_wake(&quiet), None);
+}

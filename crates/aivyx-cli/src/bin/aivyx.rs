@@ -11736,6 +11736,12 @@ async fn run_async(
             }
             board
         };
+        // A21 — the heartbeat: standing agents wake on their cron or after
+        // an assignment. After the restart sweep, every `wake_on_assign`
+        // agent with To-do tasks gets a wake; the loop itself starts below,
+        // on the daemon's shutdown token.
+        let board_heartbeat = aivyx_channel::board::heartbeat::BoardHeartbeat::new((*board).clone());
+        board_heartbeat.rewake_on_startup().await;
 
         // Security-audit fix (Task 10 fix round 2, 2026-09-16) — computed
         // once here, from the same loaded config already in scope, and
@@ -11828,6 +11834,9 @@ async fn run_async(
             eprintln!("\naivyx daemon: exiting now.");
             exit_signals::exit(130);
         });
+        // A21 — the heartbeat loop stops with the daemon (the federation
+        // listener's token). `board_heartbeat` stays for IPC's wake-now.
+        tokio::spawn(board_heartbeat.clone().run(shutdown.clone()));
 
         // The "listening on <socket>" line is printed by `run_daemon`
         // once the socket is actually bound — printing it here, before
