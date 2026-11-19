@@ -25,7 +25,9 @@ Everything is stored encrypted in its own store domain (`KeyDomain::Board`).
 
 A task is owned by a **role** (`role:<name>`, a role from your config,
 `default` included), by the **team** (the daemon's active team: the default
-roster, or an installed pack's team), or by nobody yet.
+roster, or an installed pack's team), by a standing **agent**
+(`agent:<name>`, see [Agents and heartbeats](#agents-and-heartbeats)), or by
+nobody yet. An agent-owned task runs as the agent's role or the team.
 
 **A role run** is one turn of the daemon's agent:
 
@@ -85,7 +87,8 @@ To do, Running or Review ──Cancel──▶ Cancelled
 ```
 
 - Only you move a task between states (Start, Approve, Send back, Cancel)
-  and assign owners. A run's end moves it out of Running.
+  and assign owners, except that a standing agent starts its own To-do
+  tasks when it wakes. A run's end moves it out of Running.
 - **Start** is refused while the task is Running, from Done or Cancelled,
   and when it has no owner.
 - A task added with `--no-review` goes straight to Done when its run
@@ -151,13 +154,89 @@ that was paused or waiting at a gate (its gate is dropped), with the reason
 "its board task was interrupted by a daemon restart". Start the task again
 when you're ready.
 
+## Agents and heartbeats
+
+A **standing agent** is a named worker on the board that starts its own
+tasks. You still write the work, assign it and review the results; the
+agent saves you pressing Start. Amendment A21
+(`docs/amendments/2026-11-19-board-agents.md`) records the design.
+
+An agent has:
+
+- a **name** (letters, digits, `-` and `_`, up to 64; unique) and an
+  optional **title** ("Keeps the books");
+- **works as**: `role:<name>` or `team`. A task owned by the agent runs
+  exactly as a task owned by that role or by the team would; the task keeps
+  `agent:<name>` as its owner;
+- **reports to**: another agent, optional. This only draws the **org
+  chart**: `board agent list` prints a tree in name order, each agent under
+  the one it reports to. A loop is refused when you make it; if one appears
+  anyway, its members are listed after the tree, marked "(reports-to
+  loop)";
+- a **heartbeat** (a cron pattern, optional; six fields, seconds first,
+  as for routines: `0 0 9 * * *` is 09:00 every day, in local time) and/or
+  **wake on assign**.
+
+### When an agent wakes
+
+- The daemon's heartbeat loop **ticks every 15 s**, so times below are
+  rounded up to the next tick.
+- **Wake on assign:** assigning a task to the agent (`board assign`, or
+  `task add --owner agent:<name>`) makes a wake due **30 s** later. Each
+  later assignment pushes it back to 30 s from then, so a burst of
+  assignments gives one wake.
+- **Heartbeat:** the agent wakes when its cron pattern fires. There is **no
+  catch-up**: after downtime, or a pause, only the most recent firing since
+  the last wake counts, so it wakes once, not once per missed firing.
+- **`board agent wake <name>`** wakes it now.
+
+A wake starts the agent's To-do tasks **oldest first**, **one at a time**
+(it waits for each run to end before starting the next), **at most 5** per
+wake, and each task **at most once** per wake: a run that fails sends its
+task back to To do, and the next wake tries it again. While one of the
+agent's tasks is running (a run you started counts too), the loop doesn't
+wake it; a wake that is due waits for that run to end. A second wake while
+one is in progress does nothing.
+
+### Pause
+
+`board agent pause <name>` stops the agent from starting anything more: a
+wake in progress stops before its next task, and a pending assignment wake
+is dropped. A run already going finishes normally. `board agent resume
+<name>` lets it wake again; a wake-on-assign agent that owns To-do tasks
+gets a wake 30 s later, and a heartbeat agent wakes at its next tick if a
+firing fell during the pause.
+
+### Restarts and refused starts
+
+After the daemon starts (and its sweep has returned interrupted tasks to To
+do), every wake-on-assign agent that owns To-do tasks gets a wake 30 s
+later. A heartbeat agent just waits for its next firing.
+
+If the board refuses to start a task when an agent wakes (for example, the
+agent works as a role that isn't in your config, or as the team when no team
+is set up), the task gets one comment, "the agent couldn't start this task:
+<reason>", and the wake moves on. A later wake doesn't add the same comment
+again while it is still the task's last entry.
+
+### Managing agents
+
+Only you create, edit, pause, resume, wake and remove agents, from the CLI
+or the Studio; the board tools give runs no way to touch them. These count
+as operator activity, like the other board commands. Removing an agent is
+refused while it owns a To-do, Running or Review task: reassign them first.
+
 ## Audit
 
 Every change writes one `BoardChanged { op, object, actor }` event:
 `op` is a fixed word (`created`, `assigned`, `started`, `finished`,
 `approved`, `sent_back`, `cancelled`, `commented`, `subtask_added`,
-`interrupted`), `object` is an id and `actor` is `operator` or `agent`. No
-title, description or comment text goes into the audit log.
+`interrupted`, and for agents `agent_created`, `agent_edited`,
+`agent_paused`, `agent_resumed`, `agent_removed` and `woke`), `object` is an
+id and `actor` is `operator` or `agent`. A wake is `woke` with the agent's
+id and actor `operator`; each start it makes is `started` with actor
+`agent`. No title, description, comment text or agent name goes into the
+audit log.
 `aivyx-pa audit export --event-type board_changed` lists them.
 
 ## The CLI
@@ -172,8 +251,15 @@ aivyx-pa board goal list
 aivyx-pa board project add <goal> "<title>" [--description "<text>"]
 aivyx-pa board project list [--goal <id>]
 aivyx-pa board task add (--project <id> | --parent <task>) "<title>"
-    [--description "<text>"] [--owner role:<name>|team] [--no-review]
-aivyx-pa board assign <task> role:<name>|team|none
+    [--description "<text>"] [--owner role:<name>|team|agent:<name>] [--no-review]
+aivyx-pa board agent list
+aivyx-pa board agent add <name> --works-as role:<name>|team [--title "<t>"]
+    [--reports-to <agent>] [--heartbeat "<cron>"] [--wake-on-assign]
+aivyx-pa board agent edit <name> [--name <new>] [--title "<t>"]
+    [--reports-to <agent>|--no-reports-to] [--works-as role:<name>|team]
+    [--heartbeat "<cron>"|--no-heartbeat] [--wake-on-assign|--no-wake-on-assign]
+aivyx-pa board agent pause|resume|remove|wake <name>
+aivyx-pa board assign <task> role:<name>|team|agent:<name>|none
 aivyx-pa board start <task>
 aivyx-pa board approve <task>
 aivyx-pa board send-back <task> "<why>"
@@ -181,7 +267,10 @@ aivyx-pa board cancel <task>
 aivyx-pa board comment <task> "<text>"
 ```
 
-Ids are `g-`, `p-` and `t-` followed by eight hex characters. `board show`
+Ids are `g-`, `p-`, `t-` and `a-` followed by eight hex characters; the
+agent commands take the agent's name. `board agent list` prints the org
+chart, one line per agent: its name, title, works-as, heartbeat,
+`[paused]`, the last wake and how many open tasks it owns. `board show`
 prints the thread; a run entry reads
 `run <mission id> succeeded, <n> tokens: <answer>` (with `—` in place of
 `<n> tokens` when the run wasn't metered).
@@ -194,11 +283,19 @@ filters by goal and project, and forms to add a goal, a project and a task.
 Clicking a task opens its panel: the brief, the owner (type the role's
 name), the thread with each run's answer and mission id, a comment box, and
 the buttons that apply in its state: Start, Approve, Send back (asks for a
-note) and Cancel. The view refreshes every 5 seconds while it's open.
+note) and Cancel. The owner picker lists your agents next to the roles and
+the team. The view refreshes every 5 seconds while it's open.
+
+A **Tasks | Agents** switch at the top of the view shows the agents
+instead: the org chart as a tree, each agent with its works-as, heartbeat,
+a paused badge and its open tasks, and **Pause**/**Resume**, **Wake now**
+and **Edit** buttons, with a form to add or edit an agent below. There is
+no Remove button in the Studio: use `aivyx-pa board agent remove`.
 
 ## Coming later
 
-Not in this version: standing agents woken by heartbeats; budgets per agent
-and per project that pause work; aivyx-coder and your other PA machines
+Not in this version: agents that add tasks or plan for the agents that
+report to them; budgets per agent and per project that pause work; cron
+catch-up; aivyx-coder and your other PA machines
 (federated peers) as workers; a TUI board view; drag-and-drop; anything
 multi-user.

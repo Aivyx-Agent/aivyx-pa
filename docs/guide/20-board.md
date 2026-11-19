@@ -62,6 +62,32 @@ carries on without it. Your autonomy settings apply as usual (see
 If you restart the assistant while a task is running, that task goes back to
 **To do**, marked "interrupted". Start it again when you're ready.
 
+## Let agents start tasks
+
+Instead of pressing Start each time, you can give the work to a standing
+**agent**: a named worker that starts its own tasks. Switch the Board view
+from **Tasks** to **Agents** and add one: give it a name, say whether it
+works as a role (such as `default`) or as the team, and choose when it
+wakes:
+
+- **Wake when a task is assigned**: about 30 seconds after you assign it a
+  task (each new assignment pushes that back, so a few in a row give one
+  wake);
+- a **heartbeat**: a schedule, such as `0 0 9 * * *` for 9 every morning.
+  The pattern starts with seconds, as for routines (see
+  [Autonomy and routines](15-autonomy-and-routines.md)).
+
+Then pick the agent as a task's owner. When it wakes, it starts its To-do
+tasks oldest first, one at a time, up to five per wake. You still review
+each result, as above. **Wake now** wakes it at once, and **Pause** stops it
+starting anything more until you press **Resume**. If you restart the
+assistant, an agent that wakes on assignment picks its waiting tasks up
+again about 30 seconds later.
+
+An agent can report to another, which draws your agents as an org chart.
+To remove an agent, reassign its open tasks first, then run
+`aivyx-pa board agent remove <name>`.
+
 ## From the terminal
 
 Everything on the board also works from the command line:
@@ -73,6 +99,8 @@ aivyx-pa board task add --project p-5e6f7a8b "Draft the April newsletter" --owne
 aivyx-pa board start t-9c0d1e2f
 aivyx-pa board show t-9c0d1e2f
 aivyx-pa board approve t-9c0d1e2f
+aivyx-pa board agent add scout --works-as role:default --wake-on-assign
+aivyx-pa board assign t-9c0d1e2f agent:scout
 ```
 
 `aivyx-pa board` on its own lists every command. The full operator guide is

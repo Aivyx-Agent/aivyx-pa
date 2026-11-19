@@ -39,13 +39,22 @@ agent's `works_as`; the task keeps `Owner::Agent`.
 ## The heartbeat loop
 
 One loop in the daemon ticks every **15 s**. An assignment wake is due
-**30 s** after the assignment. A wake starts the agent's To-do tasks oldest
-first, each at most once per wake and at most **5** per wake. An agent runs
-one task at a time and a paused agent never wakes. Cron has **no catch-up**:
-only the most recent firing after `last_wake` counts. After the board's
-restart sweep, every `wake_on_assign` agent that owns To-do tasks is woken 30
-s after startup. A start the board refuses (an unknown role, no team) adds one
-operator comment to the task and the wake moves on.
+**30 s** after the assignment; each later assignment moves it to 30 s after
+that one. A wake starts the agent's To-do tasks oldest first, each at most
+once per wake and at most **5** per wake. An agent runs one task at a time
+and a paused agent never wakes. Cron has **no catch-up**: only the most
+recent firing after `last_wake` counts. After the board's restart sweep,
+every `wake_on_assign` agent that owns To-do tasks is woken 30 s after
+startup. A start the board refuses (an unknown role, no team) adds one
+operator comment to the task and the wake moves on; a later wake doesn't
+repeat the comment while it is still the task's last entry. A start from a
+wake is written in the task's thread by the run, not the operator.
+
+## Pause and resume
+
+Pausing an agent stops a wake in progress before its next task and drops a
+pending assignment wake; a run already going finishes. Resuming a
+`wake_on_assign` agent that owns To-do tasks gives it a wake 30 s later.
 
 ## Audit
 
@@ -63,7 +72,8 @@ in `aivyx-ipc` and stay wasm-clean.
 ## Who may change agents
 
 The operator only, through IPC, the CLI and the Studio. The board tools never
-touch agents.
+touch agents. Agent operations count as operator activity. The Studio has no
+remove button; removing is a CLI command.
 
 ## Not in A21
 

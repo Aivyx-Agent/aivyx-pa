@@ -3,6 +3,31 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [Unreleased]
+
+### Added
+
+- **Standing agents and heartbeats on the work board (preview).** An agent
+  is a named worker that starts its own To-do tasks: it works as a role or
+  as the team, and wakes 30 s after you assign it a task (each later
+  assignment pushes the wake back), on a cron heartbeat, or when you run
+  `aivyx-pa board agent wake <name>`. A wake starts the agent's tasks
+  oldest first, one at a time, at most 5 per wake and each at most once;
+  you still review every result. The heartbeat loop ticks every 15 s and a
+  heartbeat doesn't catch up on missed firings. `aivyx-pa board agent
+  add|list|edit|pause|resume|remove|wake` manage them, and `board assign
+  <task> agent:<name>` or `task add --owner agent:<name>` gives them work.
+  `agent list` prints an org chart from each agent's "reports to". Pause
+  stops an agent starting more tasks; resuming a wake-on-assign agent with
+  waiting tasks wakes it again, and so does a daemon restart. A start the
+  board refuses adds one comment to the task. Removing an agent that owns
+  open tasks is refused. The Studio's Board view has a Tasks | Agents
+  switch: the org chart with Pause/Resume, Wake now and Edit, a form to
+  add or edit an agent, and agents in the task owner picker. New audit ops:
+  `agent_created`, `agent_edited`, `agent_paused`, `agent_resumed`,
+  `agent_removed` and `woke`, with no names or text. Part of the board
+  preview. Guide: `docs/BOARD.md`. Amendment A21.
+
 ## [1.3.0] — 2026-11-19
 
 ### Added
