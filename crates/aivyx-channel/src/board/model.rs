@@ -254,11 +254,13 @@ pub fn interrupt(task: &mut Task, now: u64) -> Option<RunRef> {
     run
 }
 
-/// The run kind an owner needs.
-pub fn run_kind(owner: &Owner) -> RunKind {
+/// The run kind an owner needs. An agent has none of its own: it runs as its
+/// `works_as`, which the service resolves first.
+pub fn run_kind(owner: &Owner) -> Option<RunKind> {
     match owner {
-        Owner::Role { .. } => RunKind::Role,
-        Owner::Team => RunKind::Team,
+        Owner::Role { .. } => Some(RunKind::Role),
+        Owner::Team => Some(RunKind::Team),
+        Owner::Agent { .. } => None,
     }
 }
 
@@ -645,8 +647,12 @@ mod tests {
         let id = new_id('t');
         assert!(id.starts_with("t-") && id.len() == 10, "{id}");
         assert_ne!(new_id('t'), new_id('t'));
-        assert_eq!(run_kind(&Owner::Team), RunKind::Team);
-        assert_eq!(run_kind(&Owner::Role { name: "x".into() }), RunKind::Role);
+        assert_eq!(run_kind(&Owner::Team), Some(RunKind::Team));
+        assert_eq!(
+            run_kind(&Owner::Role { name: "x".into() }),
+            Some(RunKind::Role)
+        );
+        assert_eq!(run_kind(&Owner::Agent { id: "a-1".into() }), None);
         assert!(now_ms() > 0);
     }
 }

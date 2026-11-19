@@ -33,6 +33,8 @@ pub enum Owner {
     Role { name: String },
     /// The daemon's active team (a team mission).
     Team,
+    /// A standing agent (A21); runs as the agent's works_as.
+    Agent { id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +159,62 @@ pub struct BoardSnapshot {
     pub goals: Vec<Goal>,
     pub projects: Vec<Project>,
     pub tasks: Vec<Task>,
+    #[serde(default)]
+    pub agents: Vec<Agent>,
+}
+
+/// How a standing agent's tasks run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorksAs {
+    Role { name: String },
+    Team,
+}
+
+/// A standing agent on the board (A21).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Agent {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub reports_to: Option<String>,
+    pub works_as: WorksAs,
+    #[serde(default)]
+    pub heartbeat: Option<String>,
+    #[serde(default)]
+    pub wake_on_assign: bool,
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default)]
+    pub last_wake: Option<u64>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// What creating or editing an agent carries. On an edit, `None` keeps the
+/// current value; `clear_heartbeat` / `clear_reports_to` clear the field
+/// (and win over a value given alongside them). aivyx-ipc has no
+/// `serde_with`, so the clear is explicit rather than `Option<Option<_>>`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NewAgent {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub reports_to: Option<String>,
+    #[serde(default)]
+    pub clear_reports_to: bool,
+    #[serde(default)]
+    pub works_as: Option<WorksAs>,
+    #[serde(default)]
+    pub heartbeat: Option<String>,
+    #[serde(default)]
+    pub clear_heartbeat: bool,
+    #[serde(default)]
+    pub wake_on_assign: Option<bool>,
 }
 
 #[cfg(test)]
@@ -191,5 +249,26 @@ mod tests {
         let t: Task = serde_json::from_str(old).unwrap();
         assert!(t.review_required, "review defaults on");
         assert!(t.thread.is_empty() && t.owner.is_none());
+    }
+
+    #[test]
+    fn agent_types_round_trip_and_old_json_decodes() {
+        let o = Owner::Agent { id: "a-1".into() };
+        let j = serde_json::to_string(&o).unwrap();
+        assert_eq!(serde_json::from_str::<Owner>(&j).unwrap(), o);
+        let snap: BoardSnapshot =
+            serde_json::from_str(r#"{"goals":[],"projects":[],"tasks":[]}"#).unwrap();
+        assert!(snap.agents.is_empty());
+        let a: Agent = serde_json::from_str(
+            r#"{"id":"a-1","name":"x","works_as":{"kind":"team"},"created_at":1,"updated_at":1}"#,
+        )
+        .unwrap();
+        assert_eq!(a.works_as, WorksAs::Team);
+        assert!(a.heartbeat.is_none() && !a.paused && a.title.is_empty());
+        let keep: NewAgent = serde_json::from_str("{}").unwrap();
+        let clear: NewAgent = serde_json::from_str(r#"{"clear_heartbeat":true}"#).unwrap();
+        assert!(keep.heartbeat.is_none() && !keep.clear_heartbeat);
+        assert!(clear.heartbeat.is_none() && clear.clear_heartbeat);
+        assert_ne!(keep, clear);
     }
 }

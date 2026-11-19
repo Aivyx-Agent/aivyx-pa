@@ -1,7 +1,7 @@
 //! The board's records in `KeyDomain::Board`: `goal\0<id>`, `project\0<id>`,
-//! `task\0<id>`, each a JSON value.
+//! `task\0<id>`, `agent\0<id>` (A21), each a JSON value.
 
-use aivyx_ipc::board::{Goal, Project, Task};
+use aivyx_ipc::board::{Agent, Goal, Project, Task};
 use aivyx_storage::{DomainHandle, KeyDomain, StorageError};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -77,6 +77,22 @@ pub async fn get_task(h: &DomainHandle, id: &str) -> Result<Option<Task>, Storag
 }
 pub async fn list_tasks(h: &DomainHandle) -> Result<Vec<Task>, StorageError> {
     list(h, "task").await
+}
+
+pub async fn put_agent(h: &DomainHandle, a: &Agent) -> Result<(), StorageError> {
+    put(h, "agent", &a.id, a).await
+}
+
+pub async fn get_agent(h: &DomainHandle, id: &str) -> Result<Option<Agent>, StorageError> {
+    get(h, "agent", id).await
+}
+
+pub async fn list_agents(h: &DomainHandle) -> Result<Vec<Agent>, StorageError> {
+    list(h, "agent").await
+}
+
+pub async fn delete_agent(h: &DomainHandle, id: &str) -> Result<(), StorageError> {
+    h.delete(&key("agent", id)).await
 }
 
 #[cfg(test)]
@@ -170,6 +186,39 @@ mod tests {
         assert_eq!(list_tasks(&h).await.unwrap().len(), 1);
         assert_eq!(list_goals(&h).await.unwrap().len(), 1);
         assert_eq!(list_projects(&h).await.unwrap().len(), 1);
+    }
+
+    fn agent(id: &str) -> Agent {
+        Agent {
+            id: id.into(),
+            name: "scout".into(),
+            title: String::new(),
+            reports_to: None,
+            works_as: aivyx_ipc::board::WorksAs::Team,
+            heartbeat: None,
+            wake_on_assign: true,
+            paused: false,
+            last_wake: None,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn agents_round_trip_delete_and_never_collide_with_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = open(dir.path(), 1).await.domain(KeyDomain::Board);
+        assert_eq!(get_agent(&h, "x-1").await.unwrap(), None);
+        put_agent(&h, &agent("x-1")).await.unwrap();
+        put_task(&h, &task("x-1")).await.unwrap();
+        assert_eq!(get_agent(&h, "x-1").await.unwrap(), Some(agent("x-1")));
+        assert_eq!(get_task(&h, "x-1").await.unwrap().unwrap().title, "T");
+        assert_eq!(list_agents(&h).await.unwrap(), vec![agent("x-1")]);
+        assert_eq!(list_tasks(&h).await.unwrap().len(), 1);
+        delete_agent(&h, "x-1").await.unwrap();
+        assert_eq!(get_agent(&h, "x-1").await.unwrap(), None);
+        assert!(list_agents(&h).await.unwrap().is_empty());
+        assert_eq!(list_tasks(&h).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

@@ -149,13 +149,16 @@ impl BoardService {
         let mut goals = store::list_goals(h).await?;
         let mut projects = store::list_projects(h).await?;
         let mut tasks = store::list_tasks(h).await?;
+        let mut agents = store::list_agents(h).await?;
         goals.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
         projects.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
         tasks.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        agents.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
         Ok(BoardSnapshot {
             goals,
             projects,
             tasks,
+            agents,
         })
     }
 
@@ -312,6 +315,9 @@ impl BoardService {
         match task.owner.clone() {
             Some(Owner::Role { name }) => self.start_role(task_id, &name).await,
             Some(Owner::Team) => self.start_team(task_id).await,
+            Some(Owner::Agent { .. }) => Err(BoardError::NotAllowed(
+                "starting an agent's task lands in a later task",
+            )),
             None => {
                 // Let the model say why (a bad state before the owner).
                 let mut probe = task;

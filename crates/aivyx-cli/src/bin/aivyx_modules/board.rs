@@ -417,6 +417,7 @@ fn owner_label(owner: Option<&Owner>) -> String {
     match owner {
         Some(Owner::Role { name }) => format!("role:{name}"),
         Some(Owner::Team) => "team".into(),
+        Some(Owner::Agent { id }) => format!("agent:{id}"),
         None => "-".into(),
     }
 }
@@ -789,6 +790,7 @@ mod tests {
 
     fn snap() -> BoardSnapshot {
         BoardSnapshot {
+            agents: vec![],
             goals: vec![Goal {
                 id: "g-1".into(),
                 title: "Launch".into(),

@@ -61,6 +61,7 @@ pub fn owner_label(o: Option<&Owner>) -> String {
         None => "unassigned".into(),
         Some(Owner::Role { name }) => format!("role {name}"),
         Some(Owner::Team) => "team".into(),
+        Some(Owner::Agent { id }) => format!("agent {id}"),
     }
 }
 
@@ -117,6 +118,7 @@ pub fn owner_choice(o: Option<&Owner>) -> &'static str {
         None => "",
         Some(Owner::Team) => "team",
         Some(Owner::Role { .. }) => "role",
+        Some(Owner::Agent { .. }) => "agent",
     }
 }
 
@@ -632,6 +634,7 @@ mod tests {
 
     fn snap() -> BoardSnapshot {
         BoardSnapshot {
+            agents: vec![],
             goals: vec![Goal {
                 id: "g1".into(),
                 title: "G1".into(),
