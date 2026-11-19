@@ -184,25 +184,40 @@ impl BoardHeartbeat {
             tried.insert(task_id.clone());
             match self.board.start_as(&task_id, "agent").await {
                 Ok(_) => started += 1,
-                Err(e) => {
-                    let text = format!("the agent couldn't start this task: {e}");
-                    // Once: a cron agent that can't start its tasks would
-                    // otherwise add the same comment at every firing.
-                    let said = matches!(
-                        next.thread.last().map(|e| &e.entry),
-                        Some(EntryKind::Comment { text: last }) if *last == text
-                    );
-                    if said {
-                        continue;
-                    }
-                    if let Err(e) = self.board.comment(&task_id, &text).await {
-                        eprintln!("aivyx-pa board: couldn't comment on task {task_id}: {e}");
-                    }
-                }
+                Err(e) => self.note_refused(agent_id, next, e).await,
             }
         }
         drop(guard);
         Ok(started)
+    }
+
+    /// A start from a wake was refused. Only a `NotAllowed` (the task can't
+    /// run as configured) earns a comment, once; a `BadState` (started or
+    /// moved meanwhile) or anything else is left alone. The caller marks the
+    /// task tried either way.
+    pub(crate) async fn note_refused(&self, agent_id: &str, task: &Task, e: BoardError) {
+        match e {
+            BoardError::NotAllowed(_) => {
+                let text = format!("the agent couldn't start this task: {e}");
+                // Once: a cron agent that can't start its tasks would
+                // otherwise add the same comment at every firing.
+                let said = matches!(
+                    task.thread.last().map(|e| &e.entry),
+                    Some(EntryKind::Comment { text: last }) if *last == text
+                );
+                if said {
+                    return;
+                }
+                if let Err(e) = self.board.comment(&task.id, &text).await {
+                    eprintln!("aivyx-pa board: couldn't comment on task {}: {e}", task.id);
+                }
+            }
+            BoardError::BadState { .. } => {}
+            e => eprintln!(
+                "aivyx-pa board: agent {agent_id} couldn't start {}: {e}",
+                task.id
+            ),
+        }
     }
 
     /// Wait until `agent_id` owns no Running task. False when the ceiling

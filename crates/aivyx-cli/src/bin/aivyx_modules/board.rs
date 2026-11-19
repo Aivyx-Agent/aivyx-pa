@@ -621,10 +621,17 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
             println!("Removed agent {}", neutralise(&name));
         }
         BoardCommand::AgentWake { name } => {
-            board_wake_agent(&socket, name.clone()).await.map_err(e)?;
+            let agents = board_agents(&socket).await.map_err(e)?;
+            let msg = wake_message(&agents, &name)?;
+            if msg.is_none() {
+                board_wake_agent(&socket, name.clone()).await.map_err(e)?;
+            }
             println!(
-                "Wake requested for agent {} (it runs in the background)",
-                neutralise(&name)
+                "{}",
+                msg.unwrap_or_else(|| format!(
+                    "Wake requested for agent {} (it runs in the background)",
+                    neutralise(&name)
+                ))
             );
         }
         BoardCommand::Start { task } => {
@@ -657,6 +664,18 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// What `agent wake` says instead of waking: an error for an unknown name,
+/// the hint for a paused agent, `None` when the wake should go ahead.
+fn wake_message(agents: &[Agent], name: &str) -> Result<Option<String>, String> {
+    let agent = agents
+        .iter()
+        .find(|a| a.name == name)
+        .ok_or_else(|| format!("no agent named `{}`", neutralise(name)))?;
+    Ok(agent
+        .paused
+        .then(|| format!("{} is paused; resume it to wake it", neutralise(name))))
 }
 
 /// An `AssignTo` as the owner to send, and its label. An agent's name
@@ -1148,13 +1167,13 @@ mod tests {
     fn every_agent_form_parses() {
         assert_eq!(p("agent list").unwrap(), BoardCommand::AgentList);
         assert_eq!(
-            p("agent add ana --works-as role:writer --title \"Lead writer\" --reports-to boss --heartbeat \"0 9 * * *\" --wake-on-assign").unwrap(),
+            p("agent add ana --works-as role:writer --title \"Lead writer\" --reports-to boss --heartbeat \"0 0 9 * * *\" --wake-on-assign").unwrap(),
             BoardCommand::AgentAdd {
                 name: "ana".into(),
                 title: Some("Lead writer".into()),
                 reports_to: Some("boss".into()),
                 works_as: WorksAs::Role { name: "writer".into() },
-                heartbeat: Some("0 9 * * *".into()),
+                heartbeat: Some("0 0 9 * * *".into()),
                 wake_on_assign: true,
             }
         );
@@ -1232,6 +1251,21 @@ mod tests {
         assert!(p("assign t-1 agent:").is_err());
     }
 
+    #[test]
+    fn wake_says_paused_and_unknown_plainly() {
+        let mut ana = agent("a-1", "ana", None);
+        assert_eq!(wake_message(std::slice::from_ref(&ana), "ana"), Ok(None));
+        ana.paused = true;
+        assert_eq!(
+            wake_message(std::slice::from_ref(&ana), "ana"),
+            Ok(Some("ana is paused; resume it to wake it".into()))
+        );
+        assert_eq!(
+            wake_message(&[ana], "bob"),
+            Err("no agent named `bob`".into())
+        );
+    }
+
     fn agent(id: &str, name: &str, boss: Option<&str>) -> Agent {
         Agent {
             id: id.into(),
@@ -1252,7 +1286,7 @@ mod tests {
     fn the_org_chart_nests_reports_under_their_boss() {
         let mut boss = agent("a-1", "boss", None);
         boss.title = "Head".into();
-        boss.heartbeat = Some("0 9 * * *".into());
+        boss.heartbeat = Some("0 0 9 * * *".into());
         boss.works_as = WorksAs::Role { name: "lead".into() };
         let mut ana = agent("a-2", "ana", Some("a-1"));
         ana.paused = true;
@@ -1268,7 +1302,7 @@ mod tests {
         assert_eq!(lines.len(), 4, "{out}");
         assert_eq!(
             lines[0],
-            "boss  Head  works as role:lead  heartbeat 0 9 * * *  last wake never  open 0"
+            "boss  Head  works as role:lead  heartbeat 0 0 9 * * *  last wake never  open 0"
         );
         assert_eq!(
             lines[1],

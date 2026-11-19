@@ -234,6 +234,7 @@ impl BoardService {
         if new.title.trim().is_empty() {
             return Err(BoardError::Empty("the title"));
         }
+        let (task_id, woken) = {
         let _w = self.inner.write_lock.lock().await;
         if store::get_project(&self.deps().store, &new.project_id)
             .await?
@@ -249,6 +250,15 @@ impl BoardService {
                 ));
             }
             model::add_subtask_check(&parent, &Actor::Operator)?;
+        }
+        let mut woken = None;
+        if let Some(Owner::Agent { id }) = &new.owner {
+            let agent = store::get_agent(&self.deps().store, id)
+                .await?
+                .ok_or(BoardError::NotFound("agent"))?;
+            if agent.wake_on_assign {
+                woken = Some(agent.id);
+            }
         }
         let now = now_ms();
         let task = Task {
@@ -267,7 +277,15 @@ impl BoardService {
         };
         store::put_task(&self.deps().store, &task).await?;
         self.record("created", &task.id, "operator");
-        Ok(task.id)
+        (task.id, woken)
+        };
+        if let Some(id) = woken {
+            let hook = self.inner.assign_hook.read().unwrap().clone();
+            if let Some(hook) = hook {
+                hook(&id);
+            }
+        }
+        Ok(task_id)
     }
 
     pub async fn assign(&self, task_id: &str, owner: Option<Owner>) -> Result<(), BoardError> {
@@ -481,13 +499,16 @@ impl BoardService {
         };
         let rewake = !paused
             && wake_on_assign
-            && store::list_tasks(&self.deps().store)
-                .await?
-                .iter()
-                .any(|t| {
+            && match store::list_tasks(&self.deps().store).await {
+                Ok(tasks) => tasks.iter().any(|t| {
                     t.state == TaskState::Todo
                         && matches!(&t.owner, Some(Owner::Agent { id: o }) if *o == id)
-                });
+                }),
+                Err(e) => {
+                    eprintln!("aivyx-pa board: resume of {name}: task list failed, no re-wake: {e}");
+                    false
+                }
+            };
         let hook = self.inner.pause_hook.read().unwrap().clone();
         if let Some(hook) = hook {
             hook(&id, rewake);
@@ -509,6 +530,7 @@ impl BoardService {
                 "reassign the agent's open tasks first",
             ));
         }
+        store::delete_agent(&self.deps().store, &agent.id).await?;
         // Agents that reported to it now report to no one.
         let now = now_ms();
         for mut other in all.into_values() {
@@ -518,7 +540,6 @@ impl BoardService {
                 store::put_agent(&self.deps().store, &other).await?;
             }
         }
-        store::delete_agent(&self.deps().store, &agent.id).await?;
         self.record("agent_removed", &agent.id, "operator");
         Ok(())
     }
@@ -636,6 +657,21 @@ impl BoardService {
         }
     }
 
+    /// Under the write lock: the task still has the owner `start_as` saw,
+    /// and an agent owner still works as `want` (a `works_as` edit may have
+    /// landed since).
+    async fn check_owner_unchanged(
+        &self,
+        task: &Task,
+        expected: &Owner,
+        want: Owner,
+    ) -> Result<(), BoardError> {
+        if task.owner.as_ref() != Some(expected) || self.resolve_owner(expected).await? != want {
+            return Err(BoardError::NotAllowed("the task's owner changed"));
+        }
+        Ok(())
+    }
+
     async fn start_role(
         &self,
         task_id: &str,
@@ -656,9 +692,8 @@ impl BoardService {
         let (task, text) = {
             let _w = self.inner.write_lock.lock().await;
             let mut task = self.load_task(task_id).await?;
-            if task.owner.as_ref() != Some(expected) {
-                return Err(BoardError::NotAllowed("the task's owner changed"));
-            }
+            self.check_owner_unchanged(&task, expected, Owner::Role { name: role.into() })
+                .await?;
             let text = self.brief_for(&task).await?;
             model::start_by(
                 &mut task,
@@ -859,9 +894,8 @@ impl BoardService {
             let _w = self.inner.write_lock.lock().await;
             async {
                 let mut task = self.load_task(task_id).await?;
-                if task.owner.as_ref() != Some(expected) {
-                    return Err(BoardError::NotAllowed("the task's owner changed"));
-                }
+                self.check_owner_unchanged(&task, expected, Owner::Team)
+                    .await?;
                 model::start_by(
                     &mut task,
                     RunRef {

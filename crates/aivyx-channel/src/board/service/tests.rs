@@ -1940,3 +1940,73 @@ async fn a_pause_drops_the_pending_wake_and_a_resume_sets_a_fresh_one() {
     // Not `wake_on_assign`: a resume sets no wake.
     assert_eq!(hb.pending_wake(&quiet), None);
 }
+
+#[tokio::test]
+async fn removing_an_agent_clears_its_reports_reports_to() {
+    let fx = plain_fx().await;
+    let ann = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let mut b = writer_agent("bob");
+    b.reports_to = Some(ann);
+    fx.board.create_agent(b).await.unwrap();
+    fx.board.remove_agent("ann").await.unwrap();
+    assert_eq!(fx.board.agent_by_name("ann").await, Err(BoardError::NotFound("agent")));
+    assert_eq!(fx.board.agent_by_name("bob").await.unwrap().reports_to, None);
+}
+
+#[tokio::test]
+async fn creating_a_task_for_a_wake_on_assign_agent_sets_a_wake() {
+    let fx = plain_fx().await;
+    let mut w = writer_agent("eager");
+    w.wake_on_assign = Some(true);
+    let id = fx.board.create_agent(w).await.unwrap();
+    let quiet = fx.board.create_agent(writer_agent("quiet")).await.unwrap();
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    seed_agent_tasks(&fx, &quiet, 1).await;
+    assert_eq!(hb.pending_wake(&quiet), None);
+    seed_agent_tasks(&fx, &id, 1).await;
+    assert!(hb.pending_wake(&id).is_some());
+}
+
+#[tokio::test]
+async fn creating_a_task_for_an_unknown_agent_is_refused() {
+    let fx = plain_fx().await;
+    let g = fx.board.create_goal("Grow sales", "").await.unwrap();
+    let p = fx.board.create_project(&g, "Q4 report", "").await.unwrap();
+    let r = fx
+        .board
+        .create_task(NewTask {
+            project_id: p,
+            parent_task: None,
+            title: "Draft".into(),
+            description: String::new(),
+            owner: Some(Owner::Agent {
+                id: "a-nope".into(),
+            }),
+            review_required: true,
+        })
+        .await;
+    assert_eq!(r, Err(BoardError::NotFound("agent")));
+    assert!(fx.board.snapshot().await.unwrap().tasks.is_empty());
+}
+
+#[tokio::test]
+async fn a_start_refused_for_a_bad_state_leaves_no_comment() {
+    let fx = plain_fx().await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let ts = seed_agent_tasks(&fx, &id, 1).await;
+    let task = fx.board.task(&ts[0]).await.unwrap();
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    hb.note_refused(
+        &id,
+        &task,
+        BoardError::BadState {
+            from: TaskState::Running,
+            op: "start",
+        },
+    )
+    .await;
+    assert!(comments(&fx.board.task(&ts[0]).await.unwrap()).is_empty());
+    hb.note_refused(&id, &task, BoardError::NotAllowed("no such role in the config"))
+        .await;
+    assert_eq!(comments(&fx.board.task(&ts[0]).await.unwrap()).len(), 1);
+}

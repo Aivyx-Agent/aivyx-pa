@@ -3854,7 +3854,7 @@ mod tests {
                 agent: NewAgent {
                     name: Some("ana".into()),
                     works_as: Some(WorksAs::Team),
-                    heartbeat: Some("0 9 * * *".into()),
+                    heartbeat: Some("0 0 9 * * *".into()),
                     ..NewAgent::default()
                 },
             },
