@@ -1,7 +1,8 @@
 //! A20 — the Studio's Board view: four columns, filters, and a task panel.
 
 use aivyx_ipc::board::{
-    Author, BoardSnapshot, EntryKind, NewTask, Owner, RunOutcome, Task, TaskState,
+    Agent, Author, BoardSnapshot, EntryKind, NewAgent, NewTask, Owner, RunOutcome, Task,
+    TaskState, WorksAs,
 };
 use aivyx_ipc::protocol::{FrontendMessage, QueryPayload};
 use dioxus::prelude::*;
@@ -56,12 +57,132 @@ pub fn review_count(snap: &BoardSnapshot) -> usize {
         .count()
 }
 
-pub fn owner_label(o: Option<&Owner>) -> String {
+pub fn owner_label(o: Option<&Owner>, agents: &[Agent]) -> String {
     match o {
         None => "unassigned".into(),
         Some(Owner::Role { name }) => format!("role {name}"),
         Some(Owner::Team) => "team".into(),
-        Some(Owner::Agent { id }) => format!("agent {id}"),
+        Some(Owner::Agent { id }) => format!("agent {}", agent_name(agents, id)),
+    }
+}
+
+/// An agent's name by id; an unknown id shows as itself.
+pub fn agent_name(agents: &[Agent], id: &str) -> String {
+    agents
+        .iter()
+        .find(|a| a.id == id)
+        .map_or_else(|| id.to_string(), |a| a.name.clone())
+}
+
+/// Tasks an agent still has to work on: To do, Running or Review.
+pub fn open_count(tasks: &[Task], agent_id: &str) -> usize {
+    tasks
+        .iter()
+        .filter(|t| matches!(&t.owner, Some(Owner::Agent { id }) if id == agent_id))
+        .filter(|t| {
+            matches!(
+                t.state,
+                TaskState::Todo | TaskState::Running | TaskState::Review
+            )
+        })
+        .count()
+}
+
+/// The org chart, depth first: `(depth, agent, in_loop)`. Roots (no
+/// reports-to, or one that names no agent) and children are in name order.
+/// Every agent shows once, so a stored reports-to loop cannot recurse; the
+/// agents a loop leaves unreached follow as extra roots with `in_loop` set.
+pub fn agent_tree(agents: &[Agent]) -> Vec<(usize, &Agent, bool)> {
+    fn walk<'a>(
+        agent: &'a Agent,
+        agents: &'a [Agent],
+        depth: usize,
+        in_loop: bool,
+        seen: &mut Vec<&'a str>,
+        out: &mut Vec<(usize, &'a Agent, bool)>,
+    ) {
+        if seen.contains(&agent.id.as_str()) {
+            return;
+        }
+        seen.push(&agent.id);
+        out.push((depth, agent, in_loop));
+        let mut kids: Vec<&Agent> = agents
+            .iter()
+            .filter(|a| a.reports_to.as_deref() == Some(agent.id.as_str()))
+            .collect();
+        kids.sort_by(|a, b| a.name.cmp(&b.name));
+        for k in kids {
+            walk(k, agents, depth + 1, in_loop, seen, out);
+        }
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+    let mut roots: Vec<&Agent> = agents
+        .iter()
+        .filter(|a| {
+            !a.reports_to
+                .as_ref()
+                .is_some_and(|b| agents.iter().any(|x| x.id == *b))
+        })
+        .collect();
+    roots.sort_by(|a, b| a.name.cmp(&b.name));
+    for r in roots {
+        walk(r, agents, 0, false, &mut seen, &mut out);
+    }
+    let mut rest: Vec<&Agent> = agents
+        .iter()
+        .filter(|a| !seen.contains(&a.id.as_str()))
+        .collect();
+    rest.sort_by(|a, b| a.name.cmp(&b.name));
+    for a in rest {
+        walk(a, agents, 0, true, &mut seen, &mut out);
+    }
+    out
+}
+
+/// "—", or the cron pattern.
+pub fn heartbeat_label(a: &Agent) -> String {
+    a.heartbeat.clone().unwrap_or_else(|| "—".into())
+}
+
+/// "role coder" or "team".
+pub fn works_as_label(w: &WorksAs) -> String {
+    match w {
+        WorksAs::Role { name } => format!("role {name}"),
+        WorksAs::Team => "team".into(),
+    }
+}
+
+/// The agent form's payload. On an edit an empty heartbeat or reports-to
+/// clears the field; on a create it is just left out.
+#[allow(clippy::too_many_arguments)]
+pub fn agent_payload(
+    name: &str,
+    title: &str,
+    works: &str,
+    role_name: &str,
+    reports_to: &str,
+    heartbeat: &str,
+    wake_on_assign: bool,
+    editing: bool,
+) -> NewAgent {
+    let works_as = if works == "role" {
+        WorksAs::Role {
+            name: role_name.trim().into(),
+        }
+    } else {
+        WorksAs::Team
+    };
+    let heartbeat = heartbeat.trim();
+    NewAgent {
+        name: Some(name.trim().into()),
+        title: Some(title.trim().into()),
+        reports_to: (!reports_to.is_empty()).then(|| reports_to.to_string()),
+        clear_reports_to: editing && reports_to.is_empty(),
+        works_as: Some(works_as),
+        heartbeat: (!heartbeat.is_empty()).then(|| heartbeat.to_string()),
+        clear_heartbeat: editing && heartbeat.is_empty(),
+        wake_on_assign: Some(wake_on_assign),
     }
 }
 
@@ -112,13 +233,14 @@ pub fn author_label(a: &Author) -> &'static str {
     }
 }
 
-/// The owner picker's choice for an owner: `""`, `"team"` or `"role"`.
-pub fn owner_choice(o: Option<&Owner>) -> &'static str {
+/// The owner picker's choice for an owner: `""`, `"team"`, `"role"` or
+/// `"agent:<id>"`.
+pub fn owner_choice(o: Option<&Owner>) -> String {
     match o {
-        None => "",
-        Some(Owner::Team) => "team",
-        Some(Owner::Role { .. }) => "role",
-        Some(Owner::Agent { .. }) => "agent",
+        None => String::new(),
+        Some(Owner::Team) => "team".into(),
+        Some(Owner::Role { .. }) => "role".into(),
+        Some(Owner::Agent { id }) => format!("agent:{id}"),
     }
 }
 
@@ -131,7 +253,10 @@ pub fn owner_from_choice(choice: &str, role_name: &str) -> Option<Owner> {
             let name = role_name.trim();
             (!name.is_empty()).then(|| Owner::Role { name: name.into() })
         }
-        _ => None,
+        other => other
+            .strip_prefix("agent:")
+            .filter(|id| !id.is_empty())
+            .map(|id| Owner::Agent { id: id.into() }),
     }
 }
 
@@ -159,6 +284,8 @@ pub struct BoardUi {
     pub project: Option<String>,
     pub selected: Option<String>,
     pub error: Option<String>,
+    /// A one-line confirmation, e.g. "Wake requested".
+    pub notice: Option<String>,
 }
 
 impl BoardUi {
@@ -172,6 +299,13 @@ impl BoardUi {
     /// The operator started a new action, so the last error is stale.
     pub fn begin_action(&mut self) {
         self.error = None;
+        self.notice = None;
+    }
+
+    /// A wake request was accepted; the wake itself runs on the daemon's
+    /// next tick.
+    pub fn on_woke(&mut self) {
+        self.notice = Some("Wake requested".into());
     }
 
     /// A `board-*` query failed.
@@ -201,16 +335,72 @@ fn opt(s: String) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum BoardTab {
+    Tasks,
+    Agents,
+}
+
 #[component]
 pub fn BoardPanel() -> Element {
     let ws = use_context::<Sender>();
     let mut ui = use_context::<Signal<BoardUi>>();
+    let mut tab = use_signal(|| BoardTab::Tasks);
 
     // Open on a fresh snapshot (the App poll keeps it fresh after).
     use_effect(move || {
         ws.send(snapshot_query());
     });
 
+    let s = ui();
+    let t = tab();
+
+    rsx! {
+        div { class: "settings",
+            div { class: "panel-head",
+                h3 { "Board" }
+                if s.loaded {
+                    span { class: "label-tech", "{s.snapshot.tasks.len()} tasks · {s.snapshot.agents.len()} agents" }
+                }
+                button { class: "btn-ghost", onclick: move |_| { ws.send(snapshot_query()); }, "Refresh" }
+            }
+            if let Some(err) = s.error.clone() {
+                div { class: "notice error", role: "alert",
+                    "{err} "
+                    button { class: "btn-ghost", onclick: move |_| ui.write().error = None, "Dismiss" }
+                }
+            }
+            if let Some(n) = s.notice.clone() {
+                div { class: "notice", role: "status", "{n}" }
+            }
+            div { role: "tablist", style: "display:flex; gap:8px; margin-bottom:12px;",
+                button {
+                    class: if t == BoardTab::Tasks { "btn" } else { "btn-ghost" },
+                    role: "tab",
+                    "aria-selected": "{t == BoardTab::Tasks}",
+                    onclick: move |_| tab.set(BoardTab::Tasks),
+                    "Tasks"
+                }
+                button {
+                    class: if t == BoardTab::Agents { "btn" } else { "btn-ghost" },
+                    role: "tab",
+                    "aria-selected": "{t == BoardTab::Agents}",
+                    onclick: move |_| tab.set(BoardTab::Agents),
+                    "Agents"
+                }
+            }
+            if t == BoardTab::Tasks {
+                TasksTab {}
+            } else {
+                AgentsTab {}
+            }
+        }
+    }
+}
+
+#[component]
+fn TasksTab() -> Element {
+    let mut ui = use_context::<Signal<BoardUi>>();
     let s = ui();
     let goal = s.goal.clone();
     let project = s.project.clone();
@@ -228,20 +418,6 @@ pub fn BoardPanel() -> Element {
         .cloned();
 
     rsx! {
-        div { class: "settings",
-            div { class: "panel-head",
-                h3 { "Board" }
-                if s.loaded {
-                    span { class: "label-tech", "{s.snapshot.tasks.len()} tasks" }
-                }
-                button { class: "btn-ghost", onclick: move |_| { ws.send(snapshot_query()); }, "Refresh" }
-            }
-            if let Some(err) = s.error.clone() {
-                div { class: "notice error", role: "alert",
-                    "{err} "
-                    button { class: "btn-ghost", onclick: move |_| ui.write().error = None, "Dismiss" }
-                }
-            }
             div { style: "display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;",
                 select {
                     class: "input",
@@ -280,7 +456,7 @@ pub fn BoardPanel() -> Element {
                                         {
                                             let id = t.id.clone();
                                             let is_sel = s.selected.as_deref() == Some(t.id.as_str());
-                                            let owner = owner_label(t.owner.as_ref());
+                                            let owner = owner_label(t.owner.as_ref(), &s.snapshot.agents);
                                             rsx! {
                                                 button {
                                                     key: "{t.id}",
@@ -310,7 +486,6 @@ pub fn BoardPanel() -> Element {
                 NewGoalForm {}
                 NewProjectForm {}
             }
-        }
     }
 }
 
@@ -318,7 +493,8 @@ pub fn BoardPanel() -> Element {
 fn TaskPanel(task: Task) -> Element {
     let ws = use_context::<Sender>();
     let mut ui = use_context::<Signal<BoardUi>>();
-    let mut choice = use_signal(|| owner_choice(task.owner.as_ref()).to_string());
+    let mut choice = use_signal(|| owner_choice(task.owner.as_ref()));
+    let agents = ui().snapshot.agents;
     let mut role_name = use_signal(|| match &task.owner {
         Some(Owner::Role { name }) => name.clone(),
         _ => String::new(),
@@ -343,7 +519,7 @@ fn TaskPanel(task: Task) -> Element {
         div { class: "glass-card", style: "margin-top:16px;",
             div { class: "panel-head",
                 h4 { "{task.title}" }
-                span { class: "label-tech", "{column_title(task.state)} · {owner_label(task.owner.as_ref())}" }
+                span { class: "label-tech", "{column_title(task.state)} · {owner_label(task.owner.as_ref(), &agents)}" }
                 button { class: "btn-ghost", onclick: move |_| ui.write().selected = None, "Close" }
             }
             if !task.description.is_empty() {
@@ -358,6 +534,9 @@ fn TaskPanel(task: Task) -> Element {
                         option { value: "", selected: c.is_empty(), "unassigned" }
                         option { value: "team", selected: c == "team", "team" }
                         option { value: "role", selected: c == "role", "role…" }
+                        for a in agents.iter() {
+                            option { key: "{a.id}", value: "agent:{a.id}", selected: c == format!("agent:{}", a.id), "agent {a.name}" }
+                        }
                     }
                     if c == "role" {
                         input {
@@ -455,6 +634,7 @@ fn NewTaskForm() -> Element {
     let mut role_name = use_signal(String::new);
     let mut review = use_signal(|| true);
     let projects = ui().snapshot.projects;
+    let agents = ui().snapshot.agents;
     // Default to the filtered project, else the first one.
     let chosen = if project().is_empty() {
         ui().project
@@ -490,6 +670,9 @@ fn NewTaskForm() -> Element {
                 option { value: "", selected: c.is_empty(), "unassigned" }
                 option { value: "team", selected: c == "team", "team" }
                 option { value: "role", selected: c == "role", "role…" }
+                for a in agents.iter() {
+                    option { key: "{a.id}", value: "agent:{a.id}", selected: c == format!("agent:{}", a.id), "agent {a.name}" }
+                }
             }
             if c == "role" {
                 input { class: "input", placeholder: "role name", value: "{role_name}", oninput: move |e| role_name.set(e.value()) }
@@ -599,6 +782,200 @@ fn NewProjectForm() -> Element {
     }
 }
 
+#[component]
+fn AgentsTab() -> Element {
+    let ws = use_context::<Sender>();
+    let ui = use_context::<Signal<BoardUi>>();
+    // The agent being edited, by name; `None` is the add form.
+    let mut editing = use_signal(|| None::<String>);
+    let s = ui();
+    let now = js_sys::Date::now() as i64 / 1000;
+    let rows = agent_tree(&s.snapshot.agents);
+    let edit_target = editing()
+        .and_then(|n| s.snapshot.agents.iter().find(|a| a.name == n))
+        .cloned();
+
+    rsx! {
+        if !s.loaded {
+            div { class: "glass-card empty", p { class: "help", "Loading the board…" } }
+        } else if rows.is_empty() {
+            div { class: "glass-card empty",
+                p { class: "help", "No agents yet. Add one below: a standing agent wakes on a schedule or when a task is assigned." }
+            }
+        } else {
+            div { class: "glass-card",
+                for (depth, a, in_loop) in rows {
+                    {
+                        let (n_pause, n_wake, n_edit) = (a.name.clone(), a.name.clone(), a.name.clone());
+                        let paused = a.paused;
+                        let open = open_count(&s.snapshot.tasks, &a.id);
+                        let last = a.last_wake.map_or_else(
+                            || "never".to_string(),
+                            |ms| crate::command_center::ago((ms / 1000) as i64, now),
+                        );
+                        let pad = depth * 24;
+                        rsx! {
+                            div {
+                                key: "{a.id}",
+                                role: "treeitem",
+                                style: "margin-left:{pad}px; padding:8px 0; border-bottom:1px solid var(--border, rgba(128,128,128,.2));",
+                                div { style: "display:flex; gap:8px; flex-wrap:wrap; align-items:center;",
+                                    strong { "{a.name}" }
+                                    if !a.title.is_empty() {
+                                        span { class: "help", "{a.title}" }
+                                    }
+                                    if paused {
+                                        span { class: "label-tech", "paused" }
+                                    }
+                                    if in_loop {
+                                        span { class: "label-tech", "(reports-to loop)" }
+                                    }
+                                }
+                                div { class: "help",
+                                    "works as {works_as_label(&a.works_as)} · heartbeat {heartbeat_label(a)} · last wake {last} · {open} open"
+                                }
+                                div { style: "display:flex; gap:8px; margin-top:4px;",
+                                    button {
+                                        class: "btn-ghost",
+                                        onclick: move |_| {
+                                            let name = n_pause.clone();
+                                            act(ws, ui, "pause-agent", if paused {
+                                                QueryPayload::BoardResumeAgent { name }
+                                            } else {
+                                                QueryPayload::BoardPauseAgent { name }
+                                            });
+                                        },
+                                        if paused { "Resume" } else { "Pause" }
+                                    }
+                                    button {
+                                        class: "btn-ghost",
+                                        disabled: paused,
+                                        onclick: move |_| act(ws, ui, "wake-agent", QueryPayload::BoardWakeAgent { name: n_wake.clone() }),
+                                        "Wake now"
+                                    }
+                                    button {
+                                        class: "btn-ghost",
+                                        onclick: move |_| editing.set(Some(n_edit.clone())),
+                                        "Edit"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        {
+            let key = edit_target.as_ref().map_or_else(|| "new".to_string(), |a| a.id.clone());
+            rsx! {
+                AgentForm {
+                    key: "{key}",
+                    agent: edit_target,
+                    editing_name: editing,
+                }
+            }
+        }
+    }
+}
+
+/// Adds an agent, or edits `agent`.
+#[component]
+fn AgentForm(agent: Option<Agent>, editing_name: Signal<Option<String>>) -> Element {
+    let ws = use_context::<Sender>();
+    let ui = use_context::<Signal<BoardUi>>();
+    let mut editing_name = editing_name;
+    let mut name = use_signal(|| agent.as_ref().map(|a| a.name.clone()).unwrap_or_default());
+    let mut title = use_signal(|| agent.as_ref().map(|a| a.title.clone()).unwrap_or_default());
+    let mut works = use_signal(|| match agent.as_ref().map(|a| &a.works_as) {
+        Some(WorksAs::Role { .. }) => "role".to_string(),
+        _ => "team".to_string(),
+    });
+    let mut role_name = use_signal(|| match agent.as_ref().map(|a| &a.works_as) {
+        Some(WorksAs::Role { name }) => name.clone(),
+        _ => String::new(),
+    });
+    let mut reports_to = use_signal(|| {
+        agent
+            .as_ref()
+            .and_then(|a| a.reports_to.clone())
+            .unwrap_or_default()
+    });
+    let mut heartbeat = use_signal(|| {
+        agent
+            .as_ref()
+            .and_then(|a| a.heartbeat.clone())
+            .unwrap_or_default()
+    });
+    let mut wake = use_signal(|| agent.as_ref().is_some_and(|a| a.wake_on_assign));
+    let agents = ui().snapshot.agents;
+    let old_name = agent.as_ref().map(|a| a.name.clone());
+    let own_id = agent.as_ref().map(|a| a.id.clone());
+    let w = works();
+    let ready = !name().trim().is_empty() && (w != "role" || !role_name().trim().is_empty());
+    let heading = if old_name.is_some() { "Edit agent" } else { "Add agent" };
+    let submit = if old_name.is_some() { "Save agent" } else { "Add agent" };
+    let editing = old_name.is_some();
+
+    rsx! {
+        div { class: "glass-card", style: "margin-top:16px;",
+            h4 { "{heading}" }
+            input { class: "input", placeholder: "Name (letters, digits, - and _)", value: "{name}", oninput: move |e| name.set(e.value()) }
+            input { class: "input", placeholder: "Title", value: "{title}", oninput: move |e| title.set(e.value()) }
+            div { style: "display:flex; gap:8px; flex-wrap:wrap;",
+                select {
+                    class: "input",
+                    "aria-label": "Works as",
+                    onchange: move |e| works.set(e.value()),
+                    option { value: "team", selected: w == "team", "team" }
+                    option { value: "role", selected: w == "role", "role…" }
+                }
+                if w == "role" {
+                    input { class: "input", placeholder: "role name", value: "{role_name}", oninput: move |e| role_name.set(e.value()) }
+                }
+            }
+            select {
+                class: "input",
+                "aria-label": "Reports to",
+                onchange: move |e| reports_to.set(e.value()),
+                option { value: "", selected: reports_to().is_empty(), "reports to nobody" }
+                for a in agents.iter().filter(|a| own_id.as_deref() != Some(a.id.as_str())) {
+                    option { key: "{a.id}", value: "{a.id}", selected: reports_to() == a.id, "reports to {a.name}" }
+                }
+            }
+            input { class: "input", placeholder: "Heartbeat (cron, e.g. 0 9 * * *); empty for none", value: "{heartbeat}", oninput: move |e| heartbeat.set(e.value()) }
+            label { class: "field-label",
+                input { r#type: "checkbox", checked: wake(), onchange: move |e| wake.set(e.checked()) }
+                " Wake when a task is assigned"
+            }
+            div { style: "display:flex; gap:8px;",
+                button {
+                    class: "btn",
+                    disabled: !ready,
+                    onclick: move |_| {
+                        let payload = agent_payload(
+                            &name(), &title(), &works(), &role_name(), &reports_to(), &heartbeat(), wake(), editing,
+                        );
+                        match old_name.clone() {
+                            Some(old) => act(ws, ui, "edit-agent", QueryPayload::BoardEditAgent { name: old, agent: payload }),
+                            None => {
+                                act(ws, ui, "create-agent", QueryPayload::BoardCreateAgent { agent: payload });
+                                name.set(String::new());
+                                title.set(String::new());
+                                heartbeat.set(String::new());
+                            }
+                        }
+                        editing_name.set(None);
+                    },
+                    "{submit}"
+                }
+                if editing {
+                    button { class: "btn-ghost", onclick: move |_| editing_name.set(None), "Cancel" }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,14 +1071,21 @@ mod tests {
 
     #[test]
     fn labels_owners() {
-        assert_eq!(owner_label(None), "unassigned");
-        assert_eq!(owner_label(Some(&Owner::Team)), "team");
+        assert_eq!(owner_label(None, &[]), "unassigned");
+        assert_eq!(owner_label(Some(&Owner::Team), &[]), "team");
         assert_eq!(
-            owner_label(Some(&Owner::Role {
-                name: "coder".into()
-            })),
+            owner_label(
+                Some(&Owner::Role {
+                    name: "coder".into()
+                }),
+                &[]
+            ),
             "role coder"
         );
+        let agents = [agent("a-1", "ana", None)];
+        let owned = Owner::Agent { id: "a-1".into() };
+        assert_eq!(owner_label(Some(&owned), &agents), "agent ana");
+        assert_eq!(owner_label(Some(&owned), &[]), "agent a-1");
     }
 
     #[test]
@@ -715,10 +1099,111 @@ mod tests {
         );
         assert_eq!(owner_choice(None), "");
         assert_eq!(owner_choice(Some(&Owner::Team)), "team");
+        assert_eq!(owner_from_choice("agent:", ""), None);
         assert_eq!(
             owner_choice(Some(&Owner::Role { name: "a".into() })),
             "role"
         );
+    }
+
+    #[test]
+    fn an_agent_owner_survives_the_picker() {
+        let owner = Owner::Agent { id: "a-1".into() };
+        let choice = owner_choice(Some(&owner));
+        assert_eq!(choice, "agent:a-1");
+        assert_eq!(owner_from_choice(&choice, ""), Some(owner));
+    }
+
+    fn agent(id: &str, name: &str, reports_to: Option<&str>) -> Agent {
+        Agent {
+            id: id.into(),
+            name: name.into(),
+            title: String::new(),
+            reports_to: reports_to.map(Into::into),
+            works_as: WorksAs::Team,
+            heartbeat: None,
+            wake_on_assign: false,
+            paused: false,
+            last_wake: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn rows(agents: &[Agent]) -> Vec<(usize, String, bool)> {
+        agent_tree(agents)
+            .into_iter()
+            .map(|(d, a, l)| (d, a.name.clone(), l))
+            .collect()
+    }
+
+    #[test]
+    fn the_tree_nests_and_sorts_by_name() {
+        let agents = [
+            agent("a-1", "zed", None),
+            agent("a-2", "mid", None),
+            agent("a-3", "amy", Some("a-1")),
+            agent("a-4", "bob", Some("a-1")),
+            agent("a-5", "orphan", Some("a-gone")),
+        ];
+        assert_eq!(
+            rows(&agents),
+            [
+                (0, "mid".to_string(), false),
+                (0, "orphan".to_string(), false),
+                (0, "zed".to_string(), false),
+                (1, "amy".to_string(), false),
+                (1, "bob".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stored_loop_renders_each_agent_once_marked() {
+        let agents = [
+            agent("a-1", "zed", Some("a-2")),
+            agent("a-2", "amy", Some("a-1")),
+            agent("a-3", "kid", Some("a-1")),
+        ];
+        let r = rows(&agents);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0], (0, "amy".to_string(), true));
+        assert!(r.iter().all(|(_, _, l)| *l));
+        assert!(agent_tree(&[]).is_empty());
+    }
+
+    #[test]
+    fn counts_open_tasks_per_agent() {
+        let mut a = task("a", "p", TaskState::Todo, 0);
+        a.owner = Some(Owner::Agent { id: "a-1".into() });
+        let mut b = task("b", "p", TaskState::Review, 0);
+        b.owner = a.owner.clone();
+        let mut c = task("c", "p", TaskState::Done, 0);
+        c.owner = a.owner.clone();
+        let mut d = task("d", "p", TaskState::Running, 0);
+        d.owner = Some(Owner::Agent { id: "a-2".into() });
+        let tasks = [a, b, c, d, task("e", "p", TaskState::Todo, 0)];
+        assert_eq!(open_count(&tasks, "a-1"), 2);
+        assert_eq!(open_count(&tasks, "a-2"), 1);
+        assert_eq!(open_count(&tasks, "a-9"), 0);
+        assert_eq!(agent_name(&[agent("a-1", "ana", None)], "a-1"), "ana");
+        assert_eq!(agent_name(&[], "a-1"), "a-1");
+    }
+
+    #[test]
+    fn the_agent_form_clears_only_on_edit() {
+        let create = agent_payload(" ana ", "Lead", "role", " dev ", "", "", true, false);
+        assert_eq!(create.name.as_deref(), Some("ana"));
+        assert_eq!(create.works_as, Some(WorksAs::Role { name: "dev".into() }));
+        assert!(!create.clear_heartbeat && !create.clear_reports_to);
+        assert_eq!(create.heartbeat, None);
+        let edit = agent_payload("ana", "", "team", "", "", " ", false, true);
+        assert_eq!(edit.works_as, Some(WorksAs::Team));
+        assert!(edit.clear_heartbeat && edit.clear_reports_to);
+        let kept = agent_payload("ana", "", "team", "", "a-2", "0 9 * * *", false, true);
+        assert_eq!(kept.reports_to.as_deref(), Some("a-2"));
+        assert_eq!(kept.heartbeat.as_deref(), Some("0 9 * * *"));
+        assert!(!kept.clear_heartbeat && !kept.clear_reports_to);
     }
 
     #[test]

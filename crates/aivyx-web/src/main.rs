@@ -11178,9 +11178,17 @@ async fn read_task(
                     payload:
                         QueryResponsePayload::BoardAck
                         | QueryResponsePayload::BoardCreated { .. }
-                        | QueryResponsePayload::BoardStarted { .. },
+                        | QueryResponsePayload::BoardStarted { .. }
+                        | QueryResponsePayload::BoardAgents { .. },
                     ..
                 } => {
+                    ws.send(board_view::snapshot_query());
+                }
+                DaemonEnvelope::QueryResponse {
+                    payload: QueryResponsePayload::BoardWoke { .. },
+                    ..
+                } => {
+                    board_ui.write().on_woke();
                     ws.send(board_view::snapshot_query());
                 }
                 DaemonEnvelope::QueryResponse {
