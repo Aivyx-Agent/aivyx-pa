@@ -942,7 +942,7 @@ fn AgentForm(agent: Option<Agent>, editing_name: Signal<Option<String>>) -> Elem
                     option { key: "{a.id}", value: "{a.id}", selected: reports_to() == a.id, "reports to {a.name}" }
                 }
             }
-            input { class: "input", placeholder: "Heartbeat (cron, e.g. 0 9 * * *); empty for none", value: "{heartbeat}", oninput: move |e| heartbeat.set(e.value()) }
+            input { class: "input", placeholder: HEARTBEAT_PLACEHOLDER, value: "{heartbeat}", oninput: move |e| heartbeat.set(e.value()) }
             label { class: "field-label",
                 input { r#type: "checkbox", checked: wake(), onchange: move |e| wake.set(e.checked()) }
                 " Wake when a task is assigned"
@@ -975,6 +975,10 @@ fn AgentForm(agent: Option<Agent>, editing_name: Signal<Option<String>>) -> Elem
         }
     }
 }
+
+/// The heartbeat field's hint. Cron patterns start with seconds (six
+/// fields), as for routines; a five-field Unix pattern is refused.
+const HEARTBEAT_PLACEHOLDER: &str = "Heartbeat (cron, seconds first, e.g. 0 0 9 * * *); empty for none";
 
 #[cfg(test)]
 mod tests {
@@ -1271,5 +1275,15 @@ mod tests {
         assert!(!can_start(&t) && can_cancel(&t));
         t.state = TaskState::Done;
         assert!(!can_cancel(&t));
+    }
+
+    #[test]
+    fn the_heartbeat_hint_is_a_six_field_pattern() {
+        let example = HEARTBEAT_PLACEHOLDER
+            .split("e.g. ")
+            .nth(1)
+            .and_then(|r| r.split(')').next())
+            .unwrap();
+        assert_eq!(example.split_whitespace().count(), 6, "{example}");
     }
 }

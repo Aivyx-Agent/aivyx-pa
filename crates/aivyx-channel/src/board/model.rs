@@ -71,6 +71,17 @@ pub fn assign(task: &mut Task, owner: Option<Owner>, now: u64) -> Result<(), Boa
 }
 
 pub fn start(task: &mut Task, run: RunRef, now: u64) -> Result<(), BoardError> {
+    start_by(task, run, now, false)
+}
+
+/// [`start`], with the `todo → running` entry written by the run itself
+/// when `by_agent` (a start from an agent's wake) rather than the operator.
+pub fn start_by(
+    task: &mut Task,
+    run: RunRef,
+    now: u64,
+    by_agent: bool,
+) -> Result<(), BoardError> {
     if task.state != TaskState::Todo {
         return Err(BoardError::BadState {
             from: task.state,
@@ -82,8 +93,15 @@ pub fn start(task: &mut Task, run: RunRef, now: u64) -> Result<(), BoardError> {
             "assign an owner before starting the task",
         ));
     }
+    let author = if by_agent {
+        Author::Agent {
+            mission_id: run.mission_id.clone(),
+        }
+    } else {
+        Author::Operator
+    };
     task.active_run = Some(run);
-    move_to(task, now, Author::Operator, TaskState::Running);
+    move_to(task, now, author, TaskState::Running);
     Ok(())
 }
 
@@ -305,6 +323,23 @@ mod tests {
             EntryKind::StateChange { from, to } => (*from, *to),
             other => panic!("expected StateChange, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_start_from_a_wake_is_written_by_the_agent() {
+        let mut t = todo_task();
+        start(&mut t, run_ref(), 2).unwrap();
+        assert_eq!(t.thread.last().unwrap().author, Author::Operator);
+
+        let mut t = todo_task();
+        start_by(&mut t, run_ref(), 2, true).unwrap();
+        assert_eq!(
+            t.thread.last().unwrap().author,
+            Author::Agent {
+                mission_id: "m-1".into()
+            }
+        );
+        assert_eq!(last_change(&t), (TaskState::Todo, TaskState::Running));
     }
 
     #[test]

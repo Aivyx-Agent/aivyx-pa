@@ -1642,6 +1642,28 @@ async fn a_wake_runs_todo_tasks_oldest_first_one_at_a_time() {
         want.push(pair("finished", "agent"));
     }
     assert_eq!(tail, want);
+    // The thread says the agent started each task, not the operator.
+    for t in &ts {
+        let task = fx.board.task(t).await.unwrap();
+        let start = task
+            .thread
+            .iter()
+            .find(|e| {
+                matches!(
+                    e.entry,
+                    EntryKind::StateChange {
+                        to: TaskState::Running,
+                        ..
+                    }
+                )
+            })
+            .expect("a todo → running entry");
+        assert!(
+            matches!(start.author, Author::Agent { .. }),
+            "{:?}",
+            start.author
+        );
+    }
     assert_chain_verifies(&fx).await;
 }
 

@@ -660,13 +660,14 @@ impl BoardService {
                 return Err(BoardError::NotAllowed("the task's owner changed"));
             }
             let text = self.brief_for(&task).await?;
-            model::start(
+            model::start_by(
                 &mut task,
                 RunRef {
                     mission_id: mission_id.clone(),
                     kind: RunKind::Role,
                 },
                 now_ms(),
+                actor == "agent",
             )?;
             let mut record =
                 mission::MissionRecord::new(mission_id.clone(), role.into(), task.title.clone());
@@ -861,13 +862,14 @@ impl BoardService {
                 if task.owner.as_ref() != Some(expected) {
                     return Err(BoardError::NotAllowed("the task's owner changed"));
                 }
-                model::start(
+                model::start_by(
                     &mut task,
                     RunRef {
                         mission_id: mission_id.clone(),
                         kind: RunKind::Team,
                     },
                     now_ms(),
+                    actor == "agent",
                 )?;
                 store::put_task(&self.deps().store, &task).await?;
                 self.record("started", task_id, actor);
