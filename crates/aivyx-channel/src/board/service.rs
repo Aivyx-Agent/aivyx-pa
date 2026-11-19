@@ -10,11 +10,13 @@ use aivyx_audit::{AuditEvent, AuditWriter, PersistentAuditLog};
 use aivyx_capability::CapabilitySet;
 use aivyx_core::{CancellationToken, ChannelContext, Message, SessionId, TurnOutcome};
 use aivyx_ipc::board::{
-    BoardSnapshot, Goal, NewTask, Owner, Project, RunKind, RunOutcome, RunRef, Task, TaskState,
+    Agent, BoardSnapshot, Goal, NewAgent, NewTask, Owner, Project, RunKind, RunOutcome, RunRef,
+    Task, TaskState, WorksAs,
 };
 use aivyx_ipc::team_mission::{TeamMissionPhase, TeamMissionRecord};
 use aivyx_storage::{DomainHandle, StorageError};
 
+use super::agents;
 use super::model::{self, Actor, BoardError, new_id, now_ms};
 use super::runner::{BoardRunContext, brief, role_ceiling, turn_result};
 use super::store;
@@ -73,7 +75,12 @@ struct Inner {
     /// A running task → the token that stops its run.
     cancels: std::sync::Mutex<HashMap<String, CancellationToken>>,
     team_poll: Duration,
+    /// Called with an agent's id after a task is assigned to it, when the
+    /// agent has `wake_on_assign`. The heartbeat installs it.
+    assign_hook: AssignHook,
 }
+
+type AssignHook = std::sync::RwLock<Option<Arc<dyn Fn(&str) + Send + Sync>>>;
 
 /// The work board. Cheap to clone.
 #[derive(Clone)]
@@ -98,6 +105,7 @@ impl BoardService {
                 runs: std::sync::Mutex::new(HashMap::new()),
                 cancels: std::sync::Mutex::new(HashMap::new()),
                 team_poll,
+                assign_hook: std::sync::RwLock::new(None),
             }),
         }
     }
@@ -256,10 +264,248 @@ impl BoardService {
     }
 
     pub async fn assign(&self, task_id: &str, owner: Option<Owner>) -> Result<(), BoardError> {
-        self.change_task(task_id, "assigned", "operator", |t, now| {
-            model::assign(t, owner, now)
+        let woken = {
+            let _w = self.inner.write_lock.lock().await;
+            let mut task = self.load_task(task_id).await?;
+            let mut woken = None;
+            if let Some(Owner::Agent { id }) = &owner {
+                let agent = store::get_agent(&self.deps().store, id)
+                    .await?
+                    .ok_or(BoardError::NotFound("agent"))?;
+                if agent.wake_on_assign {
+                    woken = Some(agent.id);
+                }
+            }
+            model::assign(&mut task, owner, now_ms())?;
+            store::put_task(&self.deps().store, &task).await?;
+            self.record("assigned", task_id, "operator");
+            woken
+        };
+        if let Some(id) = woken {
+            let hook = self.inner.assign_hook.read().unwrap().clone();
+            if let Some(hook) = hook {
+                hook(&id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Install the hook [`assign`](Self::assign) calls with an agent's id
+    /// after a task is assigned to an agent with `wake_on_assign`.
+    pub fn set_assign_hook(&self, hook: Arc<dyn Fn(&str) + Send + Sync>) {
+        *self.inner.assign_hook.write().unwrap() = Some(hook);
+    }
+
+    pub async fn agents(&self) -> Result<Vec<Agent>, BoardError> {
+        let mut list = store::list_agents(&self.deps().store).await?;
+        list.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        Ok(list)
+    }
+
+    pub async fn agent_by_name(&self, name: &str) -> Result<Agent, BoardError> {
+        store::list_agents(&self.deps().store)
+            .await?
+            .into_iter()
+            .find(|a| a.name == name)
+            .ok_or(BoardError::NotFound("agent"))
+    }
+
+    /// A `works_as` the daemon can run: the role exists, or a team is set up.
+    fn check_works_as(&self, works_as: &WorksAs) -> Result<(), BoardError> {
+        match works_as {
+            WorksAs::Role { name } if !self.deps().roles.contains_key(name) => {
+                Err(BoardError::NotAllowed("no such role in the config"))
+            }
+            WorksAs::Team if self.deps().team.is_none() => {
+                Err(BoardError::NotAllowed("no team is set up"))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn agent_map(&self) -> Result<HashMap<String, Agent>, BoardError> {
+        Ok(store::list_agents(&self.deps().store)
+            .await?
+            .into_iter()
+            .map(|a| (a.id.clone(), a))
+            .collect())
+    }
+
+    /// Check a name is valid and not another agent's.
+    fn check_name(
+        name: &str,
+        except: Option<&str>,
+        all: &HashMap<String, Agent>,
+    ) -> Result<(), BoardError> {
+        agents::validate_name(name)?;
+        if all
+            .values()
+            .any(|a| a.name == name && Some(a.id.as_str()) != except)
+        {
+            return Err(BoardError::NotAllowed("an agent with that name exists"));
+        }
+        Ok(())
+    }
+
+    pub async fn create_agent(&self, a: NewAgent) -> Result<String, BoardError> {
+        let name = a.name.ok_or(BoardError::Empty("the name"))?;
+        let works_as = a
+            .works_as
+            .ok_or(BoardError::NotAllowed("an agent needs a works-as"))?;
+        let _w = self.inner.write_lock.lock().await;
+        let all = self.agent_map().await?;
+        Self::check_name(&name, None, &all)?;
+        self.check_works_as(&works_as)?;
+        let heartbeat = if a.clear_heartbeat { None } else { a.heartbeat };
+        if let Some(h) = &heartbeat {
+            agents::validate_heartbeat(h)?;
+        }
+        let reports_to = if a.clear_reports_to {
+            None
+        } else {
+            a.reports_to
+        };
+        let id = new_id('a');
+        agents::check_reports_to(&id, reports_to.as_deref(), &all)?;
+        let now = now_ms();
+        let agent = Agent {
+            id: id.clone(),
+            name,
+            title: a.title.unwrap_or_default().trim().into(),
+            reports_to,
+            works_as,
+            heartbeat,
+            wake_on_assign: a.wake_on_assign.unwrap_or(false),
+            paused: false,
+            last_wake: None,
+            created_at: now,
+            updated_at: now,
+        };
+        store::put_agent(&self.deps().store, &agent).await?;
+        self.record("agent_created", &id, "operator");
+        Ok(id)
+    }
+
+    /// Get, change and put one agent (found by name) under the write lock,
+    /// then audit `op`. `f` also sees every agent.
+    async fn change_agent(
+        &self,
+        name: &str,
+        op: &str,
+        f: impl FnOnce(&mut Agent, &HashMap<String, Agent>, u64) -> Result<(), BoardError>,
+    ) -> Result<(), BoardError> {
+        let _w = self.inner.write_lock.lock().await;
+        let all = self.agent_map().await?;
+        let mut agent = all
+            .values()
+            .find(|a| a.name == name)
+            .cloned()
+            .ok_or(BoardError::NotFound("agent"))?;
+        f(&mut agent, &all, now_ms())?;
+        store::put_agent(&self.deps().store, &agent).await?;
+        self.record(op, &agent.id, "operator");
+        Ok(())
+    }
+
+    pub async fn edit_agent(&self, name: &str, a: NewAgent) -> Result<(), BoardError> {
+        self.change_agent(name, "agent_edited", |agent, all, now| {
+            if let Some(n) = &a.name {
+                Self::check_name(n, Some(&agent.id), all)?;
+            }
+            if let Some(w) = &a.works_as {
+                self.check_works_as(w)?;
+            }
+            if let Some(h) = a.heartbeat.as_deref().filter(|_| !a.clear_heartbeat) {
+                agents::validate_heartbeat(h)?;
+            }
+            if let Some(r) = a.reports_to.as_deref().filter(|_| !a.clear_reports_to) {
+                agents::check_reports_to(&agent.id, Some(r), all)?;
+            }
+            if let Some(n) = a.name {
+                agent.name = n;
+            }
+            if let Some(t) = a.title {
+                agent.title = t.trim().into();
+            }
+            if let Some(w) = a.works_as {
+                agent.works_as = w;
+            }
+            if a.clear_heartbeat {
+                agent.heartbeat = None;
+            } else if a.heartbeat.is_some() {
+                agent.heartbeat = a.heartbeat;
+            }
+            if a.clear_reports_to {
+                agent.reports_to = None;
+            } else if a.reports_to.is_some() {
+                agent.reports_to = a.reports_to;
+            }
+            if let Some(w) = a.wake_on_assign {
+                agent.wake_on_assign = w;
+            }
+            agent.updated_at = now;
+            Ok(())
         })
         .await
+    }
+
+    pub async fn set_agent_paused(&self, name: &str, paused: bool) -> Result<(), BoardError> {
+        let op = if paused {
+            "agent_paused"
+        } else {
+            "agent_resumed"
+        };
+        self.change_agent(name, op, |agent, _, now| {
+            agent.paused = paused;
+            agent.updated_at = now;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn remove_agent(&self, name: &str) -> Result<(), BoardError> {
+        let _w = self.inner.write_lock.lock().await;
+        let all = self.agent_map().await?;
+        let agent = all
+            .values()
+            .find(|a| a.name == name)
+            .cloned()
+            .ok_or(BoardError::NotFound("agent"))?;
+        let tasks = store::list_tasks(&self.deps().store).await?;
+        if !agents::open_tasks_owned_by(&agent.id, &tasks).is_empty() {
+            return Err(BoardError::NotAllowed(
+                "reassign the agent's open tasks first",
+            ));
+        }
+        // Agents that reported to it now report to no one.
+        let now = now_ms();
+        for mut other in all.into_values() {
+            if other.reports_to.as_deref() == Some(agent.id.as_str()) {
+                other.reports_to = None;
+                other.updated_at = now;
+                store::put_agent(&self.deps().store, &other).await?;
+            }
+        }
+        store::delete_agent(&self.deps().store, &agent.id).await?;
+        self.record("agent_removed", &agent.id, "operator");
+        Ok(())
+    }
+
+    /// The owner a run executes as: a role or team as is; an agent as its
+    /// `works_as`.
+    async fn resolve_owner(&self, owner: &Owner) -> Result<Owner, BoardError> {
+        match owner {
+            Owner::Agent { id } => {
+                let agent = store::get_agent(&self.deps().store, id)
+                    .await?
+                    .ok_or(BoardError::NotFound("agent"))?;
+                Ok(match agent.works_as {
+                    WorksAs::Role { name } => Owner::Role { name },
+                    WorksAs::Team => Owner::Team,
+                })
+            }
+            other => Ok(other.clone()),
+        }
     }
 
     pub async fn approve(&self, task_id: &str) -> Result<(), BoardError> {
@@ -313,11 +559,14 @@ impl BoardService {
     pub async fn start(&self, task_id: &str) -> Result<String, BoardError> {
         let task = self.load_task(task_id).await?;
         match task.owner.clone() {
-            Some(Owner::Role { name }) => self.start_role(task_id, &name).await,
-            Some(Owner::Team) => self.start_team(task_id).await,
-            Some(Owner::Agent { .. }) => Err(BoardError::NotAllowed(
-                "starting an agent's task lands in a later task",
-            )),
+            Some(stored) => match self.resolve_owner(&stored).await? {
+                Owner::Role { name } => self.start_role(task_id, &name, &stored).await,
+                Owner::Team => self.start_team(task_id, &stored).await,
+                // resolve_owner never returns an agent.
+                Owner::Agent { .. } => {
+                    Err(BoardError::NotAllowed("an agent can't work as an agent"))
+                }
+            },
             None => {
                 // Let the model say why (a bad state before the owner).
                 let mut probe = task;
@@ -336,7 +585,12 @@ impl BoardService {
         }
     }
 
-    async fn start_role(&self, task_id: &str, role: &str) -> Result<String, BoardError> {
+    async fn start_role(
+        &self,
+        task_id: &str,
+        role: &str,
+        expected: &Owner,
+    ) -> Result<String, BoardError> {
         let scopes = self
             .deps()
             .roles
@@ -350,11 +604,7 @@ impl BoardService {
         let (task, text) = {
             let _w = self.inner.write_lock.lock().await;
             let mut task = self.load_task(task_id).await?;
-            if task.owner
-                != Some(Owner::Role {
-                    name: role.to_string(),
-                })
-            {
+            if task.owner.as_ref() != Some(expected) {
                 return Err(BoardError::NotAllowed("the task's owner changed"));
             }
             let text = self.brief_for(&task).await?;
@@ -519,7 +769,7 @@ impl BoardService {
         }
     }
 
-    async fn start_team(&self, task_id: &str) -> Result<String, BoardError> {
+    async fn start_team(&self, task_id: &str, expected: &Owner) -> Result<String, BoardError> {
         let svc = self
             .deps()
             .team
@@ -551,7 +801,7 @@ impl BoardService {
             let _w = self.inner.write_lock.lock().await;
             async {
                 let mut task = self.load_task(task_id).await?;
-                if task.owner != Some(Owner::Team) {
+                if task.owner.as_ref() != Some(expected) {
                     return Err(BoardError::NotAllowed("the task's owner changed"));
                 }
                 model::start(

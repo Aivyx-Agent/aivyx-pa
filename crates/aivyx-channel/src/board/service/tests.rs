@@ -5,7 +5,7 @@ use super::*;
 use aivyx_capability::Scope;
 use aivyx_core::{AgentId, MessageContent, MessageOrigin, TokenUsage, TurnId};
 use aivyx_crypto::MasterKey;
-use aivyx_ipc::board::{Author, EntryKind};
+use aivyx_ipc::board::{Author, EntryKind, NewAgent, WorksAs};
 use aivyx_storage::{KeyDomain, RedbStorage, Storage, StorageConfig};
 use async_trait::async_trait;
 use std::sync::Mutex as StdMutex;
@@ -786,6 +786,273 @@ async fn a_team_task_needs_a_team() {
     assert_eq!(fx.board.task(&t).await.unwrap().state, TaskState::Todo);
 }
 
+// ---- A21 agents -----------------------------------------------------------
+
+fn new_agent(name: &str, works_as: WorksAs) -> NewAgent {
+    NewAgent {
+        name: Some(name.into()),
+        works_as: Some(works_as),
+        ..NewAgent::default()
+    }
+}
+
+fn writer_agent(name: &str) -> NewAgent {
+    new_agent(
+        name,
+        WorksAs::Role {
+            name: "writer".into(),
+        },
+    )
+}
+
+async fn plain_fx() -> Fx {
+    fixture(Arc::new(ScriptedAgent::new(Reply::Done("done".into())))).await
+}
+
+#[tokio::test]
+async fn agent_operations_each_write_one_audit_op() {
+    let fx = plain_fx().await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    assert!(id.starts_with("a-") && id.len() == 10, "{id}");
+    assert_eq!(fx.board.agents().await.unwrap().len(), 1);
+    assert_eq!(fx.board.agent_by_name("ann").await.unwrap().id, id);
+    fx.board
+        .edit_agent(
+            "ann",
+            NewAgent {
+                name: Some("anne".into()),
+                title: Some("Writer".into()),
+                wake_on_assign: Some(true),
+                ..NewAgent::default()
+            },
+        )
+        .await
+        .unwrap();
+    let a = fx.board.agent_by_name("anne").await.unwrap();
+    assert_eq!((a.title.as_str(), a.wake_on_assign), ("Writer", true));
+    assert_eq!(
+        fx.board.agent_by_name("ann").await,
+        Err(BoardError::NotFound("agent"))
+    );
+    fx.board.set_agent_paused("anne", true).await.unwrap();
+    assert!(fx.board.agent_by_name("anne").await.unwrap().paused);
+    fx.board.set_agent_paused("anne", false).await.unwrap();
+    assert!(!fx.board.agent_by_name("anne").await.unwrap().paused);
+    assert_eq!(fx.board.snapshot().await.unwrap().agents.len(), 1);
+    fx.board.remove_agent("anne").await.unwrap();
+    assert!(fx.board.agents().await.unwrap().is_empty());
+    let names = op_names(&fx.audit);
+    assert_eq!(
+        names,
+        [
+            "agent_created",
+            "agent_edited",
+            "agent_paused",
+            "agent_resumed",
+            "agent_removed"
+        ]
+    );
+    assert_chain_verifies(&fx).await;
+}
+
+#[tokio::test]
+async fn agent_validation_refuses_bad_input() {
+    let fx = plain_fx().await;
+    fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    assert!(matches!(
+        fx.board.create_agent(writer_agent("ann")).await,
+        Err(BoardError::NotAllowed(_))
+    ));
+    assert_eq!(
+        fx.board
+            .create_agent(new_agent(
+                "bob",
+                WorksAs::Role {
+                    name: "ghost".into()
+                }
+            ))
+            .await,
+        Err(BoardError::NotAllowed("no such role in the config"))
+    );
+    assert_eq!(
+        fx.board.create_agent(new_agent("bob", WorksAs::Team)).await,
+        Err(BoardError::NotAllowed("no team is set up"))
+    );
+    let mut bad = writer_agent("bob");
+    bad.heartbeat = Some("not cron".into());
+    assert!(matches!(
+        fx.board.create_agent(bad).await,
+        Err(BoardError::NotAllowed(_))
+    ));
+    // A loop: ann -> bob -> ann.
+    fx.board.create_agent(writer_agent("bob")).await.unwrap();
+    let ann = fx.board.agent_by_name("ann").await.unwrap().id;
+    let bob = fx.board.agent_by_name("bob").await.unwrap().id;
+    let reports = |id: &str| NewAgent {
+        reports_to: Some(id.into()),
+        ..NewAgent::default()
+    };
+    fx.board.edit_agent("bob", reports(&ann)).await.unwrap();
+    assert!(matches!(
+        fx.board.edit_agent("ann", reports(&bob)).await,
+        Err(BoardError::NotAllowed(_))
+    ));
+    // Renaming onto another agent's name.
+    assert!(matches!(
+        fx.board
+            .edit_agent(
+                "bob",
+                NewAgent {
+                    name: Some("ann".into()),
+                    ..NewAgent::default()
+                }
+            )
+            .await,
+        Err(BoardError::NotAllowed(_))
+    ));
+    // Nothing above wrote an audit record beyond the two creations + edit.
+    assert_eq!(
+        op_names(&fx.audit),
+        ["agent_created", "agent_created", "agent_edited"]
+    );
+}
+
+#[tokio::test]
+async fn a_clear_flag_wins_over_a_value_sent_with_it() {
+    let fx = plain_fx().await;
+    let ann = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let mut b = writer_agent("bob");
+    b.heartbeat = Some("0 0 9 * * *".into());
+    b.reports_to = Some(ann);
+    fx.board.create_agent(b).await.unwrap();
+    let bob = fx.board.agent_by_name("bob").await.unwrap();
+    assert!(bob.heartbeat.is_some() && bob.reports_to.is_some());
+    fx.board
+        .edit_agent(
+            "bob",
+            NewAgent {
+                heartbeat: Some("0 0 10 * * *".into()),
+                clear_heartbeat: true,
+                reports_to: Some(bob.id.clone()),
+                clear_reports_to: true,
+                ..NewAgent::default()
+            },
+        )
+        .await
+        .unwrap();
+    let bob = fx.board.agent_by_name("bob").await.unwrap();
+    assert_eq!((bob.heartbeat, bob.reports_to), (None, None));
+}
+
+#[tokio::test]
+async fn removing_an_agent_with_open_tasks_is_refused() {
+    let fx = plain_fx().await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let t = seed(&fx, Some(Owner::Agent { id })).await;
+    assert_eq!(
+        fx.board.remove_agent("ann").await,
+        Err(BoardError::NotAllowed(
+            "reassign the agent's open tasks first"
+        ))
+    );
+    fx.board.assign(&t, None).await.unwrap();
+    fx.board.remove_agent("ann").await.unwrap();
+}
+
+#[tokio::test]
+async fn assigning_to_an_unknown_agent_is_not_found() {
+    let fx = plain_fx().await;
+    let t = seed(&fx, None).await;
+    assert_eq!(
+        fx.board
+            .assign(
+                &t,
+                Some(Owner::Agent {
+                    id: "a-nope".into()
+                })
+            )
+            .await,
+        Err(BoardError::NotFound("agent"))
+    );
+    assert_eq!(fx.board.task(&t).await.unwrap().owner, None);
+}
+
+#[tokio::test]
+async fn an_agents_role_task_runs_as_its_role_and_keeps_its_owner() {
+    let agent = Arc::new(ScriptedAgent::new(Reply::Done("done".into())));
+    let seen = Arc::clone(&agent.seen);
+    let fx = fixture(agent).await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let owner = Owner::Agent { id };
+    let t = seed(&fx, Some(owner.clone())).await;
+    let mid = fx.board.start(&t).await.unwrap();
+    let task = wait_not_running(&fx, &t).await;
+    assert_eq!(task.state, TaskState::Review);
+    assert_eq!(task.owner, Some(owner));
+    assert_eq!(last_run(&task).0, mid);
+    let record = mission::get_mission(&fx.missions, &mid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.role_name, "writer");
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1);
+    let mut ceiling: Vec<String> = seen[0]
+        .ceiling
+        .as_ref()
+        .expect("a ceiling")
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    ceiling.sort();
+    assert_eq!(ceiling, ["board.write", "fs.read", "memory.read"]);
+}
+
+#[tokio::test]
+async fn an_agent_whose_works_as_vanished_cant_start() {
+    let fx = plain_fx().await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let t = seed(&fx, Some(Owner::Agent { id: id.clone() })).await;
+    // The agent is changed behind the service's back to a missing role.
+    let mut a = store::get_agent(&fx.board.deps().store, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    a.works_as = WorksAs::Role {
+        name: "ghost".into(),
+    };
+    store::put_agent(&fx.board.deps().store, &a).await.unwrap();
+    assert_eq!(
+        fx.board.start(&t).await,
+        Err(BoardError::NotAllowed("no such role in the config"))
+    );
+    assert_eq!(fx.board.task(&t).await.unwrap().state, TaskState::Todo);
+}
+
+#[tokio::test]
+async fn the_assign_hook_fires_only_for_wake_on_assign_agents() {
+    let fx = plain_fx().await;
+    let calls = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let c = Arc::clone(&calls);
+    fx.board
+        .set_assign_hook(Arc::new(move |id| c.lock().unwrap().push(id.to_string())));
+    let quiet = fx.board.create_agent(writer_agent("quiet")).await.unwrap();
+    let mut w = writer_agent("eager");
+    w.wake_on_assign = Some(true);
+    let eager = fx.board.create_agent(w).await.unwrap();
+    let t = seed(&fx, None).await;
+    fx.board
+        .assign(&t, Some(Owner::Agent { id: quiet }))
+        .await
+        .unwrap();
+    assert!(calls.lock().unwrap().is_empty());
+    fx.board
+        .assign(&t, Some(Owner::Agent { id: eager.clone() }))
+        .await
+        .unwrap();
+    assert_eq!(*calls.lock().unwrap(), [eager]);
+}
+
 // ---- model: finish never moves a task that isn't Running -----------------
 
 #[test]
@@ -893,6 +1160,35 @@ mod team {
             ["started".to_string(), "finished".to_string()]
         );
         assert!(fx.board.inner.cancels.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_agents_team_task_runs_as_the_team_and_keeps_its_owner() {
+        let p = provider(ONE_STEP, false);
+        let mut d = deps("unused");
+        d.provider = Arc::new(p);
+        let svc = service(d, team_domain().await);
+        let fx = fixture_with(Setup {
+            agent: Arc::new(ScriptedAgent::new(Reply::Done("unused".into()))),
+            team: Some(svc.clone()),
+            notify: None,
+        })
+        .await;
+        let id = fx
+            .board
+            .create_agent(new_agent("crew", WorksAs::Team))
+            .await
+            .unwrap();
+        let owner = Owner::Agent { id };
+        let t = seed(&fx, Some(owner.clone())).await;
+        let mid = fx.board.start(&t).await.unwrap();
+        assert_eq!(
+            svc.snapshot(&mid).unwrap().triggered_by,
+            Some(format!("board:{t}"))
+        );
+        let task = wait_not_running(&fx, &t).await;
+        assert_eq!(task.state, TaskState::Review);
+        assert_eq!(task.owner, Some(owner));
     }
 
     /// Call 0 returns `plan`; call `n` > 0 answers `step output <n>`, and
