@@ -407,7 +407,7 @@ aivyx-pa board goal list
 aivyx-pa board project add <goal> "<title>" [--description "<text>"]
 aivyx-pa board project list [--goal <id>]
 aivyx-pa board task add (--project <id> | --parent <task>) "<title>"
-    [--description "<text>"] [--owner role:<name>|team] [--no-review]
+    [--description "<text>"] [--owner role:<name>|team|agent:<name>] [--no-review]
 aivyx-pa board agent list
 aivyx-pa board agent add <name> --works-as role:<name>|team [--title "<t>"]
     [--reports-to <agent>] [--heartbeat "<cron>"] [--wake-on-assign]

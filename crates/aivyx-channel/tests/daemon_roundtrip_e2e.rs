@@ -3282,6 +3282,16 @@ async fn team_queries_without_service_return_query_error() {
         ("board-agents", QueryPayload::BoardAgents),
         ("board-wake-agent", QueryPayload::BoardWakeAgent { name: "ana".into() }),
         ("board-remove-agent", QueryPayload::BoardRemoveAgent { name: "ana".into() }),
+        (
+            "board-create-agent",
+            QueryPayload::BoardCreateAgent { agent: Default::default() },
+        ),
+        (
+            "board-edit-agent",
+            QueryPayload::BoardEditAgent { name: "ana".into(), agent: Default::default() },
+        ),
+        ("board-pause-agent", QueryPayload::BoardPauseAgent { name: "ana".into() }),
+        ("board-resume-agent", QueryPayload::BoardResumeAgent { name: "ana".into() }),
     ] {
         let q = FrontendMessage::Query { id: id.into(), payload };
         writer.write_all(&encode_frame(&q).unwrap()).await.unwrap();

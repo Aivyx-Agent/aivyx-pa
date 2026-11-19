@@ -27,7 +27,7 @@ pub const USAGE: &str = "usage:
   aivyx-pa board project add <goal> \"<title>\" [--description \"<text>\"]
   aivyx-pa board project list [--goal <id>]
   aivyx-pa board task add (--project <id> | --parent <task>) \"<title>\"
-      [--description \"<text>\"] [--owner role:<name>|team] [--no-review]
+      [--description \"<text>\"] [--owner role:<name>|team|agent:<name>] [--no-review]
   aivyx-pa board agent list
   aivyx-pa board agent add <name> --works-as role:<name>|team [--title \"<t>\"]
       [--reports-to <agent>] [--heartbeat \"<cron>\"] [--wake-on-assign]
@@ -75,7 +75,7 @@ pub enum BoardCommand {
         parent: TaskParent,
         title: String,
         description: String,
-        owner: Option<Owner>,
+        owner: AssignTo,
         review_required: bool,
     },
     Assign {
@@ -166,20 +166,6 @@ fn parse_state(s: &str) -> Result<TaskState, String> {
         other => Err(format!(
             "unknown state `{other}` (use todo, running, review, done or cancelled)"
         )),
-    }
-}
-
-/// `role:<name>` | `team` | `none`.
-pub fn parse_owner(s: &str) -> Result<Option<Owner>, String> {
-    match s {
-        "team" => Ok(Some(Owner::Team)),
-        "none" => Ok(None),
-        _ => match s.strip_prefix("role:") {
-            Some(name) if !name.is_empty() => Ok(Some(Owner::Role { name: name.into() })),
-            _ => Err(format!(
-                "unknown owner `{s}` (use role:<name>, team or none)"
-            )),
-        },
     }
 }
 
@@ -352,8 +338,8 @@ pub fn parse(args: &[String]) -> Result<BoardCommand, String> {
                     return Err(USAGE.to_string());
                 };
                 let owner = match s.value("--owner") {
-                    Some(o) => parse_owner(o)?,
-                    None => None,
+                    Some(o) => parse_assign(o)?,
+                    None => AssignTo::None,
                 };
                 Ok(BoardCommand::TaskAdd {
                     parent,
@@ -526,6 +512,7 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
             owner,
             review_required,
         } => {
+            let owner = resolve_owner(&socket, owner).await?.0;
             let (project_id, parent_task) = match parent {
                 TaskParent::Project(p) => (p, None),
                 TaskParent::Task(t) => {
@@ -549,18 +536,7 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
             println!("Added task {}", neutralise(&id));
         }
         BoardCommand::Assign { task, owner } => {
-            let (owner, label) = match owner {
-                AssignTo::None => (None, "-".to_string()),
-                AssignTo::Team => (Some(Owner::Team), "team".to_string()),
-                AssignTo::Role(name) => {
-                    let label = format!("role:{name}");
-                    (Some(Owner::Role { name }), label)
-                }
-                AssignTo::Agent(name) => {
-                    let id = resolve_agent(&socket, &name).await?;
-                    (Some(Owner::Agent { id }), format!("agent:{name}"))
-                }
-            };
+            let (owner, label) = resolve_owner(&socket, owner).await?;
             board_assign(&socket, task.clone(), owner).await.map_err(e)?;
             println!(
                 "Task {} is now owned by {}",
@@ -683,6 +659,23 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
     Ok(())
 }
 
+/// An `AssignTo` as the owner to send, and its label. An agent's name
+/// becomes its id.
+async fn resolve_owner(socket: &Path, to: AssignTo) -> Result<(Option<Owner>, String), String> {
+    Ok(match to {
+        AssignTo::None => (None, "-".to_string()),
+        AssignTo::Team => (Some(Owner::Team), "team".to_string()),
+        AssignTo::Role(name) => {
+            let label = format!("role:{name}");
+            (Some(Owner::Role { name }), label)
+        }
+        AssignTo::Agent(name) => {
+            let id = resolve_agent(socket, &name).await?;
+            (Some(Owner::Agent { id }), format!("agent:{name}"))
+        }
+    })
+}
+
 /// An agent's name to its id.
 async fn resolve_agent(socket: &Path, name: &str) -> Result<String, String> {
     let agents = board_agents(socket).await.map_err(|e| e.to_string())?;
@@ -778,13 +771,29 @@ pub fn render_agents(agents: &[Agent], tasks: &[Task]) -> String {
     if agents.is_empty() {
         return "No agents.\n".into();
     }
+    let by_name = |list: &mut Vec<&Agent>| list.sort_by(|a, b| a.name.cmp(&b.name));
     let mut out = String::new();
     let mut seen: Vec<&str> = Vec::new();
-    let roots = agents
+    let mut roots: Vec<&Agent> = agents
         .iter()
-        .filter(|a| !a.reports_to.as_ref().is_some_and(|b| agents.iter().any(|x| x.id == *b)));
+        .filter(|a| {
+            !a.reports_to
+                .as_ref()
+                .is_some_and(|b| agents.iter().any(|x| x.id == *b))
+        })
+        .collect();
+    by_name(&mut roots);
     for root in roots {
-        agent_lines(root, agents, tasks, 0, &mut seen, &mut out);
+        agent_lines(root, agents, tasks, 0, false, &mut seen, &mut out);
+    }
+    // Agents a stored loop left unreached: show each as a root, marked.
+    let mut rest: Vec<&Agent> = agents
+        .iter()
+        .filter(|a| !seen.contains(&a.id.as_str()))
+        .collect();
+    by_name(&mut rest);
+    for a in rest {
+        agent_lines(a, agents, tasks, 0, true, &mut seen, &mut out);
     }
     out
 }
@@ -794,6 +803,7 @@ fn agent_lines<'a>(
     agents: &'a [Agent],
     tasks: &[Task],
     depth: usize,
+    in_loop: bool,
     seen: &mut Vec<&'a str>,
     out: &mut String,
 ) {
@@ -822,16 +832,21 @@ fn agent_lines<'a>(
     if agent.paused {
         line.push_str("  [paused]");
     }
+    if in_loop {
+        line.push_str("  (reports-to loop)");
+    }
     line.push_str(&format!(
         "  last wake {}  open {open}\n",
         agent.last_wake.map_or_else(|| "never".to_string(), when)
     ));
     out.push_str(&line);
-    for child in agents
+    let mut children: Vec<&Agent> = agents
         .iter()
         .filter(|a| a.reports_to.as_deref() == Some(agent.id.as_str()))
-    {
-        agent_lines(child, agents, tasks, depth + 1, seen, out);
+        .collect();
+    children.sort_by(|a, b| a.name.cmp(&b.name));
+    for child in children {
+        agent_lines(child, agents, tasks, depth + 1, in_loop, seen, out);
     }
 }
 
@@ -1038,9 +1053,7 @@ mod tests {
                 parent: TaskParent::Project("p-1".into()),
                 title: "Draft".into(),
                 description: String::new(),
-                owner: Some(Owner::Role {
-                    name: "writer".into()
-                }),
+                owner: AssignTo::Role("writer".into()),
                 review_required: false
             }
         );
@@ -1050,10 +1063,18 @@ mod tests {
                 parent: TaskParent::Task("t-1".into()),
                 title: "Sub".into(),
                 description: "d".into(),
-                owner: Some(Owner::Team),
+                owner: AssignTo::Team,
                 review_required: true
             }
         );
+        match p("task add --project p-1 \"x\" --owner agent:ana").unwrap() {
+            BoardCommand::TaskAdd { owner, .. } => assert_eq!(owner, AssignTo::Agent("ana".into())),
+            other => panic!("{other:?}"),
+        }
+        match p("task add --project p-1 \"x\"").unwrap() {
+            BoardCommand::TaskAdd { owner, .. } => assert_eq!(owner, AssignTo::None),
+            other => panic!("{other:?}"),
+        }
         assert_eq!(
             p("assign t-1 role:writer").unwrap(),
             BoardCommand::Assign {
@@ -1256,6 +1277,31 @@ mod tests {
         assert!(lines[2].starts_with("    deep  works as team"), "{out}");
         assert!(lines[3].starts_with("solo  works as team"), "{out}");
         assert_eq!(render_agents(&[], &[]), "No agents.\n");
+    }
+
+    #[test]
+    fn a_stored_loop_still_renders_and_names_sort() {
+        let a = agent("a-1", "zed", Some("a-2"));
+        let b = agent("a-2", "amy", Some("a-1"));
+        let out = render_agents(&[a, b], &[]);
+        assert_eq!(out.lines().count(), 2, "{out}");
+        assert!(out.contains("zed") && out.contains("amy"), "{out}");
+        assert!(out.lines().all(|l| l.contains("(reports-to loop)")), "{out}");
+
+        // Created zed, mid, amy, kid-of-zed: roots and children by name.
+        let agents = [
+            agent("a-1", "zed", None),
+            agent("a-2", "mid", None),
+            agent("a-3", "amy", None),
+            agent("a-4", "yan", Some("a-1")),
+            agent("a-5", "bob", Some("a-1")),
+        ];
+        let out = render_agents(&agents, &[]);
+        let names: Vec<&str> = out
+            .lines()
+            .map(|l| l.split_whitespace().next().unwrap())
+            .collect();
+        assert_eq!(names, ["amy", "mid", "zed", "bob", "yan"], "{out}");
     }
 
     #[test]

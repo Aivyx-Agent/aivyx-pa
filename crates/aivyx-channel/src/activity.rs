@@ -130,6 +130,12 @@ pub fn is_operator_action(msg: &FrontendMessage) -> bool {
                 | QueryPayload::BoardApprove { .. }
                 | QueryPayload::BoardSendBack { .. }
                 | QueryPayload::BoardCancel { .. }
+                | QueryPayload::BoardCreateAgent { .. }
+                | QueryPayload::BoardEditAgent { .. }
+                | QueryPayload::BoardPauseAgent { .. }
+                | QueryPayload::BoardResumeAgent { .. }
+                | QueryPayload::BoardRemoveAgent { .. }
+                | QueryPayload::BoardWakeAgent { .. }
         ),
         _ => false,
     }
@@ -202,6 +208,19 @@ mod tests {
                 payload: QueryPayload::BoardSendBack { task_id: "t".into(), why: "w".into() },
             },
             FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardCancel { task_id: "t".into() } },
+            // A21: so are the standing-agent changes.
+            FrontendMessage::Query {
+                id: "x".into(),
+                payload: QueryPayload::BoardCreateAgent { agent: Default::default() },
+            },
+            FrontendMessage::Query {
+                id: "x".into(),
+                payload: QueryPayload::BoardEditAgent { name: "a".into(), agent: Default::default() },
+            },
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardPauseAgent { name: "a".into() } },
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardResumeAgent { name: "a".into() } },
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardRemoveAgent { name: "a".into() } },
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardWakeAgent { name: "a".into() } },
         ];
         for m in &yes {
             assert!(is_operator_action(m), "{m:?}");
