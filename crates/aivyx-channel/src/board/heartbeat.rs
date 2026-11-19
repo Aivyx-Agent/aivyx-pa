@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use aivyx_core::CancellationToken;
-use aivyx_ipc::board::{Owner, Task, TaskState};
+use aivyx_ipc::board::{EntryKind, Owner, Task, TaskState};
 
 use super::BoardService;
 use super::agents::is_due;
@@ -74,10 +74,8 @@ impl Drop for WakeGuard {
 
 fn set_pending(pending: &Pending, agent_id: &str, delay: Duration) {
     let at = now_ms().saturating_add(delay.as_millis() as u64);
-    let mut p = pending.lock().unwrap();
-    // An earlier wake already set stays: it starts this task too.
-    let slot = p.entry(agent_id.to_string()).or_insert(at);
-    *slot = (*slot).min(at);
+    // A debounce: a later assignment moves the wake to its own delay.
+    pending.lock().unwrap().insert(agent_id.to_string(), at);
 }
 
 fn owned_by<'a>(tasks: &'a [Task], agent_id: &'a str) -> impl Iterator<Item = &'a Task> + 'a {
@@ -101,6 +99,16 @@ impl BoardHeartbeat {
         let hook_pending = Arc::clone(&pending);
         let delay = durations.assign_delay;
         board.set_assign_hook(Arc::new(move |id| set_pending(&hook_pending, id, delay)));
+        // A pause drops the pending wake (a stale one would fire right after
+        // the resume); a resume with To-do tasks to wake for sets a fresh one.
+        let pause_pending = Arc::clone(&pending);
+        board.set_pause_hook(Arc::new(move |id, rewake| {
+            if rewake {
+                set_pending(&pause_pending, id, delay);
+            } else {
+                pause_pending.lock().unwrap().remove(id);
+            }
+        }));
         BoardHeartbeat {
             board,
             pending,
@@ -160,8 +168,13 @@ impl BoardHeartbeat {
             if !self.wait_idle(agent_id).await? {
                 break;
             }
-            // Snapshot tasks come oldest first.
-            let tasks = self.board.snapshot().await?.tasks;
+            // Paused (or removed) mid-wake: start nothing more. Snapshot
+            // tasks come oldest first.
+            let snap = self.board.snapshot().await?;
+            if !snap.agents.iter().any(|a| a.id == agent_id && !a.paused) {
+                break;
+            }
+            let tasks = snap.tasks;
             let Some(next) = owned_by(&tasks, agent_id)
                 .find(|t| t.state == TaskState::Todo && !tried.contains(&t.id))
             else {
@@ -173,6 +186,15 @@ impl BoardHeartbeat {
                 Ok(_) => started += 1,
                 Err(e) => {
                     let text = format!("the agent couldn't start this task: {e}");
+                    // Once: a cron agent that can't start its tasks would
+                    // otherwise add the same comment at every firing.
+                    let said = matches!(
+                        next.thread.last().map(|e| &e.entry),
+                        Some(EntryKind::Comment { text: last }) if *last == text
+                    );
+                    if said {
+                        continue;
+                    }
                     if let Err(e) = self.board.comment(&task_id, &text).await {
                         eprintln!("aivyx-pa board: couldn't comment on task {task_id}: {e}");
                     }

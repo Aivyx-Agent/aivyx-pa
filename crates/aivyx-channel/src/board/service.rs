@@ -78,9 +78,15 @@ struct Inner {
     /// Called with an agent's id after a task is assigned to it, when the
     /// agent has `wake_on_assign`. The heartbeat installs it.
     assign_hook: AssignHook,
+    /// Called with an agent's id after it is paused (`false`) or resumed
+    /// (`true` when it should wake: `wake_on_assign` and To-do tasks). The
+    /// heartbeat installs it.
+    pause_hook: PauseHook,
 }
 
 type AssignHook = std::sync::RwLock<Option<Arc<dyn Fn(&str) + Send + Sync>>>;
+type PauseHookFn = Arc<dyn Fn(&str, bool) + Send + Sync>;
+type PauseHook = std::sync::RwLock<Option<PauseHookFn>>;
 
 /// The work board. Cheap to clone.
 #[derive(Clone)]
@@ -106,6 +112,7 @@ impl BoardService {
                 cancels: std::sync::Mutex::new(HashMap::new()),
                 team_poll,
                 assign_hook: std::sync::RwLock::new(None),
+                pause_hook: std::sync::RwLock::new(None),
             }),
         }
     }
@@ -296,6 +303,12 @@ impl BoardService {
         *self.inner.assign_hook.write().unwrap() = Some(hook);
     }
 
+    /// Install the hook [`set_agent_paused`](Self::set_agent_paused) calls
+    /// with an agent's id and whether a resume should wake it.
+    pub fn set_pause_hook(&self, hook: PauseHookFn) {
+        *self.inner.pause_hook.write().unwrap() = Some(hook);
+    }
+
     pub async fn agents(&self) -> Result<Vec<Agent>, BoardError> {
         let mut list = store::list_agents(&self.deps().store).await?;
         list.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
@@ -455,12 +468,31 @@ impl BoardService {
         } else {
             "agent_resumed"
         };
+        let mut changed = None;
         self.change_agent(name, op, |agent, _, now| {
             agent.paused = paused;
             agent.updated_at = now;
+            changed = Some((agent.id.clone(), agent.wake_on_assign));
             Ok(())
         })
-        .await
+        .await?;
+        let Some((id, wake_on_assign)) = changed else {
+            return Ok(());
+        };
+        let rewake = !paused
+            && wake_on_assign
+            && store::list_tasks(&self.deps().store)
+                .await?
+                .iter()
+                .any(|t| {
+                    t.state == TaskState::Todo
+                        && matches!(&t.owner, Some(Owner::Agent { id: o }) if *o == id)
+                });
+        let hook = self.inner.pause_hook.read().unwrap().clone();
+        if let Some(hook) = hook {
+            hook(&id, rewake);
+        }
+        Ok(())
     }
 
     pub async fn remove_agent(&self, name: &str) -> Result<(), BoardError> {

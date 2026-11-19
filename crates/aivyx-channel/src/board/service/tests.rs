@@ -1721,6 +1721,11 @@ async fn a_refused_start_comments_once_and_the_wake_moves_on() {
             ["the agent couldn't start this task: no such role in the config"]
         );
     }
+    // A second wake with the same refusal doesn't repeat the comment.
+    assert_eq!(hb.wake_now(&id).await, Ok(0));
+    for t in &ts {
+        assert_eq!(comments(&fx.board.task(t).await.unwrap()).len(), 1);
+    }
     assert!(seen.lock().unwrap().is_empty());
     assert!(!ops(&fx.audit).iter().any(|(op, _)| op == "started"));
 }
@@ -1826,5 +1831,90 @@ async fn rewake_on_startup_wakes_only_wake_on_assign_agents_with_todo_tasks() {
     hb.rewake_on_startup().await;
     assert!(hb.pending_wake(&eager).is_some());
     assert_eq!(hb.pending_wake(&idle), None);
+    assert_eq!(hb.pending_wake(&quiet), None);
+}
+
+#[tokio::test]
+async fn a_later_assignment_pushes_the_pending_wake_back() {
+    let fx = plain_fx().await;
+    let mut w = writer_agent("eager");
+    w.wake_on_assign = Some(true);
+    let id = fx.board.create_agent(w).await.unwrap();
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    let t = seed(&fx, None).await;
+    let owner = Some(Owner::Agent { id: id.clone() });
+    fx.board.assign(&t, owner.clone()).await.unwrap();
+    let first = hb.pending_wake(&id).unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    fx.board.assign(&t, owner).await.unwrap();
+    assert!(hb.pending_wake(&id).unwrap() > first);
+}
+
+#[tokio::test]
+async fn assigning_to_an_agent_without_wake_on_assign_sets_no_wake() {
+    let fx = plain_fx().await;
+    let id = fx.board.create_agent(writer_agent("quiet")).await.unwrap();
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    let t = seed(&fx, None).await;
+    fx.board
+        .assign(&t, Some(Owner::Agent { id: id.clone() }))
+        .await
+        .unwrap();
+    assert_eq!(hb.pending_wake(&id), None);
+}
+
+#[tokio::test]
+async fn pausing_mid_wake_starts_nothing_more() {
+    let mut a = ScriptedAgent::new(Reply::Done("done".into()));
+    a.hold = true;
+    let agent = Arc::new(a);
+    let (seen, started, release) = (
+        Arc::clone(&agent.seen),
+        Arc::clone(&agent.started),
+        Arc::clone(&agent.release),
+    );
+    let fx = fixture(agent).await;
+    let id = fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let ts = seed_agent_tasks(&fx, &id, 3).await;
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    let wake = {
+        let (hb, id) = (hb.clone(), id.clone());
+        tokio::spawn(async move { hb.wake_now(&id).await })
+    };
+    tokio::time::timeout(WAIT, started.notified()).await.unwrap();
+    // A pause doesn't stop the run in progress, only what comes after.
+    fx.board.set_agent_paused("ann", true).await.unwrap();
+    release.notify_one();
+    assert_eq!(tokio::time::timeout(WAIT, wake).await.unwrap().unwrap(), Ok(1));
+    assert_eq!(
+        task_states(&fx, &ts).await,
+        [TaskState::Review, TaskState::Todo, TaskState::Todo]
+    );
+    assert_eq!(titles_seen(&seen), ["T0"]);
+}
+
+#[tokio::test]
+async fn a_pause_drops_the_pending_wake_and_a_resume_sets_a_fresh_one() {
+    let fx = plain_fx().await;
+    let mut w = writer_agent("eager");
+    w.wake_on_assign = Some(true);
+    let eager = fx.board.create_agent(w).await.unwrap();
+    let quiet = fx.board.create_agent(writer_agent("quiet")).await.unwrap();
+    seed_agent_tasks(&fx, &eager, 1).await;
+    seed_agent_tasks(&fx, &quiet, 1).await;
+    let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+    hb.wake_after(&eager, Duration::ZERO);
+    hb.wake_after(&quiet, Duration::ZERO);
+    fx.board.set_agent_paused("eager", true).await.unwrap();
+    fx.board.set_agent_paused("quiet", true).await.unwrap();
+    assert_eq!(hb.pending_wake(&eager), None);
+    assert_eq!(hb.pending_wake(&quiet), None);
+    let before = now_ms();
+    fx.board.set_agent_paused("eager", false).await.unwrap();
+    fx.board.set_agent_paused("quiet", false).await.unwrap();
+    // A fresh wake, a full delay from the resume.
+    let due = hb.pending_wake(&eager).expect("a fresh wake");
+    assert!(due >= before + fast().assign_delay.as_millis() as u64);
+    // Not `wake_on_assign`: a resume sets no wake.
     assert_eq!(hb.pending_wake(&quiet), None);
 }
