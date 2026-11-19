@@ -211,7 +211,8 @@ firing fell during the pause.
 
 After the daemon starts (and its sweep has returned interrupted tasks to To
 do), every wake-on-assign agent that owns To-do tasks gets a wake 30 s
-later. A heartbeat agent just waits for its next firing.
+later. After a restart, a heartbeat agent wakes at the first tick if a
+firing fell while the daemon was down (once; no catch-up).
 
 If the board refuses to start a task when an agent wakes (for example, the
 agent works as a role that isn't in your config, or as the team when no team

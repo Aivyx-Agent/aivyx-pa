@@ -63,10 +63,16 @@ pending assignment wake; a run already going finishes. Resuming a
 `operator`). A start from a wake is `started` with actor `agent`. No free
 text goes into the chain.
 
+## Missed firings
+
+This refines the spec's "not run later": a heartbeat firing that fell while
+the daemon was down counts once. The agent wakes at the first tick after the
+restart; there is no catch-up for several missed firings.
+
 ## IPC
 
-The board query family gains the agent queries: list and get, create, edit,
-pause, resume and remove. `BoardSnapshot` carries the agents. The types live
+The board query family gains the agent queries: list, create, edit,
+pause, resume, remove and wake. `BoardSnapshot` carries the agents. The types live
 in `aivyx-ipc` and stay wasm-clean.
 
 ## Who may change agents

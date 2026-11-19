@@ -5,6 +5,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- Once tasks are assigned to agents, aivyx-pa 1.3.0 can no longer read the board.
+
 ### Added
 
 - **Standing agents and heartbeats on the work board (preview).** An agent
