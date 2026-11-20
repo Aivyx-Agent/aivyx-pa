@@ -258,6 +258,8 @@ mod tests {
             team: None,
             notify: None,
             notify_target: None,
+            protected_paths: vec![],
+            home: None,
         }));
         Fx {
             _dir: dir,

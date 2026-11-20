@@ -11711,6 +11711,19 @@ async fn run_async(
             // empty level) capped by its trust ceiling, as `role.switch`
             // builds a child.
             let board_roles = aivyx_channel::board_role_scopes(&roles, &backcompat_floor);
+            // A22 — a coder workspace can't contain or sit inside pa's own
+            // data, config or packs folders.
+            let board_protected_paths: Vec<std::path::PathBuf> =
+                aivyx_instance::InstancePaths::current()
+                    .ok()
+                    .map(|p| {
+                        [p.data_dir(), p.config_dir(), p.packs_dir()]
+                            .into_iter()
+                            .flatten()
+                            .filter(|d| d.exists())
+                            .collect()
+                    })
+                    .unwrap_or_default();
             let board = Arc::new(aivyx_channel::board::BoardService::new(aivyx_channel::board::BoardDeps {
                 store: storage.domain(KeyDomain::Board),
                 missions: storage.domain(KeyDomain::Missions),
@@ -11722,6 +11735,10 @@ async fn run_async(
                 team: team_missions.clone(),
                 notify: Some(Arc::clone(&notify_dispatcher)),
                 notify_target: default_notify_target_name.clone(),
+                protected_paths: board_protected_paths,
+                home: std::env::var_os("HOME")
+                    .filter(|h| !h.is_empty())
+                    .map(std::path::PathBuf::from),
             }));
             // Set outside the assert: `debug_assert!` doesn't evaluate its
             // argument in a release build.

@@ -11,12 +11,13 @@ use aivyx_capability::CapabilitySet;
 use aivyx_core::{CancellationToken, ChannelContext, Message, SessionId, TurnOutcome};
 use aivyx_ipc::board::{
     Agent, BoardSnapshot, Goal, NewAgent, NewTask, Owner, Project, RunKind, RunOutcome, RunRef,
-    Task, TaskState, WorksAs,
+    Task, TaskState, WorksAs, Workspace,
 };
 use aivyx_ipc::team_mission::{TeamMissionPhase, TeamMissionRecord};
 use aivyx_storage::{DomainHandle, StorageError};
 
 use super::agents;
+use super::workspaces;
 use super::model::{self, Actor, BoardError, new_id, now_ms};
 use super::runner::{BoardRunContext, brief, role_ceiling, turn_result};
 use super::store;
@@ -64,6 +65,11 @@ pub struct BoardDeps {
     pub team: Option<TeamMissionService>,
     pub notify: Option<Arc<NotifyDispatcher>>,
     pub notify_target: Option<String>,
+    /// pa's own data and config folders: a workspace can't contain or sit
+    /// inside them.
+    pub protected_paths: Vec<std::path::PathBuf>,
+    /// The operator's home folder, which can't itself be a workspace.
+    pub home: Option<std::path::PathBuf>,
 }
 
 struct Inner {
@@ -254,6 +260,7 @@ impl BoardService {
             }
             model::add_subtask_check(&parent, &Actor::Operator)?;
         }
+        self.check_owner_workspace(new.owner.as_ref()).await?;
         let mut woken = None;
         if let Some(Owner::Agent { id }) = &new.owner {
             let agent = store::get_agent(&self.deps().store, id)
@@ -295,6 +302,7 @@ impl BoardService {
         let woken = {
             let _w = self.inner.write_lock.lock().await;
             let mut task = self.load_task(task_id).await?;
+            self.check_owner_workspace(owner.as_ref()).await?;
             let mut woken = None;
             if let Some(Owner::Agent { id }) = &owner {
                 let agent = store::get_agent(&self.deps().store, id)
@@ -345,8 +353,9 @@ impl BoardService {
     }
 
     /// A `works_as` the daemon can run: the role exists, or a team is set up.
-    fn check_works_as(&self, works_as: &WorksAs) -> Result<(), BoardError> {
+    async fn check_works_as(&self, works_as: &WorksAs) -> Result<(), BoardError> {
         match works_as {
+            WorksAs::Coder { workspace } => self.check_workspace(workspace).await,
             WorksAs::Role { name } if !self.deps().roles.contains_key(name) => {
                 Err(BoardError::NotAllowed("no such role in the config"))
             }
@@ -355,6 +364,83 @@ impl BoardService {
             }
             _ => Ok(()),
         }
+    }
+
+    async fn check_workspace(&self, id: &str) -> Result<(), BoardError> {
+        store::get_workspace(&self.deps().store, id)
+            .await?
+            .map(|_| ())
+            .ok_or(BoardError::NotFound("workspace"))
+    }
+
+    async fn check_owner_workspace(&self, owner: Option<&Owner>) -> Result<(), BoardError> {
+        match owner {
+            Some(Owner::Coder { workspace }) => self.check_workspace(workspace).await,
+            _ => Ok(()),
+        }
+    }
+
+    pub async fn workspaces(&self) -> Result<Vec<Workspace>, BoardError> {
+        let mut list = store::list_workspaces(&self.deps().store).await?;
+        list.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        Ok(list)
+    }
+
+    pub async fn workspace_by_name(&self, name: &str) -> Result<Workspace, BoardError> {
+        store::list_workspaces(&self.deps().store)
+            .await?
+            .into_iter()
+            .find(|w| w.name == name)
+            .ok_or(BoardError::NotFound("workspace"))
+    }
+
+    /// The operator registers a folder; the stored path is canonical.
+    pub async fn add_workspace(&self, name: &str, path: &str) -> Result<String, BoardError> {
+        workspaces::validate_name(name)?;
+        let canon = workspaces::validate_path(
+            std::path::Path::new(path),
+            self.deps().home.as_deref(),
+            &self.deps().protected_paths,
+        )?;
+        let _w = self.inner.write_lock.lock().await;
+        if store::list_workspaces(&self.deps().store)
+            .await?
+            .iter()
+            .any(|w| w.name == name)
+        {
+            return Err(BoardError::NotAllowed("a workspace with that name exists"));
+        }
+        let ws = Workspace {
+            id: new_id('w'),
+            name: name.into(),
+            path: canon.to_string_lossy().into_owned(),
+            created_at: now_ms(),
+        };
+        store::put_workspace(&self.deps().store, &ws).await?;
+        self.record("workspace_added", &ws.id, "operator");
+        Ok(ws.id)
+    }
+
+    /// Refused while an open task is owned by the workspace or an agent
+    /// works as it.
+    pub async fn remove_workspace(&self, name: &str) -> Result<(), BoardError> {
+        let _w = self.inner.write_lock.lock().await;
+        let ws = self.workspace_by_name(name).await?;
+        let h = &self.deps().store;
+        let agents = store::list_agents(h).await?;
+        let in_use = agents
+            .iter()
+            .any(|a| matches!(&a.works_as, WorksAs::Coder { workspace } if *workspace == ws.id))
+            || store::list_tasks(h).await?.iter().any(|t| {
+                matches!(t.state, TaskState::Todo | TaskState::Running | TaskState::Review)
+                    && matches!(&t.owner, Some(Owner::Coder { workspace }) if *workspace == ws.id)
+            });
+        if in_use {
+            return Err(BoardError::NotAllowed("the workspace is in use"));
+        }
+        store::delete_workspace(h, &ws.id).await?;
+        self.record("workspace_removed", &ws.id, "operator");
+        Ok(())
     }
 
     async fn agent_map(&self) -> Result<HashMap<String, Agent>, BoardError> {
@@ -389,7 +475,7 @@ impl BoardService {
         let _w = self.inner.write_lock.lock().await;
         let all = self.agent_map().await?;
         Self::check_name(&name, None, &all)?;
-        self.check_works_as(&works_as)?;
+        self.check_works_as(&works_as).await?;
         let heartbeat = if a.clear_heartbeat { None } else { a.heartbeat };
         if let Some(h) = &heartbeat {
             agents::validate_heartbeat(h)?;
@@ -442,12 +528,12 @@ impl BoardService {
     }
 
     pub async fn edit_agent(&self, name: &str, a: NewAgent) -> Result<(), BoardError> {
+        if let Some(w) = &a.works_as {
+            self.check_works_as(w).await?;
+        }
         self.change_agent(name, "agent_edited", |agent, all, now| {
             if let Some(n) = &a.name {
                 Self::check_name(n, Some(&agent.id), all)?;
-            }
-            if let Some(w) = &a.works_as {
-                self.check_works_as(w)?;
             }
             if let Some(h) = a.heartbeat.as_deref().filter(|_| !a.clear_heartbeat) {
                 agents::validate_heartbeat(h)?;

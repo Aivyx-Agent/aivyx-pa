@@ -138,4 +138,16 @@ mod tests {
             std::fs::canonicalize(&real).unwrap()
         );
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_protected_folder_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&data, &link).unwrap();
+        let prot = [data];
+        assert!(msg(validate_path(&link, None, &prot)).contains("own folders"));
+    }
 }

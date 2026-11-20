@@ -173,6 +173,8 @@ async fn fixture_on(
         team: setup.team,
         notify_target: setup.notify.as_ref().map(|_| "ops".to_string()),
         notify: setup.notify,
+        protected_paths: vec![dir.path().join("pa-data")],
+        home: Some(dir.path().to_path_buf()),
     };
     Fx {
         _dir: dir,
@@ -2009,4 +2011,163 @@ async fn a_start_refused_for_a_bad_state_leaves_no_comment() {
     hb.note_refused(&id, &task, BoardError::NotAllowed("no such role in the config"))
         .await;
     assert_eq!(comments(&fx.board.task(&ts[0]).await.unwrap()).len(), 1);
+}
+
+// ---- A22 — coder workspaces ----
+
+fn make_dir(fx: &Fx, name: &str) -> String {
+    let p = fx._dir.path().join(name);
+    std::fs::create_dir_all(&p).unwrap();
+    p.to_string_lossy().into_owned()
+}
+
+#[tokio::test]
+async fn workspace_operations_each_write_one_audit_op_and_no_path() {
+    let fx = plain_fx().await;
+    let path = make_dir(&fx, "proj");
+    let id = fx.board.add_workspace("proj", &path).await.unwrap();
+    assert!(id.starts_with("w-") && id.len() == 10, "{id}");
+    let list = fx.board.workspaces().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(fx.board.workspace_by_name("proj").await.unwrap().id, id);
+    assert_eq!(fx.board.snapshot().await.unwrap().workspaces, list);
+    fx.board.remove_workspace("proj").await.unwrap();
+    assert!(fx.board.workspaces().await.unwrap().is_empty());
+    assert_eq!(
+        fx.board.workspace_by_name("proj").await,
+        Err(BoardError::NotFound("workspace"))
+    );
+    assert_eq!(
+        ops(&fx.audit),
+        [
+            ("workspace_added".to_string(), "operator".to_string()),
+            ("workspace_removed".to_string(), "operator".to_string())
+        ]
+    );
+    for e in fx.audit.entries().unwrap() {
+        let json = serde_json::to_string(&e.event).unwrap();
+        assert!(!json.contains(&path), "{json}");
+        assert!(!json.contains("proj"), "{json}");
+    }
+    assert_chain_verifies(&fx).await;
+}
+
+#[tokio::test]
+async fn workspace_name_and_path_are_validated() {
+    let fx = plain_fx().await;
+    let path = make_dir(&fx, "proj");
+    fx.board.add_workspace("proj", &path).await.unwrap();
+    let other = make_dir(&fx, "other");
+    assert_eq!(
+        fx.board.add_workspace("proj", &other).await,
+        Err(BoardError::NotAllowed("a workspace with that name exists"))
+    );
+    assert!(matches!(
+        fx.board.add_workspace("bad name", &other).await,
+        Err(BoardError::NotAllowed(_))
+    ));
+    let missing = fx._dir.path().join("nope").to_string_lossy().into_owned();
+    assert_eq!(
+        fx.board.add_workspace("x", &missing).await,
+        Err(BoardError::NotAllowed("the workspace path doesn't exist"))
+    );
+    // home itself and pa's own folders
+    let home = fx._dir.path().to_string_lossy().into_owned();
+    assert!(fx.board.add_workspace("h", &home).await.is_err());
+    let prot = make_dir(&fx, "pa-data/sub");
+    assert!(fx.board.add_workspace("p", &prot).await.is_err());
+    assert_eq!(fx.board.workspaces().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_workspace_in_use_cannot_be_removed() {
+    let fx = plain_fx().await;
+    let path = make_dir(&fx, "proj");
+    let ws = fx.board.add_workspace("proj", &path).await.unwrap();
+    let t = seed(
+        &fx,
+        Some(Owner::Coder {
+            workspace: ws.clone(),
+        }),
+    )
+    .await;
+    let busy = Err(BoardError::NotAllowed("the workspace is in use"));
+    assert_eq!(fx.board.remove_workspace("proj").await, busy);
+    fx.board.assign(&t, None).await.unwrap();
+    let a = fx
+        .board
+        .create_agent(new_agent(
+            "cody",
+            WorksAs::Coder {
+                workspace: ws.clone(),
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(fx.board.remove_workspace("proj").await, busy);
+    fx.board.remove_agent("cody").await.unwrap();
+    let _ = a;
+    fx.board.remove_workspace("proj").await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unknown_workspace_is_not_found_everywhere() {
+    let fx = plain_fx().await;
+    let nf = BoardError::NotFound("workspace");
+    let ghost = || Owner::Coder {
+        workspace: "w-nope".into(),
+    };
+    let t = seed(&fx, None).await;
+    assert_eq!(fx.board.assign(&t, Some(ghost())).await, Err(nf.clone()));
+    let g = fx.board.create_goal("g", "").await.unwrap();
+    let p = fx.board.create_project(&g, "p", "").await.unwrap();
+    let r = fx
+        .board
+        .create_task(NewTask {
+            project_id: p,
+            parent_task: None,
+            title: "x".into(),
+            description: String::new(),
+            owner: Some(ghost()),
+            review_required: true,
+        })
+        .await;
+    assert_eq!(r, Err(nf.clone()));
+    let coder = WorksAs::Coder {
+        workspace: "w-nope".into(),
+    };
+    assert_eq!(
+        fx.board.create_agent(new_agent("c", coder.clone())).await,
+        Err(nf.clone())
+    );
+    fx.board.create_agent(writer_agent("ann")).await.unwrap();
+    let edit = NewAgent {
+        works_as: Some(coder),
+        ..NewAgent::default()
+    };
+    assert_eq!(fx.board.edit_agent("ann", edit).await, Err(nf));
+}
+
+#[tokio::test]
+async fn a_coder_agent_resolves_to_a_coder_owner() {
+    let fx = plain_fx().await;
+    let path = make_dir(&fx, "proj");
+    let ws = fx.board.add_workspace("proj", &path).await.unwrap();
+    let id = fx
+        .board
+        .create_agent(new_agent(
+            "cody",
+            WorksAs::Coder {
+                workspace: ws.clone(),
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        fx.board
+            .resolve_owner(&Owner::Agent { id })
+            .await
+            .unwrap(),
+        Owner::Coder { workspace: ws }
+    );
 }
