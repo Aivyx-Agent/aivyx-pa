@@ -14620,3 +14620,66 @@ fn old_local_configs_still_load_unchanged() {
     }
     drop(env);
 }
+
+#[test]
+fn openai_constrain_tool_calls_round_trips_and_defaults_off() {
+    // Chapter Emboss (EB.2) — `[openai] constrain_tool_calls` is the
+    // opt-in for grammar-constrained tool-calling on llama.cpp-family
+    // servers. Omitted → false (byte-identical passthrough); set → true.
+    let env = EnvScope::new();
+
+    // Omitted → false.
+    let tmp = TempDir::new("emboss-constrain-default");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    std::fs::write(
+        &toml_path,
+        r#"
+[agent]
+provider = "llamacpp"
+
+[openai]
+base_url = "http://localhost:8080"
+"#,
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+    assert!(
+        !cfg.openai_constrain_tool_calls,
+        "omitted constrain_tool_calls must default to false"
+    );
+
+    // Set → true.
+    let tmp2 = TempDir::new("emboss-constrain-on");
+    let toml_path2 = tmp2.path().join("aivyx-pa.toml");
+    std::fs::write(
+        &toml_path2,
+        r#"
+[agent]
+provider = "llamacpp"
+
+[openai]
+base_url = "http://localhost:8080"
+constrain_tool_calls = true
+"#,
+    )
+    .unwrap();
+    let opts2 = LoadOptions {
+        toml_path: Some(toml_path2),
+        require_api_key: false,
+        require_telegram_token: false,
+        require_discord_token: false,
+        require_slack_tokens: false,
+        role_override: None,
+    };
+    let cfg2 = AivyxConfig::load_from_env_and_toml(&opts2).expect("load");
+    assert!(cfg2.openai_constrain_tool_calls);
+    drop(env);
+}

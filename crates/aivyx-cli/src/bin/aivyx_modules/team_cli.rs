@@ -148,7 +148,7 @@ async fn resolve_gate(
 fn load_team_config(config_path: Option<&str>) -> Result<Option<TeamConfig>, String> {
     match config_path {
         None => Ok(None),
-        Some(path) => TeamConfig::load(path)
+        Some(path) => aivyx_team::load_team(path)
             .map(Some)
             .map_err(|e| format!("failed to load team config from {path:?}: {e}")),
     }

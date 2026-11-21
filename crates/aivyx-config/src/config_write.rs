@@ -1786,12 +1786,21 @@ impl std::fmt::Debug for EmbeddingEntryWrite {
 /// Patch the `[embedding]` section, touching only the `Some` fields. An
 /// explicit-but-blank `base_url`/`model` is refused (would write an
 /// empty string, which the loader's own defaulting treats differently
-/// from "key absent") rather than silently accepted.
+/// from "key absent") rather than silently accepted. A `base_url` that is
+/// not local (`aivyx_route::require_local`) is refused with the NotLocal text.
 pub fn write_embedding_section(path: &Path, entry: &EmbeddingEntryWrite) -> Result<(), ConfigWriteError> {
     if let Some(v) = &entry.base_url {
         if v.trim().is_empty() {
             return Err(ConfigWriteError::InvalidEmbeddingConfig {
                 reason: "base_url, if set, must not be blank".to_string(),
+            });
+        }
+        // 2.0 (local-only): the loader refuses a non-local `[embedding]
+        // base_url`, so never write one. The reason is the NotLocal text.
+        // (May do a blocking DNS lookup for a domain name.)
+        if let Err(e) = aivyx_route::require_local(v.trim()) {
+            return Err(ConfigWriteError::InvalidEmbeddingConfig {
+                reason: format!("base_url: {e}"),
             });
         }
     }
@@ -2098,14 +2107,17 @@ mod tests {
     #[test]
     fn budget_writes_action_and_alert() {
         let path = temp_toml("budget");
+        // The writer owns action + alert (+ the refused money caps); token
+        // caps are edited by hand, so an existing one must survive untouched.
+        std::fs::write(&path, "[budget]\nper_mission_tokens = 50000\n").unwrap();
         let b = BudgetConfig {
             on_exceeded: BudgetAction::Deny,
             alert_at: Some(0.8),
-            per_mission_tokens: Some(50_000),
             ..Default::default()
         };
         write_budget_section(&path, &b).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
+        assert!(out.contains("per_mission_tokens = 50000"), "{out}");
         assert!(!out.contains("_usd"), "{out}");
         assert!(out.contains("on_exceeded = \"deny\""), "{out}");
         assert!(out.contains("alert_at = 0.8"), "{out}");
@@ -3339,6 +3351,34 @@ mod tests {
     }
 
     #[test]
+    fn embedding_write_refuses_a_non_local_base_url() {
+        for url in ["https://api.openai.com/v1", "http://203.0.113.9:8080"] {
+            let path = temp_toml("embedding-not-local");
+            std::fs::write(&path, "[embedding]\nmodel = \"m\"\n").unwrap();
+            let err = write_embedding_section(
+                &path,
+                &EmbeddingEntryWrite { base_url: Some(url.to_string()), model: None, api_key: None },
+            )
+            .unwrap_err();
+            let msg = err.to_string();
+            assert!(matches!(err, ConfigWriteError::InvalidEmbeddingConfig { .. }));
+            assert!(msg.contains("is not local"), "{msg}");
+            assert!(msg.contains("aivyx is local-only"), "{msg}");
+            // Nothing was written.
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert!(!after.contains("base_url"), "{after}");
+        }
+        // A LAN server is accepted.
+        let path = temp_toml("embedding-lan");
+        std::fs::write(&path, "").unwrap();
+        write_embedding_section(
+            &path,
+            &EmbeddingEntryWrite { base_url: Some("http://192.168.1.9:8081".to_string()), model: None, api_key: None },
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn embedding_write_rejects_blank_base_url() {
         let path = temp_toml("embedding-blank-url");
         std::fs::write(&path, "").unwrap();
@@ -3357,14 +3397,14 @@ mod tests {
         write_embedding_section(
             &path,
             &EmbeddingEntryWrite {
-                base_url: Some("https://api.openai.com".to_string()),
+                base_url: Some("http://127.0.0.1:8081".to_string()),
                 model: Some("text-embedding-3-small".to_string()),
                 api_key: Some("sk-real-secret".to_string()),
             },
         )
         .unwrap();
         let read = read_embedding_section(&path).unwrap();
-        assert_eq!(read.base_url.as_deref(), Some("https://api.openai.com"));
+        assert_eq!(read.base_url.as_deref(), Some("http://127.0.0.1:8081"));
         assert_eq!(read.model.as_deref(), Some("text-embedding-3-small"));
         // read_embedding_section itself returns the raw value (Task 4's
         // daemon handler is what redacts it before it reaches the wire) —

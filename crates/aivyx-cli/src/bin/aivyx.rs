@@ -1369,6 +1369,16 @@ fn run() -> Result<(), String> {
     let mut config = AivyxConfig::load_from_env_and_toml(&load_opts)?;
 
     if let Some(kind) = cli_provider {
+        // The load check for `provider = "openai"` without a base URL ran
+        // against the file's provider, not this flag: apply it now, with the
+        // same error.
+        if kind == ProviderKind::OpenAi && config.openai_base_url.is_none() {
+            return Err(aivyx_config::ConfigError::Invalid {
+                field: "openai.base_url",
+                reason: aivyx_config::OPENAI_NEEDS_BASE_URL.to_string(),
+            }
+            .into());
+        }
         config.provider = aivyx_config::Sourced::new(kind, aivyx_config::FieldSource::Env);
     }
 
@@ -8211,7 +8221,7 @@ async fn run_async(
             // local); the key is optional, as for llama-server.
             let base_url = openai_base_url
                 .map(|s| s.value)
-                .ok_or("provider \"openai\" needs [openai] base_url")?;
+                .ok_or_else(|| aivyx_config::OPENAI_NEEDS_BASE_URL.to_string())?;
             let cfg = match openai_api_key {
                 Some(k) => OpenAiConfig::new(k.value),
                 None => OpenAiConfig::without_api_key(),

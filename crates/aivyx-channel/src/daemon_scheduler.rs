@@ -345,6 +345,16 @@ fn update_earliest(
     }
 }
 
+/// `aivyx_team::load_team` off the async worker (blocking DNS in the
+/// local-only URL guard).
+async fn load_team_blocking(
+    path: impl AsRef<std::path::Path> + Send + 'static,
+) -> Result<aivyx_team::TeamConfig, aivyx_team::TeamError> {
+    tokio::task::spawn_blocking(move || aivyx_team::load_team(path))
+        .await
+        .unwrap_or_else(|e| Err(aivyx_team::TeamError::Io(format!("load task failed: {e}"))))
+}
+
 /// Chapter Muster — the deterministic team-mission half of `fire_schedule`,
 /// extracted into its own function so it's testable without constructing a
 /// `TriggerDispatch` (which nothing in this codebase does today — see this
@@ -360,7 +370,7 @@ async fn fire_team_mission_schedule(
     report_ctx: Option<&ReportContext>,
 ) {
     let config = match &tm.pack_config {
-        Some(path) => match aivyx_team::TeamConfig::load(path) {
+        Some(path) => match load_team_blocking(path.clone()).await {
             Ok(c) => Some(c),
             Err(e) => {
                 let msg = format!(

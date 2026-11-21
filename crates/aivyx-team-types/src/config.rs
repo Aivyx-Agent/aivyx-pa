@@ -160,6 +160,43 @@ impl TeamConfig {
         Ok(file.team)
     }
 
+    /// [`Self::from_toml`], then run `check` on every member's `base_url`
+    /// (members without one are skipped). A refusal becomes
+    /// `team member <name> base_url: <reason>`. The check is injected so
+    /// this crate stays dependency-light (wasm-clean); aivyx-team passes
+    /// the local-only guard.
+    pub fn from_toml_checked(
+        s: &str,
+        check: &dyn Fn(&str) -> Result<(), String>,
+    ) -> Result<Self, TeamError> {
+        let team = Self::from_toml(s)?;
+        team.check_base_urls(check)?;
+        Ok(team)
+    }
+
+    /// [`Self::load`] with the same per-member `base_url` check as
+    /// [`Self::from_toml_checked`].
+    pub fn load_checked(
+        path: impl AsRef<Path>,
+        check: &dyn Fn(&str) -> Result<(), String>,
+    ) -> Result<Self, TeamError> {
+        let team = Self::load(path)?;
+        team.check_base_urls(check)?;
+        Ok(team)
+    }
+
+    /// Run `check` on every member `base_url`.
+    pub fn check_base_urls(&self, check: &dyn Fn(&str) -> Result<(), String>) -> Result<(), TeamError> {
+        for m in &self.members {
+            if let Some(url) = m.base_url.as_deref() {
+                check(url).map_err(|e| {
+                    TeamError::Config(format!("team member {} base_url: {e}", m.name))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
     /// Serialize back to `[team]`-rooted TOML.
     pub fn to_toml(&self) -> Result<String, TeamError> {
         toml::to_string_pretty(&TeamFileRef { team: self }).map_err(|e| TeamError::Toml(e.to_string()))

@@ -1342,7 +1342,7 @@ fn check_team_pack(doc: &toml_edit::DocumentMut, toml_path: &Path) -> bool {
             toml_path.parent().unwrap_or(Path::new(".")).join(p)
         }
     };
-    match aivyx_team::TeamConfig::load(&pack) {
+    match aivyx_team::load_team(&pack) {
         Ok(team) => {
             pass(&format!(
                 "team pack `{}` loads ({} members)",

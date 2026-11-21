@@ -258,7 +258,7 @@ pub fn check_pa_part(dir: &Path) -> Result<PaPartSummary, Vec<String>> {
 
     // The team config loads.
     if let Some(rel) = &pa.team_config {
-        match aivyx_team::TeamConfig::load(dir.join(rel)) {
+        match aivyx_team::load_team(dir.join(rel)) {
             Ok(team) => {
                 team_members = team.members.len();
                 for m in &team.members {

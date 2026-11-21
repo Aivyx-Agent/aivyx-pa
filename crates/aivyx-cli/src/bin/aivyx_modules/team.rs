@@ -87,7 +87,7 @@ fn load_team(config: Option<&str>) -> Result<TeamConfig, String> {
 /// without `--config` don't quietly use a different team.
 fn load_team_from(config: Option<&str>, toml_path: &Path) -> Result<TeamConfig, String> {
     match config {
-        Some(path) => TeamConfig::load(path)
+        Some(path) => aivyx_team::load_team(path)
             .map_err(|e| format!("failed to load team config from {path:?}: {e}")),
         None => Ok(installed_team_at(toml_path)),
     }
@@ -162,7 +162,7 @@ pub fn resolve_daemon_team_config(configured: Option<&Path>, base_dir: &Path) ->
     let Some(path) = candidate else {
         return default_nonagon();
     };
-    match TeamConfig::load(&path) {
+    match aivyx_team::load_team(&path) {
         Ok(cfg) => {
             eprintln!("aivyx-pa team: loaded team config from {}", path.display());
             cfg
@@ -202,7 +202,7 @@ pub fn run_roster(config: Option<&str>) -> Result<(), String> {
 fn init_source(pack: Option<&str>) -> Result<TeamConfig, String> {
     match pack {
         None | Some("default") => Ok(default_nonagon()),
-        Some(path) => TeamConfig::load(path)
+        Some(path) => aivyx_team::load_team(path)
             .map_err(|e| format!("failed to load team pack from {path:?}: {e}")),
     }
 }
