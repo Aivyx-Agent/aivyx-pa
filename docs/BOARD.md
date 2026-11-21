@@ -331,10 +331,17 @@ Things to know:
   project whose test command coder detects (`cargo test` for a Cargo
   project, and so on). Without one the task goes back to To do with coder's
   error.
-- **Undo** is coder's: each batch of edits is a checkpoint, and you undo a
-  run's work with `/undo` (and `/checkpoints`) in aivyx-coder, opened in the
-  workspace. Send back puts the task in To do with your note, and the next
-  run starts from the folder as it is now.
+- **Undo** is coder's: each run saves a coder session with its
+  checkpoints. To take a run's work back, open that session in the
+  workspace with `aivyx-coder --resume` (the latest session; `/sessions`
+  lists older ones) and type `/undo`, which shows the files and asks first.
+  The checkpoints are also plain git refs (`git for-each-ref
+  refs/aivyx/checkpoints/`). Send back puts the task in To do with your
+  note, and the next run starts from the folder as it is now.
+- **Cancel, the ceiling and a restart don't undo anything:** edits coder
+  made before it stopped stay in the folder. Use `/undo` as above.
+- `board show` cuts a run's answer at 200 characters, so with a long
+  notice the counts at its end may not show there.
 - **A very long brief** (over about 128 KiB, the system's limit on one
   argument) can't be passed, so the start fails and the task goes back to
   To do with the error.
