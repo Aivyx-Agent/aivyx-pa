@@ -2208,7 +2208,7 @@ async fn a_folder_already_registered_is_refused() {
 #[cfg(unix)]
 mod coder {
     use super::*;
-    use crate::board::coder_run::tests::{TRAPS_TERM, fake_coder};
+    use crate::board::coder_run::tests::{TRAPS_TERM, fake_coder, wait_trap_ready};
 
     const REPORT: &str = r#"{"outcome":"goal_achieved","notice":"Added parse() and its test.","prompt_tokens":100,"completion_tokens":20,"checkpoints":3,"changed_files":[{"path":"a.rs"},{"path":"b.rs"}]}"#;
 
@@ -2389,7 +2389,8 @@ mod coder {
         );
         assert_eq!(fx.board.task(&t2).await.unwrap().state, TaskState::Todo);
         // Let the fake set its trap.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let path = fx.board.workspaces().await.unwrap()[0].path.clone();
+        wait_trap_ready(std::path::Path::new(&path)).await;
         fx.board.cancel(&t1).await.unwrap();
         assert_eq!(
             fx.board.task(&t1).await.unwrap().state,

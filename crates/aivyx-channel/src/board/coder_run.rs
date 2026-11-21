@@ -265,11 +265,34 @@ async fn stop(child: &mut Child, grace: Duration) -> Option<std::process::ExitSt
     }
 }
 
-/// pa's own secrets (passphrase, API and bot tokens: `AIVYX_PA_*`) stay
-/// with pa.
+/// Well-known cloud-provider credential variables. pa and aivyx-coder are
+/// local-only (local LLMs), so pa never hands a cloud credential to a worker.
+const CLOUD_CREDENTIAL_VARS: &[&str] = &[
+    "OPENAI_API_KEY",
+    "OPENAI_ORG_ID",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "MISTRAL_API_KEY",
+    "GROQ_API_KEY",
+    "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "XAI_API_KEY",
+    "COHERE_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AWS_BEARER_TOKEN_BEDROCK",
+];
+
+/// pa's own secrets (passphrase, API and bot tokens: `AIVYX_PA_*`) and
+/// cloud-provider credentials stay with pa.
 fn strip_pa_env(cmd: &mut Command, names: impl Iterator<Item = OsString>) {
     for k in names {
-        if k.to_str().is_some_and(|k| k.starts_with("AIVYX_PA_")) {
+        if k.to_str()
+            .is_some_and(|k| k.starts_with("AIVYX_PA_") || CLOUD_CREDENTIAL_VARS.contains(&k))
+        {
             cmd.env_remove(k);
         }
     }
@@ -612,10 +635,23 @@ pub(crate) mod tests {
         assert!(o.report.is_none());
     }
 
+    /// Polls (bounded) until a trapping fake coder has installed its trap;
+    /// it touches `trap-ready` in its working directory right after.
+    pub(crate) async fn wait_trap_ready(dir: &Path) {
+        let f = dir.join("trap-ready");
+        for _ in 0..500 {
+            if f.exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the fake coder never installed its trap");
+    }
+
     /// Loops in short sleeps (so no long-lived grandchild is left behind);
     /// on TERM writes a report and exits 130.
     #[cfg(unix)]
-    pub(crate) const TRAPS_TERM: &str = "trap 'echo \"{\\\"notice\\\":\\\"stopped\\\"}\" > \"$REPORT\"; exit 130' TERM\ni=0\nwhile [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done\nexit 0";
+    pub(crate) const TRAPS_TERM: &str = "trap 'echo \"{\\\"notice\\\":\\\"stopped\\\"}\" > \"$REPORT\"; exit 130' TERM\ntouch trap-ready\ni=0\nwhile [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done\nexit 0";
 
     #[cfg(unix)]
     #[tokio::test]
@@ -624,8 +660,9 @@ pub(crate) mod tests {
         let bin = fake_coder(d.path(), "hold", TRAPS_TERM);
         let cancel = CancellationToken::new();
         let c = cancel.clone();
+        let dir = d.path().to_path_buf();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            wait_trap_ready(&dir).await;
             c.cancel();
         });
         let started = std::time::Instant::now();
@@ -664,7 +701,9 @@ pub(crate) mod tests {
         let d = tempfile::tempdir().unwrap();
         let bin = fake_coder(d.path(), "hung", TRAPS_TERM);
         let mut s = spec(bin, d.path());
-        s.ceiling = Duration::from_millis(300);
+        // `run` has no readiness hook, so the ceiling is made generous
+        // against a slow shell start instead (the trap installs in ms).
+        s.ceiling = Duration::from_millis(1500);
         let o = run(s, CancellationToken::new()).await;
         assert!(o.timed_out && !o.cancelled);
         assert_eq!(o.exit, Some(130));
@@ -711,6 +750,25 @@ pub(crate) mod tests {
                 ("AIVYX_PA_PASSPHRASE".to_string(), true)
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_child_sees_no_pa_or_cloud_secrets() {
+        // SAFETY: test-only; the names are unique to this test or canaries.
+        unsafe {
+            std::env::set_var("AIVYX_PA_ENVTEST_SECRET", "x");
+            std::env::set_var("OPENAI_API_KEY", "x");
+            std::env::set_var("AIVYX_ENVTEST_ORDINARY", "visible");
+        }
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_coder(d.path(), "envdump", "env > env.txt\nexit 0");
+        let o = run(spec(bin, d.path()), CancellationToken::new()).await;
+        assert_eq!(o.exit, Some(0));
+        let env = std::fs::read_to_string(d.path().join("env.txt")).unwrap();
+        assert!(!env.contains("AIVYX_PA_"), "{env}");
+        assert!(!env.contains("OPENAI_API_KEY"), "{env}");
+        assert!(env.contains("AIVYX_ENVTEST_ORDINARY=visible"), "{env}");
     }
 
     #[cfg(unix)]

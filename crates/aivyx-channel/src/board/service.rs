@@ -1037,7 +1037,6 @@ impl BoardService {
             let outcome = coder_run::run(spec, cancel).await;
             let (run_outcome, answer, tokens) = coder_run::to_run_result(&outcome);
             let task_id = registration.task_id.clone();
-            drop(registration);
             if let Err(e) = this
                 .close_mission(&mid, run_outcome == RunOutcome::Succeeded)
                 .await
@@ -1046,6 +1045,8 @@ impl BoardService {
             }
             this.finish(&task_id, run_outcome, answer, tokens, None)
                 .await;
+            // Free the workspace only now; the guard also frees it on a panic.
+            drop(registration);
         });
         Ok(mission_id)
     }
