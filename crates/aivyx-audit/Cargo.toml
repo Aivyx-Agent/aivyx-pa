@@ -47,13 +47,12 @@ async-trait = { workspace = true }
 # directory names, avoiding redb file-lock collisions) land here.
 aivyx-crypto = { path = "../aivyx-crypto" }
 uuid = { workspace = true }
-# Phase 2 task 5 E2E integration test pulls in the Anthropic reference
+# Phase 2 task 5 E2E integration test pulls in the OpenAI-compatible
 # provider + its fake-transport seam so the test can drive the whole
-# stack (agent → LlmPlanner → AnthropicProvider → FakeTransport → SSE
+# stack (agent → LlmPlanner → OpenAiProvider → FakeTransport → SSE
 # parser → audit bridge → HmacChainLog) without touching the network.
-aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic"] }
-# SecretString for the fake API key the provider config expects.
-secrecy = { workspace = true }
+# (2.0: was the removed Anthropic provider.)
+aivyx-llm = { path = "../aivyx-llm", features = ["provider-openai"] }
 # Fake transport builds canned SSE byte streams via futures::stream::iter.
 futures-util = { workspace = true }
 bytes = { workspace = true }

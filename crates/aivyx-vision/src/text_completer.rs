@@ -19,8 +19,23 @@ pub enum BuildProviderError {
     Provider { provider: String, source: LlmError },
 }
 
-/// Construct the real `LlmProvider` this config selects.
+/// Construct the real `LlmProvider` this config selects. 2.0 (local-only):
+/// the provider's URL must be local — checked here, by the provider's own
+/// constructor, and again before every request.
 pub fn build_provider(config: &VisionConfig) -> Result<Arc<dyn LlmProvider>, BuildProviderError> {
+    let (name, url) = match &config.provider {
+        ProviderChoice::Ollama { base_url } => (
+            "ollama",
+            base_url
+                .as_deref()
+                .unwrap_or(aivyx_llm::ollama::DEFAULT_OLLAMA_BASE_URL),
+        ),
+        ProviderChoice::Openai { base_url, .. } => ("openai", base_url.as_str()),
+    };
+    aivyx_llm::local_only::check_url(url).map_err(|e| BuildProviderError::Provider {
+        provider: name.to_string(),
+        source: e,
+    })?;
     match &config.provider {
         ProviderChoice::Ollama { base_url } => {
             let mut ollama_config = aivyx_llm::ollama::OllamaConfig::default_local();
@@ -165,6 +180,42 @@ mod tests {
                 remaining: self.chunks.iter().cloned().collect(),
             }))
         }
+    }
+
+    fn config(provider: ProviderChoice) -> VisionConfig {
+        VisionConfig {
+            provider,
+            model: "m".to_string(),
+            mold: None,
+        }
+    }
+
+    fn refusal(provider: ProviderChoice) -> String {
+        match build_provider(&config(provider)) {
+            Err(BuildProviderError::Provider { source: LlmError::NotLocal(text), .. }) => text,
+            Err(other) => panic!("expected a local-only refusal, got {other}"),
+            Ok(_) => panic!("expected a local-only refusal, got a provider"),
+        }
+    }
+
+    #[test]
+    fn the_builder_refuses_a_non_local_url() {
+        let text = refusal(ProviderChoice::Openai {
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: None,
+        });
+        assert!(text.starts_with("https://api.openai.com/v1 is not local (cloud host)"), "{text}");
+        let text = refusal(ProviderChoice::Ollama {
+            base_url: Some("http://203.0.113.7:11434".to_string()),
+        });
+        assert!(text.contains("public address 203.0.113.7"), "{text}");
+        // Local URLs build.
+        build_provider(&config(ProviderChoice::Openai {
+            base_url: "http://192.168.1.5:8080".to_string(),
+            api_key: None,
+        }))
+        .unwrap();
+        build_provider(&config(ProviderChoice::Ollama { base_url: None })).unwrap();
     }
 
     #[tokio::test]

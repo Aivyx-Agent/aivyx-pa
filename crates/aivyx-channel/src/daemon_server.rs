@@ -11245,7 +11245,7 @@ system_prompt = "You are a custom role."
     #[test]
     fn embedding_config_view_never_leaks_the_raw_api_key() {
         let entry = aivyx_config::config_write::EmbeddingEntryWrite {
-            base_url: Some("https://api.openai.com".to_string()),
+            base_url: Some("http://127.0.0.1:11434".to_string()),
             model: Some("text-embedding-3-small".to_string()),
             api_key: Some("sk-super-secret-value".to_string()),
         };

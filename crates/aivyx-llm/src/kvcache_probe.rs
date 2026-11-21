@@ -40,11 +40,13 @@ pub fn parse_llama_slots_info(json: &serde_json::Value) -> Option<LlamaSlotsInfo
 /// Requires the `provider-openai` feature (which gates reqwest availability).
 #[cfg(feature = "provider-openai")]
 pub async fn fetch_llama_slots_info(base_url: &str) -> Option<LlamaSlotsInfo> {
-    let client = crate::transport::client_builder_for(base_url)
+    let url = format!("{}/props", base_url.trim_end_matches('/'));
+    // 2.0 (local-only): a non-local URL is never contacted.
+    crate::local_only::require_local_async(&url).await.ok()?;
+    let client = crate::local_only::model_client_builder()
         .timeout(KVCACHE_PROBE_TIMEOUT)
         .build()
         .ok()?;
-    let url = format!("{}/props", base_url.trim_end_matches('/'));
     let resp = client.get(&url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;

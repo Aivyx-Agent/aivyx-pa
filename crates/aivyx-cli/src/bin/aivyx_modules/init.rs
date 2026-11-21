@@ -14,7 +14,6 @@ use aivyx_config::AccessLevel;
 use aivyx_llm::LlmProvider;
 use aivyx_llm::ollama::RECOMMENDED_LOCAL_MODEL;
 use aivyx_llm::openai::DEFAULT_OLLAMA_BASE_URL;
-use aivyx_llm::verify::{VerifyError, VerifyProvider, verify_provider_credentials};
 
 use aivyx_channel::profile_draft::{DraftedProfile, IdentityAnswers, draft_identity};
 
@@ -29,11 +28,13 @@ fn config_path() -> std::path::PathBuf {
 /// `"claude-sonnet-4-20250514"` (Phase 44, ~1 year stale at
 /// Phase 104 entry); current Sonnet generation is
 /// `claude-sonnet-4-6`.
+#[cfg(test)]
 const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
 
 /// Default OpenAI model id presented to the operator on the
 /// model-name prompt. Phase 104 refresh: was `"gpt-4o"` (Phase
 /// 25); current flagship is `gpt-4.1`.
+#[cfg(test)]
 const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
 
 /// Chapter Engram — the recommended local embedding model and its vector
@@ -70,7 +71,7 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Check whether Ollama is reachable at the given base URL.
 /// Returns `true` on any 2xx response, `false` on error.
 pub(crate) async fn detect_ollama(base_url: &str) -> bool {
-    let client = match aivyx_llm::transport::client_builder_for(base_url)
+    let client = match aivyx_llm::local_only::model_client_builder()
         .connect_timeout(DETECT_TIMEOUT)
         .timeout(DETECT_TIMEOUT)
         .build()
@@ -88,7 +89,7 @@ pub(crate) async fn detect_ollama(base_url: &str) -> bool {
 /// Fetch the list of locally available model names from Ollama's
 /// `GET /api/tags` endpoint. Returns model names sorted alphabetically.
 pub(crate) async fn list_ollama_models(base_url: &str) -> Result<Vec<String>, String> {
-    let client = aivyx_llm::transport::client_builder_for(base_url)
+    let client = aivyx_llm::local_only::model_client_builder()
         .connect_timeout(DETECT_TIMEOUT)
         .timeout(LIST_TIMEOUT)
         .build()
@@ -124,7 +125,7 @@ async fn pull_ollama_model(
 ) -> Result<(), String> {
     use futures_util::StreamExt;
 
-    let client = aivyx_llm::transport::client_builder_for(base_url)
+    let client = aivyx_llm::local_only::model_client_builder()
         .connect_timeout(DETECT_TIMEOUT)
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
@@ -195,7 +196,7 @@ async fn pull_ollama_model(
 ///   leave semantic memory off rather than render a broken provider.
 async fn decide_embedding(
     provider: Provider,
-    api_key: Option<&str>,
+    _api_key: Option<&str>,
     base_url: &str,
     reader: &mut dyn BufRead,
     writer: &mut dyn IoWrite,
@@ -245,17 +246,12 @@ async fn decide_embedding(
                 api_key: None,
             }))
         }
-        Provider::OpenAi => Ok(api_key.map(|k| EmbeddingFields {
-            base_url: aivyx_config::DEFAULT_EMBEDDING_BASE_URL.to_string(),
-            model: aivyx_config::DEFAULT_EMBEDDING_MODEL.to_string(),
-            dimensions: aivyx_config::DEFAULT_EMBEDDING_DIMENSIONS,
-            api_key: Some(k.to_string()),
-        })),
-        Provider::Anthropic => {
+        // 2.0 (local-only): no cloud embeddings default any more.
+        Provider::Anthropic | Provider::OpenAi => {
             writeln!(
                 writer,
-                "\nNote: Anthropic has no embeddings API, so semantic memory stays \
-                 off. Add an [embedding] provider (OpenAI, or a local Ollama running \
+                "\nNote: semantic memory stays off. Add an [embedding] section \
+                 pointing at a local server (e.g. Ollama running \
                  {RECOMMENDED_EMBED_MODEL}) to enable it."
             )
             .map_err(|e| format!("write error: {e}"))?;
@@ -424,142 +420,6 @@ fn prompt_choice_opt(
 /// with injected readers.
 fn prompt_secret(prompt: &str) -> Result<String, String> {
     rpassword::prompt_password(prompt).map_err(|e| format!("failed to read secret: {e}"))
-}
-
-// ---------------------------------------------------------------------------
-// Phase 104 — verify-before-write
-// ---------------------------------------------------------------------------
-
-/// Hard cap on verify retries before the wizard falls through to
-/// a final `Write anyway?` gate. Per Q2(a): verify is a
-/// guardrail, not a lock.
-const VERIFY_MAX_ATTEMPTS: u32 = 3;
-
-/// Collect a `(model, api_key)` pair for a cloud provider with
-/// `GET /v1/models` verify-before-write per Q1(a). On verify
-/// failure, re-prompts the implicated field — auth → key, model-
-/// not-found → model, network/other → both with a "Write anyway?"
-/// escape hatch (Q2(a)).
-///
-/// Returns `Ok((model, Some(key)))` on success, including the
-/// last-resort write-anyway acceptance path. Returns `Err` only
-/// when the operator declines write-anyway after exhausting
-/// retries — in that case the wizard exits without writing.
-///
-/// `key_prompt_label` is the secret-prompt label (e.g. `"Anthropic
-/// API key: "`); `default_model` is the fallback when neither the
-/// operator nor the template supplies one; `template_model` lets
-/// a Phase 66 template override the default.
-async fn collect_and_verify_cloud(
-    provider: VerifyProvider,
-    key_prompt_label: &str,
-    default_model: &str,
-    template_model: Option<&str>,
-    reader: &mut dyn BufRead,
-    writer: &mut dyn IoWrite,
-) -> Result<(String, Option<String>), String> {
-    let resolved_default = template_model.unwrap_or(default_model);
-
-    // Initial collection — same prompt order as pre-Phase-104.
-    let mut model = prompt_line(&format!("Model [{resolved_default}]: "), reader, writer)?;
-    if model.is_empty() {
-        model = resolved_default.into();
-    }
-    let mut key = prompt_secret(key_prompt_label)?;
-    if key.is_empty() {
-        return Err("API key cannot be empty".into());
-    }
-
-    for attempt in 1..=VERIFY_MAX_ATTEMPTS {
-        writeln!(writer, "Verifying provider…").map_err(|e| format!("write error: {e}"))?;
-        writer.flush().map_err(|e| format!("flush error: {e}"))?;
-
-        match verify_provider_credentials(provider, &key, &model).await {
-            Ok(()) => {
-                writeln!(writer, "Verified ok.").map_err(|e| format!("write error: {e}"))?;
-                return Ok((model, Some(key)));
-            }
-            Err(VerifyError::Auth(msg)) => {
-                writeln!(writer, "Authentication failed: {msg}")
-                    .map_err(|e| format!("write error: {e}"))?;
-                if attempt == VERIFY_MAX_ATTEMPTS {
-                    break;
-                }
-                writeln!(
-                    writer,
-                    "Retry {attempt}/{VERIFY_MAX_ATTEMPTS}: re-enter the API key.",
-                )
-                .map_err(|e| format!("write error: {e}"))?;
-                key = prompt_secret(key_prompt_label)?;
-                if key.is_empty() {
-                    return Err("API key cannot be empty".into());
-                }
-            }
-            Err(VerifyError::ModelNotFound { available, .. }) => {
-                writeln!(
-                    writer,
-                    "Model `{model}` is not available for this account.\n\
-                     Available: {available}",
-                )
-                .map_err(|e| format!("write error: {e}"))?;
-                if attempt == VERIFY_MAX_ATTEMPTS {
-                    break;
-                }
-                writeln!(
-                    writer,
-                    "Retry {attempt}/{VERIFY_MAX_ATTEMPTS}: enter a model name.",
-                )
-                .map_err(|e| format!("write error: {e}"))?;
-                let m = prompt_line("Model: ", reader, writer)?;
-                if !m.is_empty() {
-                    model = m;
-                }
-            }
-            Err(VerifyError::Network(msg)) | Err(VerifyError::Other(msg)) => {
-                writeln!(writer, "Verify failed: {msg}")
-                    .map_err(|e| format!("write error: {e}"))?;
-                // Ambiguous failure — offer immediate write-anyway
-                // before consuming another retry. Operator typing
-                // `y` short-circuits the loop.
-                if prompt_yes_no(
-                    "Write the config without verification?",
-                    false,
-                    reader,
-                    writer,
-                )? {
-                    return Ok((model, Some(key)));
-                }
-                if attempt == VERIFY_MAX_ATTEMPTS {
-                    break;
-                }
-                writeln!(
-                    writer,
-                    "Retry {attempt}/{VERIFY_MAX_ATTEMPTS}: re-enter key and model.",
-                )
-                .map_err(|e| format!("write error: {e}"))?;
-                key = prompt_secret(key_prompt_label)?;
-                if key.is_empty() {
-                    return Err("API key cannot be empty".into());
-                }
-                let m = prompt_line(&format!("Model [{model}]: "), reader, writer)?;
-                if !m.is_empty() {
-                    model = m;
-                }
-            }
-        }
-    }
-
-    // Exhausted retries — last-resort write-anyway gate.
-    writeln!(
-        writer,
-        "Verification failed after {VERIFY_MAX_ATTEMPTS} attempts.",
-    )
-    .map_err(|e| format!("write error: {e}"))?;
-    if prompt_yes_no("Write the config anyway?", false, reader, writer)? {
-        Ok((model, Some(key)))
-    } else {
-        Err("provider verification failed; aivyx-pa.toml not written".into())
-    }
 }
 
 /// Ask a yes/no question. `default` is the answer when the user
@@ -2516,24 +2376,11 @@ async fn confirm_identity(
 /// here only needs credentials / endpoint.
 fn build_wizard_provider(
     provider: Provider,
-    api_key: Option<&str>,
     server_base: Option<&str>,
 ) -> Option<Arc<dyn LlmProvider>> {
     match provider {
-        Provider::Anthropic => {
-            use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
-            let key = api_key?;
-            AnthropicProvider::new(AnthropicConfig::new(key.to_string()))
-                .ok()
-                .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
-        }
-        Provider::OpenAi => {
-            use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
-            let key = api_key?;
-            OpenAiProvider::new(OpenAiConfig::new(key.to_string()))
-                .ok()
-                .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
-        }
+        // 2.0 (local-only): no cloud provider to draft with.
+        Provider::Anthropic | Provider::OpenAi => None,
         Provider::Ollama => {
             use aivyx_llm::ollama::{OllamaConfig, OllamaProvider};
             OllamaProvider::new(OllamaConfig::default_local())
@@ -2635,6 +2482,10 @@ fn write_config(path: &Path, contents: &str) -> Result<(), String> {
 /// that case.
 struct TemplateDefaults {
     provider: Option<String>,
+    // 2.0 (local-only): only the removed cloud prompts used it as their
+    // model default; local servers list their own models. Kept parsed for
+    // the init rework.
+    #[allow(dead_code)]
     model: Option<String>,
     fs_root: Option<String>,
     storage_path: Option<String>,
@@ -3226,31 +3077,17 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
             mistralrs_model_path = Some(path);
             (model, None)
         }
+        // 2.0 (local-only): the cloud providers and their key checks are
+        // gone from aivyx-llm. (Task 7 removes them from the menu too.)
         Provider::Anthropic => {
-            // Phase 104 — collect model + key, then verify against
-            // GET /v1/models before falling through to the rest of
-            // the wizard. The template_defaults.model is forwarded
-            // as a Phase 66 prompt-default override.
-            collect_and_verify_cloud(
-                VerifyProvider::Anthropic,
-                "Anthropic API key: ",
-                DEFAULT_ANTHROPIC_MODEL,
-                template_defaults.model.as_deref(),
-                &mut reader,
-                &mut writer,
-            )
-            .await?
+            return Err(aivyx_config::removed_provider_message("anthropic"));
         }
         Provider::OpenAi => {
-            collect_and_verify_cloud(
-                VerifyProvider::OpenAi,
-                "OpenAI API key: ",
-                DEFAULT_OPENAI_MODEL,
-                template_defaults.model.as_deref(),
-                &mut reader,
-                &mut writer,
-            )
-            .await?
+            return Err(
+                "OpenAI's cloud API was removed in 2.0 — aivyx is local-only; choose a local \
+                 server (llama.cpp, Ollama, Jan, Lemonade or the broker)"
+                    .to_string(),
+            );
         }
     };
 
@@ -3268,7 +3105,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // falls back to the guided manual prompts (local-first — the
     // builder never requires an LLM).
     let draft_provider =
-        build_wizard_provider(provider, api_key.as_deref(), server_base.as_deref());
+        build_wizard_provider(provider, server_base.as_deref());
     let identity = confirm_identity(
         &mut reader,
         &mut writer,
@@ -4455,7 +4292,7 @@ email customers without asking
         assert!(toml.contains("profile = \"smart\""), "{toml}");
     }
 
-    /// OpenAI embedding renders the cloud endpoint + the key + smart memory.
+    /// An embedding section renders the endpoint + the key + smart memory.
     #[test]
     fn render_emits_embedding_with_key_and_smart_memory_for_openai() {
         let mut cfg = init_config_no_profile(
@@ -4467,7 +4304,7 @@ email customers without asking
             false,
         );
         cfg.embedding = Some(EmbeddingFields {
-            base_url: aivyx_config::DEFAULT_EMBEDDING_BASE_URL.into(),
+            base_url: "http://127.0.0.1:8081".into(),
             model: aivyx_config::DEFAULT_EMBEDDING_MODEL.into(),
             dimensions: aivyx_config::DEFAULT_EMBEDDING_DIMENSIONS,
             api_key: Some("sk-embed".into()),
@@ -4550,22 +4387,18 @@ email customers without asking
         assert!(got.is_none());
     }
 
-    /// `decide_embedding` for OpenAI uses the key; without one it is `None`.
+    /// 2.0 (local-only): `decide_embedding` for OpenAI no longer writes the
+    /// cloud embeddings default, key or not.
     #[tokio::test]
-    async fn decide_embedding_openai_depends_on_key() {
+    async fn decide_embedding_openai_is_none() {
         let mut r = std::io::Cursor::new(&b""[..]);
         let mut w = Vec::new();
-        let with_key = decide_embedding(Provider::OpenAi, Some("sk-x"), "", &mut r, &mut w)
-            .await
-            .unwrap()
-            .expect("openai + key → embedding");
-        assert_eq!(with_key.model, aivyx_config::DEFAULT_EMBEDDING_MODEL);
-        assert_eq!(with_key.api_key.as_deref(), Some("sk-x"));
-
-        let no_key = decide_embedding(Provider::OpenAi, None, "", &mut r, &mut w)
-            .await
-            .unwrap();
-        assert!(no_key.is_none(), "no key → no embedding");
+        for key in [Some("sk-x"), None] {
+            let got = decide_embedding(Provider::OpenAi, key, "", &mut r, &mut w)
+                .await
+                .unwrap();
+            assert!(got.is_none(), "no cloud embeddings default");
+        }
     }
 
     #[test]

@@ -30,12 +30,11 @@ aivyx-core = { path = "../aivyx-core" }
 base64 = { workspace = true }
 aivyx-tool = { path = "../aivyx-tool" }
 # text_completer::build_provider wires a real LlmProvider from this
-# crate's own config, so all three concrete providers' feature gates need to
-# be on -- each of aivyx-llm's `ollama`/`anthropic`/`openai` modules is
+# crate's own config, so both concrete providers' feature gates need to
+# be on -- each of aivyx-llm's `ollama`/`openai` modules is
 # itself `#[cfg(feature = "provider-*")]`.
 aivyx-llm = { path = "../aivyx-llm", features = [
     "provider-ollama",
-    "provider-anthropic",
     "provider-openai",
 ] }
 

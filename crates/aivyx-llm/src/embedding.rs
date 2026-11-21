@@ -2,12 +2,10 @@
 //!
 //! An OpenAI-compatible `/v1/embeddings` HTTP client built on
 //! the shared [`crate::transport::HttpTransport`]. The
-//! `base_url` is operator-configured: point it at
-//! `https://api.openai.com` (memory content leaves the box —
-//! the operator's explicit choice) or a local OpenAI-compatible
-//! server (ollama, llama.cpp, text-embeddings-inference) and
-//! everything stays on-device. The privacy decision is the
-//! operator's base_url, not forced by this implementation.
+//! `base_url` is operator-configured and, since 2.0, required and
+//! local: a server on this machine or the operator's own network
+//! (ollama, llama.cpp, text-embeddings-inference). It is checked
+//! when the provider is built and before every request.
 //!
 //! Zero new workspace deps: this reuses the existing
 //! `reqwest`/rustls transport the chat providers use.
@@ -21,7 +19,6 @@ use tokio_util::sync::CancellationToken;
 use crate::transport::{HttpTransport, ReqwestTransport};
 use crate::LlmError;
 
-const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 const DEFAULT_MODEL: &str = "text-embedding-3-small";
 
 /// Failure modes for an embedding call. Mirrors the
@@ -83,15 +80,24 @@ pub struct OpenAiEmbeddingProvider {
 }
 
 impl OpenAiEmbeddingProvider {
+    /// `base_url` is required (2.0: no cloud default) and must be local
+    /// (`require_local`; blocking DNS for a name that isn't local by
+    /// spelling).
     pub fn new(
         base_url: Option<String>,
         model: Option<String>,
         api_key: Option<SecretString>,
         dimensions: usize,
     ) -> Result<Self, LlmError> {
+        let base_url = base_url.ok_or_else(|| {
+            LlmError::Config(
+                "the embedding provider needs a base_url (a server on this machine or your own network)"
+                    .to_string(),
+            )
+        })?;
+        crate::local_only::check_url(&base_url)?;
         Ok(Self {
-            base_url: base_url
-                .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            base_url,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             api_key,
             dimensions,

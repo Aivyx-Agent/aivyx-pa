@@ -129,7 +129,7 @@ aivyx-federation-net = { path = "../aivyx-federation-net" }
 # the same McpServerBridge/transport connect calls aivyx-cli's own boot-time
 # startup loop uses.
 aivyx-mcp = { path = "../aivyx-mcp" }
-aivyx-llm = { path = "../aivyx-llm", features = ["provider-anthropic", "provider-openai", "provider-ollama"] }
+aivyx-llm = { path = "../aivyx-llm", features = ["provider-openai", "provider-ollama"] }
 # Model routing Part 3a — `CompletionJudge::with_route_task` tags the loop
 # completion judge's request `TaskKind::Judge` (a no-op on a non-routed
 # provider).

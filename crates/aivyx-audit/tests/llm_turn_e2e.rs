@@ -8,11 +8,11 @@
 //!   ↓ begin_turn + next_step + observe_tool_outcome
 //! LlmPlanner
 //!   ↓ chat_stream
-//! AnthropicProvider
+//! OpenAiProvider (OpenAI-compatible, local server)
 //!   ↓ HttpTransport::post_sse
 //! FakeTransport (canned SSE bytes)
 //!   ↓ bytes_stream
-//! SseReader (inside AnthropicStream)
+//! SSE line parser (inside OpenAiStream)
 //!   ↓ state machine
 //! LlmStepEnd → NextStep → ToolRegistry lookup → Tool::execute
 //!   ↓
@@ -39,7 +39,6 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream;
-use secrecy::SecretString;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -53,7 +52,8 @@ use aivyx_core::{
     StreamEvent, Tool, ToolContext, ToolId, ToolOutcome, TurnOutcome, TurnOutcomeSummary,
     Verification,
 };
-use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider, ByteStream, HttpTransport};
+use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
+use aivyx_llm::transport::{ByteStream, HttpTransport};
 use aivyx_llm::{LlmError, LlmProvider};
 
 // ---------------------------------------------------------------------------
@@ -202,44 +202,29 @@ impl Tool for MemoryReadTool {
 // ---------------------------------------------------------------------------
 // SSE scripts: step 1 = tool-call, step 2 = final message.
 //
-// Both scripts are hand-rolled Anthropic Messages-API event streams.
-// They deliberately use realistic field names (content_block_start,
-// content_block_delta, message_delta, message_stop) so the test
-// exercises the real parser + state machine, not a simplified
-// happy path.
+// Both scripts are hand-rolled OpenAI-compatible Chat Completions
+// streams (what llama-server, Jan, Lemonade and the broker speak). They
+// split the tool-call arguments and the text across chunks so the test
+// exercises the real parser + state machine, not a simplified happy
+// path. (2.0: this test used the removed Anthropic provider.)
 // ---------------------------------------------------------------------------
 
 fn step1_tool_call_script() -> Vec<&'static str> {
     vec![
-        "event: message_start\n",
-        "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":42}}}\n\n",
-        "event: content_block_start\n",
-        "data: {\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_mem_01\",\"name\":\"memory.read\",\"input\":{}}}\n\n",
-        "event: content_block_delta\n",
-        "data: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"topic\\\":\"}}\n\n",
-        "event: content_block_delta\n",
-        "data: {\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"todos\\\"}\"}}\n\n",
-        "event: content_block_stop\ndata: {\"index\":0}\n\n",
-        "event: message_delta\n",
-        "data: {\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":14}}\n\n",
-        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_mem_01\",\"type\":\"function\",\"function\":{\"name\":\"memory.read\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"topic\\\":\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"todos\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":14}}\n\n",
+        "data: [DONE]\n\n",
     ]
 }
 
 fn step2_final_message_script() -> Vec<&'static str> {
     vec![
-        "event: message_start\n",
-        "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":80}}}\n\n",
-        "event: content_block_start\n",
-        "data: {\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
-        "event: content_block_delta\n",
-        "data: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"You have 2 items: \"}}\n\n",
-        "event: content_block_delta\n",
-        "data: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"buy milk and call dentist.\"}}\n\n",
-        "event: content_block_stop\ndata: {\"index\":0}\n\n",
-        "event: message_delta\n",
-        "data: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":11}}\n\n",
-        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"You have 2 items: \"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"buy milk and call dentist.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":80,\"completion_tokens\":11}}\n\n",
+        "data: [DONE]\n\n",
     ]
 }
 
@@ -253,14 +238,14 @@ async fn llm_driven_turn_e2e_tool_call_then_final_message() {
     let chain = HmacChainLog::new(b"phase2-task5-e2e-key".to_vec());
     let bridge: Arc<AuditBridge<HmacChainLog>> = Arc::new(AuditBridge::new(chain));
 
-    // Real Anthropic provider backed by a fake transport that replays
+    // Real OpenAI-compatible provider backed by a fake transport that replays
     // two scripted responses in order: tool-call, then final message.
     let transport = FakeTransport::new(vec![
         step1_tool_call_script(),
         step2_final_message_script(),
     ]);
-    let provider: Arc<dyn LlmProvider> = Arc::new(AnthropicProvider::with_transport(
-        AnthropicConfig::new(SecretString::from("fake-test-key")),
+    let provider: Arc<dyn LlmProvider> = Arc::new(OpenAiProvider::with_transport(
+        OpenAiConfig::without_api_key().with_base_url("http://127.0.0.1:8080"),
         Box::new(transport),
     ));
 
@@ -290,7 +275,7 @@ async fn llm_driven_turn_e2e_tool_call_then_final_message() {
             Box::new(LlmPlanner::new(
                 Arc::clone(&provider_for_factory),
                 Arc::clone(&registry_for_factory),
-                LlmPlannerConfig::new("claude-haiku-4-5-20251001")
+                LlmPlannerConfig::new("local-model")
                     .with_system_prompt("You are a terse assistant.")
                     .with_max_tokens(128),
             ))
@@ -332,7 +317,7 @@ async fn llm_driven_turn_e2e_tool_call_then_final_message() {
             "You have 2 items: ".to_string(),
             "buy milk and call dentist.".to_string()
         ],
-        "channel should have seen the two text_delta chunks in order"
+        "channel should have seen the two content chunks in order"
     );
 
     // ---- Assertion 3: the HMAC audit chain is intact and carries

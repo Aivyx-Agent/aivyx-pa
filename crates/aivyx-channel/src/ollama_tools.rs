@@ -49,7 +49,10 @@ pub struct OllamaListTool {
 
 impl OllamaListTool {
     pub fn new(base_url: &str) -> Result<Self, AivyxError> {
-        let client = aivyx_llm::transport::client_builder_for(base_url)
+        // 2.0 (local-only): refuse a non-local Ollama URL when built.
+        aivyx_llm::local_only::check_url(base_url)
+            .map_err(|e| AivyxError::Config(e.to_string()))?;
+        let client = aivyx_llm::local_only::model_client_builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(READ_TIMEOUT)
             .build()
@@ -104,6 +107,12 @@ impl Tool for OllamaListTool {
 
     async fn execute(&self, _input: Value, _ctx: &ToolContext<'_>) -> ToolOutcome {
         let url = format!("{}/api/tags", self.base_url);
+        if let Err(e) = aivyx_llm::local_only::require_local_async(&url).await {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("ollama.list: {e}"),
+            });
+        }
         match self.client.get(&url).send().await {
             Ok(resp) => {
                 let status = resp.status();
@@ -165,7 +174,10 @@ pub struct OllamaShowTool {
 
 impl OllamaShowTool {
     pub fn new(base_url: &str) -> Result<Self, AivyxError> {
-        let client = aivyx_llm::transport::client_builder_for(base_url)
+        // 2.0 (local-only): refuse a non-local Ollama URL when built.
+        aivyx_llm::local_only::check_url(base_url)
+            .map_err(|e| AivyxError::Config(e.to_string()))?;
+        let client = aivyx_llm::local_only::model_client_builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(READ_TIMEOUT)
             .build()
@@ -240,6 +252,12 @@ impl Tool for OllamaShowTool {
         let url = format!("{}/api/show", self.base_url);
         let body = json!({ "name": name });
 
+        if let Err(e) = aivyx_llm::local_only::require_local_async(&url).await {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("ollama.show: {e}"),
+            });
+        }
         match self.client.post(&url).json(&body).send().await {
             Ok(resp) => {
                 let status = resp.status();
@@ -303,7 +321,10 @@ pub struct OllamaPullTool {
 
 impl OllamaPullTool {
     pub fn new(base_url: &str) -> Result<Self, AivyxError> {
-        let client = aivyx_llm::transport::client_builder_for(base_url)
+        // 2.0 (local-only): refuse a non-local Ollama URL when built.
+        aivyx_llm::local_only::check_url(base_url)
+            .map_err(|e| AivyxError::Config(e.to_string()))?;
+        let client = aivyx_llm::local_only::model_client_builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(PULL_TIMEOUT)
             .build()
@@ -379,6 +400,12 @@ impl Tool for OllamaPullTool {
         let url = format!("{}/api/pull", self.base_url);
         let body = json!({ "name": name, "stream": false });
 
+        if let Err(e) = aivyx_llm::local_only::require_local_async(&url).await {
+            return ToolOutcome::Failed(AivyxError::Tool {
+                tool: self.id,
+                detail: format!("ollama.pull: {e}"),
+            });
+        }
         match self.client.post(&url).json(&body).send().await {
             Ok(resp) => {
                 let status = resp.status();

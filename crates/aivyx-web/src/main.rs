@@ -3398,7 +3398,7 @@ fn EmbeddingConfigCard(config: EmbeddingConfigView) -> Element {
             }
             div { class: "field-row",
                 label { "Base URL" }
-                input { class: "input", placeholder: "https://api.openai.com", value: "{base_url}", oninput: move |e| base_url.set(e.value()) }
+                input { class: "input", placeholder: "http://127.0.0.1:11434", value: "{base_url}", oninput: move |e| base_url.set(e.value()) }
             }
             div { class: "field-row",
                 label { "Model" }

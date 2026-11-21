@@ -2,13 +2,13 @@
 //!
 //! The `LlmProvider` trait and supporting types. This is the protocol
 //! crate that sits between `aivyx-core`'s turn loop and any concrete
-//! model backend (Anthropic, Ollama, etc.).
+//! model backend (llama.cpp, Ollama, etc.; local-only since 2.0).
 //!
 //! `aivyx-llm` depends on no other Aivyx crate — it is at the bottom of
 //! the dependency graph, and `aivyx-core` depends on *it* to declare
 //! `AivyxError::Llm(#[from] LlmError)`. Providers implement the trait
-//! in their own crates (or, for the reference Anthropic impl, later in
-//! this same crate).
+//! in their own crates (or, for the reference OpenAI-compatible, Ollama
+//! and mistral.rs impls, in this same crate).
 //!
 //! See DESIGN.md D1 (the north-star paragraph mentions "its LlmProvider"
 //! and `llm.chat_stream(...)`) and D6 (`AivyxError::Llm`).
@@ -49,14 +49,19 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(any(
-    feature = "provider-anthropic",
     feature = "provider-openai",
     feature = "provider-ollama"
 ))]
 pub mod transport;
 
-#[cfg(feature = "provider-anthropic")]
-pub mod anthropic;
+/// 2.0 (local-only) — the guard every model HTTP client uses: a URL check
+/// before each request and a connect-time resolver that only ever returns
+/// local addresses.
+#[cfg(any(
+    feature = "provider-openai",
+    feature = "provider-ollama"
+))]
+pub mod local_only;
 
 #[cfg(feature = "provider-openai")]
 pub mod openai;
@@ -100,18 +105,15 @@ pub use kvcache_probe::fetch_llama_slots_info;
 /// cloud API or a local server (ollama / llama.cpp /
 /// text-embeddings-inference).
 #[cfg(any(
-    feature = "provider-anthropic",
     feature = "provider-openai",
     feature = "provider-ollama"
 ))]
 pub mod embedding;
 
-/// Phase 104 — `aivyx-pa init` provider credential verification.
-/// Issues `GET /v1/models` against Anthropic / OpenAI to confirm
-/// `(api_key, model)` is valid before the wizard writes
-/// `aivyx-pa.toml`. See [`verify::verify_provider_credentials`].
+/// Phase 104 — model verification against a local server's
+/// `GET /v1/models` (2.0: local servers only; the cloud key checks are
+/// gone). See [`verify::verify_model_listed`].
 #[cfg(any(
-    feature = "provider-anthropic",
     feature = "provider-openai",
     feature = "provider-ollama"
 ))]
@@ -496,7 +498,6 @@ pub enum LlmStreamEvent {
 /// tracing subscriber), so a cut-off or odd ending can be diagnosed without
 /// a line for every healthy call.
 #[cfg(any(
-    feature = "provider-anthropic",
     feature = "provider-openai",
     feature = "provider-ollama",
     feature = "provider-mistral-rs"
@@ -516,7 +517,6 @@ pub(crate) fn finish_event(
 /// (`stop`, `end_turn`, `tool_calls`, `tool_use`, `stop_sequence`, or no
 /// reason at all). Pure.
 #[cfg(any(
-    feature = "provider-anthropic",
     feature = "provider-openai",
     feature = "provider-ollama",
     feature = "provider-mistral-rs"
@@ -774,6 +774,12 @@ pub enum LlmError {
 
     #[error("model routing: {0}")]
     Routing(String),
+
+    /// 2.0 (local-only) — a model URL that isn't on this machine or the
+    /// operator's own network. The text is aivyx-route's `NotLocal` message,
+    /// shown as-is. Nothing was sent.
+    #[error("{0}")]
+    NotLocal(String),
 
     /// Routing visibility B1 — an `ask`-mode call stopped for cloud
     /// consent. The text is [`escalation::consent_lead`]'s channel-neutral

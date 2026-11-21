@@ -274,6 +274,17 @@ fn cli_args() -> Vec<String> {
     CLI_ARGS.get().expect("CLI_ARGS not initialized").clone()
 }
 
+/// Chapter Ensemble — a team member's own Ollama provider at its roster
+/// `base_url`. 2.0 (local-only): `OllamaProvider::new` refuses a URL that
+/// isn't local, which is the backstop for a roster read through the
+/// unchecked `TeamConfig::load`.
+fn ollama_member_provider(url: &str) -> Result<Arc<dyn aivyx_llm::LlmProvider>, String> {
+    let cfg = aivyx_llm::ollama::OllamaConfig::default_local().with_base_url(url.to_string());
+    aivyx_llm::ollama::OllamaProvider::new(cfg)
+        .map(|p| Arc::new(p) as Arc<dyn aivyx_llm::LlmProvider>)
+        .map_err(|e| e.to_string())
+}
+
 /// Jan's server root for the OpenAI-compatible provider, which appends
 /// `/v1/chat/completions` itself: the configured `[openai] base_url` or the
 /// default `http://localhost:1337`, with a trailing `/v1` dropped. Jan's own
@@ -8312,7 +8323,7 @@ async fn run_async(
             // `[openai] base_url` (a trailing `/v1` is tolerated — see
             // `jan_base_url`).
             //
-            // Jan's API mirrors api.openai.com/v1 exactly — no
+            // Jan's API is the OpenAI-compatible `/v1` shape — no
             // server-side adaptation needed. The API key is accepted
             // if present but never required (Jan ignores it).
             let base_url = jan_base_url(openai_base_url.map(|s| s.value));
@@ -11578,15 +11589,7 @@ async fn run_async(
                 // tuning) — a documented v1 simplification. Other kinds → None
                 // (a per-role `base_url` falls back to the shared provider).
                 member_provider_builder: if matches!(provider_kind.value, ProviderKind::Ollama) {
-                    Some(std::sync::Arc::new(
-                        |url: &str| -> Result<Arc<dyn aivyx_llm::LlmProvider>, String> {
-                            let cfg = aivyx_llm::ollama::OllamaConfig::default_local()
-                                .with_base_url(url.to_string());
-                            aivyx_llm::ollama::OllamaProvider::new(cfg)
-                                .map(|p| Arc::new(p) as Arc<dyn aivyx_llm::LlmProvider>)
-                                .map_err(|e| e.to_string())
-                        },
-                    ))
+                    Some(std::sync::Arc::new(ollama_member_provider))
                 } else {
                     None
                 },
@@ -15991,6 +15994,17 @@ mod tests {
         .expect("combining --mcp and --mcp-sse must parse");
         assert_eq!(parsed.mcp_servers.len(), 1);
         assert_eq!(parsed.mcp_sse_servers.len(), 1);
+    }
+
+    /// 2.0 (local-only): a team member's Ollama URL is checked when its
+    /// provider is built, even from a roster loaded unchecked.
+    #[test]
+    fn a_team_members_ollama_provider_refuses_a_non_local_url() {
+        let err = ollama_member_provider("https://api.openai.com").err().unwrap();
+        assert!(err.contains("is not local (cloud host)"), "{err}");
+        let err = ollama_member_provider("http://203.0.113.7:11434").err().unwrap();
+        assert!(err.contains("resolves to a public address 203.0.113.7"), "{err}");
+        assert!(ollama_member_provider("http://192.168.1.30:11434").is_ok());
     }
 
     // ---- --provider flag tests ----------------------------------------

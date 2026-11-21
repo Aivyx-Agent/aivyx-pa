@@ -2745,16 +2745,12 @@ pub struct EmailConfig {
 /// keeps working in keyword mode (no behavior change for
 /// pre-Phase-75 configs).
 ///
-/// `base_url` is the privacy lever: point it at
-/// `https://api.openai.com` and memory content is sent to
-/// OpenAI; point it at a local OpenAI-compatible server
-/// (ollama, llama.cpp, text-embeddings-inference) and nothing
-/// leaves the box. The default is the OpenAI public endpoint —
-/// the operator opts into locality explicitly.
+/// `base_url` is required and, since 2.0, must be local: a server on this
+/// machine or the operator's own network (ollama, llama.cpp,
+/// text-embeddings-inference). Memory content never leaves it.
 #[derive(Debug, Clone)]
 pub struct EmbeddingConfig {
-    /// Embeddings API base URL. Default
-    /// [`DEFAULT_EMBEDDING_BASE_URL`]. The provider POSTs to
+    /// Embeddings API base URL (required, local). The provider POSTs to
     /// `{base_url}/v1/embeddings`.
     pub base_url: String,
     /// Embedding model id. Default [`DEFAULT_EMBEDDING_MODEL`].
@@ -2898,11 +2894,6 @@ pub const DEFAULT_RECALL_WIKI_WEIGHT: f32 = 0.0;
 /// Chapter Lattice (LT.6) — typed-graph ranker weight default: off.
 pub const DEFAULT_RECALL_GRAPH_TYPED_WEIGHT: f32 = 0.0;
 
-/// The pre-2.0 embeddings default (the OpenAI public API). **Not used by
-/// the loader since 2.0** — `[embedding] base_url` is required and must be
-/// local; only `init`'s cloud OpenAI path still names it, until that path
-/// goes too.
-pub const DEFAULT_EMBEDDING_BASE_URL: &str = "https://api.openai.com";
 /// Default embedding model. `text-embedding-3-small` is the
 /// cheap, widely-supported OpenAI default; local servers
 /// generally accept an arbitrary model string.

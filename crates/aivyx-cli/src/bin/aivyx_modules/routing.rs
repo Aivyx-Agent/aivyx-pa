@@ -44,7 +44,8 @@ pub(crate) const DEFAULT_ENDPOINT: &str = "default";
 /// locality follows aivyx-route's one rule
 /// ([`DefaultEndpoint::effective_locality`]): cloud providers are cloud, a
 /// local provider is local only at a local address, and the in-process
-/// mistral.rs backend (no address at all) is marked local. That locality
+/// mistral.rs backend (no address at all) is aivyx-route's in-process
+/// endpoint, local by construction. That locality
 /// decides every roster entry without an `endpoint`, and whether routing
 /// may choose cloud models at all.
 pub(crate) fn default_endpoint(kind: ProviderKind, base_url: Option<&str>) -> DefaultEndpoint {
@@ -60,12 +61,14 @@ pub(crate) fn default_endpoint(kind: ProviderKind, base_url: Option<&str>) -> De
         | ProviderKind::MistralRs
         | ProviderKind::Broker => EndpointKind::OpenaiCompat,
     };
+    // The in-process backend (mistral.rs) has no URL and is never
+    // contacted: aivyx-route's in-process endpoint is local by construction.
+    if kind.is_in_process() {
+        return DefaultEndpoint::in_process(DEFAULT_ENDPOINT);
+    }
     let mut default = DefaultEndpoint::new(DEFAULT_ENDPOINT, endpoint_kind);
     if let Some(url) = url {
         default = default.with_base_url(url);
-    }
-    if kind.is_in_process() {
-        default = default.with_locality(Locality::Local);
     }
     default
 }
@@ -1217,12 +1220,10 @@ mod tests {
         for p in [P::Ollama, P::LlamaCpp, P::Jan, P::Lemonade, P::Broker] {
             assert_eq!(loc(p, None), Locality::Local, "{p:?}");
         }
-        // aivyx-route 0.2.0 honours a `local` override only for a verified
-        // URL, and the in-process backend has none, so it fails closed to
-        // Cloud (only its own cloud-tagged roster entries become choosable —
-        // they run in-process too). Follow-up: an in-process notion in
-        // aivyx-route.
-        assert_eq!(loc(P::MistralRs, None), Locality::Cloud);
+        // The in-process backend: aivyx-route's in-process endpoint, local
+        // by construction (no URL, never contacted).
+        assert_eq!(loc(P::MistralRs, None), Locality::Local);
+        assert!(default_endpoint(P::MistralRs, None).is_in_process());
         assert_eq!(loc(P::Ollama, Some("http://192.168.1.20:11434")), Locality::Local);
         assert_eq!(loc(P::Ollama, Some("https://ollama.example.com")), Locality::Cloud);
         assert_eq!(loc(P::LlamaCpp, Some("https://llm.example.com")), Locality::Cloud);

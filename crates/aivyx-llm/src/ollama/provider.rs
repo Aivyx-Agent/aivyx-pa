@@ -244,7 +244,15 @@ pub struct OllamaProvider {
 }
 
 impl OllamaProvider {
+    /// Builds the provider for its base URL (the configured one, else
+    /// `localhost:11434`), which must be local (`require_local`; blocking
+    /// DNS for a name that isn't local by spelling). Every request
+    /// re-checks it. This is also the backstop for a team member's Ollama
+    /// URL read through an unchecked `TeamConfig::load`.
     pub fn new(config: OllamaConfig) -> Result<Self, LlmError> {
+        crate::local_only::check_url(
+            config.base_url.as_deref().unwrap_or(DEFAULT_OLLAMA_BASE_URL),
+        )?;
         Ok(OllamaProvider {
             config,
             transport: Box::new(ReqwestTransport::new()?),

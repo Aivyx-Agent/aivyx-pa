@@ -12,15 +12,9 @@ readme.workspace = true
 
 [features]
 default = []
-# Opt-in: pulls in reqwest + rustls + secrecy and compiles the Anthropic
-# reference provider. Downstream crates (e.g. aivyx-core) that only need
-# the LlmProvider trait and LlmError must NOT enable this feature.
-provider-anthropic = [
-    "dep:reqwest",
-    "dep:secrecy",
-    "dep:futures-util",
-    "dep:bytes",
-]
+# Opt-in: pulls in reqwest + rustls + secrecy. Downstream crates (e.g.
+# aivyx-core) that only need the LlmProvider trait and LlmError must NOT
+# enable a provider feature. (2.0: the Anthropic provider was removed.)
 provider-openai = [
     "dep:reqwest",
     "dep:secrecy",
@@ -85,10 +79,10 @@ thiserror = { workspace = true }
 tokio-util = { workspace = true }
 # Routing classifier — bounds the classifier side call with
 # `tokio::time::timeout`. Already in every consumer's tree.
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "rt"] }
 
-# Feature-gated: only compiled when `provider-anthropic`, `provider-openai`,
-# or `provider-ollama` is on. Keeping these optional means `aivyx-core`
+# Feature-gated: only compiled when `provider-openai` or
+# `provider-ollama` is on. Keeping these optional means `aivyx-core`
 # (which depends on this crate purely for LlmError) never links
 # reqwest/rustls/secrecy. kvcache adoption's kvcache_probe gates
 # fetch_llama_slots_info behind the same feature set.

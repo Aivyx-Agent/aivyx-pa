@@ -1,4 +1,4 @@
-//! HTTP transport seam for the Anthropic provider.
+//! HTTP transport seam for the model providers.
 //!
 //! The provider does not own a `reqwest::Client` directly — it owns a
 //! `Box<dyn HttpTransport>`. The real implementation (`ReqwestTransport`)
@@ -6,17 +6,21 @@
 //! `provider.rs`) replays canned bytes.
 //!
 //! This split is what lets the SSE parser and the `LlmProvider` impl be
-//! tested exhaustively with zero network. It also makes a second vendor
-//! (OpenAI, Ollama, ...) trivially reuse the same transport.
+//! tested exhaustively with zero network. The OpenAI-compatible and
+//! Ollama providers and the embedding client share it.
 
 use std::pin::Pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::Stream;
 use tokio_util::sync::CancellationToken;
 
+use aivyx_route::{Resolve, SystemResolver};
+
 use crate::LlmError;
+use crate::local_only::{check_url_async, model_client_builder_with};
 
 /// A byte stream returned by [`HttpTransport::post_sse`]. Wraps
 /// `reqwest::Response::bytes_stream()` in the real path; in tests it wraps
@@ -79,76 +83,93 @@ pub trait HttpTransport: Send + Sync {
 ///
 /// reqwest otherwise sends even loopback requests -- prompts, keys -- to
 /// `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` when one is set (aivyx-vision
-/// audit 2026-11-11, X1).
+/// audit 2026-11-11, X1). For a **model** URL use
+/// [`model_client_builder`](crate::local_only::model_client_builder),
+/// which also refuses redirects and non-local addresses.
 pub fn direct_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder().no_proxy()
 }
 
-/// A client builder for `url`: direct when `url` is a local address
-/// (aivyx-route's `url_locality`, the rule routing uses), otherwise
-/// honouring a configured proxy, which people behind a corporate proxy
-/// need for cloud APIs.
-pub fn client_builder_for(url: &str) -> reqwest::ClientBuilder {
-    if is_local_url(url) {
-        direct_client_builder()
-    } else {
-        reqwest::Client::builder()
-    }
-}
-
-fn is_local_url(url: &str) -> bool {
-    aivyx_route::url_locality(url) == aivyx_route::Locality::Local
-}
-
-/// Production transport: a `reqwest::Client` with rustls. It holds two
-/// clients and picks one per request: `direct` (no proxy) for a local
-/// address, `client` (honouring a configured proxy) for anything else --
-/// see [`client_builder_for`].
+/// Production transport: one `reqwest::Client` (rustls) built with
+/// [`model_client_builder_with`]: no proxy (every model is local since
+/// 2.0), no redirects, and a connect-time resolver that only returns local
+/// addresses. Every request first re-checks its URL with `require_local`
+/// (in `spawn_blocking`), because reqwest skips the resolver for an
+/// IP-literal URL and a provider's URL may have been built unchecked.
 pub struct ReqwestTransport {
     client: reqwest::Client,
-    direct: reqwest::Client,
+    resolver: Arc<dyn Resolve>,
 }
 
 impl ReqwestTransport {
     pub fn new() -> Result<Self, LlmError> {
-        let build = |builder: reqwest::ClientBuilder| {
-            builder
-                .user_agent(concat!("aivyx-llm/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .map_err(|e| LlmError::Config(format!("reqwest client build failed: {e}")))
-        };
-        Ok(ReqwestTransport {
-            client: build(reqwest::Client::builder())?,
-            direct: build(direct_client_builder())?,
-        })
+        Self::with_resolver(Arc::new(SystemResolver))
     }
 
-    /// Uses `client` for every request, local or not.
+    /// [`Self::new`] over `resolver`, for both the per-request URL check
+    /// and the connect-time resolver (a test seam).
+    pub fn with_resolver(resolver: Arc<dyn Resolve>) -> Result<Self, LlmError> {
+        let client = model_client_builder_with(Arc::clone(&resolver))
+            .user_agent(concat!("aivyx-llm/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| LlmError::Config(format!("reqwest client build failed: {e}")))?;
+        Ok(ReqwestTransport { client, resolver })
+    }
+
+    /// Uses `client` for every request. The per-request local-only URL
+    /// check still applies; the caller owns the client's redirect and
+    /// resolver settings.
     pub fn from_client(client: reqwest::Client) -> Self {
         ReqwestTransport {
-            direct: client.clone(),
             client,
+            resolver: Arc::new(SystemResolver),
         }
     }
 
-    fn client_for(&self, url: &str) -> &reqwest::Client {
-        if is_local_url(url) {
-            &self.direct
-        } else {
-            &self.client
-        }
+    /// `require_local` on `url`, off the async runtime.
+    async fn check(&self, url: &str) -> Result<(), LlmError> {
+        check_url_async(url, Arc::clone(&self.resolver)).await
     }
+}
+
+/// A send error, with its source chain (the local-only resolver's refusal
+/// is a source, not the top-level message).
+fn send_error(e: reqwest::Error) -> LlmError {
+    let mut text = e.to_string();
+    let mut source = std::error::Error::source(&e);
+    while let Some(s) = source {
+        text.push_str(": ");
+        text.push_str(&s.to_string());
+        source = s.source();
+    }
+    LlmError::Transport(text)
+}
+
+/// A redirect is refused, not followed (the policy is `none`, so reqwest
+/// hands it back as the response): following it would re-send the request
+/// to whatever host the server names.
+fn refuse_redirect(response: &reqwest::Response) -> Result<(), LlmError> {
+    let status = response.status();
+    if status.is_redirection() {
+        let to = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("<none>");
+        return Err(LlmError::Api {
+            status: status.as_u16(),
+            message: format!("the model server redirected to {to}; aivyx doesn't follow redirects"),
+        });
+    }
+    Ok(())
 }
 
 #[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn get_text(&self, url: &str) -> Result<String, LlmError> {
-        let response = self
-            .client_for(url)
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| LlmError::Transport(e.to_string()))?;
+        self.check(url).await?;
+        let response = self.client.get(url).send().await.map_err(send_error)?;
+        refuse_redirect(&response)?;
 
         let status = response.status();
         if !status.is_success() {
@@ -180,16 +201,16 @@ impl HttpTransport for ReqwestTransport {
         if cancellation.is_cancelled() {
             return Err(LlmError::Cancelled);
         }
+        // Before each stream (re)connect: every chat stream is a new POST.
+        self.check(url).await?;
 
-        let mut request = self.client_for(url).post(url).body(body);
+        let mut request = self.client.post(url).body(body);
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| LlmError::Transport(e.to_string()))?;
+        let response = request.send().await.map_err(send_error)?;
+        refuse_redirect(&response)?;
 
         let status = response.status();
         if !status.is_success() {
@@ -224,14 +245,13 @@ impl HttpTransport for ReqwestTransport {
         if cancellation.is_cancelled() {
             return Err(LlmError::Cancelled);
         }
-        let mut request = self.client_for(url).post(url).body(body);
+        self.check(url).await?;
+        let mut request = self.client.post(url).body(body);
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| LlmError::Transport(e.to_string()))?;
+        let response = request.send().await.map_err(send_error)?;
+        refuse_redirect(&response)?;
         let status = response.status();
         if !status.is_success() {
             let message: String = response

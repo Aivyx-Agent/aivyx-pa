@@ -103,7 +103,6 @@ aivyx-memory = { path = "../aivyx-memory" }
 aivyx-mcp = { path = "../aivyx-mcp" }
 aivyx-tool = { path = "../aivyx-tool" }
 aivyx-llm = { path = "../aivyx-llm", features = [
-    "provider-anthropic",
     "provider-openai",
     "provider-ollama",
 ] }

@@ -914,7 +914,7 @@ async fn check_local_openai_server_at(
     // Same joining the OpenAI provider uses for chat: `{base}/v1/...`.
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
     let models: Result<Vec<String>, ProbeError> = async {
-        let mut request = aivyx_llm::transport::client_builder_for(&url)
+        let mut request = aivyx_llm::local_only::model_client_builder()
             .build()
             .unwrap_or_default()
             .get(&url).timeout(LOCAL_PROBE_TIMEOUT);
@@ -985,7 +985,7 @@ async fn check_broker(cfg: &AivyxConfig) -> bool {
 }
 
 async fn check_broker_at(base_url: &str) -> bool {
-    let client = aivyx_llm::transport::client_builder_for(base_url)
+    let client = aivyx_llm::local_only::model_client_builder()
         .build()
         .unwrap_or_default();
     let base = base_url.trim_end_matches('/');

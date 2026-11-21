@@ -1,18 +1,14 @@
-//! Phase 104 — provider credential verification.
+//! Phase 104 — model verification against a local server.
 //!
-//! Used by `aivyx-pa init` to confirm the operator-supplied
-//! `(provider, api_key, model)` triple is valid before writing
-//! `aivyx-pa.toml` to disk. Catches typo'd keys and non-existent
-//! model names at config-write time rather than first-turn time
-//! (after the operator has already committed to a passphrase).
+//! `GET {base_url}/v1/models` on an OpenAI-compatible server (llama-server,
+//! Jan, Lemonade, the broker, …) returns `{ data: [ { id, … }, … ] }`.
+//! [`verify_model_listed`] issues that GET, parses the list and confirms
+//! the chosen model is present. Errors carry enough detail for a caller to
+//! re-prompt the right field (auth → key; model-not-found → model).
 //!
-//! Both Anthropic and OpenAI expose a `GET /v1/models` endpoint
-//! that takes an API key in a provider-specific header and
-//! returns a JSON document with shape `{ data: [ { id, … }, … ] }`.
-//! The helper issues that GET, parses the returned list, and
-//! confirms the chosen model is present. Errors carry enough
-//! detail for the wizard to re-prompt the right field on retry
-//! (auth → re-prompt key; model-not-found → re-prompt model).
+//! 2.0 (local-only): the cloud key checks (Anthropic's and OpenAI's own
+//! `/v1/models`) are gone. `base_url` must be local; it is checked before
+//! the request, and the client refuses redirects and non-local addresses.
 
 use std::time::Duration;
 
@@ -22,47 +18,33 @@ use thiserror::Error;
 // Public types
 // ---------------------------------------------------------------------------
 
-/// Provider kinds verified by [`verify_provider_credentials`].
-///
-/// Ollama is excluded on purpose — the wizard verifies Ollama
-/// via the existing `/api/tags` listing path; an empty list is
-/// caught before this helper is called.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VerifyProvider {
-    Anthropic,
-    OpenAi,
-}
-
-/// Why [`verify_provider_credentials`] failed. The variants are
-/// discriminated by failure class so the wizard knows which
-/// prompt to re-show on retry — auth errors → re-prompt key,
-/// model-not-found → re-prompt model, network/other → both.
+/// Why [`verify_model_listed`] failed. The variants are discriminated by
+/// failure class so a caller knows which prompt to re-show on retry —
+/// auth errors → re-prompt key, model-not-found → re-prompt model,
+/// network/other → both.
 #[derive(Debug, Error)]
 pub enum VerifyError {
-    /// 401 / 403 from the provider. The supplied API key is
-    /// missing, malformed, or revoked.
+    /// 401 / 403 from the server. The supplied API key is missing,
+    /// malformed, or revoked.
     #[error("authentication failed: {0}")]
     Auth(String),
 
-    /// The provider accepted the key but the requested model id
-    /// was not present in the returned list. `available` is a
-    /// human-readable summary of what *is* available, so the
-    /// wizard can show it on retry.
+    /// The server answered but the requested model id was not present in
+    /// the returned list. `available` is a human-readable summary of what
+    /// *is* available.
     #[error(
-        "model `{model}` is not available for this account; \
+        "model `{model}` is not available on this server; \
          available models: {available}"
     )]
     ModelNotFound { model: String, available: String },
 
-    /// Network-layer failure — DNS, connect timeout, TLS, etc.
-    /// The wizard treats this as ambiguous (could be either key
-    /// or model wrong) and re-prompts both.
+    /// Network-layer failure — DNS, connect timeout, TLS, a non-local
+    /// URL, etc.
     #[error("network error: {0}")]
     Network(String),
 
-    /// The provider returned a non-auth non-success status, or
-    /// the response body did not match the expected shape. The
-    /// wizard treats this as ambiguous like [`VerifyError::Network`].
+    /// The server returned a non-auth non-success status, or the response
+    /// body did not match the expected shape.
     #[error("provider returned unexpected response: {0}")]
     Other(String),
 }
@@ -71,59 +53,37 @@ pub enum VerifyError {
 // Constants
 // ---------------------------------------------------------------------------
 
-const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";
-const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
-
-/// Anthropic requires an `anthropic-version` header on every
-/// request. The value here matches the version
-/// `aivyx-llm::anthropic::provider` already uses.
-const ANTHROPIC_API_VERSION: &str = "2023-06-01";
-
-/// Connect + total timeout for the verify GET. Short — the
-/// wizard is interactive and a stalled verify is worse than a
-/// crisp `Network` error the operator can retry from.
+/// Connect + total timeout for the verify GET. Short — callers are
+/// interactive and a stalled verify is worse than a crisp `Network` error
+/// the operator can retry from.
 const VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// Verify the `(provider, api_key, model)` triple by issuing
-/// `GET /v1/models` with the supplied key and confirming the
-/// chosen model is in the returned list.
-///
-/// Returns `Ok(())` on success; on failure the wizard branches
-/// on the [`VerifyError`] variant to re-prompt the right field.
-pub async fn verify_provider_credentials(
-    provider: VerifyProvider,
-    api_key: &str,
+/// Verify that `model` is listed by the local server at `base_url`
+/// (`GET {base_url}/v1/models`, with `api_key` as a bearer token when
+/// given). `base_url` must be local.
+pub async fn verify_model_listed(
+    base_url: &str,
+    api_key: Option<&str>,
     model: &str,
 ) -> Result<(), VerifyError> {
-    let client = reqwest::Client::builder()
+    let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+    crate::local_only::require_local_async(&url)
+        .await
+        .map_err(|e| VerifyError::Network(e.to_string()))?;
+
+    let client = crate::local_only::model_client_builder()
         .timeout(VERIFY_TIMEOUT)
         .connect_timeout(VERIFY_TIMEOUT)
         .build()
-        .map_err(|e| {
-            VerifyError::Network(format!("failed to build HTTP client: {e}"))
-        })?;
+        .map_err(|e| VerifyError::Network(format!("failed to build HTTP client: {e}")))?;
 
-    let (url, headers) = match provider {
-        VerifyProvider::Anthropic => (
-            ANTHROPIC_MODELS_URL,
-            vec![
-                ("x-api-key", api_key.to_string()),
-                ("anthropic-version", ANTHROPIC_API_VERSION.to_string()),
-            ],
-        ),
-        VerifyProvider::OpenAi => (
-            OPENAI_MODELS_URL,
-            vec![("Authorization", format!("Bearer {api_key}"))],
-        ),
-    };
-
-    let mut req = client.get(url);
-    for (k, v) in &headers {
-        req = req.header(*k, v.as_str());
+    let mut req = client.get(&url);
+    if let Some(key) = api_key {
+        req = req.header("Authorization", format!("Bearer {key}"));
     }
 
     let resp = req
@@ -146,7 +106,7 @@ pub async fn verify_provider_credentials(
 
 /// Map an HTTP status + response body + chosen model to a
 /// [`Result<(), VerifyError>`]. Extracted from
-/// [`verify_provider_credentials`] so unit tests can drive every
+/// [`verify_model_listed`] so unit tests can drive every
 /// branch without a real HTTP server.
 pub(crate) fn classify_response(
     status: u16,
@@ -181,7 +141,7 @@ pub(crate) fn classify_response(
 }
 
 /// Parse the `{ data: [ { id, … }, … ] }` shape shared by
-/// Anthropic's and OpenAI's `/v1/models` responses.
+/// OpenAI-compatible `/v1/models` responses.
 pub(crate) fn parse_models_response(body: &str) -> Result<Vec<String>, String> {
     let v: serde_json::Value = serde_json::from_str(body)
         .map_err(|e| format!("invalid JSON: {e}"))?;
@@ -231,7 +191,7 @@ pub(crate) fn summarize_models(models: &[String], cap: usize) -> String {
 
 // ---------------------------------------------------------------------------
 // Tests — pure-function coverage only. The live HTTP path in
-// `verify_provider_credentials` is integration-tested in the
+// `verify_model_listed` is integration-tested in the
 // wizard's `cargo test` suite via the same model the rest of
 // `aivyx-llm` uses: the parse + classify helpers are exhaustively
 // unit-tested, and the HTTP layer is treated as
@@ -243,6 +203,16 @@ pub(crate) fn summarize_models(models: &[String], cap: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_non_local_server_is_refused_before_any_request() {
+        for base in ["https://api.openai.com", "https://api.anthropic.com", "http://203.0.113.7:8080"] {
+            match verify_model_listed(base, Some("sk-x"), "m").await {
+                Err(VerifyError::Network(msg)) => assert!(msg.contains("is not local"), "{msg}"),
+                other => panic!("{base}: expected a local-only refusal, got {other:?}"),
+            }
+        }
+    }
 
     // -- parse_models_response -------------------------------------------
 

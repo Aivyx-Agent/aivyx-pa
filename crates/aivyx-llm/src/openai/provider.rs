@@ -29,7 +29,11 @@ use crate::{
 
 use crate::transport::{ByteStream, HttpTransport, ReqwestTransport};
 
-const DEFAULT_BASE_URL: &str = "https://api.openai.com";
+/// `OpenAiProvider::new` without `base_url` (2.0: there is no built-in
+/// address; every model server is the operator's own).
+pub const OPENAI_NEEDS_BASE_URL: &str =
+    "the OpenAI-compatible provider needs a base_url (a model server on this machine or your own network)";
+
 /// Default Ollama base URL — standard port for `ollama serve`.
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 
@@ -54,7 +58,7 @@ pub struct OpenAiConfig {
     /// emits a valid, real-named call by construction. Default `false`
     /// → the unchanged OpenAI-compat passthrough. Set only for the
     /// llama.cpp-backed providers; cloud OpenAI does not support the
-    /// extension.
+    /// extension (2.0: there is no cloud OpenAI path any more).
     ///
     /// [`tool_grammar::tool_call_grammar`]: crate::tool_grammar::tool_call_grammar
     pub constrain_tool_calls: bool,
@@ -116,13 +120,23 @@ pub struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
+    /// Builds the provider for `config.base_url`, which is required and
+    /// must be local (`require_local`; blocking DNS for a name that isn't
+    /// local by spelling). Every request re-checks it.
     pub fn new(config: OpenAiConfig) -> Result<Self, LlmError> {
+        let base = config
+            .base_url
+            .as_deref()
+            .ok_or_else(|| LlmError::Config(OPENAI_NEEDS_BASE_URL.to_string()))?;
+        crate::local_only::check_url(base)?;
         Ok(OpenAiProvider {
             config,
             transport: Box::new(ReqwestTransport::new()?),
         })
     }
 
+    /// A test seam: no constructor check. A real [`ReqwestTransport`]
+    /// still checks every request's URL (an empty `base_url` fails closed).
     pub fn with_transport(
         config: OpenAiConfig,
         transport: Box<dyn HttpTransport>,
@@ -131,19 +145,11 @@ impl OpenAiProvider {
     }
 
     fn endpoint(&self) -> String {
-        let base = self
-            .config
-            .base_url
-            .as_deref()
-            .unwrap_or(DEFAULT_BASE_URL);
-        format!("{base}/v1/chat/completions")
+        format!("{}/v1/chat/completions", self.base_url())
     }
 
     fn base_url(&self) -> &str {
-        self.config
-            .base_url
-            .as_deref()
-            .unwrap_or(DEFAULT_BASE_URL)
+        self.config.base_url.as_deref().unwrap_or_default()
     }
 
     /// Lightweight health check against the provider's base URL.
@@ -183,14 +189,10 @@ impl OpenAiProvider {
 
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
-    /// OpenAI's own API: its current chat models take images. Any other
-    /// server: llama.cpp's `llama-server` says in `GET /props`
+    /// llama.cpp's `llama-server` says in `GET /props`
     /// (`modalities.vision`, true when started with `--mmproj`); a server
     /// without that endpoint can't tell.
     async fn sees_images(&self, _model: &str) -> Option<bool> {
-        if self.base_url() == DEFAULT_BASE_URL {
-            return Some(true);
-        }
         let url = format!("{}/props", self.base_url().trim_end_matches('/'));
         let body = self.transport.get_text(&url).await.ok()?;
         let props: serde_json::Value = serde_json::from_str(&body).ok()?;
@@ -210,7 +212,6 @@ impl LlmProvider for OpenAiProvider {
                 &request,
                 self.config.include_stream_usage,
                 constrain,
-                self.base_url() != DEFAULT_BASE_URL,
             )?;
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| LlmError::Parse(format!("request serialization: {e}")))?;
@@ -259,13 +260,10 @@ impl LlmProvider for OpenAiProvider {
 // Request-body construction
 // ---------------------------------------------------------------------------
 
-/// `local_server`: not OpenAI's own API, whose strict schema rejects the
-/// llama.cpp extensions this may add.
 fn build_request_body(
     request: &LlmRequest<'_>,
     include_stream_usage: bool,
     constrain: bool,
-    local_server: bool,
 ) -> Result<Value, LlmError> {
     if request.model.is_empty() {
         return Err(LlmError::UnknownModel(String::new()));
@@ -296,9 +294,8 @@ fn build_request_body(
     }
 
     // Answer without reasoning first (llama.cpp's chat-template switch,
-    // which Qwen3-family templates read; others ignore it). Never sent to
-    // OpenAI itself.
-    if request.no_thinking && local_server {
+    // which Qwen3-family templates read; others ignore it).
+    if request.no_thinking {
         body["chat_template_kwargs"] = json!({"enable_thinking": false});
     }
 
@@ -1103,7 +1100,7 @@ data: [DONE]\n\n";
             route: None,
             no_thinking: false,
         };
-        let body = build_request_body(&req, true, false, true).unwrap();
+        let body = build_request_body(&req, true, false).unwrap();
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[0]["content"], "you are helpful");
@@ -1130,7 +1127,7 @@ data: [DONE]\n\n";
             route: None,
             no_thinking: false,
         };
-        let body = build_request_body(&req, true, false, true).unwrap();
+        let body = build_request_body(&req, true, false).unwrap();
         let tool_arr = body["tools"].as_array().unwrap();
         assert_eq!(tool_arr.len(), 1);
         assert_eq!(tool_arr[0]["type"], "function");
@@ -1166,7 +1163,7 @@ data: [DONE]\n\n";
             route: None,
             no_thinking: false,
         };
-        let body = build_request_body(&req, false, true, true).unwrap();
+        let body = build_request_body(&req, false, true).unwrap();
 
         // The grammar is present as `json_schema` (a oneOf union)…
         assert!(body.get("json_schema").is_some(), "json_schema injected");
@@ -1363,7 +1360,7 @@ data: [DONE]\n\n";
             route: None,
             no_thinking: false,
         };
-        let body = build_request_body(&req, false, false, true).unwrap();
+        let body = build_request_body(&req, false, false).unwrap();
         assert!(
             body.get("stream_options").is_none(),
             "stream_options must be absent when include_stream_usage is false: {body}"
@@ -1385,7 +1382,7 @@ data: [DONE]\n\n";
             route: None,
             no_thinking: false,
         };
-        let body = build_request_body(&req, true, false, true).unwrap();
+        let body = build_request_body(&req, true, false).unwrap();
         assert!(
             body.get("stream_options").is_some(),
             "stream_options must be present when include_stream_usage is true: {body}"
@@ -1463,7 +1460,7 @@ data: [DONE]\n\n";
     }
 
     #[tokio::test]
-    async fn sees_images_asks_llama_server_and_trusts_openai() {
+    async fn sees_images_asks_llama_server() {
         let local = |props: &'static str| {
             OpenAiProvider::with_transport(
                 OpenAiConfig::without_api_key().with_base_url("http://127.0.0.1:8090/"),
@@ -1481,11 +1478,6 @@ data: [DONE]\n\n";
             Box::new(UnreachableTransport),
         );
         assert_eq!(unreachable.sees_images("m").await, None);
-        let openai = OpenAiProvider::with_transport(
-            OpenAiConfig::new("sk-test"),
-            Box::new(UnreachableTransport),
-        );
-        assert_eq!(openai.sees_images("gpt-5").await, Some(true));
     }
 
     #[tokio::test]
@@ -1583,7 +1575,7 @@ data: [DONE]\n\n";
     /// Onboarding audit 3: the setup wizard's drafts ask a thinking model
     /// to answer without reasoning; only local servers get the switch.
     #[test]
-    fn no_thinking_sets_the_chat_template_switch_for_local_servers_only() {
+    fn no_thinking_sets_the_chat_template_switch() {
         let messages: Vec<LlmMessage> = vec![];
         let tools: Vec<LlmToolDescriptor> = vec![];
         let request = |no_thinking| LlmRequest {
@@ -1598,11 +1590,9 @@ data: [DONE]\n\n";
             route: None,
             no_thinking,
         };
-        let local = build_request_body(&request(true), true, false, true).unwrap();
+        let local = build_request_body(&request(true), true, false).unwrap();
         assert_eq!(local["chat_template_kwargs"], json!({"enable_thinking": false}));
-        let openai = build_request_body(&request(true), true, false, false).unwrap();
-        assert!(openai.get("chat_template_kwargs").is_none());
-        let normal = build_request_body(&request(false), true, false, true).unwrap();
+        let normal = build_request_body(&request(false), true, false).unwrap();
         assert!(normal.get("chat_template_kwargs").is_none());
     }
 
@@ -1622,7 +1612,7 @@ data: [DONE]\n\n";
             route: None,
             no_thinking: false,
         };
-        let body = build_request_body(&request, true, false, true).unwrap();
+        let body = build_request_body(&request, true, false).unwrap();
         assert!(body.get("id_slot").is_none(), "id_slot must be omitted entirely when None");
     }
 
@@ -1642,7 +1632,7 @@ data: [DONE]\n\n";
             route: None,
             no_thinking: false,
         };
-        let body = build_request_body(&request, true, false, true).unwrap();
+        let body = build_request_body(&request, true, false).unwrap();
         assert_eq!(body["id_slot"], serde_json::json!(2));
     }
 
@@ -1662,7 +1652,7 @@ data: [DONE]\n\n";
             route: None,
             no_thinking: false,
         };
-        let body = build_request_body(&request, true, false, true).unwrap();
+        let body = build_request_body(&request, true, false).unwrap();
         assert!(
             body.get("aivyx_slot_hint").is_none(),
             "aivyx_slot_hint must be omitted entirely when None -- a request without it \
@@ -1692,7 +1682,7 @@ data: [DONE]\n\n";
             route: None,
             no_thinking: false,
         };
-        let body = build_request_body(&request, true, false, true).unwrap();
+        let body = build_request_body(&request, true, false).unwrap();
         assert_eq!(
             body["aivyx_slot_hint"],
             serde_json::json!({"prefix_hash": "abc123", "preferred_slot": 2}),
