@@ -7074,6 +7074,11 @@ async fn handle_query(
             on_exceeded,
             alert_at,
         } => {
+            // 2.0 (local-only): money caps were removed; the loader refuses
+            // them, so refuse here and never write those keys.
+            if let Some(refusal) = money_cap_refusal(per_run_usd, per_day_usd) {
+                return refusal;
+            }
             let path = match config_toml_path {
                 Some(p) => p,
                 None => return no_config_file_error(),
@@ -7406,6 +7411,21 @@ fn gallery_caption(entry: &serde_json::Value) -> Option<String> {
 /// Chapter U — `QueryError` for a Settings write/read when the daemon was
 /// launched without an `aivyx-pa.toml` (env-only). The handler refuses rather
 /// than fabricate a config path.
+/// The `SetBudget` refusal when any money (`*_usd`) cap is set.
+fn money_cap_refusal(
+    per_run_usd: Option<f64>,
+    per_day_usd: Option<f64>,
+) -> Option<QueryResponsePayload> {
+    if per_run_usd.is_none() && per_day_usd.is_none() {
+        return None;
+    }
+    Some(QueryResponsePayload::QueryError {
+        code: "invalid_budget".into(),
+        message: "money caps were removed in 2.0 — aivyx is local-only; use a token or run cap"
+            .into(),
+    })
+}
+
 fn no_config_file_error() -> QueryResponsePayload {
     QueryResponsePayload::QueryError {
         code: "no_config_file".into(),
@@ -10822,6 +10842,20 @@ system_prompt = "You are a custom role."
             budget_action_label(aivyx_cost::BudgetAction::Alert),
             "alert"
         );
+    }
+
+    #[test]
+    fn set_budget_refuses_money_caps() {
+        assert!(money_cap_refusal(None, None).is_none());
+        for (r, d) in [(Some(1.0), None), (None, Some(2.0)), (Some(1.0), Some(2.0))] {
+            match money_cap_refusal(r, d) {
+                Some(QueryResponsePayload::QueryError { code, message }) => {
+                    assert_eq!(code, "invalid_budget");
+                    assert!(message.contains("local-only"));
+                }
+                other => panic!("expected QueryError, got {other:?}"),
+            }
+        }
     }
 
     #[test]

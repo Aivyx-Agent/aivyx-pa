@@ -3952,7 +3952,7 @@ email customers without asking
     fn prompt_choice_returns_default_on_empty_input() {
         let mut input = Cursor::new(b"\n" as &[u8]);
         let mut output = Vec::new();
-        let opts = &["Ollama", "Anthropic", "OpenAI"];
+        let opts = &["Ollama", "Jan", "OpenAI"];
         let result = prompt_choice("Choose", opts, 0, &mut input, &mut output).unwrap();
         assert_eq!(result, 0);
     }
@@ -3961,7 +3961,7 @@ email customers without asking
     fn prompt_choice_returns_selected_option() {
         let mut input = Cursor::new(b"2\n" as &[u8]);
         let mut output = Vec::new();
-        let opts = &["Ollama", "Anthropic", "OpenAI"];
+        let opts = &["Ollama", "Jan", "OpenAI"];
         let result = prompt_choice("Choose", opts, 0, &mut input, &mut output).unwrap();
         assert_eq!(result, 1); // 0-indexed
     }
@@ -3971,7 +3971,7 @@ email customers without asking
         // First input "5" is out of range, second "3" is valid.
         let mut input = Cursor::new(b"5\n3\n" as &[u8]);
         let mut output = Vec::new();
-        let opts = &["Ollama", "Anthropic", "OpenAI"];
+        let opts = &["Ollama", "Jan", "OpenAI"];
         let result = prompt_choice("Choose", opts, 0, &mut input, &mut output).unwrap();
         assert_eq!(result, 2);
         let out = String::from_utf8(output).unwrap();

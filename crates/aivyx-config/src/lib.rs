@@ -6900,6 +6900,7 @@ impl AivyxConfig {
     /// reported as its own row (via [`model_urls`](Self::model_urls))
     /// instead of stopping the whole check. Never build a provider from a
     /// config loaded this way without checking it first.
+    #[doc(hidden)]
     pub fn load_for_diagnostics(opts: &LoadOptions) -> Result<Self, ConfigError> {
         Self::load_unchecked(opts)
     }
