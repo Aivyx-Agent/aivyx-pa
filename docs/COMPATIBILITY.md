@@ -89,8 +89,9 @@ one list of tagged entries is `NOT_STABLE` in
   `aivyx-pa lock`), federation between your own instances (the
   `[federation]` section and `aivyx-pa federation card|peer|ping|send`),
   and the work board (`aivyx-pa board`, its standing agents and
-  `aivyx-pa board agent`, and the board's storage lines in
-  `formats.txt`).
+  `aivyx-pa board agent`, its aivyx-coder workspaces and
+  `aivyx-pa board workspace`, the `coder:<workspace>` owner, and the
+  board's storage lines in `formats.txt`).
   The `board_changed` audit event name is stable while the board itself
   is a preview: audit entries are permanent.
   A preview can change or be removed in any release.

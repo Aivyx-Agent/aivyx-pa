@@ -3,6 +3,36 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [Unreleased]
+
+### Added
+
+- **aivyx-coder as a board worker (preview).** A task owned by
+  `coder:<workspace>` is worked by aivyx-coder in a folder you registered:
+  `aivyx-pa board workspace add <name> <path>` (also `list` and `remove`).
+  The daemon canonicalizes the path and refuses `/`, your home folder
+  itself, pa's own data and config folders (and anything inside or above
+  them), a missing path and a file; removing a workspace with open tasks or
+  an agent working as it is refused. `coder:<name>` works for `board
+  assign`, `task add --owner` and `agent add|edit --works-as`, so a standing
+  agent can work as a coder workspace. Start runs `aivyx-coder --auto
+  <brief> --headless --report <tmp>/report.json` in the workspace
+  (`$AIVYX_CODER`, or `aivyx-coder` on `PATH`), with pa's `AIVYX_PA_*`
+  variables and well-known cloud-provider credentials removed from its
+  environment: pa and coder are local-only, so point coder's config at
+  your local llama-server. coder's exit code decides the result: 0 and 1
+  go to Review (Done with review off) with coder's notice, the token
+  count, the changed-file and checkpoint counts ("undo with /undo in
+  aivyx-coder"); 2, 3 and 4 go back to To do with the reason; 130 or a
+  Cancel ends Cancelled. One coder run per workspace ("the workspace is
+  busy"), a 4 h ceiling (SIGTERM, a kill 30 s later), no turn lock (use
+  aivyx-broker to share a llama-server), a `coder:<name>` mission record,
+  and the restart sweep returns an interrupted run's task to To do. The
+  Studio's owner picker and agent form offer "coder <workspace>", and the
+  Agents tab lists the workspaces read-only. New audit ops
+  `workspace_added` and `workspace_removed`, with the workspace id only.
+  Part of the board preview. Guide: `docs/BOARD.md`. Amendment A22.
+
 ## [1.4.0] — 2026-11-19
 
 ### Changed

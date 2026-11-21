@@ -26,8 +26,11 @@ Everything is stored encrypted in its own store domain (`KeyDomain::Board`).
 A task is owned by a **role** (`role:<name>`, a role from your config,
 `default` included), by the **team** (the daemon's active team: the default
 roster, or an installed pack's team), by a standing **agent**
-(`agent:<name>`, see [Agents and heartbeats](#agents-and-heartbeats)), or by
-nobody yet. An agent-owned task runs as the agent's role or the team.
+(`agent:<name>`, see [Agents and heartbeats](#agents-and-heartbeats)), by
+**aivyx-coder** in a registered folder (`coder:<workspace>`, see
+[Give coding tasks to aivyx-coder](#give-coding-tasks-to-aivyx-coder)), or
+by nobody yet. An agent-owned task runs as the agent's role, the team or
+its coder workspace.
 
 **A role run** is one turn of the daemon's agent:
 
@@ -165,9 +168,9 @@ An agent has:
 
 - a **name** (letters, digits, `-` and `_`, up to 64; unique) and an
   optional **title** ("Keeps the books");
-- **works as**: `role:<name>` or `team`. A task owned by the agent runs
-  exactly as a task owned by that role or by the team would; the task keeps
-  `agent:<name>` as its owner;
+- **works as**: `role:<name>`, `team` or `coder:<workspace>`. A task owned
+  by the agent runs exactly as a task owned by that role, the team or that
+  workspace would; the task keeps `agent:<name>` as its owner;
 - **reports to**: another agent, optional. This only draws the **org
   chart**: `board agent list` prints a tree in name order, each agent under
   the one it reports to. A loop is refused when you make it; if one appears
@@ -227,14 +230,155 @@ or the Studio; the board tools give runs no way to touch them. These count
 as operator activity, like the other board commands. Removing an agent is
 refused while it owns a To-do, Running or Review task: reassign them first.
 
+## Give coding tasks to aivyx-coder
+
+Some tasks are code work: change a project, run its tests, report back. A
+task owned by `coder:<workspace>` is worked by
+[aivyx-coder](https://github.com/Aivyx-Agent/aivyx-coder), the terminal
+coding agent, running headless in a folder you registered. You review the
+result like any other run's. Amendment A22
+(`docs/amendments/2026-11-20-board-coder-workers.md`) records the design.
+
+**Local only.** aivyx-pa and aivyx-coder are local-first and use only local
+models. pa never passes a cloud credential to coder: it removes its own
+secrets (`AIVYX_PA_*`) and the well-known cloud-provider key variables
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and the like) from coder's
+environment. Point coder's own config (`~/.config/aivyx-coder/config.toml`,
+`[backend] base_url`) at your local llama-server.
+
+### Workspaces
+
+A **workspace** is a folder aivyx-coder may work in. Only you register one,
+from the CLI:
+
+```
+aivyx-pa board workspace add shop ~/src/shop
+aivyx-pa board workspace list
+aivyx-pa board workspace remove shop
+```
+
+- The name is letters, digits, `-` and `_`, up to 64, unique among
+  workspaces. A relative path is made absolute against your current
+  directory, and the daemon canonicalizes it (following symlinks) and stores
+  that.
+- Refused: a path that doesn't exist or isn't a folder; `/`; your home
+  folder itself (a folder inside it is fine); pa's own data and config
+  folders, anything inside them, and anything that contains them; a folder
+  that is already registered.
+- The folder is checked again at every Start, so a workspace whose folder
+  has gone, or now resolves somewhere refused, doesn't start.
+- `workspace list` prints `<name>  <path>  <busy|idle>  open <n>`: whether
+  a coder run is working in it, and how many open tasks it owns.
+- Removing a workspace is refused while a To-do, Running or Review task is
+  owned by it, or while an agent works as it. To change a workspace's path,
+  remove it and add it again.
+- Board tools, runs, team specialists and federation peers can't register
+  or remove a workspace, and nothing else ever supplies a path: a run can
+  only go to a folder you registered.
+
+### Coder owners and coder agents
+
+`coder:<workspace>` is accepted wherever an owner is: `board assign <task>
+coder:shop`, `task add --owner coder:shop`, and for a standing agent
+`agent add|edit --works-as coder:shop`. An agent that works as a coder
+workspace wakes as any other agent does (on assignment, on its heartbeat, or
+on `agent wake`) and starts its tasks in that workspace. In the Studio the
+owner picker and the agent form list "coder <workspace>".
+
+### What a run does
+
+A Start runs, in the workspace folder:
+
+```
+aivyx-coder --auto "<brief>" --headless --report <tmp>/report.json
+```
+
+with stdin closed and the last 64 KiB of its output kept. The brief is the
+same as a role run's (the goal's, project's and task's titles, the
+description and your notes). The binary is `$AIVYX_CODER` when it is set,
+otherwise `aivyx-coder` on the daemon's `PATH`; if there is neither, Start
+is refused ("aivyx-coder isn't installed"). Each run gets a mission record
+labelled `coder:<workspace name>`, which shows under Missions.
+
+How it ends is decided by coder's exit code:
+
+| Exit | Task goes to | Thread note |
+|---|---|---|
+| 0 | Review (Done with `--no-review`) | coder's stop notice |
+| 1 | Review (Done with `--no-review`) | the notice + " — a check failed" |
+| 2 | To do | "coder's budget ran out" |
+| 3 | To do | "coder failed: <its last stderr lines>" |
+| 4 | To do | "coder stopped: possible prompt injection" |
+| 130, or Cancel | Cancelled | — |
+| couldn't start | To do | the error |
+| anything else, or a signal | To do | "coder exited unexpectedly (<code>)" |
+
+The run entry's token count is the report's prompt plus completion tokens,
+and its answer ends with "N changed files; N checkpoints — undo with /undo
+in aivyx-coder". If coder wrote no report, the exit code still decides and
+the note says "(coder wrote no report)".
+
+Things to know:
+
+- **coder's own config and sandbox decide what it may do.** pa adds no
+  scopes and no allow-list: coder's `[permissions]`, deny list and kernel
+  sandbox (Landlock and seccomp on Linux) apply as in any headless run, and
+  it edits only inside the workspace. A headless `--auto` run asks nobody,
+  so its unattended limits apply (no `run_shell`, no commits).
+- **`--auto` needs a test command.** coder refuses to start an autonomous
+  run without one: set `[verification] command` (naming a
+  `[[permissions.allowed_commands]]` entry) in coder's config, or have a
+  project whose test command coder detects (`cargo test` for a Cargo
+  project, and so on). Without one the task goes back to To do with coder's
+  error.
+- **Undo** is coder's: each batch of edits is a checkpoint, and you undo a
+  run's work with `/undo` (and `/checkpoints`) in aivyx-coder, opened in the
+  workspace. Send back puts the task in To do with your note, and the next
+  run starts from the folder as it is now.
+- **A very long brief** (over about 128 KiB, the system's limit on one
+  argument) can't be passed, so the start fails and the task goes back to
+  To do with the error.
+
+### Limits and cancel
+
+- **One run per workspace.** A second Start in a workspace with a run going
+  is refused: "the workspace is busy". Runs in different workspaces go side
+  by side.
+- **A 4 h ceiling.** A run still going after 4 hours gets SIGTERM, which
+  makes coder stop cleanly and write its report; if it hasn't exited 30 s
+  later, it is killed. The task goes back to To do, "coder ran past the run
+  ceiling and was stopped". coder's own `[autonomous] max_duration_secs`
+  (an hour by default) usually stops it first, with exit 2.
+- **Cancel** sends SIGTERM the same way (a kill 30 s later), and the task
+  ends Cancelled.
+- **Daemon stop or restart** kills the coder process; at startup the
+  restart sweep puts the task back in To do, "interrupted by a daemon
+  restart", and closes its mission record, as for role runs.
+- **On macOS**, a hard kill (after the 30 s grace) can leave behind a
+  command coder had started (a test run, say): coder's clean-up of its own
+  children when it dies is Linux-only.
+
+### No turn lock: share a llama with aivyx-broker
+
+A coder run doesn't take the daemon's turn lock, so chat, routines and
+other board runs carry on while it works (a lock held for hours would block
+them all). When pa and coder share one llama-server, run
+[aivyx-broker](https://github.com/Aivyx-Agent/aivyx-broker) to coordinate
+their access to the GPU slots, and point both at it (coder's
+`[backend] kind = "llama_server_broker"` with `[broker] base_url`).
+
 ## Audit
 
 Every change writes one `BoardChanged { op, object, actor }` event:
 `op` is a fixed word (`created`, `assigned`, `started`, `finished`,
 `approved`, `sent_back`, `cancelled`, `commented`, `subtask_added`,
-`interrupted`, and for agents `agent_created`, `agent_edited`,
-`agent_paused`, `agent_resumed`, `agent_removed` and `woke`), `object` is an
-id and `actor` is `operator` or `agent`. A wake is `woke` with the agent's
+`interrupted`, for agents `agent_created`, `agent_edited`,
+`agent_paused`, `agent_resumed`, `agent_removed` and `woke`, and for
+workspaces `workspace_added` and `workspace_removed`), `object` is an id and
+`actor` is `operator` or `agent`. A workspace event's object is the
+workspace id: no path or name goes into the log. A coder run writes
+`started` and `finished` like any other run; coder's own output stays in
+the task's thread and coder's own logs, not in pa's audit chain. A wake is `woke` with the agent's
 id and actor `operator`; each start it makes is `started` with actor
 `agent`. No title, description, comment text or agent name goes into the
 audit log.
@@ -252,15 +396,22 @@ aivyx-pa board goal list
 aivyx-pa board project add <goal> "<title>" [--description "<text>"]
 aivyx-pa board project list [--goal <id>]
 aivyx-pa board task add (--project <id> | --parent <task>) "<title>"
-    [--description "<text>"] [--owner role:<name>|team|agent:<name>] [--no-review]
+    [--description "<text>"]
+    [--owner role:<name>|team|agent:<name>|coder:<name>] [--no-review]
 aivyx-pa board agent list
-aivyx-pa board agent add <name> --works-as role:<name>|team [--title "<t>"]
-    [--reports-to <agent>] [--heartbeat "<cron>"] [--wake-on-assign]
+aivyx-pa board agent add <name> --works-as role:<name>|team|coder:<name>
+    [--title "<t>"] [--reports-to <agent>] [--heartbeat "<cron>"]
+    [--wake-on-assign]
 aivyx-pa board agent edit <name> [--name <new>] [--title "<t>"]
-    [--reports-to <agent>|--no-reports-to] [--works-as role:<name>|team]
-    [--heartbeat "<cron>"|--no-heartbeat] [--wake-on-assign|--no-wake-on-assign]
+    [--reports-to <agent>|--no-reports-to]
+    [--works-as role:<name>|team|coder:<name>]
+    [--heartbeat "<cron>"|--no-heartbeat]
+    [--wake-on-assign|--no-wake-on-assign]
 aivyx-pa board agent pause|resume|remove|wake <name>
-aivyx-pa board assign <task> role:<name>|team|agent:<name>|none
+aivyx-pa board workspace list
+aivyx-pa board workspace add <name> <path>
+aivyx-pa board workspace remove <name>
+aivyx-pa board assign <task> role:<name>|team|agent:<name>|coder:<name>|none
 aivyx-pa board start <task>
 aivyx-pa board approve <task>
 aivyx-pa board send-back <task> "<why>"
@@ -268,8 +419,8 @@ aivyx-pa board cancel <task>
 aivyx-pa board comment <task> "<text>"
 ```
 
-Ids are `g-`, `p-`, `t-` and `a-` followed by eight hex characters; the
-agent commands take the agent's name. `board agent list` prints the org
+Ids are `g-`, `p-`, `t-`, `a-` and `w-` followed by eight hex characters;
+the agent and workspace commands, and `coder:<name>`, take names. `board agent list` prints the org
 chart, one line per agent: its name, title, works-as, heartbeat,
 `[paused]`, the last wake and how many open tasks it owns. `board show`
 prints the thread; a run entry reads
@@ -293,10 +444,16 @@ a paused badge and its open tasks, and **Pause**/**Resume**, **Wake now**
 and **Edit** buttons, with a form to add or edit an agent below. There is
 no Remove button in the Studio: use `aivyx-pa board agent remove`.
 
+The Agents tab also lists your **workspaces** (name, path, busy or idle,
+open tasks), read-only: you add and remove them with `aivyx-pa board
+workspace`. The owner picker and the agent form offer "coder <workspace>"
+for each one, and a coder run's thread entry shows coder's notice, the
+changed-file and checkpoint counts and the mission id.
+
 ## Coming later
 
 Not in this version: agents that add tasks or plan for the agents that
 report to them; budgets per agent and per project that pause work; cron
-catch-up; aivyx-coder and your other PA machines
-(federated peers) as workers; a TUI board view; drag-and-drop; anything
+catch-up; several coder runs in one workspace, per-workspace budgets and
+remote workspaces; your other PA machines (federated peers) as workers; a TUI board view; drag-and-drop; anything
 multi-user.

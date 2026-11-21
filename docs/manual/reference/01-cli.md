@@ -414,8 +414,10 @@ aivyx-pa board agent add <name> --works-as role:<name>|team|coder:<name>
     [--title "<t>"]
     [--reports-to <agent>] [--heartbeat "<cron>"] [--wake-on-assign]
 aivyx-pa board agent edit <name> [--name <new>] [--title "<t>"]
-    [--reports-to <agent>|--no-reports-to] [--works-as role:<name>|team|coder:<name>]
-    [--heartbeat "<cron>"|--no-heartbeat] [--wake-on-assign|--no-wake-on-assign]
+    [--reports-to <agent>|--no-reports-to]
+    [--works-as role:<name>|team|coder:<name>]
+    [--heartbeat "<cron>"|--no-heartbeat]
+    [--wake-on-assign|--no-wake-on-assign]
 aivyx-pa board agent pause|resume|remove|wake <name>
 aivyx-pa board workspace list
 aivyx-pa board workspace add <name> <path>

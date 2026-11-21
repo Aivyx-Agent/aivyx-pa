@@ -88,6 +88,36 @@ An agent can report to another, which draws your agents as an org chart.
 To remove an agent, reassign its open tasks first, then run
 `aivyx-pa board agent remove <name>`.
 
+## Give coding tasks to aivyx-coder
+
+If you use [aivyx-coder](https://github.com/Aivyx-Agent/aivyx-coder), the
+coding agent, the board can hand it code work. First tell the board which
+project folder it may work in (a **workspace**), from the terminal:
+
+```sh
+aivyx-pa board workspace add shop ~/src/shop
+```
+
+Then choose **coder shop** as a task's owner (or as what an agent works as)
+and press **Start**. aivyx-coder works on the task in that folder on its own,
+runs the project's tests, and the task comes back to **Review** with what it
+did: its summary, how many files changed and how many checkpoints it made.
+If you don't like the change, open aivyx-coder in the folder and type
+`/undo`.
+
+A few things to know:
+
+- Everything stays on your machine. aivyx-coder uses its own settings, so
+  point them at your local model server; your assistant never gives it a
+  cloud key.
+- aivyx-coder needs a test command to check its work: one it can find on
+  its own (such as `cargo test`) or one set in its settings.
+- One task at a time per folder. A run stops after 4 hours at most, and
+  **Cancel** stops it at once.
+- If your assistant and aivyx-coder share one model server, use
+  [aivyx-broker](https://github.com/Aivyx-Agent/aivyx-broker) so they take
+  turns on it.
+
 ## From the terminal
 
 Everything on the board also works from the command line:
@@ -101,6 +131,8 @@ aivyx-pa board show t-9c0d1e2f
 aivyx-pa board approve t-9c0d1e2f
 aivyx-pa board agent add scout --works-as role:default --wake-on-assign
 aivyx-pa board assign t-9c0d1e2f agent:scout
+aivyx-pa board workspace add shop ~/src/shop
+aivyx-pa board assign t-9c0d1e2f coder:shop
 ```
 
 `aivyx-pa board` on its own lists every command. The full operator guide is
