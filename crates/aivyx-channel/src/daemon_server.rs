@@ -7408,9 +7408,6 @@ fn gallery_caption(entry: &serde_json::Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Chapter U — `QueryError` for a Settings write/read when the daemon was
-/// launched without an `aivyx-pa.toml` (env-only). The handler refuses rather
-/// than fabricate a config path.
 /// The `SetBudget` refusal when any money (`*_usd`) cap is set.
 fn money_cap_refusal(
     per_run_usd: Option<f64>,
@@ -7426,6 +7423,9 @@ fn money_cap_refusal(
     })
 }
 
+/// Chapter U — `QueryError` for a Settings write/read when the daemon was
+/// launched without an `aivyx-pa.toml` (env-only). The handler refuses rather
+/// than fabricate a config path.
 fn no_config_file_error() -> QueryResponsePayload {
     QueryResponsePayload::QueryError {
         code: "no_config_file".into(),
