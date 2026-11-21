@@ -7,8 +7,7 @@
 
 > A personal autonomous agent platform that runs on your hardware,
 > works with a model on your own machine (Ollama, Lemonade, llama.cpp,
-> Jan, Docker Model Runner) or a cloud LLM under your own API key, and
-> never compromises privacy or auditability for the sake of a feature.
+> Jan, Docker Model Runner). Local-only: models run on your machine or your own network. It never compromises privacy or auditability for the sake of a feature.
 
 Aivyx PA is a Rust-built agent framework whose load-bearing
 properties are **capability-based security**, **HMAC-chained
@@ -54,7 +53,7 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 **2. Have a model to talk to.** Either a local model server —
 [Lemonade](https://lemonade-server.ai), [Ollama](https://ollama.com),
 llama.cpp's `llama-server`, Jan, Docker Model Runner, or `aivyx-broker` — running with a
-tool-capable model, or an Anthropic / OpenAI API key.
+tool-capable model. Local-only: models run on your machine or your own network.
 
 **3. Set it up:**
 
@@ -155,8 +154,8 @@ tool and file, and a developer part.
 - **Runs on your hardware, no API key.** The headline path is local inference —
   `aivyx-pa init` detects a running Lemonade, Ollama, llama.cpp, Jan or
   `aivyx-broker` server, and `aivyx-pa doctor` confirms the path end to end.
-  Anthropic / OpenAI are optional, under *your* key, talking directly to the
-  provider.
+  Local-only: models run on your machine or your own network, and a model URL that
+  isn't local is refused.
 - **Secure by construction.** Capability-based scopes + trust tiers bound
   exactly what the agent can reach; every action lands on an **HMAC-chained,
   offline-verifiable audit log**; storage is encrypted at rest
@@ -307,7 +306,7 @@ Forty crates in the workspace. The substrate core:
 | `aivyx-storage` | redb-backed encrypted store, 29 key domains |
 | `aivyx-audit` | HMAC-chained audit log, offline verification |
 | `aivyx-config` | TOML + env loader with source provenance |
-| `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama impls |
+| `aivyx-llm` | `LlmProvider` trait + local-server impls (Ollama, llama.cpp, Jan, Lemonade, broker) |
 | `aivyx-memory` | `memory.{read,write,forget,gc}` + redb-backed substrate |
 | `aivyx-channel` | Daemon, CLI/Local channel, Web UI, mission/schedule/reflection/loop machinery |
 | `aivyx-ipc` | wasm-clean wire protocol shared by the daemon and the Dioxus web client |
@@ -338,7 +337,7 @@ OAuth substrate.
 - [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what Aivyx PA
   defends against, what it doesn't. Read this before deploying.
 - [`examples/`](examples/) — worked TOML configs for Ollama,
-  Anthropic, and the SemiTrusted (Telegram) tier.
+  llama.cpp, and the SemiTrusted (Telegram) tier.
 
 **For users & operators** wanting to know what the agent can do:
 - [`docs/TOOLS.md`](docs/TOOLS.md) — the **tool catalog**: every tool, its

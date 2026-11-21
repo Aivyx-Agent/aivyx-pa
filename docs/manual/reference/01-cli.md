@@ -53,7 +53,7 @@ The task runs over the daemon, which must already be running (headless never
 starts one); the result is printed and the command exits. Actions that need
 your approval are refused rather than waiting for an answer nobody can give.
 Exit codes: `0` completed, `3` refused at an approval gate or stopped for
-cloud consent, `1` anything else.
+consent to use a less-trusted server, `1` anything else.
 
 ## Setup and the daemon
 
@@ -740,8 +740,10 @@ aivyx-pa routing explain [--limit <N>]
 aivyx-pa routing allow-cloud <session-id>
 ```
 
-`allow-cloud` gives consent for one conversation to escalate to a cloud
-endpoint you configured. See [Models and routing](../../guide/12-models-and-routing.md).
+`allow-cloud` gives consent for one conversation to escalate to an endpoint
+you labelled `locality = "cloud"` — a local URL you marked less trusted, such
+as a shared server. It is not a way to reach a cloud provider: aivyx is
+local-only, and a model URL that isn't local is refused. See [Models and routing](../../guide/12-models-and-routing.md).
 
 ### `aivyx-pa identity`
 

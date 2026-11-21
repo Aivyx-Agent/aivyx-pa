@@ -30,7 +30,7 @@ the key is ignored.
   allowed words (`` `a` | `b` ``).
 - `[[name]]` is an array of tables: repeat the block once per entry.
 - `<name>` in a heading is a name you choose (e.g. `[pricing.<name>]` →
-  `[pricing."claude-sonnet-5"]`).
+  `[pricing."qwen3:14b"]`).
 
 
 ## Models and providers
@@ -41,9 +41,9 @@ The model the agent uses and how a turn behaves. Pairs with one provider section
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `model` | string |  | The model id, as the provider names it (e.g. `qwen3:14b`, `claude-sonnet-5`). |
+| `model` | string |  | The model id, as the provider names it (e.g. `qwen3:14b`). |
 | `system_prompt` | string |  | Extra instructions added to the agent's system prompt. |
-| `provider` | `anthropic` \| `openai` \| `ollama` \| `llamacpp` \| `jan` \| `mistralrs` \| `broker` \| `lemonade` | `"openai"` | Which backend serves the model. |
+| `provider` | `openai` \| `ollama` \| `llamacpp` \| `jan` \| `mistralrs` \| `broker` \| `lemonade` | `"openai"` | Which backend serves the model. |
 | `turn_timeout_secs` | integer |  | Per-turn wall-clock deadline override (seconds). Unset → the built-in 120s default. |
 | `cycle_detection` | bool |  | Small-cycle breaker switch. `true` arms the loop's repeating-cycle detector (catches `A,B,A,B,…` that the consecutive-identical breaker misses) with the built-in defaults. |
 | `conversation_history_messages` | integer |  | Conversation-history replay depth in messages (user and assistant lines each count as one). Unset → `8`; `0` disables. |
@@ -54,20 +54,20 @@ The model the agent uses and how a turn behaves. Pairs with one provider section
 
 ### `[anthropic]`
 
-Anthropic as the provider (`[agent] provider = "anthropic"`).
+Unused since 2.0: the Anthropic provider was removed (aivyx is local-only), and `provider = "anthropic"` fails to load. The section is still read so a stored key isn't lost; `aivyx-pa doctor` notes it.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `api_key` | string |  | Your Anthropic API key. Prefer the encrypted store (`aivyx-pa init` or the Studio) or `AIVYX_PA_ANTHROPIC_API_KEY`. |
+| `api_key` | string |  | Unused since 2.0. A stored key is kept, never deleted. |
 
 ### `[openai]`
 
-OpenAI, or any OpenAI-compatible server (llama.cpp, LM Studio, vLLM, Jan, Lemonade…) via `base_url`.
+An OpenAI-compatible server on this machine or your own network (llama.cpp, LM Studio, vLLM, Jan, Lemonade…), through `base_url`, which is required and must be local.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `api_key` | string | `"sk-..."` | API key for the server. Not needed for a local server. Prefer the encrypted store or `AIVYX_PA_OPENAI_API_KEY`. |
-| `base_url` | string | `"https://api.openai.com"` | The server's URL. Default `https://api.openai.com`; point it at a local server for llama.cpp, Jan, LM Studio and the like. |
+| `api_key` | string |  | Optional API key, only if your local server wants one. Prefer the encrypted store or `AIVYX_PA_OPENAI_API_KEY`. |
+| `base_url` | string | `"http://192.168.1.20:8000"` | The server's URL. Required for `provider = "openai"`, and must be local (this machine or your own network); a URL that isn't local is refused. |
 | `constrain_tool_calls` | bool |  | Grammar-constrained tool-calling for the llama.cpp-family OpenAI-compat servers (`provider = "llamacpp"` / `"jan"`). Unset → off. |
 
 ### `[ollama]`
@@ -125,7 +125,7 @@ Provider-independent model settings. Advanced: not covered by the 1.x compatibil
 
 ### `[routing]`
 
-Per-call model routing: send each task to the best-suited model you have, escalate when needed, never send sensitive conversations to the cloud. Off by default. See [Models and routing](../../guide/12-models-and-routing.md).
+Per-call model routing: send each task to the best-suited model you have, escalate when needed, never send sensitive conversations to a less-trusted server. Off by default. See [Models and routing](../../guide/12-models-and-routing.md).
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -137,7 +137,7 @@ Per-call model routing: send each task to the best-suited model you have, escala
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `kind` | `ollama` \| `llama_router` \| `openai_compat` \| `lemonade` \| `anthropic` \| `openai` |  | What kind of server this is. |
+| `kind` | `ollama` \| `llama_router` \| `openai_compat` \| `lemonade` |  | What kind of server this is. |
 | `base_url` | string |  | The server's URL. Unset uses the kind's usual local address. |
 | `locality` | `local` \| `cloud` |  | Operator override of the locality the address implies: `local` marks a non-cloud kind local even when its host looks public (a LAN box with a public DNS name); `cloud` marks it cloud. Never makes a cloud kind local. |
 
@@ -166,7 +166,7 @@ Per-call model routing: send each task to the best-suited model you have, escala
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `mode` | `never` \| `ask` \| `auto` | `"ask"` | Whether a call may escalate to a cloud model: `never`, `ask` (default) or `auto`. |
+| `mode` | `never` \| `ask` \| `auto` | `"ask"` | Whether a call may escalate to a server you labelled `locality = "cloud"` (less trusted): `never`, `ask` (default) or `auto`. |
 | `no_local_candidate` | bool | `true` | Escalate when no local candidate can serve the call. |
 | `tiers` | list of string | `[]` | `TaskKind` names (`[routing.tasks]` keys, e.g. `"plan"`) that always prefer a cloud endpoint. |
 | `on_failure` | bool |  | After a local failure, escalate the next turn (through the same `mode` gate; sensitive conversations never escalate). |
@@ -175,7 +175,7 @@ Per-call model routing: send each task to the best-suited model you have, escala
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `tool_prefixes` | list of string |  | Tool-name prefixes that mark a conversation sensitive (it then never escalates to a cloud model). The default list covers tools that return your own data. |
+| `tool_prefixes` | list of string |  | Tool-name prefixes that mark a conversation sensitive (it then never escalates to a server you labelled less trusted). The default list covers tools that return your own data. |
 | `channels` | list of string | `[]` | Channels whose conversations count as sensitive, e.g. `["telegram"]`. |
 
 #### `[routing.classifier]`
@@ -191,10 +191,10 @@ Semantic memory search: the embeddings server, and how recall picks memories for
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `base_url` | string | `"https://api.openai.com"` | Embeddings API base URL. Default `"https://api.openai.com"`. |
-| `model` | string | `"text-embedding-3-small"` | Embedding model id. Default `"text-embedding-3-small"`. |
-| `api_key` | string | `"sk-..."` | API key for the embeddings server. Not needed for a local one. |
-| `dimensions` | integer | `1536` | Expected vector dimensionality. Default `1536` (text-embedding-3-small). |
+| `base_url` | string | `"http://localhost:11434"` | Embeddings API base URL (required, local). The provider POSTs to `{base_url}/v1/embeddings`. |
+| `model` | string | `"nomic-embed-text"` | Embedding model id. Default `"text-embedding-3-small"`. |
+| `api_key` | string |  | API key for the embeddings server. Not needed for a local one. |
+| `dimensions` | integer | `768` | Expected vector dimensionality. Default `1536` (text-embedding-3-small). |
 | `rag_top_k` | integer | `5` | Most memories recall may add to a turn. Default 5. |
 | `rag_min_similarity` | number | `0.20` | Recall leaves out a memory less similar than this (0–1) to what you asked, so unrelated memories don't crowd in. |
 | `recall_window_turns` | integer | `1` | How many recent turns (yours included) recall looks at to find relevant memories. Default 1. |
@@ -932,7 +932,7 @@ The autonomous loop: works through a queue of stories until done or a limit is h
 | `max_run_secs` | integer |  | Wall-clock cap (seconds). A run stops once it has been running this long (checked between iterations). |
 | `progress_inject_count` | integer |  | How many recent progress-log notes the driver injects into each fresh iteration's prompt (the cross-iteration learning, the Ralph `progress.txt` analog). `0` disables injection. |
 | `max_run_tokens` | integer |  | Per-run token-budget cap. A run stops once the total token usage (input + output) of every turn that completes during the run exceeds this. |
-| `max_run_usd` | number |  | Per-run **dollar**-budget cap. A run stops once the priced spend (`LlmCost` events over the run window, priced by the default table) reaches this. |
+| `max_run_usd` | number |  | Per-run **dollar**-budget cap. **Unused since 2.0** (local-only: every model costs `$0`): always Unset, because the loader refuses a set `[loop] max_run_usd`. |
 | `max_idle_iterations` | integer |  | Cross-iteration stall breaker. A run stops once this many *consecutive* iterations make no progress — neither completing/delegating a story (the backlog shrinks) nor recording a fresh progress note. |
 | `resume_on_boot` | bool |  | Auto-resume an interrupted run on daemon boot. When `true`, a daemon restart while a run was active (a crash or a `systemctl restart`) re-starts the run if the backlog still has pending stories — so a "runs for days" agent under `Restart=on-failure` keeps working instead of silently stopping. |
 | `verify_completion` | bool |  | Verify story completion with an LLM acceptance judge. When `true`, `loop.complete` is gated: the judge checks the agent's `summary` against the story's acceptance criteria (its `body`) and a FAIL keeps the story `Pending` (the agent is told why) instead of trusting the self-report. |
@@ -958,7 +958,7 @@ Spending caps in USD (and tokens), and what happens when one is reached.
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `per_run_usd` | number |  | Max USD per **run** — one mission / loop run / session. |
-| `per_day_usd` | number |  | Max USD per **rolling day**. |
+| `per_day_usd` | number |  | Max USD per **rolling day**. **Unused since 2.0**, like `per_run_usd`. |
 | `per_mission_usd` | number |  | Most USD one team mission started by the loop may spend across all its specialists. Unset means no cap. |
 | `per_mission_tokens` | integer |  | Max **tokens** a single team mission may spend. Unset ⇒ unbounded. |
 | `on_exceeded` | `alert` \| `deny` |  | Whether exceeding a cap alerts or denies. |

@@ -60,12 +60,11 @@ but unleashed for files — in the config file; see
 
 ## Budgets
 
-If you use a paid model provider, you can cap spending: a limit per run and
-a limit per rolling day, in dollars. When a cap is reached, the assistant
-either stops or warns you, depending on **On exceeded**; **Alert at** warns
-you early, at a fraction of the cap (0.8 means 80%). Leave a cap blank for
-no limit. Caps apply to ordinary chats and to long autonomous jobs alike,
-and every cost is recorded on the same audited trail as everything else.
+Aivyx PA is local-only, so models cost nothing and there are no dollar caps
+(a money cap in the config is refused). This card is read-only: `aivyx-pa cost`
+shows turns and tokens per model, recorded on the same audited trail as
+everything else. To bound long autonomous jobs, use token or run caps in the
+config (a team mission's `per_mission_tokens`, the loop's `max_run_tokens`).
 
 ## Also on this screen
 
@@ -78,7 +77,7 @@ and every cost is recorded on the same audited trail as everything else.
 Settings are read when the daemon starts, so after saving, restart it:
 `aivyx-pa daemon stop && aivyx-pa daemon run`, or **Restart daemon** in the
 desktop app's tray menu. To
-change the model, provider or keys, run `aivyx-pa init` again.
+change the model or server, run `aivyx-pa init` again.
 
 ## Everything is audited
 

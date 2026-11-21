@@ -62,7 +62,7 @@ narrow a role but never widen past its tier.
 | `aivyx-audit` | The HMAC-chained audit log and its offline verifier |
 | `aivyx-config` | The TOML + environment loader, recording where each value came from |
 | `aivyx-instance` | Named instances: the only place an Aivyx PA path is built |
-| `aivyx-llm` | Providers (Anthropic, OpenAI-compatible, Ollama, mistral.rs, …) and routed model selection |
+| `aivyx-llm` | Local providers (OpenAI-compatible servers, Ollama, llama.cpp, Jan, Lemonade, mistral.rs, the broker; every URL is checked local) and routed model selection |
 | `aivyx-memory` | The memory tools and store |
 | `aivyx-channel` | The daemon server and client, missions, schedules, reflection, the autonomous loop, recall — the largest crate |
 | `aivyx-ipc` | The wire protocol, kept WebAssembly-clean so the Studio shares its types |

@@ -6,8 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Aivyx PA is a Rust-built, local-first autonomous agent platform (a personal-agent
 daemon + multi-frontend architecture). It runs on the operator's own hardware,
-talks to LLM providers (Ollama local, or Anthropic/OpenAI under the operator's
-own key) directly — there is no Aivyx PA-hosted service in the request path.
+talks to local model servers only (Ollama, llama.cpp, Lemonade, Jan, aivyx-broker, or any
+OpenAI-compatible server on this machine or your own network; local-only since 2.0:
+every model URL must be local) directly — there is no Aivyx PA-hosted service in the
+request path.
 Load-bearing properties: capability-based security, HMAC-chained auditability,
 and encryption at rest.
 
@@ -95,7 +97,7 @@ socket is the operator").
 | `aivyx-audit` | HMAC-chained audit log + offline verification |
 | `aivyx-config` | TOML + env config loader with source provenance |
 | `aivyx-instance` | Named instances: `InstanceName` + `InstancePaths`, the **only** place an aivyx-pa path or per-instance name (socket, store, config, working dirs, sandbox, keyring account, service names) is built — a guard test fails any other crate that builds one (`// instance-paths: ok — <reason>` marks a deliberate exception). The default instance resolves exactly to the historical paths |
-| `aivyx-llm` | `LlmProvider` trait + Anthropic / OpenAI / Ollama implementations; `RoutedProvider` (opt-in `[routing]` per-call model routing over the shared `aivyx-route` router) |
+| `aivyx-llm` | `LlmProvider` trait + local-server implementations (Ollama, llama.cpp, Jan, Lemonade, broker, OpenAI-compatible local servers; no cloud kinds since 2.0); `RoutedProvider` (opt-in `[routing]` per-call model routing over the shared `aivyx-route` router) |
 | `aivyx-memory` | `memory.{read,write,forget,gc}` + redb-backed substrate |
 | `aivyx-channel` | Daemon server/client, missions, scheduling, reflection, the autonomous loop, memory recall/graph/wiki machinery — the largest crate; most feature "chapters" land here |
 | `aivyx-ipc` | wasm-clean wire protocol shared by the daemon and the Dioxus web client |

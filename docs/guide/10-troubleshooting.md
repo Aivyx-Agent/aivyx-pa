@@ -54,9 +54,9 @@ or `--mcp-sse`, since those only apply to that one session.
 
 **"Connection refused" to the model.**
 Your model backend isn't reachable. For a local model, make sure Ollama (or your
-chosen runtime) is running. For a provider, check that your API key is set and
-valid — the setup wizard verifies the key before saving, so a re-run of
-`aivyx-pa init` will catch a bad one.
+chosen runtime) is running. If the address points somewhere else, check it is on this machine or your own
+network: Aivyx PA refuses a model URL that isn't local, and `aivyx-pa doctor`'s
+`local-only` row names the endpoint and the reason.
 
 **The assistant won't do something / says it's not allowed.**
 That's the access and permission system working as intended. Check your **access

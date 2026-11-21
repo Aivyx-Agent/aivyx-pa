@@ -10,7 +10,7 @@
 > preamble** (B), and an operator-configurable **turn timeout** for slow local
 > backends (C). No new tool, base, scope, P10 amendment, or dependency — a
 > robustness refinement of the turn loop + the MistralRs provider. Each piece is
-> guarded so well-behaved (esp. cloud) turns stay byte-identical.
+> guarded so well-behaved (esp. fast-server) turns stay byte-identical.
 
 ## 1. Why this chapter
 
@@ -90,8 +90,8 @@ admits. Decisions:
 
 ### C — Operator-configurable turn timeout (config → agent)
 `TURN_TIMEOUT` is a deliberate const today ("a caller who needs a custom budget is
-almost certainly papering over a real bug"). That reasoning holds for *cloud*
-models; it does **not** hold for a legitimately slow local CPU backend. Bridle adds
+almost certainly papering over a real bug"). That reasoning holds for fast
+local servers; it does **not** hold for a legitimately slow local CPU backend. Bridle adds
 an **opt-in override** without weakening the default:
 
 - **New `[agent] turn_timeout_secs` config field, `Option<u64>`.** Unset → the
@@ -100,7 +100,7 @@ an **opt-in override** without weakening the default:
   optional-knob pattern), consumed where the deadline task is spawned (agent.rs:340).
   The const stays the default; the field overrides it.
 - **Keep the const's spirit:** document that raising it is for slow *local* backends,
-  not for papering over stuck cloud turns — and note that the repeat-call breaker
+  not for papering over stuck turns — and note that the repeat-call breaker
   (A) now catches the most common "stuck" case independent of the timeout.
 
 ### D — CUDA 13.x is a tracked watch-item, **not** a deliverable

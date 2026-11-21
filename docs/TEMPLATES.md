@@ -148,7 +148,7 @@ add one to your custom template and it'll show up in
 # description: My customized coder template with the rustc-internals MCP server.
 
 [agent]
-provider = "anthropic"
+provider = "llamacpp"
 …
 ```
 

@@ -17,12 +17,11 @@
 >
 > Both are optional; omit them and the member uses the team's shared default
 > provider + model (byte-identical to before). `model` alone gives role-fit +
-> cost (and parallelism on a cloud provider, whose model endpoints run
-> independently). `base_url` points a role at a different **same-kind** endpoint
+> cost. `base_url` points a role at a different **same-kind** endpoint
 > (e.g. a second Ollama / GPU) for true local parallelism instead of serializing
 > on one server. v1 supports the **Ollama** kind for `base_url`; a per-role
 > endpoint uses default Ollama options (not the operator's `[ollama]` tuning),
-> and cross-provider-kind teams (e.g. a cloud lead + local grunts) are a later
+> and cross-provider-kind teams (e.g. a lead on one local server kind + grunts on another) are a later
 > step. The mission driver builds each role's backend at assembly; specialists
 > without an override share the daemon's provider.
 

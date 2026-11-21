@@ -8,6 +8,10 @@ product-shape work (Daemon Migration, Role-Config Migration,
 Reflection Layer, …) that may span multiple phases or fold into
 one.
 
+> **2.0 (local-only):** entries below that mention Anthropic, OpenAI or a
+> cloud `base_url` record 1.x history. Since 2.0 every model call goes to a
+> local server (Amendment A23).
+
 **This is not a contract.** Milestone shapes are revised whenever
 a phase exit teaches us something new. Sequencing is loose — if
 the Reflection milestone turns out to need the Role-Config

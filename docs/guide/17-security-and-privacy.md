@@ -8,14 +8,14 @@ plain words, what protects you — and, just as important, what doesn't.
 
 - **Nowhere you didn't choose.** There is no Aivyx PA server. Your memory,
   settings and history stay on your machine.
-- **To your model provider, if it's in the cloud.** Whatever goes into a
-  conversation is sent to the model that answers it. With a local model
-  (Ollama, llama.cpp, Lemonade, Jan) nothing leaves your machine. With
-  Anthropic or OpenAI, your messages and the tool results the assistant
-  reads go to them, under your account and their terms.
+- **To your model server, which is local.** Whatever goes into a
+  conversation is sent to the model that answers it. Aivyx PA is
+  local-only: models run on your machine or your own network (Ollama,
+  llama.cpp, Lemonade, Jan, or a server on your LAN or Tailscale), and a
+  model URL that isn't local is refused.
 - **With routing on**, a conversation that has touched your own data —
-  mail, files, memory and so on — stays on local models; going to a cloud
-  model needs your say-so per conversation. See
+  mail, files, memory and so on — stays on local models; going to a server you
+  labelled less trusted needs your say-so per conversation. See
   [Models and routing](12-models-and-routing.md).
 
 ## Encrypted at rest
@@ -119,8 +119,9 @@ defend against:
 
 - **A compromised computer.** If someone controls your user account or the
   operating system, they can read what the assistant can.
-- **Your model provider.** A cloud provider sees what you send it. Use a
-  local model for anything you wouldn't send.
+- **Other people on your network.** Your model server sees what you send it.
+  If it's a shared box on your network, its operator can read your prompts;
+  use a server only you control for anything private.
 - **Every prompt injection.** Fencing and scanning make it much harder for
   a web page or email to steer the assistant, but can't make it impossible.
   That's why consequential actions need your approval, whatever the model

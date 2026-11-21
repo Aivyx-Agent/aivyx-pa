@@ -62,8 +62,8 @@ Observed live while testing local models this build:
 - **No silent empty replies.** Every failure mode above is either fixed in the
   provider or surfaced by `doctor` with an actionable message — never a blank
   turn with no explanation.
-- **Cloud path untouched.** All changes are scoped to the Ollama provider and the
-  wizard's local branch; Anthropic / OpenAI behavior is unchanged.
+- **Local-only.** Models run on your machine or your own network; since 2.0
+  there is no cloud branch in the wizard.
 - **Diagnose, don't guess.** `doctor` reuses the audit chain's `LlmCost`
   out-token signal + a live test turn to distinguish "context-starved",
   "thinking-empty", and "no model" — the same signals that diagnosed these bugs.
@@ -137,17 +137,12 @@ was dark for any operator who didn't hand-configure embeddings — flipping the
   the OpenAI-compatible `/v1/embeddings` endpoint the provider already speaks)
   and writes a keyless `[embedding]` pointing at the local server. A declined or
   failed pull degrades to "semantic memory off" with a note, not an error.
-- **Cloud (OpenAI)** — reuses the operator's key for OpenAI embeddings
-  (`text-embedding-3-small`, 1536-dim).
-- **Cloud (Anthropic-only)** — skipped with a clear note: Anthropic has no
-  embeddings API, so semantic memory stays off until the operator adds a
-  provider. No broken config is written.
 - When (and only when) an embedding provider is set, init also writes
   `[memory] profile = "smart"` — the full graph-augmented stack.
 
 **Why `smart` is written into the config, not made the compiled default.** The
 `smart` profile runs the wiki / typed-graph extraction sweeps, which spend
-tokens on the cloud path. Flipping the *compiled* default would surprise-bill
+tokens on small local models. Flipping the *compiled* default would surprise
 existing installs on upgrade, so the compiled default stays `Off` and only new
 configs opt in (the same planting model as the default cron routines). Local
 sweeps are free compute (just slower on a small model).

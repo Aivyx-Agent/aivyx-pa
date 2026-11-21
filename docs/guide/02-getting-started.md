@@ -35,8 +35,9 @@ Aivyx PA needs an AI model to reason with. You have two kinds of choice:
     [Jan](https://jan.ai), or Docker Model Runner.
   - `aivyx-broker`, if you want Aivyx PA and Aivyx Coder to share one
     llama-server.
-- **A provider (Anthropic or OpenAI).** Paste an API key during setup. These
-  models are more capable; you pay the provider per use.
+- **Another OpenAI-compatible server on your own network.** A box on your
+  LAN, or a machine on your Tailscale network, works too. Aivyx PA refuses a
+  model URL that isn't local.
 
 You can switch later — this is just your starting point.
 
@@ -50,8 +51,7 @@ aivyx-pa init
 
 It looks for a local model server that's already running (Ollama, Lemonade,
 llama.cpp, Jan, Docker Model Runner or the broker), offers the ones it finds first, and lets you pick
-one of their models. If it finds none, it asks you to choose — it never picks a
-cloud provider for you. Then it walks you through **creating your agent** —
+one of their models. If it finds none, it asks you to choose among the local servers — it only offers local ones. Then it walks you through **creating your agent** —
 giving your assistant a name, a personality, and a level of access to your
 machine. That flow is covered in detail on the next page.
 

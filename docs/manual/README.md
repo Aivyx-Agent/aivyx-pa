@@ -1,8 +1,8 @@
 # Aivyx PA manual
 
 Aivyx PA is a self-learning personal AI agent that runs on your own
-hardware. It talks to the model you choose — local, or a cloud provider under
-your own key — with no Aivyx server in between, and every action it takes is
+hardware. Local-only: models run on your machine or your own network. It talks to the
+model server you choose, with no Aivyx server in between, and every action it takes is
 gated, recorded and yours to review.
 
 This manual has three parts. Start with the guide; use the reference to look

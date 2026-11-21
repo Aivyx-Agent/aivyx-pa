@@ -16,7 +16,7 @@
 # Required top-level sections (minimal — no real secrets)
 # ----------------------------------------------------------------
 #
-# A real deployment supplies `[anthropic] api_key`, `[fs] root`,
+# A real deployment supplies `[fs] root`,
 # `[storage] path`, `[storage] passphrase`, etc. They are omitted
 # here so the file can be loaded by tests via `LoadOptions`
 # with `require_api_key = false`. Copy this file and add those
@@ -325,12 +325,16 @@ parent_role = "researcher"
 # Provider selection (Phase 25)
 # ----------------------------------------------------------------
 #
-# `[agent] provider` selects the LLM backend. Default: "anthropic".
-# Supported values: "anthropic", "openai", "ollama", "lemonade",
-# "llamacpp", "jan", "broker", "mistralrs". `aivyx-pa init` detects
+# `[agent] provider` selects the LLM backend. Local-only since 2.0: every model
+# URL must be on this machine or your own network. Default: "llamacpp" at
+# http://127.0.0.1:8080.
+# Supported values: "openai", "ollama", "lemonade",
+# "llamacpp", "jan", "broker", "mistralrs". `provider = "anthropic"` was
+# removed in 2.0 and fails to load. `aivyx-pa init` detects
 # whichever local runtime is running and writes this for you.
 #
-# - "openai" targets cloud OpenAI or any compatible endpoint.
+# - "openai" means an OpenAI-compatible server on this machine or your own
+#   network (LM Studio, vLLM, ...); it requires [openai] base_url.
 # - "ollama" is sugar for local Ollama — defaults to
 #   http://localhost:11434, API key is optional, and
 #   stream_options.include_usage is omitted (some Ollama
@@ -359,15 +363,13 @@ parent_role = "researcher"
 # provider = "openai"
 #
 # [openai]
-# api_key = "sk-..."
-# base_url = "https://api.openai.com"  # default for "openai"
+# base_url = "http://192.168.1.20:8000"  # required; must be local
+# # api_key is optional, only if your local server wants one
 #
-# API keys can come from the environment instead:
-# `AIVYX_PA_ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY`) for Anthropic,
-# `AIVYX_PA_OPENAI_API_KEY` for "openai". The OpenAI one is deliberately
-# not `OPENAI_API_KEY`: this provider also talks to other servers
-# (base_url), and a key your shell exports for OpenAI must never be sent
-# to them.
+# An API key for such a server can come from the environment instead:
+# `AIVYX_PA_OPENAI_API_KEY`. It is deliberately not `OPENAI_API_KEY`:
+# a key your shell exports for something else must never be sent to your
+# local server.
 
 # ----------------------------------------------------------------
 # The Studio web UI
@@ -918,21 +920,11 @@ parent_role = "researcher"
 #     `memory.search` `mode` arg, and the Web UI "semantic"
 #     toggle all use it.
 #
-# PRIVACY — read this. `base_url` is the only thing that decides
-# whether memory content leaves the machine. Embedding requires
-# sending the text to be embedded to the configured endpoint:
-#
-#   • Cloud (text leaves the box — your explicit choice):
-#       [embedding]
-#       base_url = "https://api.openai.com"
-#       model = "text-embedding-3-small"
-#       api_key = "sk-..."          # or AIVYX_PA_EMBEDDING_API_KEY,
-#                                   # or the encrypted secrets store
-#       dimensions = 1536
-#
-#   • Local / on-device (nothing leaves the box) — point at any
-#     OpenAI-compatible server (ollama, llama.cpp,
-#     text-embeddings-inference). No api_key needed:
+# LOCAL-ONLY (2.0). `base_url` is required and must be local — this machine
+# or your own network. A URL that isn't local is refused at load, so memory
+# content never leaves your network. Point it at any OpenAI-compatible
+# embeddings server (ollama, llama.cpp, text-embeddings-inference). No
+# api_key is needed:
 #       [embedding]
 #       base_url = "http://localhost:11434"
 #       model = "nomic-embed-text"
@@ -942,13 +934,9 @@ parent_role = "researcher"
 # models later, stored vectors of the old dimension are treated
 # as unembedded and the backfill re-embeds them automatically.
 #
-# Defaults if a field is omitted (but the section is present):
-#   base_url   = "https://api.openai.com"
-#   model      = "text-embedding-3-small"
-#   dimensions = 1536
-# api_key resolves env (AIVYX_PA_EMBEDDING_API_KEY) > this TOML key
-# > the encrypted secrets store — same precedence as the
-# anthropic / openai keys.
+# Defaults if a field is omitted (but the section is present): none for
+# `base_url` (required). A key, if your local server wants one, resolves env
+# (AIVYX_PA_EMBEDDING_API_KEY) > this TOML key > the encrypted secrets store.
 #
 # ----------------------------------------------------------------
 # Automatic recall (Phase 76) — `rag_top_k` / `rag_min_similarity`
@@ -1660,33 +1648,24 @@ parent_role = "researcher"
 # a second one). Other roster entries without `endpoint` are models on
 # that same provider.
 #
-# Cloud and privacy (PRODUCT.md G6; amendment A15):
-#   * Cloud or local is decided by aivyx-route from the address, not just
-#     the kind: kind = "anthropic" / "openai" is always cloud; any other
-#     kind is local only when its base_url host is local (loopback, a
-#     private / link-local / CGNAT-Tailscale IP, or a name that is
+# Local-only and trust (PRODUCT.md G6; amendments A15, A23):
+#   * Every endpoint must be local (A23): its base_url host is loopback, a
+#     private / link-local / CGNAT-Tailscale / ULA address, or a name that is
 #     `localhost`, has no dots, or ends in .local / .lan / .internal /
-#     .home.arpa). So an "openai_compat" endpoint at
-#     https://api.groq.com/openai/v1, or an "ollama" one on a public
-#     host, is cloud; so is an "openai_compat" one with no base_url
-#     (ollama / llama_router / lemonade default to localhost). A box on your own
-#     network with a public-looking DNS name: add `locality = "local"` to
-#     its [routing.endpoints.*] table (`locality = "cloud"` forces cloud).
-#   * A cloud [routing.endpoints.*] entry is an ESCALATION target, never
-#     an ordinary candidate — see "Cloud escalation" below. With
-#     [routing.escalation] mode = "never" it is rejected at startup.
-#   * Ordinary cloud candidates are allowed only on the `default` endpoint, and
-#     only when the [agent] backend is itself cloud by the same rule — e.g.
-#     on provider = "anthropic", or an Ollama/llama.cpp/Jan/Lemonade/broker
-#     base_url on a public host, routing may pick another model on it you
-#     list in [[routing.models]]; on a local backend, a cloud-tagged entry
-#     is never chosen. (provider = "openai" with a local base_url counts
-#     as a local OpenAI-compatible server; mistral.rs runs in-process and
-#     is always local.)
-#   * No API key is ever sent to a routing endpoint — so a hosted
-#     "openai_compat" escalation target only works through a gateway
-#     that needs no key; one that requires a key fails authentication
-#     (after the consented request has left this machine).
+#     .home.arpa. A DNS name that doesn't look local is accepted only if
+#     every address it resolves to is local. Anything else is refused at
+#     startup: "<url> is not local (<reason>) — aivyx is local-only; point it
+#     at a model server on this machine or your own network". The hosted
+#     kinds "anthropic" and "openai" were removed.
+#   * `locality = "local"` on an endpoint is honoured only through that
+#     DNS-verified path; it can't bless a public address.
+#   * `locality = "cloud"` still works, to mark a local endpoint LESS
+#     TRUSTED (say, a shared server). Such an endpoint is an ESCALATION
+#     target, never an ordinary candidate — see "Escalation to a
+#     less-trusted server" below. With [routing.escalation] mode = "never"
+#     it is rejected at startup.
+#   * No API key is ever sent to a routing endpoint — so a routing
+#     endpoint must be a server that needs no key.
 #   * Routed Ollama / OpenAI-compatible endpoints use the provider's
 #     DEFAULT settings — your [ollama] tuning (e.g. num_ctx) applies
 #     only to the `default` endpoint.
@@ -1783,43 +1762,41 @@ parent_role = "researcher"
 #     (loaded / needs a load / may not fit), and available VRAM for a
 #     new load.
 #
-# Cost caveats (cloud [agent] provider):
+# Cost caveats:
 #   * The judge and mission-planning side calls don't record `LlmCost`
 #     (true without routing too); routing them to a larger model
 #     spends more than `aivyx-pa cost` shows.
-#   * The [budget] pre-call gate prices a turn at the [agent] model;
-#     routing to a pricier model on the same provider can overshoot a
-#     cap by at most one turn (see docs/COST_GOVERNANCE.md).
+#   * Local runs cost $0, and money caps were removed in 2.0; use token or
+#     run caps (see docs/COST_GOVERNANCE.md).
 #
 # ----------------------------------------------------------------
-# Cloud escalation (Part 3b) — [routing.escalation], [routing.sensitive]
+# Escalation to a less-trusted server (Part 3b) — [routing.escalation], [routing.sensitive]
 # ----------------------------------------------------------------
-# Lets a local-first setup send a SPECIFIC conversation's call to a
-# cloud model you configure — only with consent, never after the
-# conversation has touched sensitive data, and always audited. Nothing
-# changes unless a [routing.endpoints.*] entry is cloud — kind =
-# "anthropic" or "openai", or another kind at a non-local address (see
-# "Cloud and privacy" above) — with at least one [[routing.models]] entry
-# on it. Governed
-# by docs/amendments/2026-09-26-cloud-escalation.md (A15).
+# Local-only since 2.0: there is no cloud to escalate to. This lets a setup
+# send a SPECIFIC conversation's call to a local server you labelled
+# `locality = "cloud"` (less trusted, e.g. a shared box) — only with
+# consent, never after the conversation has touched sensitive data, and
+# always audited. Nothing changes unless a [routing.endpoints.*] entry is
+# labelled that way with at least one [[routing.models]] entry on it.
+# Governed by docs/amendments/2026-09-26-cloud-escalation.md (A15) as
+# narrowed by docs/amendments/2026-11-21-local-only-models.md (A23).
 #
-# [routing.endpoints.claude]
-# kind = "anthropic"          # uses your anthropic_api_key (required)
-# # kind = "openai"           # uses your openai_api_key
-# # base_url = "https://…"    # optional, either kind: your gateway instead
-# #                           # of the public API
+# [routing.endpoints.shared]
+# kind = "openai_compat"
+# base_url = "http://192.168.1.30:8000"   # must be local
+# locality = "cloud"                      # label it less trusted
 #
 # [[routing.models]]
-# id = "claude-sonnet-5"
-# endpoint = "claude"
+# id = "big-local-model"
+# endpoint = "shared"
 # tier = "large"
 # capabilities = ["completion", "tools", "vision"]
 # context_window = 200000
 #
 # [routing.escalation]
 # mode = "ask"                # never | ask (default) | auto
-# no_local_candidate = true   # escalate when no local model can do it
-# tiers = []                  # task kinds that go straight to the cloud,
+# no_local_candidate = true   # escalate when no trusted local model can do it
+# tiers = []                  # task kinds that go straight to the labelled server,
 #                             # e.g. ["plan"] (chat | plan | judge | …);
 #                             # under "ask", each new conversation of that
 #                             # kind stops for /allow-cloud first
@@ -1846,7 +1823,7 @@ parent_role = "researcher"
 # How it works:
 #   * A trigger fires when no local model meets the call's needs
 #     (no_local_candidate) or its task kind is listed in `tiers`.
-#   * mode "ask": the turn stops with a message naming the cloud model,
+#   * mode "ask": the turn stops with a message naming the less-trusted model,
 #     why (in plain words) and about how many tokens would be sent.
 #     Allow it with /allow-cloud in that conversation (the whole
 #     message), the Studio's "Allow cloud" button, or
@@ -1861,16 +1838,16 @@ parent_role = "researcher"
 #     `channels`. A tainted conversation NEVER escalates, in any mode,
 #     and consent doesn't override it. A `tiers` call in a tainted
 #     conversation is served locally; a call with no local model fails
-#     with "cloud escalation blocked: this conversation contains …".
+#     with "cloud escalation blocked: this conversation contains …" (the wording predates 2.0).
 #   * Calls outside a conversation (the completion judge, mission
 #     planning, the skill-proposer judge) never escalate.
 #   * A turn carrying a PDF is never routed, so never escalated.
-#   * Cloud models on [routing.endpoints.*] are never ordinary routing
+#   * Endpoints labelled `locality = "cloud"` are never ordinary routing
 #     candidates — they're reachable only through this gate.
 #   * Every escalation decision is audited as `CloudEscalation` (allowed,
 #     allowed_failed — allowed, but the call failed, possibly after the
-#     cloud received it — consent_requested, no_cloud_model, blocked_taint
-#     or disabled; the cloud model where one was chosen; a SHA-256 hash
+#     server received it — consent_requested, no_cloud_model, blocked_taint
+#     or disabled; the less-trusted model where one was chosen; a SHA-256 hash
 #     of what would be sent — never the content). Consent grants are `CloudConsentGranted`; the first taint
 #     of a conversation is `ConversationTainted`. `aivyx-pa routing
 #     explain` lists them; `routing.status` shows this conversation's
@@ -1892,9 +1869,8 @@ parent_role = "researcher"
 # conversation's soft tier (remembered, so a later turn that still has
 # no sticky model reuses it). At most timeout_ms of extra latency, once.
 # The side call runs on the model [routing.tasks] classify picks among
-# the configured candidates: a small local model when there is one, but
-# with a cloud [agent] provider it can be that provider's model. No new
-# destination either way. Any failure, timeout, or unparseable answer
+# the configured candidates: a small local model when there is one, and
+# no new destination either way. Any failure, timeout, or unparseable answer
 # falls back to medium. `aivyx-pa routing status`/`explain` and
 # `routing.status` show whether it's on.
 #

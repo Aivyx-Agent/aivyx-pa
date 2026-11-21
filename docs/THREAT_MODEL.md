@@ -1,6 +1,6 @@
 # Aivyx PA Threat Model
 
-**Status:** Draft. **Last reviewed:** Phase 180 exit (2026-06-06)
+**Status:** Draft. **Last reviewed:** local-only chapter / 2.0 (2026-11-21: A23, §1, §4.12, §5.4, §5.5); earlier, Phase 180 exit (2026-06-06)
 — the bundled secure-by-default sandbox preset (§6, §4.10); prior
 pass added the productivity-tool OAuth asset (§3), the autonomous
 loop (§4.9), and productivity-tool egress (§4.10). **Owners:**
@@ -22,8 +22,8 @@ right and the document is wrong — file an issue.
 
 Aivyx PA is a **single-operator personal agent**. The threat model is
 written around exactly one human, on hardware they control, talking
-to LLM providers under their own API key, holding secrets they
-own.
+to model servers on that machine or their own network (local-only since
+2.0, Amendment A23), holding secrets they own.
 
 This is the same posture OpenClaw and Hermes Agent take. The model
 is **not**:
@@ -77,7 +77,7 @@ What an attacker would gain by compromising each.
 | Master key | `MasterKey` in daemon RAM, zeroize-on-drop (`aivyx-crypto/src/lib.rs:175`) | Same. |
 | Encrypted store | `$XDG_DATA_HOME/aivyx-pa/store.redb`, chmod 0600 | Confidential without the passphrase; needs Argon2id work to brute. |
 | Audit chain | redb `KeyDomain::Audit` | Reading reveals every tool call ever made. Tampering trips `AuditError::ChainBroken` on next open. |
-| API keys (LLM provider, Telegram bot token) | `KeyDomain::Secrets`, AEAD-sealed under a domain subkey | Spend on operator's LLM account; impersonate operator's bot. |
+| API keys (optional local-server key, Telegram bot token, integration keys) | `KeyDomain::Secrets`, AEAD-sealed under a domain subkey | Impersonate operator's bot; act on an integration. |
 | Productivity-tool OAuth tokens (Gmail, Calendar, Drive, Notion, …) | A **per-tool-process token file**, owned by the separate tool binary — *not* the daemon store | Act as the operator on that one external service. Scoped to the single tool process; a daemon-store compromise does not reach them, and vice versa. |
 | Memory entries | `KeyDomain::Memory`, AEAD-sealed under a domain subkey | Reveals everything the operator told the agent across sessions. |
 | Daemon IPC socket | `$XDG_RUNTIME_DIR/aivyx-pa/daemon.sock`, mode 0600 | Anything the operator can do. |
@@ -516,20 +516,28 @@ inside the trust boundary this does not claim to defend. A second
 account's own daemon can't bind the same default port while the first
 holds it.
 
-### 4.12 Private data leaves the machine through cloud model escalation
+### 4.12 Private data reaches a less-trusted server through escalation
 
-**Threat:** with model routing's cloud escalation configured (Amendment
-A15), a conversation that has read the operator's email, files or
-memories is sent to a cloud model — silently, or by a model or a remote
-sender steering it there.
+**Local-only since 2.0 (A23).** There is no cloud model to escalate to: every
+model URL must be local (loopback, private LAN, Tailscale/CGNAT, link-local,
+ULA, `.local`/`.lan`/`.internal`/`.home.arpa`, single-label names, or a DNS
+name whose every resolved address is local), and anything else is refused at
+load, at request time and at connect. The escalation gate below remains for
+endpoints the operator labelled `locality = "cloud"` — local URLs treated as
+less trusted, such as a shared server other people use. "Cloud" in the
+text below means that label; `locality = "local"` can only be set through the
+DNS-verified path and can't bless a public address.
 
-**Mitigation:** escalation is off unless the operator configures a
-cloud `[routing.endpoints.*]` entry, and then passes a gate. "Cloud" is
-aivyx-route's effective locality, decided by the address and not just
-the kind: `anthropic`/`openai` always, and any other kind (an
-`openai_compat` gateway, a remote Ollama) whose `base_url` host isn't a
-local address or that has none — so a hosted OpenAI-compatible API can't
-pass as local under `mode = "never"`. The gate is
+**Threat:** with model routing's escalation configured (Amendment A15), a
+conversation that has read the operator's email, files or memories is sent to
+a less-trusted endpoint — silently, or by a model or a remote sender steering
+it there.
+
+**Mitigation:** escalation is off unless the operator labels a
+`[routing.endpoints.*]` entry `locality = "cloud"`, and then passes a gate. The
+label is aivyx-route's effective locality; the hosted kinds
+(`anthropic`/`openai`) no longer exist, and a non-local `base_url` is refused
+rather than treated as cloud. The gate is
 `aivyx_llm::escalation::decide_escalation`, dispatched by
 `RoutedProvider`:
 
@@ -552,10 +560,9 @@ pass as local under `mode = "never"`. The gate is
   allowlist).
 - **No session, no escalation.** Calls outside a conversation (judges,
   mission planning) never escalate, because their taint can't be known.
-- **Only the operator's endpoints and keys.** Cloud models on
-  `[routing.endpoints.*]` are reachable only through this gate — never
-  as ordinary routing candidates — and use the operator's own
-  `anthropic_api_key` / `openai_api_key`.
+- **Only the operator's endpoints.** Endpoints labelled
+  `locality = "cloud"` are reachable only through this gate — never
+  as ordinary routing candidates — and no API key is sent to them.
 - **Audited without content.** Every decision (allowed — including a
   call that failed after it may have been sent — consent requested, no
   cloud model, blocked by taint, disabled) is a `CloudEscalation` audit
@@ -593,10 +600,10 @@ allowlists to the operator, list them in `[routing.sensitive] channels`
 including the operator Profile and the reflection-written Persona, which
 are derived from past conversations (tainted ones included); operators
 for whom that is private should keep `mode = "never"`. Once a call is
-escalated, the cloud provider's own retention terms apply (§5.5).
+escalated, the receiving server's own logging and retention apply (§5.5).
 With `on_failure = true` and `mode = "auto"`, a local model's failure
 moves the conversation's next turn — and, for the autonomous loop, the
-next iteration — to the cloud without a prompt; the operator enabled
+next iteration — to the less-trusted endpoint without a prompt; the operator enabled
 exactly that by setting both, and taint still blocks it.
 
 ### 4.13 The store is opened from a copied disk (card unlock, A18)
@@ -727,22 +734,25 @@ it is allowed to read and post it to a URL it is allowed to post
 to). Operators are responsible for not granting roles authority
 they would regret if the LLM acted maliciously.
 
-### 5.4 Network-level eavesdropping on LLM provider traffic
+### 5.4 Network-level eavesdropping on LLM server traffic
 
-Aivyx PA uses `rustls` over HTTPS for every LLM provider call. We
-trust the TLS stack and the operator's CA roots. If a corporate
-or hostile MITM has injected a root CA into the operator's trust
-store, the agent will use it.
+A model server on this machine is reached over loopback. One elsewhere on the
+operator's network is typically plain `http://` on a LAN or Tailscale; anyone
+able to sniff that segment can read the prompts. Put such a server behind
+Tailscale or TLS you control. Where HTTPS is used, we trust the `rustls`
+stack and the operator's CA roots; a MITM with an injected root CA is not
+defended.
 
-### 5.5 The LLM provider itself being malicious
+### 5.5 The model server itself being malicious
 
-API keys go straight to Anthropic / OpenAI / Ollama. We do not
-defend against an LLM provider exfiltrating prompt content,
-returning poisoned tool calls, or correlating the operator's API
-usage. The privacy guarantee is *not* "the cloud cannot see your
-prompts" — it is *"only the provider you chose can see your
-prompts, with the API key you supplied, under your account"*
-(`PRODUCT.md` G6, N5).
+Prompts go straight to a local model server (Ollama, llama.cpp, Jan,
+Lemonade, the broker, or an OpenAI-compatible server on the operator's
+network). We do not defend against that server logging prompt content or
+returning poisoned tool calls: a shared box on a LAN is only as private as
+the people who run it. The privacy guarantee is *not* "no one else can see
+your prompts" — it is *"prompts go only to servers on your machine or your
+own network, and a URL that isn't local is refused"* (`PRODUCT.md` G6, N5, as
+amended by A23).
 
 ### 5.6 Tools running in the same address space as the daemon
 
@@ -993,8 +1003,8 @@ running Aivyx PA daemon":
    tree (`PRODUCT.md` P7, P9).
 5. **No silent self-modification:** Yes. Reflection writes go
    through operator-approved gates.
-6. **No hosted control plane:** Yes. The operator's API key talks
-   directly to the model provider; storage stays on the operator's
+6. **No hosted control plane:** Yes. Model calls go
+   straight to a local model server (every URL is checked local); storage stays on the operator's
    hardware (`PRODUCT.md` G6, N5).
 7. **Container-level sandboxing of tools:** **Partial.** `shell.exec`
    and `git.rs`'s three tools (`git.status`/`git.diff`/`git.commit`)

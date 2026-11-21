@@ -82,15 +82,15 @@ GROUPS = [
 INTROS = {
     "agent": "The model the agent uses and how a turn behaves. Pairs with one provider section below. "
              f"See [Models and routing]({GUIDE}/12-models-and-routing.md).",
-    "anthropic": "Anthropic as the provider (`[agent] provider = \"anthropic\"`).",
-    "openai": "OpenAI, or any OpenAI-compatible server (llama.cpp, LM Studio, vLLM, Jan, Lemonade…) via `base_url`.",
+    "anthropic": "Unused since 2.0: the Anthropic provider was removed (aivyx is local-only), and `provider = \"anthropic\"` fails to load. The section is still read so a stored key isn't lost; `aivyx-pa doctor` notes it.",
+    "openai": "An OpenAI-compatible server on this machine or your own network (llama.cpp, LM Studio, vLLM, Jan, Lemonade…), through `base_url`, which is required and must be local.",
     "ollama": "Generation options passed to Ollama when it is the provider. Unset keys keep Ollama's own defaults. `prompt_strategies` is advanced: not covered by the 1.x compatibility promise.",
     "mistralrs": "The embedded, in-process mistral.rs engine (`provider = \"mistralrs\"`) — runs a local GGUF model with no separate server. Build-time feature: only a build with `provider-mistral-rs` has it (release binaries don't), and it is not covered by the 1.x compatibility promise.",
     "broker": "Share one local GPU server fairly with other processes (such as aivyx-coder) through `aivyx-broker`.",
     "kvcache": "Where saved KV-cache slots live when a local llama.cpp server is the backend.",
     "providers": "Provider-independent model settings. Advanced: not covered by the 1.x compatibility promise.",
     "routing": "Per-call model routing: send each task to the best-suited model you have, escalate when needed, "
-               f"never send sensitive conversations to the cloud. Off by default. See [Models and routing]({GUIDE}/12-models-and-routing.md).",
+               f"never send sensitive conversations to a less-trusted server. Off by default. See [Models and routing]({GUIDE}/12-models-and-routing.md).",
     "embedding": "Semantic memory search: the embeddings server, and how recall picks memories for each turn. The `rag_*`, `recall_*` and `ann_*` keys are advanced: not covered by the 1.x compatibility promise. `[memory] profile` sets them for you.",
     "fs": f"The directory the file tools work in. Usually set through `[access]` instead — see [Access and settings]({GUIDE}/08-access-and-settings.md).",
     "access": "How far the agent can reach on your machine and network: the access level, plus the guards for secrets "
@@ -161,9 +161,9 @@ MEANINGS = {
     "*.prompt": "The prompt sent to the agent when this fires.",
     "*.wrap_mission": "Record each run as a mission (visible in missions and the Studio).",
     "*.auto_accept_confidence_threshold": "Apply a proposal without asking when the judge's confidence is at least this (0–1).",
-    "anthropic.api_key": "Your Anthropic API key. Prefer the encrypted store (`aivyx-pa init` or the Studio) or `AIVYX_PA_ANTHROPIC_API_KEY`.",
-    "openai.api_key": "API key for the server. Not needed for a local server. Prefer the encrypted store or `AIVYX_PA_OPENAI_API_KEY`.",
-    "agent.model": "The model id, as the provider names it (e.g. `qwen3:14b`, `claude-sonnet-5`).",
+    "anthropic.api_key": "Unused since 2.0. A stored key is kept, never deleted.",
+    "openai.api_key": "Optional API key, only if your local server wants one. Prefer the encrypted store or `AIVYX_PA_OPENAI_API_KEY`.",
+    "agent.model": "The model id, as the provider names it (e.g. `qwen3:14b`).",
     "agent.system_prompt": "Extra instructions added to the agent's system prompt.",
     "agent.provider": "Which backend serves the model.",
     "agent.max_reply_tokens": "The most tokens the model may use for one reply (the request's `max_tokens`). Default 4096. The model server's own limit still applies; a server that refuses a larger value reports an error. A reasoning model's thinking counts toward it.",
@@ -198,7 +198,7 @@ MEANINGS = {
     "proactive.signal_recall_cluster": "Surface a topic whose memories have proved consistently helpful.",
     "proactive.signal_due_reminder": "Surface a reminder whose time has arrived.",
     "persona_lifecycle.signal_decay": "Retire Persona facets that keep proving unhelpful.",
-    "routing.sensitive.tool_prefixes": "Tool-name prefixes that mark a conversation sensitive (it then never escalates to a cloud model). The default list covers tools that return your own data.",
+    "routing.sensitive.tool_prefixes": "Tool-name prefixes that mark a conversation sensitive (it then never escalates to a server you labelled less trusted). The default list covers tools that return your own data.",
     "reminders.check_interval_secs": "Seconds between checks for due reminders. Default 30.",
     "skills.auto_propose.judge_model": "Model that judges candidate proposals. Unset means the agent's own model.",
     "skills.auto_propose.judge_max_tokens": "Most tokens the judge may write. Default 800.",
@@ -271,7 +271,7 @@ MEANINGS = {
     "*.notify_target": "Deprecated (warns): a single notify target, the older spelling of `notify_targets`. Don't set both.",
     "telegram.token": "The bot token from @BotFather. Prefer the encrypted store (`aivyx-pa connect`) over writing it here.",
     "tool_process.expected_scopes": "Per tool name, the widest scope that tool may declare for itself. Once set, it also acts as an allowlist of tool names for this process.",
-    "openai.base_url": "The server's URL. Default `https://api.openai.com`; point it at a local server for llama.cpp, Jan, LM Studio and the like.",
+    "openai.base_url": "The server's URL. Required for `provider = \"openai\"`, and must be local (this machine or your own network); a URL that isn't local is refused.",
     "embedding.api_key": "API key for the embeddings server. Not needed for a local one.",
     "routing.enabled": "Turn routing on. Off (the default) means every call uses `[agent] model`.",
     "routing.discover": "Ask each endpoint what models it serves at startup. Off means use only `[[routing.models]]`.",
@@ -280,7 +280,7 @@ MEANINGS = {
     "routing.models.tier": "Its size class, for matching tasks to models.",
     "routing.models.strengths": "What it is good at.",
     "routing.models.context_window": "The context window you actually serve it with, in tokens.",
-    "routing.escalation.mode": "Whether a call may escalate to a cloud model: `never`, `ask` (default) or `auto`.",
+    "routing.escalation.mode": "Whether a call may escalate to a server you labelled `locality = \"cloud\"` (less trusted): `never`, `ask` (default) or `auto`.",
     "routing.escalation.on_failure": "After a local failure, escalate the next turn (through the same `mode` gate; sensitive conversations never escalate).",
     "routing.sensitive.channels": "Channels whose conversations count as sensitive, e.g. `[\"telegram\"]`.",
     "sandbox.require_enforcement": "Refuse to run a command when confinement can't be set up. On by default; off fails open.",
@@ -440,6 +440,8 @@ def find_enum(name: str, near=None):
         return None
     attrs, body = d[2]
     rule = re.search(r'rename_all\s*=\s*"([^"]+)"', attrs)
+    if name == "ProviderKind" and not rule:  # parsed by FromStr, spelled lowercase
+        rule = re.match(r"(lowercase)", "lowercase")
     out, rename = [], None
     for line in body.splitlines():
         s = line.strip()
@@ -806,7 +808,7 @@ the key is ignored.
   allowed words (`` `a` | `b` ``).
 - `[[name]]` is an array of tables: repeat the block once per entry.
 - `<name>` in a heading is a name you choose (e.g. `[pricing.<name>]` →
-  `[pricing."claude-sonnet-5"]`).
+  `[pricing."qwen3:14b"]`).
 """
 
 

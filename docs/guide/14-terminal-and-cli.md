@@ -49,7 +49,7 @@ Nobody is there to approve anything, so a headless task refuses
 irreversible steps instead of waiting. It needs the background assistant
 already running (`aivyx-pa daemon run`, or the installed service). The exit
 code tells a script what happened: `0` done, `3` refused at an approval (or
-it wanted cloud consent), `1` anything else. Good for cron jobs and shell
+it needed consent for a less-trusted server), `1` anything else. Good for cron jobs and shell
 scripts.
 
 All three talk to the same background assistant, so a conversation in one
@@ -65,13 +65,13 @@ These work in plain chat, the terminal UI, the Studio and the chat apps:
 | `/models` | Which models routing can choose from |
 | `/models why` | Why it chose the model it did |
 | `/model <name>` / `/model auto` | Pin this conversation to a model, or let routing choose again |
-| `/allow-cloud` | Let this conversation use a cloud model (see [Models and routing](12-models-and-routing.md)) |
+| `/allow-cloud` | Let this conversation use a server you labelled less trusted (see [Models and routing](12-models-and-routing.md)) |
 
 ## The commands you'll use most
 
 | Command | What it does |
 |---|---|
-| `aivyx-pa init` | First-time setup, or change the model, provider or keys |
+| `aivyx-pa init` | First-time setup, or change the local model or server |
 | `aivyx-pa doctor` | Check everything and say what to fix |
 | `aivyx-pa studio` | Print the Studio sign-in link |
 | `aivyx-pa daemon status` / `stop` / `run` | Check, stop or start the background assistant |

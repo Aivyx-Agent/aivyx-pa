@@ -14,8 +14,12 @@ Aivyx PA ships a single binary, `aivyx-pa`, plus five optional channel
 adapters baked into it (CLI, Telegram, Discord, Slack, Web UI).
 There are no hosted dependencies — your binary talks directly to
 your model (a local server — Lemonade, Ollama, llama.cpp, Jan,
-aivyx-broker — or Anthropic / OpenAI under your key) and stores
-everything locally in an encrypted redb file.
+aivyx-broker, or any OpenAI-compatible server on this machine or your own
+network) and stores
+everything locally in an encrypted redb file. Local-only: models run on your
+machine or your own network; a model URL that isn't local is refused (2.0,
+Amendment A23). Where this file mentions Anthropic or OpenAI-cloud
+below it is phase history from 1.x, not a supported path.
 
 **Quick path:** the [shell installer](#shell-installer-recommended),
 then `aivyx-pa init`, then `aivyx-pa`. The
@@ -386,19 +390,17 @@ always-on assistant" profile, not a drop-in for the desktop install. See
 [`DOCKER.md`](DOCKER.md) for the full framing and security posture, and
 [`../deploy/docker/README.md`](../deploy/docker/README.md) for the worked files.
 
-### Quick start (cloud provider)
+### Quick start (local-only)
 
 ```sh
 # 1. set the store passphrase (a Docker SECRET — not a plain env var)
 printf '%s' 'a-strong-passphrase' > deploy/docker/secrets/passphrase
 
-# 2. give it an API key
-export ANTHROPIC_API_KEY=sk-ant-...
+# 2. bring it up with the local model server (builds the image the first time; ~minutes)
+docker compose --profile ollama up --build
+docker compose exec ollama ollama pull qwen3:8b
 
-# 3. bring it up (builds the image the first time; ~minutes)
-docker compose up --build
-
-# 4. open the Studio and create your agent
+# 3. open the Studio and create your agent
 #    → http://localhost:7843  → the "Create" screen (guided onboarding)
 ```
 
@@ -509,7 +511,7 @@ After install:
 1. **`aivyx-pa init`** — interactive wizard. Detects a local model
    server that's already running (Ollama, Lemonade Server, llama.cpp,
    Jan or aivyx-broker) and offers it first; with none running it asks,
-   and never picks a cloud provider for you. It asks for the passphrase
+   and only offers local servers. It asks for the passphrase
    that encrypts your store and keeps it in the OS keyring; with no
    keyring (servers, minimal desktops) it offers to save it in
    `~/.config/aivyx-pa/daemon.env`, readable only by you. Either way
@@ -545,8 +547,8 @@ After install:
    it starts as, not who it becomes.
 
    **Phase 104 — verify-before-write.** When the operator picks
-   Anthropic or OpenAI, the wizard hits the provider's
-   `GET /v1/models` with the supplied key before writing
+   an OpenAI-compatible local server, the wizard hits the server's
+   `GET /v1/models` (with a key, if one is given) before writing
    `aivyx-pa.toml` and confirms the chosen model is in the
    returned list. A wrong key or typo'd model is caught here
    and re-prompts the implicated field; a broken config never
@@ -1048,7 +1050,7 @@ enabled = true
 # Defaults are tuned for "fires on multi-tool work, skips
 # chit-chat." Operator only needs `enabled = true` to opt
 # into the loop.
-# judge_model = "claude-haiku-4-5"
+# judge_model = "qwen3:8b"
 # judge_max_tokens = 800
 # fuzzy_match_threshold = 0.80  # LearnedSkill dedup only
 
@@ -1439,7 +1441,7 @@ empty).
 Local models like qwen3.6:27b and gemma4:31b occasionally
 hallucinate tool names — emitting `fs_read` when the
 registered tool is `fs.read`, or `web_fetch` instead of
-`web.fetch`. Cloud models (Anthropic) rarely do this;
+`web.fetch`. Larger models rarely do this;
 local models with smaller training corpora are the
 dominant source.
 
@@ -1457,7 +1459,7 @@ structured response that lets it recover.
 
 ### What happens when the model hallucinates
 
-1. The OpenAI/Ollama or Anthropic provider classifies
+1. The OpenAI-compatible or Ollama provider classifies
    every emitted tool name against the canonical tool set
    the request advertised. Unknown names get flagged as
    `NameResolution::Unknown { original }` before the
@@ -1542,8 +1544,8 @@ is operator-conservative-leaning at the default:
 
 ### What this does NOT change
 
-- **Cloud-model behavior is unchanged in practice.**
-  Anthropic and OpenAI cloud models rarely emit
+- **Large-model behavior is unchanged in practice.**
+  Large, well-trained models rarely emit
   hallucinated tool names; the provider-side validation
   fires but classifies every call as `Known`, the
   planner dispatches directly, and `auto_corrected_from`
@@ -1964,7 +1966,7 @@ is published on crates.io, so install from a clone of this repository:
 ```bash
 $ git clone https://github.com/Aivyx-Agent/aivyx-pa && cd aivyx-pa
 
-# The embedded provider alongside Anthropic/OpenAI/Ollama (CPU):
+# The embedded provider alongside the local OpenAI-compatible/Ollama providers (CPU):
 $ cargo install --locked --path crates/aivyx-cli --features recommended-providers
 
 # Embedded provider with platform GPU acceleration —
@@ -2294,6 +2296,10 @@ extends with **pdf** (`application/pdf`), **svg**
 (`image/svg+xml`), and **tif / tiff**
 (`image/tiff`).
 
+> **2.0:** the Anthropic provider was removed, so the Anthropic-specific
+> paragraphs in Phases 163–166 below (document blocks, the model-version
+> guard, the PDF page cap and `AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP`) are history.
+
 **Phase 163 (amendment A13) — PDF document
 routing.** PDFs no longer surface as image
 blocks. The voice substrate routes
@@ -2572,8 +2578,8 @@ Supported extensions: `.png`, `.jpg`/`.jpeg`,
 Operator-side prereqs: a vision-capable LLM
 must be configured as the agent's planner.
 Tested with Qwen-VL via mistral.rs or Ollama;
-should work with Anthropic Claude (any modern
-model) or OpenAI GPT-4-vision via the existing
+should work with any vision-capable model served by
+a local OpenAI-compatible server via the existing
 provider plumbing.
 
 The queued image is consumed on the next turn
@@ -2902,10 +2908,10 @@ binary maps a model name to its family at startup:
 | `gemma3:9b`          | `gemma3` |
 | `llama3.1:latest`    | `llama3` |
 | `llama2:13b`         | `llama2` |
-| `claude-haiku-4-5`   | (none)   |
+| `some-hosted-name`   | (none)   |
 
 Anything that doesn't parse to a known Ollama family
-prefix (cloud model names, future families this build
+prefix (other model names, future families this build
 doesn't recognize) gets `OllamaFamilyStrategy::None`
 unconditionally — operator-conservative: a new model
 release doesn't silently get substrate it wasn't
@@ -3045,7 +3051,7 @@ deep (120 + 121 + 122 + 124). If Phase 124's examples also
 fail to break through, the model-layer ceiling will need
 to be named definitively — operators using local models
 for tool-use workloads would have to either accept the
-limitation or fall back to cloud providers.
+limitation or use a larger local model.
 
 **Operator escape hatches preserved.** Per-family
 `prompt_strategy = "structured_injection"` (drops back
@@ -3091,8 +3097,8 @@ Phase 125:**
 prompt-substrate-bounded.** Four substrate phases (120 +
 121 + 122 + 124) have hit the same model-layer wall.
 Operators with tool-use workloads should consider
-cloud providers (Anthropic / OpenAI) for those workloads
-specifically; local models remain useful for
+a larger local model for those workloads
+specifically (aivyx is local-only since 2.0); smaller local models remain useful for
 conversation, drafting, and other non-tool-invoking
 tasks. See PHASE_124.md exit doc for the full
 recommendation.
@@ -4686,8 +4692,8 @@ The fired turn:
 2. If `count > 0`, composes a `notify.send` per change.
 3. If `count == 0`, exits silently.
 
-This works reliably under cloud providers (Anthropic /
-OpenAI) per the Phase 124 finding — local Ollama models
+This works reliably under larger models per the
+Phase 124 finding — small local Ollama models
 won't reliably make the multi-tool call sequence even if
 the tools themselves are simple.
 
@@ -5262,20 +5268,15 @@ the Phase 74 keyword search. It is **off by default** — without
 an `[embedding]` section nothing changes, and a `semantic`
 request transparently falls back to keyword.
 
-**The base_url privacy choice.** Embedding means sending the
-text to be embedded to the configured endpoint. `base_url` is
-the only thing that decides whether memory content leaves the
-machine:
+**The base_url is local-only (2.0).** Embedding means sending the
+text to be embedded to the configured endpoint, so `base_url` is
+required and must be local: this machine or your own network. A
+URL that isn't local is refused at load, so memory content never
+leaves your network.
 
-- **Cloud** (`base_url = "https://api.openai.com"`, the
-  default) — entry bodies and search queries are sent to
-  OpenAI. This is your explicit, opt-in choice by configuring
-  the section.
-- **Local / on-device** — point `base_url` at any
-  OpenAI-compatible server (ollama, llama.cpp,
-  text-embeddings-inference, e.g.
-  `http://localhost:11434`). Nothing leaves the box; no
-  `api_key` needed.
+- Point `base_url` at any OpenAI-compatible server (ollama,
+  llama.cpp, text-embeddings-inference, e.g.
+  `http://localhost:11434`). No `api_key` needed.
 
 ```toml
 [embedding]
@@ -5283,12 +5284,12 @@ base_url = "http://localhost:11434"   # local → on-device
 model = "nomic-embed-text"
 dimensions = 768
 # api_key resolves env (AIVYX_PA_EMBEDDING_API_KEY) > this TOML
-# key > the encrypted secrets store, same as the LLM keys.
+# key > the encrypted secrets store.
 ```
 
-`dimensions` must match the model's native output. Omitted
-fields default to `https://api.openai.com` /
-`text-embedding-3-small` / `1536`.
+`dimensions` must match the model's native output. `base_url`
+has no default; omitted `model` / `dimensions` fall back to
+`text-embedding-3-small` / `1536`, so set them for your model.
 
 **Keyword fallback.** A `semantic` request silently serves
 keyword results — flagged so you can see it — when (a) no

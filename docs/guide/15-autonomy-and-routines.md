@@ -95,10 +95,10 @@ With no area at *supervised*, nothing is ever parked.
 ## Routines
 
 A routine runs a prompt for you on a schedule. Setup offers a few starter
-routines when you use a local model (they cost nothing to run): a daily
+routines (they run on your own model, so they cost nothing): a daily
 look at what's changed, a nightly reflection that tidies memory, a health
-check every six hours, and a Monday digest. On a paid provider they're
-written to your config but left off, so they never spend money unasked.
+check every six hours, and a Monday digest. If you decline routines in setup
+they're written to your config but left off.
 
 Manage routines on the **Schedules** screen: create one, switch it on or
 off, delete it. The assistant can also propose routines itself ("shall I
@@ -204,6 +204,7 @@ run, refuses irreversible steps rather than waiting for you.
 
 ## Budgets keep it honest
 
-Anything that runs on its own can spend money on a paid provider. Set caps
-on **Settings → Budget** (per run and per day); the loop has its own
-`max_run_usd`. See [Access and settings](08-access-and-settings.md).
+Local models cost nothing, so there are no dollar caps — a money cap in the
+config is refused. To bound something that runs on its own, use token or run
+caps: a team mission's `per_mission_tokens`, and the loop's `max_run_tokens`.
+See [Access and settings](08-access-and-settings.md).

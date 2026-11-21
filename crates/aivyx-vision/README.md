@@ -10,10 +10,10 @@ cannot share the daemon's own LLM provider — it has its own,
 separately-configured one via `~/.aivyx-pa/tool-processes/vision/config.toml`:
 
 ```toml
-provider = "ollama"   # "ollama" | "anthropic" | "openai"
+provider = "ollama"   # "ollama" | "openai" (an OpenAI-compatible LOCAL server)
 model = "qwen3:8b"
-# base_url = "http://127.0.0.1:11434"   # ollama only, optional
-# api_key = "sk-..."                     # required for anthropic/openai
+# base_url = "http://127.0.0.1:11434"   # optional for ollama; required for openai; must be local
+# api_key = "..."                        # optional, openai only
 ```
 
 Add the corresponding `[[tool_process]]` entry to `aivyx-pa.toml`:

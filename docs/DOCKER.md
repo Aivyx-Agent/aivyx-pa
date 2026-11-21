@@ -160,8 +160,8 @@ services:
       - aivyx-pa-data:/root/.aivyx-pa              # config + encrypted store + tokens
       - ./workspace:/work                         # the agent's fs_root (access level)
     environment:
-      - AIVYX_PA_PROVIDER=anthropic                # cloud profile first (no GPU/OAuth)
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - AIVYX_PA_PROVIDER=ollama                   # local-only: the ollama sibling below (2.0)
+      - AIVYX_PA_OPENAI_BASE_URL=http://ollama:11434  # a compose-network name; must resolve local
     secrets: [aivyx_pa_passphrase]                 # → AIVYX_PA_PASSPHRASE via file
     # config (baked or mounted) sets: [studio] host="0.0.0.0", enabled=true,
     #   [access] level rooted at /work
@@ -249,7 +249,7 @@ cross-platform fix, and the host-networking dance retires. Tracked, not built.
 | Phase | Deliverable |
 |---|---|
 | **HB.0** | This contract. |
-| **HB.1** | ✅ The **cloud-provider spike**: multi-stage `Dockerfile` (debian-slim runtime, daemon + all tool binaries) + `docker-compose.yml` for the Anthropic profile (no Ollama, no OAuth) + baked appliance config + secret-bridging entrypoint. Includes the §4.1 `web_ui_host` change (opt-in). **Built + ran end-to-end** (Docker 29.5, legacy builder): image builds (290 MB), daemon boots, Studio reachable through the published port, state persists across `down`/`up`, passphrase bridged from the Docker secret. Three build-verify fixes: `WORKDIR /root/.aivyx-pa` (the daemon reads `./aivyx-pa.toml` from the CWD), the appliance role named `default` (the active role), and a legacy-builder Dockerfile (no `buildx`/BuildKit cache mounts required). |
+| **HB.1** | ✅ The **first-boot spike** (originally an Anthropic profile; local-only since 2.0): multi-stage `Dockerfile` (debian-slim runtime, daemon + all tool binaries) + `docker-compose.yml` for a no-Ollama, no-OAuth profile + baked appliance config + secret-bridging entrypoint. Includes the §4.1 `web_ui_host` change (opt-in). **Built + ran end-to-end** (Docker 29.5, legacy builder): image builds (290 MB), daemon boots, Studio reachable through the published port, state persists across `down`/`up`, passphrase bridged from the Docker secret. Three build-verify fixes: `WORKDIR /root/.aivyx-pa` (the daemon reads `./aivyx-pa.toml` from the CWD), the appliance role named `default` (the active role), and a legacy-builder Dockerfile (no `buildx`/BuildKit cache mounts required). |
 | **HB.2** | ✅ The §4.2 opt-in **Origin allowlist** (`web_ui_allowed_origins`, default empty = localhost-only) + the F-4 non-loopback startup warning + the optional **Ollama sibling** (CPU default; opt-in GPU override `deploy/docker/compose.gpu.yml`). |
 | **HB.3** | ✅ The **OAuth-in-Docker recipe** (§7) — corrected from the original sketch: the callback listener binds container-loopback + Google mandates a loopback `redirect_uri`, so the flow uses **host networking** (Linux) / a host-run binary (Docker Desktop), tokens landing in the shared volume. Doc, not code. *Recipe is code-read-verified, not yet live-run against a real Google app.* |
 | **HB.4** | ✅ **Docs**: this file's status flipped to *usable from source* + an [INSTALL.md "Docker"](INSTALL.md#docker--the-server-appliance) section leading with the appliance-vs-desktop framing (§2), the passphrase-secret + exposure/TLS guidance, the Ollama/GPU + OAuth pointers, and the worked compose quick-start. |

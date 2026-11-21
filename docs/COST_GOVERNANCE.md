@@ -1,5 +1,14 @@
 # Cost Governance — Token Accounting & Budgets (Chapter K)
 
+> **2.0 (local-only):** the dollar caps described below were removed. A
+> money cap (`[budget] per_run_usd` / `per_day_usd` / `per_mission_usd`,
+> `[loop] max_run_usd`) is refused at load, and by the Studio and IPC, with "a
+> money cap needs cloud prices, which were removed in 2.0 — use a token or run
+> cap". Use token caps (`per_mission_tokens`, `max_run_tokens`) or run caps.
+> aivyx-cost ships no cloud price tables; a local run costs $0 unless you set a
+> per-model rate with `[pricing.<model>]`. The dollar-cap sections that follow
+> are kept as the design record of Chapter K.
+
 > **Status:** ✅ **shipped** (Chapter K complete). This began as the design
 > contract and is now fully implemented: the `aivyx-cost` crate (pricing +
 > `CostReport` + `BudgetEnforcer`), the per-turn `AuditEvent::LlmCost`,
@@ -71,7 +80,7 @@ struct Cost { usd: f64, priced: bool }   // priced=false ⇒ no rate known (untr
 /// A model→rate table: shipped defaults + operator overrides.
 struct Pricing { /* HashMap<model, ModelRate> */ }
 impl Pricing {
-    fn with_defaults() -> Self;                 // common cloud models + $0 local families
+    fn with_defaults() -> Self;                 // $0 local families; no cloud price tables
     fn cost_of(&self, model: &str, t: &TokenCounts) -> Cost;
     fn set_rate(&mut self, model, rate);        // from [pricing.<model>] config
 }
@@ -79,7 +88,7 @@ impl Pricing {
 
 - **Local models are free.** Ollama/llama/qwen/gemma/… price at **$0**
   (`priced = true`) — local inference costs no API dollars.
-- **Unknown cloud models** price at `$0` with **`priced = false`** — a flag
+- **Unknown models** price at `$0` with **`priced = false`** — a flag
   the report surfaces so the operator adds a rate rather than silently
   under-counting.
 - **Defaults are overridable.** Shipped rates are a convenience, clearly
@@ -105,11 +114,10 @@ impl BudgetEnforcer {
   ceiling, not a post-hoc notice. (The loop's existing post-iteration token
   stop stays; the $ pre-call gate is additive.)
 - **Model routing and the gate.** With `[routing]` on, the pre-call gate
-  still prices a turn at the configured `[agent]` model. On a cloud
-  provider, routing a turn to a pricier model on that same provider can
-  overshoot a cap by at most one turn. The judge and mission-planning side calls record
+  still prices a turn at the configured `[agent]` model. Routing a turn to a different model on the same server can
+  overshoot a token cap by at most one turn. The judge and mission-planning side calls record
   no `LlmCost` at all (pre-existing, routing or not), so routing them to a
-  larger cloud model spends more than `aivyx-pa cost` reports.
+  larger model spends more than `aivyx-pa cost` reports.
 - **Concurrency (teams).** A team runs specialists **concurrently**, so two
   in-flight calls can both pass a naive check and jointly bust the cap. K.3
   carries the archive's **reservation** idea (reserve an estimated cost
@@ -157,5 +165,5 @@ K.1 ─▶ K.2 ─▶ K.3 ─▶ K.4 ─▶ K.5
 2. **Single-operator** — no multi-tenant; the chain is per-daemon.
 3. **Chain is the token source of truth** — price a view over `TurnEnded`
    usage; no second ledger store unless query cost forces one.
-4. **Local = $0, unknown cloud = flagged** — never silently under-count.
+4. **Local = $0, unknown models = flagged** — never silently under-count.
 5. **Deny is a pre-call gate; reservations cover team concurrency.**

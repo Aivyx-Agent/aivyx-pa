@@ -1,10 +1,9 @@
 # Aivyx — server-appliance deployment (Chapter Harbor, HB.1).
 #
-# Quick start (cloud provider — no GPU, no OAuth):
+# Quick start (local-only: models run on your machine or your own network):
 #   1. printf '%s' 'your-store-passphrase' > deploy/docker/secrets/passphrase
-#   2. export ANTHROPIC_API_KEY=sk-ant-...
-#   3. docker compose up --build
-#   4. open http://localhost:7843  → use the "Create" screen to make your agent
+#   2. docker compose --profile ollama up --build   (then pull a model, see README)
+#   3. open http://localhost:7843  → use the "Create" screen to make your agent
 #
 # This is the SERVER-APPLIANCE profile (docs/DOCKER.md): the agent reaches the
 # bind-mounted ./workspace, the Studio is published to host-localhost only, and
@@ -26,15 +25,13 @@ services:
     volumes:
       - aivyx-pa-data:/root/.aivyx-pa  # config + encrypted store + audit chain + tokens
       - ./workspace:/work              # the agent's filesystem reach (fs_root)
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in your shell or .env}
     secrets:
       - aivyx_pa_passphrase            # → AIVYX_PA_PASSPHRASE via the entrypoint
     restart: unless-stopped
 
   # ── optional local-model profile: `docker compose --profile ollama up` ──
-  # Then set provider="ollama" + [ollama] base_url="http://ollama:11434" in your
-  # mounted config. Runs CPU-only by default; for NVIDIA GPU passthrough layer in
+  # The baked config already points at it (provider="ollama", [openai] base_url=
+  # "http://ollama:11434"); override in your mounted config. Runs CPU-only by default; for NVIDIA GPU passthrough layer in
   # deploy/docker/compose.gpu.yml (`-f docker-compose.yml -f deploy/docker/compose.gpu.yml`).
   ollama:
     image: ollama/ollama:latest

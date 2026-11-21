@@ -9,7 +9,7 @@
 - **Model:** llama-server at `http://127.0.0.1:8090`, Qwen3.5-9B Q4_K_M,
   for both pa (`provider = "llamacpp"`) and coder (`[backend] base_url =
   "http://127.0.0.1:8090/v1"`, `locality = "local"`). Nothing used Lemonade
-  or a cloud provider.
+  or any non-local server.
 - **Isolation:** as in the agents live check (`board-agents-live-check.md`):
   a throwaway HOME in the session scratchpad (`board-coder-live/home`), every
   command through a wrapper (`scratchpad/bc.sh`) that runs

@@ -110,8 +110,7 @@ type `/undo`. Cancelling a run doesn't undo what it already changed; use
 A few things to know:
 
 - Everything stays on your machine. aivyx-coder uses its own settings, so
-  point them at your local model server; your assistant never gives it a
-  cloud key.
+  point them at your local model server.
 - aivyx-coder needs a test command to check its work: one it can find on
   its own (such as `cargo test`) or one set in its settings.
 - One task at a time per folder. A run stops after 4 hours at most, and

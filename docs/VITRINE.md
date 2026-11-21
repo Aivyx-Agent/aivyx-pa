@@ -537,9 +537,9 @@ provide a quick summary" →
   genuinely multi-intent message.
 - **P1 FOUND + FIXED same-hour (c137d3c, deployed):** the audit
   chain showed `SkillAutoProposal JudgeError: model
-  'claude-haiku-4-5' not found (404)` — the auto-proposal judge
+  '<hosted-model-id>' not found (404)` — the auto-proposal judge
   reused the planner's PROVIDER but its model defaulted to a
-  hardcoded Claude id, so every tool-heavy turn on an Ollama-only
+  hardcoded hosted-model id (a pre-2.0 finding), so every tool-heavy turn on an Ollama-only
   install burned a judge 404 (silently killing the auto-proposal
   arc for all local-first users). `judge_model` is now optional:
   unset follows the planner's configured model; explicit still wins.

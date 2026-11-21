@@ -8,11 +8,15 @@
 # voice. It is NOT the desktop local-first install.
 
 [agent]
-# Cloud provider for the HB.1 spike (no GPU, no local model). The API key comes
-# from the ANTHROPIC_API_KEY env var (compose passes it through) — never bake a
-# key into the image.
-provider = "anthropic"
-model = "claude-sonnet-4-6"
+# Local-only (2.0): the model runs in the `ollama` sibling service
+# (`docker compose --profile ollama up`, then `docker compose exec ollama ollama
+# pull qwen3:8b`), or on any server on your own network. The URL must be local;
+# `ollama` is a single-label compose-network name, which counts as local.
+provider = "ollama"
+model = "qwen3:8b"
+
+[openai]
+base_url = "http://ollama:11434"
 
 [storage]
 # Lives under the mounted named volume so the encrypted store + audit chain

@@ -8,8 +8,7 @@ Secrets (API keys, tokens, the passphrase) are better kept in the encrypted
 store — `aivyx-pa init`, `aivyx-pa connect` and the Studio put them there.
 Use these variables for scripts, containers and one-off overrides.
 
-The variables in the first four tables, except
-`AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP`, are part of pa's stable surface
+The variables in the first four tables are part of pa's stable surface
 ([Compatibility](../../COMPATIBILITY.md)); `docs/stable/env.txt` lists them.
 
 ## Choosing the instance and config
@@ -28,13 +27,12 @@ The variables in the first four tables, except
 | `AIVYX_PA_MODEL` | `[agent] model` |
 | `AIVYX_PA_SYSTEM_PROMPT` | `[agent] system_prompt` |
 | `AIVYX_PA_ROLE` | `[agent] role`, the active role (the `--role` flag wins) |
-| `AIVYX_PA_ANTHROPIC_API_KEY` | `[anthropic] api_key` |
-| `ANTHROPIC_API_KEY` | `[anthropic] api_key`, when `AIVYX_PA_ANTHROPIC_API_KEY` is unset. The older name, still accepted. |
-| `AIVYX_PA_OPENAI_API_KEY` | `[openai] api_key` |
+| `AIVYX_PA_ANTHROPIC_API_KEY` | `[anthropic] api_key`. Unused since 2.0 (the Anthropic provider was removed); still read so a stored key isn't lost, and `aivyx-pa doctor` notes it. |
+| `ANTHROPIC_API_KEY` | The same, when `AIVYX_PA_ANTHROPIC_API_KEY` is unset. Unused since 2.0. |
+| `AIVYX_PA_OPENAI_API_KEY` | `[openai] api_key`. Optional: only for a local OpenAI-compatible server that wants one. |
 | `AIVYX_PA_OPENAI_BASE_URL` | `[openai] base_url` |
 | `AIVYX_PA_EMBEDDING_API_KEY` | `[embedding] api_key` |
 | `AIVYX_PA_KVCACHE_STORE_PATH` | `[kvcache] store_path` |
-| `AIVYX_PA_ANTHROPIC_PDF_PAGE_CAP` | Most PDF pages sent to Anthropic in one request. Default 100. |
 
 ## Files and memory
 

@@ -46,7 +46,7 @@ narrowed further by the access level — so the raw list is the
   `fs_root/**`. At `full`, `fs_root = /`.
 - **`net.fetch` / `net.post` / `web.search` / `web.extract` / `net.dns`**
   — outbound HTTP (GET/POST), search, readable-article extraction, DNS.
-  Enough to drive any cloud provider's REST API.
+  Enough to drive a web service's REST API.
 - **`git.read` / `git.write`** — status/diff, and `git.commit` (stage +
   commit; confirm-first on destructive). Version and ship code it writes.
 - **Nonagon teams** — a lead plus up to 9 capability-**attenuated**

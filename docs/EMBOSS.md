@@ -78,8 +78,8 @@ them; zero behavior change there.
 A new **`constrain_tool_calls`** flag on the OpenAI-compat config (surfaced as
 `[llamacpp] constrain_tool_calls` / the openai-compat section). Default `false` →
 the exact current passthrough, byte-identical. The operator turns it on knowing
-their server is llama.cpp-family (`llama-server` or Jan); cloud OpenAI proper does
-**not** support the `json_schema` extension, so the knob is documented as
+their server is llama.cpp-family (`llama-server` or Jan); a hosted OpenAI-style API would
+**not** (and 2.0 is local-only) support the `json_schema` extension, so the knob is documented as
 local-llama.cpp-only and only consulted on the relevant provider path. Ollama's
 **native** `/api/chat` provider is out of scope (different constraint story — its
 own chapter if ever).
@@ -90,7 +90,7 @@ own chapter if ever).
 (EB.2); injecting `json_schema` + the `respond` preamble into the OpenAI-compat
 request and parsing the constrained SSE content back into a tool call / text (EB.3);
 their tests; a live-verify against a real `llama-server` (EB.4). **Out:** a native
-`/completion` path; Ollama's native `/api/chat` constraint; cloud OpenAI (no
+`/completion` path; Ollama's native `/api/chat` constraint; a non-llama.cpp OpenAI server (no
 `json_schema` extension); any grammar change (Stencil owns `tool_call_grammar`);
 GPU (the parked CUDA watch-item).
 

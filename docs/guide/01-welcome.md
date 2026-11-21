@@ -3,8 +3,9 @@
 Aivyx PA is a personal AI assistant that runs **on your own hardware**. It learns
 how you work, keeps its memory in an encrypted file on your machine, and records
 everything it does in a tamper-evident log you can inspect at any time. There is
-no Aivyx PA cloud — your assistant talks directly to whichever AI model you choose
-(a local model with no API key, or a provider like Anthropic or OpenAI).
+no Aivyx PA cloud, and Aivyx PA is local-only: models run on your machine or
+your own network. Your assistant talks directly to a model server you run, with
+no API key needed.
 
 This guide is the end-user manual. It walks you from first launch through every
 part of the Studio — the web interface you're reading this in.

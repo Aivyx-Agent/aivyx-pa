@@ -33,18 +33,16 @@ scheduled time.
 
 ## Enablement (which routines are on)
 
-Routines are gated by the answers the wizard already collects, because a
-scheduled run on a **cloud** provider silently spends tokens:
+Routines are gated by the answers the wizard already collects. Every provider
+is local since 2.0, so there is no per-provider rule: the four core routines are
+**enabled** when you say yes to routines in `init` and written
+**present-but-disabled** otherwise; `trend-scan` is enabled **iff** routines are
+on and you enabled web search.
 
-| Provider | Four core routines | `trend-scan` |
-|---|---|---|
-| **Ollama (local)** | **enabled** (runs are free) | enabled **iff** you enabled web search |
-| **Anthropic / OpenAI (cloud)** | written **present-but-disabled** | written disabled |
-
-On a cloud provider the routines are still written to `aivyx-pa.toml` so they're
-discoverable — flip `enabled = true` on any you want (and mind your
-[`[budget]`](COST_GOVERNANCE.md)). The wizard prints a one-line summary of what
-it set up, so this is never surprise behavior.
+Disabled routines are still written to `aivyx-pa.toml` so they're discoverable
+(flip `enabled = true` on any you want, and mind your
+[`[budget]`](COST_GOVERNANCE.md) token caps). The wizard prints a one-line
+summary of what it set up, so this is never surprise behavior.
 
 ## The `[[schedule]]` primitive
 
@@ -149,5 +147,5 @@ sections for the config knobs.
 ## See also
 
 - [AUTONOMY.md](AUTONOMY.md) — the autonomy dial that gates how freely the agent acts.
-- [COST_GOVERNANCE.md](COST_GOVERNANCE.md) — budgets (relevant when enabling routines on a cloud provider).
+- [COST_GOVERNANCE.md](COST_GOVERNANCE.md) — token budgets (local-only since 2.0; money caps are removed).
 - [ONBOARDING.md](ONBOARDING.md) — the first-run wizard that plants these.

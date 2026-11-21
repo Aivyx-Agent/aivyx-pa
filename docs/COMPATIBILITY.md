@@ -17,7 +17,7 @@ From 1.0, Aivyx PA follows semantic versioning for its stable surface.
   global flags (`--instance`, `--provider`, `--mcp`, ...) and the old flag
   spellings still accepted. Snapshot: `docs/stable/cli.txt`.
 - **The environment variables.** The names the config loader reads
-  (`AIVYX_PA_*`, plus `ANTHROPIC_API_KEY`) and what each one sets.
+  (`AIVYX_PA_*`, plus the bare `ANTHROPIC_API_KEY`, now unused) and what each one sets.
   Snapshot: `docs/stable/env.txt`. The variables other parts read (the
   desktop app, one integration or tool) are listed in the environment
   variables reference but are not in the snapshot.
@@ -128,6 +128,35 @@ one list of tagged entries is `NOT_STABLE` in
 - **The pack checks.** What `pack check` and `pack install` verify may get stricter in a minor release, so a pack that installs today can be refused later. The pack format itself doesn't change.
 - **The tools the model sees.** Their names, arguments and descriptions
   change as models change.
+
+## The 2.0 break: local-only models
+
+2.0 is a new major version because it narrows the stable config surface.
+Aivyx PA is local-only: every model call goes to a server on this machine or
+your own network (Amendment A23, `docs/amendments/2026-11-21-local-only-models.md`).
+
+A 1.x config that does any of these **won't load** in 2.0, and the error names
+the fix:
+
+- `[agent] provider = "anthropic"` (the provider was removed), or any
+  `[routing.endpoints.*]` with `kind = "anthropic"` or `"openai"`.
+- `provider = "openai"` without `[openai] base_url`. `openai` now means an
+  OpenAI-compatible server on this machine or your own network; its key is
+  optional. A 1.x config that relied on the old default URL has to name one.
+- An `[embedding]` section without a local `base_url` (there is no built-in
+  embeddings endpoint).
+- Any model URL that isn't local: `<url> is not local (<reason>) — aivyx is
+  local-only; point it at a model server on this machine or your own network`.
+- A money cap: `[budget] per_run_usd` / `per_day_usd` / `per_mission_usd` or
+  `[loop] max_run_usd`. Use a token or run cap.
+
+What changes without breaking: the default provider is now `llamacpp` at
+`http://127.0.0.1:8080` with model `local-model`; stored Anthropic keys are
+kept, unused (`aivyx-pa doctor` notes them); `/allow-cloud` and the routing
+consent keep working for endpoints labelled `locality = "cloud"` (local URLs
+treated as less trusted). Nothing in the encrypted store, the audit chain or
+the instance layout changes. To migrate, see the 2.0.0 section of the
+[CHANGELOG](../CHANGELOG.md).
 
 ## Rules
 

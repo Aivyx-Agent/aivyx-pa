@@ -366,8 +366,10 @@ conversation's first routed call.
 ```
 
 **`CloudConsentRequested { model, endpoint, why, estimated_tokens,
-can_allow_here }`** — the turn stopped to ask for cloud consent (A15
-`ask` mode). `model` is the model id, `endpoint` the
+can_allow_here }`** — the turn stopped to ask for consent to use an endpoint labelled
+`locality = "cloud"` (A15 `ask` mode; since 2.0 that is a local URL the
+operator marked less trusted, never a hosted provider; the wording below
+still says "cloud"). `model` is the model id, `endpoint` the
 `[routing.endpoints.*]` name, `why` plain words (`no local model can
 handle this request`, `this kind of request is set to use the cloud`,
 `the local model got stuck`), `estimated_tokens` what would be sent.
@@ -375,8 +377,8 @@ handle this request`, `this kind of request is set to use the cloud`,
 Kernel — the channels `/allow-cloud` accepts consent from.
 
 ```json
-{"kind": "CloudConsentRequested", "model": "claude-sonnet-4-5",
- "endpoint": "anthropic", "why": "no local model can handle this request",
+{"kind": "CloudConsentRequested", "model": "big-local-model",
+ "endpoint": "shared", "why": "no local model can handle this request",
  "estimated_tokens": 12578, "can_allow_here": true}
 ```
 

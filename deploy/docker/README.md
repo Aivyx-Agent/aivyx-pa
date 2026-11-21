@@ -7,19 +7,17 @@ volume (not your real home), the Studio is exposed deliberately, and there's no
 voice. See [`docs/DOCKER.md`](../../docs/DOCKER.md) for the full framing and
 security posture.
 
-## Quick start (cloud provider — HB.1)
+## Quick start (local-only)
 
 ```sh
 # 1. set the store passphrase (Docker secret — never an env var in plain sight)
 printf '%s' 'a-strong-passphrase' > deploy/docker/secrets/passphrase
 
-# 2. give it an API key
-export ANTHROPIC_API_KEY=sk-ant-...
+# 2. bring it up with the local model server (builds the image the first time)
+docker compose --profile ollama up --build
+docker compose exec ollama ollama pull qwen3:8b
 
-# 3. bring it up (builds the image the first time)
-docker compose up --build
-
-# 4. open the Studio and create your agent
+# 3. open the Studio and create your agent
 open http://localhost:7843     # → use the "Create" screen (Chapter Genesis)
 ```
 

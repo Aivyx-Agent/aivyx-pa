@@ -3,6 +3,71 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [Unreleased]
+
+### Breaking
+
+- **Local-only models.** Every model call (chat, embeddings, vision, routing
+  and the broker) now goes to a server on this machine or your own network.
+  Amendment A23 (`docs/amendments/2026-11-21-local-only-models.md`) amends G6
+  and N5. Integrations (Gmail, Calendar, Drive, Notion, n8n), channels and web
+  tools are untouched: they stay optional and operator-enabled.
+- **The Anthropic provider is removed.** `provider = "anthropic"` (in
+  `[agent]`, `AIVYX_PA_PROVIDER` or `--provider`) fails with `provider
+  "anthropic" was removed in 2.0 — aivyx is local-only; use <the local kinds>
+  with a local base_url`. The hosted routing endpoint kinds `anthropic` and
+  `openai` are gone too, and so are the OpenAI cloud default URL and the
+  built-in embeddings endpoint.
+- **`openai` now means an OpenAI-compatible local server.** It requires
+  `[openai] base_url`; its key is optional. The default provider is `llamacpp`
+  at `http://127.0.0.1:8080`, and the default model is `local-model`.
+  `[embedding]` needs an explicit local `base_url`.
+- **A model URL that isn't local is refused**, at config load, when a provider
+  is built and before each connection (so a DNS change can't move traffic off
+  your network): `<url> is not local (<reason>) — aivyx is local-only; point it
+  at a model server on this machine or your own network`. Local means loopback,
+  a private LAN address, Tailscale/CGNAT, link-local, unique-local IPv6, a
+  `.local`, `.lan`, `.internal` or `.home.arpa` name, a single-label name, or a
+  DNS name whose every resolved address is local. Team members' `base_url`s and
+  the vision tool's config are checked too. A `locality = "local"` label on a
+  routing endpoint is honoured only through that DNS-verified path.
+- **Money caps are removed.** `[budget] per_run_usd`, `per_day_usd` and
+  `per_mission_usd`, and `[loop] max_run_usd`, are refused at load, and by the
+  Studio and IPC. aivyx-cost ships no cloud price tables: a local run costs
+  `$0` unless you set a per-model rate with `[pricing.<model>]`, and reports
+  show turns and tokens. Use token or run caps (`per_mission_tokens`,
+  `max_run_tokens`).
+- **`init` offers only local providers**, and `doctor` has a `local-only` row
+  that names each failing endpoint and its reason, team members included. It
+  also notes a stored Anthropic key as unused; no key is ever deleted.
+- **`/allow-cloud` and the routing consent stay**, but only for endpoints you
+  labelled `locality = "cloud"`: local URLs treated as less trusted, such as a
+  shared server. They are no longer a way to reach a hosted provider.
+
+#### Migrating from 1.x
+
+1. Run a local model server: llama.cpp's `llama-server`, Ollama, Jan, Lemonade,
+   `aivyx-broker`, or an OpenAI-compatible server on your own network.
+2. If your config says `provider = "anthropic"`, change it to a local kind.
+   Run `aivyx-pa init` again to pick one, or edit `[agent] provider`.
+3. If it says `provider = "openai"`, set `[openai] base_url` to your local
+   server (it has no default now) and drop any hosted-service key from use.
+4. Give `[embedding]` a local `base_url`, or remove the section (recall is then
+   keyword-only).
+5. Remove `kind = "anthropic"` and `kind = "openai"` endpoints from
+   `[routing.endpoints.*]`; point the endpoint at a local server with a local
+   kind, or delete it.
+6. Replace money caps with token or run caps.
+7. Run `aivyx-pa doctor`: the `local-only` row names anything still failing.
+   Nothing in the encrypted store, the audit chain or the instance layout
+   changes, and stored keys stay where they are.
+
+### Changed
+
+- Docs: README, CLAUDE.md, the guide, the manual, the THREAT_MODEL (sections
+  1, 4.12, 5.4 and 5.5), COMPATIBILITY, the Docker appliance files and the
+  example configs describe the local-only product.
+
 ## [1.5.0] - 2026-11-21
 
 ### Added

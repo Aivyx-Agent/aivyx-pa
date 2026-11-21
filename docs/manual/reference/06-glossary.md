@@ -36,8 +36,8 @@ over a private local socket.
 and shared with aivyx-coder, read through `skill_defaults.*` tools. Not
 the same as learned skills.
 
-**Escalation** — With routing on, moving a call from a local model to a
-cloud one. Governed by `[routing.escalation]`; never happens for a
+**Escalation** — With routing on, moving a call from your own local model to an
+endpoint you labelled less trusted (`locality = "cloud"`). Governed by `[routing.escalation]`; never happens for a
 sensitive conversation.
 
 **Gate** — A pause for your approval before an action runs. You answer it
