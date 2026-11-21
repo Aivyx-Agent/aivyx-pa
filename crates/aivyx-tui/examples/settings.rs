@@ -170,7 +170,7 @@ fn settings(f: &mut Frame, area: Rect) {
             Style::default().fg(DIMMER),
         )),
         Line::from(Span::styled(
-            "switch the provider above to anthropic / openai.",
+            "switch the provider above to ollama / jan / llamacpp.",
             Style::default().fg(DIMMER),
         )),
     ];

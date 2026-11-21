@@ -27,8 +27,8 @@ provider-mistral-rs-cuda = ["aivyx-llm/provider-mistral-rs-cuda"]
 provider-mistral-rs-metal = ["aivyx-llm/provider-mistral-rs-metal"]
 provider-mistral-rs-accelerate = ["aivyx-llm/provider-mistral-rs-accelerate"]
 # Phase 134 — `recommended-providers` meta-feature. Pulls in the
-# embedded provider on top of the three already-enabled
-# out-of-process providers (Anthropic / OpenAI / Ollama, hard-wired
+# embedded provider on top of the already-enabled
+# out-of-process providers (OpenAI-compatible / Ollama, hard-wired
 # below). New users running
 # `cargo install --features recommended-providers aivyx` get a
 # single binary with every Phase 134 local-LLM story available.

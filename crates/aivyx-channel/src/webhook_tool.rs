@@ -163,7 +163,7 @@ impl Tool for WebhookCreateTool {
         // context (see aivyx-core/src/agent.rs, planner.tool_result_texts()),
         // lands in the session transcript, and is chained into the audit
         // log. Putting the live bearer secret in `output` therefore ships
-        // the credential to whatever cloud LLM provider is configured for
+        // the credential to whatever LLM provider is configured for
         // this agent. Instead, print it once to the daemon's own stderr —
         // the same mechanism the CLI's `[[webhook]]` config-sync path
         // already uses (`aivyx-cli/src/bin/aivyx.rs`) — and keep it out of

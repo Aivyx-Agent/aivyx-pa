@@ -31,7 +31,7 @@
 //! 2. Local LLM inference latency dominates network
 //!    round-trips; streaming UX value is lower on a
 //!    100ms-per-token local model than on a
-//!    1-second-network-roundtrip cloud model.
+//!    1-second-network-roundtrip remote model.
 //! 3. Streaming is a focused Phase 135 task once
 //!    operators have validated the broader
 //!    integration.

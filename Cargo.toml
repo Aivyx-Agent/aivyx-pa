@@ -171,7 +171,7 @@ zeroize = "1.8"
 # deliberately off: in snow 0.10 it switches on the optional ring + blake2 deps.
 snow = { version = "0.10", default-features = false, features = ["use-curve25519", "use-chacha20poly1305", "use-sha2", "use-getrandom"] }
 
-# LLM provider HTTP transport (feature-gated in aivyx-llm via provider-anthropic)
+# LLM provider HTTP transport (feature-gated in aivyx-llm via the provider-* features)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 # WHATWG-compliant URL parsing — already transitive via reqwest; promoted to
 # a direct workspace dependency (Chapter Rampart hardening) so

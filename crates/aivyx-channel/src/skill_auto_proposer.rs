@@ -165,7 +165,7 @@ impl Default for SkillAutoProposeConfig {
             heuristic: HeuristicConfig::default(),
             // Empty = follow the planner's configured model
             // (resolved at daemon wiring). A concrete foreign-model
-            // default 404s on any non-Anthropic install.
+            // default 404s on any install without that model.
             judge_model: String::new(),
             judge_max_tokens: 800,
             auto_accept_confidence_threshold: 0.85,

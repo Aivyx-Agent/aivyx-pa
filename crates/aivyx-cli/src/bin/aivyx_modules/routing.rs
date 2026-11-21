@@ -42,12 +42,12 @@ pub(crate) const DEFAULT_ENDPOINT: &str = "default";
 /// configured backend URL — `[openai] base_url`, or `[broker] base_url` for
 /// the broker — and `None` falls back to the provider's own default. Its
 /// locality follows aivyx-route's one rule
-/// ([`DefaultEndpoint::effective_locality`]): cloud providers are cloud, a
+/// ([`DefaultEndpoint::effective_locality`]): a
 /// local provider is local only at a local address, and the in-process
 /// mistral.rs backend (no address at all) is aivyx-route's in-process
 /// endpoint, local by construction. That locality
 /// decides every roster entry without an `endpoint`, and whether routing
-/// may choose cloud models at all.
+/// may choose less-trusted (`locality = "cloud"`) endpoints at all.
 pub(crate) fn default_endpoint(kind: ProviderKind, base_url: Option<&str>) -> DefaultEndpoint {
     let url = backend_url(kind, base_url);
     // 2.0 (local-only): `provider = "openai"` is an OpenAI-compatible local
@@ -88,8 +88,8 @@ pub(crate) fn configured_backend_url<'a>(
 
 /// The URL the `[agent]` provider connects to: the configured one, else
 /// the provider's own default (the same defaults the provider is built
-/// with). `None` for the in-process backend, and for the cloud APIs on
-/// their built-in address.
+/// with). `None` for the in-process backend, and for a provider on
+/// its built-in address.
 fn backend_url(kind: ProviderKind, configured: Option<&str>) -> Option<String> {
     let default = match kind {
         ProviderKind::Ollama => Some(DEFAULT_OLLAMA_BASE_URL),
@@ -698,7 +698,7 @@ pub(crate) async fn wrap_with_routing(
         });
     }
     // Part 3b — escalation only when it's active and the daemon handed us
-    // its guard; the cloud models live on their own router, never the
+    // its guard; the less-trusted endpoints live on their own router, never the
     // local one.
     if escalation_active(Some(routing), &access.escalation)
         && let Some(guard) = &access.escalation_guard

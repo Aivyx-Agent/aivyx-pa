@@ -9,7 +9,7 @@
 - **Isolation:** as in the board live check (`board-live-check.md`): a
   throwaway HOME in the session scratchpad (`agents-live2/`), every command
   through a wrapper (`scratchpad/al2.sh`, a copy of `bl.sh`) that runs
-  `env -i HOME=<tmp> … XDG_RUNTIME_DIR=/tmp/claude-1000/agrun2
+  `env -i HOME=<tmp> … XDG_RUNTIME_DIR=$SCRATCH/agrun2
   AIVYX_PA_PASSPHRASE=<throwaway> target/debug/aivyx-pa "$@"`
   (`agrun2` is a short symlink to `<tmp>/run`). Own webhook port 17852 and
   Studio port 17853. The operator's daemon (pid 1894) and
@@ -142,14 +142,16 @@ The binary (`target/debug/aivyx-pa`, built 15:25) embeds the bundle from
 `just build-web` in this task. To run the check:
 
 ```sh
-S=/tmp/claude-1000/-home-julian-Projects-Rust/2a2a3496-9f15-466a-9988-2a0a7bde93c0/scratchpad
-ln -sfn $S/agents-live2/run /tmp/claude-1000/agrun2   # the wrapper's runtime dir
+# Pick a short scratch dir (<runtime dir> paths must stay short).
+SCRATCH=/tmp/aivyx-live; mkdir -p $SCRATCH
+S=$SCRATCH   # your session scratchpad
+ln -sfn $S/agents-live2/run $SCRATCH/agrun2   # the wrapper's runtime dir
 cd $S/agents-live2
 nohup $S/al2.sh daemon run > daemon-studio.log 2>&1 &
 $S/al2.sh studio            # prints the sign-in link for http://127.0.0.1:17853/
 # … click through …
 $S/al2.sh daemon stop
-rm /tmp/claude-1000/agrun2
+rm $SCRATCH/agrun2
 ```
 
 State waiting for it: agents `bookkeeper` (heartbeat every minute) with

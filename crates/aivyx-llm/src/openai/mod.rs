@@ -11,7 +11,7 @@
 //!   into `LlmStreamEvent` / `LlmStepEnd` values.
 //!
 //! Reuses the `HttpTransport` and `ByteStream` types from
-//! `crate::anthropic::transport` — the transport seam is
+//! `crate::transport` — the transport seam is
 //! provider-agnostic by design.
 
 pub mod provider;

@@ -6,7 +6,7 @@
 //! Phase 3 task 5 needs a hermetic test that drives the full CLI stack
 //! (planner → provider → audit → channel) via scripted I/O, without
 //! touching the network. The binary's `main.rs` hardcodes
-//! `AnthropicProvider::new(...)` + `io::stdin()` + `io::stdout()`, none
+//! a provider constructor + `io::stdin()` + `io::stdout()`, none
 //! of which a test can intercept. Two options exist:
 //!
 //! 1. Add a test-only transport backdoor to the binary.
@@ -44,7 +44,7 @@
 //!   level piece of ctrl-C machinery, and that's here.
 //! - **Secret handling.** `SessionConfig` takes plain `String`s for
 //!   `model` and `system_prompt`. The API key lives inside whichever
-//!   `LlmProvider` the caller supplies — `AnthropicProvider` holds a
+//!   `LlmProvider` the caller supplies — a provider holds a
 //!   `SecretString` internally, and tests use a `FakeLlmProvider` with
 //!   no secret at all. Keeping the session layer secret-free means the
 //!   test path never has to mint a fake key.
@@ -423,7 +423,7 @@ pub struct SessionReport {
 /// `reader` signals EOF (`read_line` returns `Ok(0)`).
 ///
 /// The `provider` is an `Arc<dyn LlmProvider>` so the binary can pass
-/// a live `AnthropicProvider` and the integration test can pass a
+/// a live provider and the integration test can pass a
 /// `FakeLlmProvider`. Both flow through the same `LlmPlanner` +
 /// `ConcreteAgent` stack.
 ///

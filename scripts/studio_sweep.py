@@ -10,13 +10,16 @@ lookups are invisible to the compiler — drive the real page.
 Usage:
     AIVYX_TOKEN=<gatehouse token> python3 scripts/studio_sweep.py
 Requires: google-chrome-stable, `pip install websocket-client`.
+Set STUDIO_SWEEP_PROFILE to a scratch Chrome profile dir.
 Target URL is hardcoded to the dogfood rig; edit as needed.
 """
 import json, subprocess, time, os, base64
 import urllib.request
 
 port = 9224
-prof = "/tmp/claude-1000/-home-julian-Projects-Rust-aivyx/cdc8a29c-1d2b-402a-9153-245f2a71e944/scratchpad/chrome-profile3"
+prof = os.environ.get("STUDIO_SWEEP_PROFILE")
+if not prof:
+    raise SystemExit("set STUDIO_SWEEP_PROFILE to a scratch Chrome profile directory")
 chrome = subprocess.Popen([
     "/usr/bin/google-chrome-stable", "--headless=new", "--disable-gpu",
     f"--remote-debugging-port={port}", "--remote-allow-origins=*",

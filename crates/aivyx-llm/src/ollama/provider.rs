@@ -156,7 +156,7 @@ impl OllamaOptions {
 }
 
 /// Provider config. The OpenAI provider needed an `api_key`
-/// because cloud OpenAI authenticates via Bearer; Ollama does
+/// because hosted OpenAI authenticates via Bearer; Ollama does
 /// not require auth, so the field is `Option<SecretString>` for
 /// non-default deployments (e.g. operator-protected Ollama
 /// behind a proxy). The default `None` matches the

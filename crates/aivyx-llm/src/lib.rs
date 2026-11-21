@@ -101,8 +101,8 @@ pub use kvcache_probe::fetch_llama_slots_info;
 
 /// Phase 75 — embedding provider for semantic memory search.
 /// Reuses the shared HTTP transport; an OpenAI-compatible
-/// `/v1/embeddings` client whose `base_url` can point at the
-/// cloud API or a local server (ollama / llama.cpp /
+/// `/v1/embeddings` client whose `base_url` can point at
+/// a local server (ollama / llama.cpp /
 /// text-embeddings-inference).
 #[cfg(any(
     feature = "provider-openai",

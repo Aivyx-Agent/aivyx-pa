@@ -13,7 +13,7 @@
 - **Isolation:** as in the agents live check (`board-agents-live-check.md`):
   a throwaway HOME in the session scratchpad (`board-coder-live/home`), every
   command through a wrapper (`scratchpad/bc.sh`) that runs
-  `env -i HOME=<tmp> … XDG_RUNTIME_DIR=/tmp/claude-1000/bcrun
+  `env -i HOME=<tmp> … XDG_RUNTIME_DIR=$SCRATCH/bcrun
   AIVYX_PA_PASSPHRASE=<throwaway>
   AIVYX_CODER=<aivyx-coder>/target/debug/aivyx-coder target/debug/aivyx-pa "$@"`
   (`bcrun` is a short symlink to `<tmp>/run`). Own webhook port 17862 and
@@ -211,14 +211,16 @@ The daemon is left **stopped**. The config has `[studio] port = 17863`.
 To run the check:
 
 ```sh
-S=/tmp/claude-1000/-home-julian-Projects-Rust/2a2a3496-9f15-466a-9988-2a0a7bde93c0/scratchpad
-ln -sfn $S/board-coder-live/home/run /tmp/claude-1000/bcrun   # the wrapper's runtime dir
+# Pick a short scratch dir (<runtime dir> paths must stay short).
+SCRATCH=/tmp/aivyx-live; mkdir -p $SCRATCH
+S=$SCRATCH   # your session scratchpad
+ln -sfn $S/board-coder-live/home/run $SCRATCH/bcrun   # the wrapper's runtime dir
 cd $S/board-coder-live
 nohup $S/bc.sh daemon run > daemon-studio.log 2>&1 &
 $S/bc.sh studio            # prints the sign-in link for http://127.0.0.1:17863/
 # … click through …
 $S/bc.sh daemon stop
-rm /tmp/claude-1000/bcrun
+rm $SCRATCH/bcrun
 ```
 
 The binary embeds the bundle committed in Task 5 (the guide text changed

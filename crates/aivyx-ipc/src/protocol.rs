@@ -1763,7 +1763,7 @@ pub struct SettingsSnapshot {
     pub fs_root: String,
     /// Whether irreversible fs ops confirm first (the expanded-level posture).
     pub confirm_destructive: bool,
-    /// Provider label — `anthropic | openai | ollama | …` (read-only here).
+    /// Provider label — `llamacpp | ollama | jan | openai | …` (read-only here).
     pub provider: String,
     /// Active model id (read-only here).
     pub model: String,

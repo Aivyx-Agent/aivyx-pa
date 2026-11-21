@@ -9,7 +9,8 @@
 //!   → Message::text
 //!   → ConcreteAgent::turn
 //!       → LlmPlanner
-//!           → AnthropicProvider (live HTTPS)
+//!           → local provider (llama.cpp / Ollama / Jan / an
+//!             OpenAI-compatible local server, or in-process mistral.rs)
 //!               → tokens streamed back through LocalChannel
 //!       → PersistentAuditLog (HMAC chain persisted to KeyDomain::Audit)
 //!   → TurnOutcome
@@ -19,18 +20,16 @@
 //!
 //! ## Configuration
 //!
-//! The binary reads one required environment variable:
+//! aivyx is local-only (2.0): the provider is a model server on this
+//! machine or your own network (`llamacpp`, `ollama`, `jan`, an
+//! OpenAI-compatible local server such as llama-server, or the
+//! in-process `mistral_rs` backend), chosen in `config.toml`. No API
+//! key is required to run a turn.
 //!
-//! - `ANTHROPIC_API_KEY` — the API key for the Anthropic Messages
-//!   endpoint. Wrapped in `SecretString` as soon as it's read so it
-//!   can't accidentally end up in a `Debug` log line. A future phase
-//!   will add a config-file path; for Phase 3, env var is the one
-//!   and only secret source.
+//! Optional environment variables:
 //!
-//! Five optional variables:
-//!
-//! - `AIVYX_PA_MODEL` — override the default model id (default:
-//!   `claude-haiku-4-5-20251001`). Sent verbatim to the API.
+//! - `AIVYX_PA_MODEL` — override the model id (default: the one the
+//!   chosen local provider configures). Sent verbatim to the server.
 //! - `AIVYX_PA_SYSTEM_PROMPT` — override the default system prompt.
 //! - `AIVYX_PA_FS_ROOT` — directory under which the filesystem tools
 //!   (`fs.read`, `fs.write`, `fs.metadata`, and — on Local channels
@@ -78,9 +77,9 @@
 //! `KeyDomain::Audit` range, prints a one-line `VerifyReport`, and
 //! exits with status 0 (chain OK) or non-zero (chain broken, corrupt
 //! entry, or storage error). No session is started, no provider is
-//! built, and `ANTHROPIC_API_KEY` is **not** required — an operator
-//! running verification on a production store should not have to hand
-//! the cloud key to a read-only forensic tool.
+//! built, and no model server needs to be running — an operator
+//! running verification on a production store should not have to
+//! start one for a read-only forensic tool.
 //!
 //! ## What this binary is not
 //!
@@ -1327,8 +1326,8 @@ fn run() -> Result<(), String> {
     //
     // `require_*` flags are derived from the CLI-arg decisions so the
     // validator's error messages land at the right point: verify-only
-    // does not need `ANTHROPIC_API_KEY`, so the loader does not demand
-    // it; `--channel telegram` does need `AIVYX_PA_TELEGRAM_TOKEN`, so a
+    // does not need a model server, so the loader does not demand
+    // one; `--channel telegram` does need `AIVYX_PA_TELEGRAM_TOKEN`, so a
     // missing token surfaces as a clean `ConfigError::Missing` instead
     // of a Frankenstein "invalid request" on the first HTTP call.
     // `--print-role` is a debug exit mode that should not require
@@ -2150,7 +2149,7 @@ fn print_config_banner(config: &AivyxConfig) {
     // `structured_injection` is active, which family was
     // detected, and whether their `[ollama.prompt_strategies]`
     // override (if any) is being honored. Only shown when the
-    // provider is Ollama — cloud providers handle their own
+    // provider is Ollama — other providers handle their own
     // tool-catalog surface. Pure-string formatting lives in
     // `format_ollama_prompt_strategy_banner_line` so it can be
     // unit-tested without capturing stderr.
@@ -8491,12 +8490,12 @@ async fn run_async(
     // - `[ollama.prompt_strategies] qwen3 = "none"` → operator opts out
     //   of the structured-injection default for qwen3.
     // - Family detected, no override → per-family default.
-    // - Family not detected (cloud model, bare-family-without-digits) →
+    // - Family not detected (non-Ollama-style model name, bare-family-without-digits) →
     //   `OllamaFamilyStrategy::None`. Operator-conservative.
     //
     // Non-Ollama providers always end up at `None` (no catalog
     // injection) since the strategy enum gates the
-    // `append_tool_catalog` call below — cloud providers handle their
+    // `append_tool_catalog` call below — other providers handle their
     // tool-catalog surface natively.
     let ollama_prompt_strategy: aivyx_config::OllamaFamilyStrategy =
         if matches!(provider_kind.value, ProviderKind::Ollama) {
