@@ -238,3 +238,28 @@ No throwaway daemon or coder left running (`pgrep`: only the operator's pid
 1894); ports 17862/17863 free. The `bcrun` runtime symlink is left for
 step 9 (remove it afterwards, as above). `board-coder-live/` stays in the
 scratchpad.
+
+## Re-check after final-review fixes (2026-11-21)
+
+Re-run on `board-coder` at `9f224624` (includes `54b9e4f9`): debug `aivyx-pa`
+rebuilt, same throwaway HOME, same 9B at `127.0.0.1:8090` (no cloud, no
+port 13305). 628 GB free on `/home`. The daemon was started with
+`setsid` (own process group) and
+`EXTRA_ENV="AWS_ACCESS_KEY_ID=dummy CEREBRAS_API_KEY=dummy"` on top of the
+wrapper's dummy `OPENAI_API_KEY`. The operator's daemon (pid 1894) was not
+touched.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Build and df | ✅ |
+| 2 | Review, counts line and undo hint | ✅ `t-bd32d21e` "Add quintuple": "1 changed file, 4 checkpoints — undo: run aivyx-coder --resume in the workspace, then /undo", then the run text; Review in about 10 s. A first task (`triple`, which the earlier check had already added) correctly said "0 changed files, 1 checkpoint" |
+| 3 | Environment scrub | ✅ coder's `/proc/<pid>/environ` held only `AIVYX_CODER CARGO_HOME HOME PATH RUSTUP_HOME TERM XDG_*`; 0 matches for `OPENAI_API_KEY`, `AWS_*`, `CEREBRAS_API_KEY`, `*_API_KEY`, `AIVYX_PA_*` |
+| 4 | Process group | ✅ coder pid 2053338, pgid 2053338, ppid the daemon (a second run: 2053752 / 2053752) |
+| 5 | Restart mid-run | ✅ `kill -TERM -- -<daemon pgid>` (the group held only the daemon, since coder has its own group): task `t-c1d99d6f` went `running → todo` with "interrupted by a daemon restart", not Cancelled; no aivyx-coder, cargo or throwaway aivyx-pa left; the workspace was idle after the restart |
+| 6 | Cancel | ✅ `t-d7411f0f` `board cancel` → Cancelled; coder gone within 10 ms of the command returning; workspace idle |
+| 7 | Clean-up | ✅ `daemon stop`; `ps` shows only the operator's pid 1894 |
+
+Not exercised: the exit-130-not-cancelled path (the daemon's own SIGTERM
+went through the restart handler, not coder's 130 code), and
+`PR_SET_PDEATHSIG` (would need a SIGKILL of the daemon). No failures; the 9B
+did the coding each time it ran to completion.
