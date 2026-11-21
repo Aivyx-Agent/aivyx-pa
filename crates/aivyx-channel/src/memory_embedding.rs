@@ -36,7 +36,7 @@ pub fn build_embedding_provider(
         cfg.api_key.as_ref().map(|s| s.value.clone());
     let provider = OpenAiEmbeddingProvider::new(
         Some(cfg.base_url.clone()),
-        Some(cfg.model.clone()),
+        cfg.model.clone(),
         api_key,
         cfg.dimensions,
     )

@@ -11280,7 +11280,7 @@ system_prompt = "You are a custom role."
     fn embedding_config_view_never_leaks_the_raw_api_key() {
         let entry = aivyx_config::config_write::EmbeddingEntryWrite {
             base_url: Some("http://127.0.0.1:11434".to_string()),
-            model: Some("text-embedding-3-small".to_string()),
+            model: Some("nomic-embed-text".to_string()),
             api_key: Some("sk-super-secret-value".to_string()),
         };
         let view = embedding_config_view(&entry);
@@ -11293,12 +11293,12 @@ system_prompt = "You are a custom role."
     #[test]
     fn embedding_write_with_none_api_key_leaves_the_existing_secret_on_disk() {
         let path = secret_leak_temp_toml("embedding-rotate");
-        std::fs::write(&path, "").unwrap();
+        std::fs::write(&path, "[embedding]\ndimensions = 768\n").unwrap();
         aivyx_config::config_write::write_embedding_section(
             &path,
             &aivyx_config::config_write::EmbeddingEntryWrite {
                 base_url: Some("http://127.0.0.1:8081".to_string()),
-                model: None,
+                model: Some("nomic-embed-text".to_string()),
                 api_key: Some("sk-original-secret".to_string()),
             },
         )
@@ -11308,7 +11308,7 @@ system_prompt = "You are a custom role."
             &path,
             &aivyx_config::config_write::EmbeddingEntryWrite {
                 base_url: None,
-                model: Some("text-embedding-3-large".to_string()),
+                model: Some("mxbai-embed-large".to_string()),
                 api_key: None,
             },
         )
@@ -11316,7 +11316,7 @@ system_prompt = "You are a custom role."
         let contents = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).ok();
         assert!(contents.contains("sk-original-secret"), "None must not clear the existing secret");
-        assert!(contents.contains("text-embedding-3-large"));
+        assert!(contents.contains("mxbai-embed-large"));
     }
 
     #[test]

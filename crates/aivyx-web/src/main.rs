@@ -3402,7 +3402,7 @@ fn EmbeddingConfigCard(config: EmbeddingConfigView) -> Element {
             }
             div { class: "field-row",
                 label { "Model" }
-                input { class: "input", placeholder: "text-embedding-3-small", value: "{model}", oninput: move |e| model.set(e.value()) }
+                input { class: "input", placeholder: "nomic-embed-text", value: "{model}", oninput: move |e| model.set(e.value()) }
             }
             p { class: "help",
                 {if config.api_key.configured { "API key: configured" } else { "API key: not set" }}

@@ -7961,9 +7961,9 @@ fn embedding_absent_section_is_none() {
     drop(env);
 }
 
-/// A `[embedding]` section with only the api_key set: the three
-/// non-secret fields fall back to the `DEFAULT_EMBEDDING_*`
-/// constants, the key is `FieldSource::Toml`.
+/// A `[embedding]` section with only base_url, model, dimensions and the
+/// api_key set: the RAG knobs fall back to their defaults, the key is
+/// `FieldSource::Toml`.
 #[test]
 fn embedding_partial_section_applies_defaults() {
     let env = EnvScope::new();
@@ -7975,6 +7975,8 @@ fn embedding_partial_section_applies_defaults() {
         r#"
 [embedding]
 base_url = "http://127.0.0.1:11434"
+model = "nomic-embed-text"
+dimensions = 768
 api_key = "sk-emb-toml"
 "#,
     )
@@ -7991,8 +7993,8 @@ api_key = "sk-emb-toml"
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
     let emb = cfg.embedding.expect("section present");
     assert_eq!(emb.base_url, "http://127.0.0.1:11434");
-    assert_eq!(emb.model, crate::DEFAULT_EMBEDDING_MODEL);
-    assert_eq!(emb.dimensions, crate::DEFAULT_EMBEDDING_DIMENSIONS);
+    assert_eq!(emb.model, "nomic-embed-text");
+    assert_eq!(emb.dimensions, 768);
     // Phase 76 — RAG knobs default when unspecified.
     assert_eq!(emb.rag_top_k, crate::DEFAULT_RAG_TOP_K);
     assert_eq!(
@@ -8061,6 +8063,8 @@ fn embedding_env_key_beats_toml_key() {
         &toml_path,
         r#"
 [embedding]
+model = "nomic-embed-text"
+dimensions = 768
 base_url = "http://127.0.0.1:11434"
 api_key = "sk-emb-toml-loses"
 "#,
@@ -8126,6 +8130,7 @@ fn embedding_zero_dimensions_is_invalid() {
         &toml_path,
         r#"
 [embedding]
+model = "nomic-embed-text"
 base_url = "http://127.0.0.1:11434"
 dimensions = 0
 "#,
@@ -8162,6 +8167,8 @@ fn embedding_rag_knobs_explicit_win() {
         &toml_path,
         r#"
 [embedding]
+model = "nomic-embed-text"
+dimensions = 768
 base_url = "http://localhost:11434"
 rag_top_k = 12
 rag_min_similarity = 0.55
@@ -8192,6 +8199,8 @@ fn embedding_rag_top_k_zero_is_invalid() {
         &toml_path,
         r#"
 [embedding]
+model = "nomic-embed-text"
+dimensions = 768
 base_url = "http://127.0.0.1:11434"
 rag_top_k = 0
 "#,
@@ -8227,6 +8236,8 @@ fn embedding_rag_min_similarity_out_of_range_is_invalid() {
         &toml_path,
         r#"
 [embedding]
+model = "nomic-embed-text"
+dimensions = 768
 base_url = "http://127.0.0.1:11434"
 rag_min_similarity = 1.5
 "#,
@@ -8263,6 +8274,8 @@ fn embedding_recall_window_turns_explicit_wins() {
         &toml_path,
         r#"
 [embedding]
+model = "nomic-embed-text"
+dimensions = 768
 base_url = "http://127.0.0.1:11434"
 recall_window_turns = 5
 "#,
@@ -8296,6 +8309,8 @@ fn embedding_recall_window_turns_zero_is_invalid() {
         &toml_path,
         r#"
 [embedding]
+model = "nomic-embed-text"
+dimensions = 768
 base_url = "http://127.0.0.1:11434"
 recall_window_turns = 0
 "#,
@@ -8329,7 +8344,7 @@ recall_window_turns = 0
 fn embedding_recall_gate_min_chars_default_is_zero() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"any\"\n",
+        "\n[embedding]\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"any\"\n",
         "embed-gate-default",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8346,7 +8361,7 @@ fn embedding_recall_gate_min_chars_default_is_zero() {
 fn embedding_recall_gate_min_chars_explicit_wins() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_gate_min_chars = 6\n",
+        "\n[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nrecall_gate_min_chars = 6\n",
         "embed-gate-explicit",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8362,7 +8377,7 @@ fn embedding_recall_gate_min_chars_explicit_wins() {
 fn embedding_recall_gate_min_chars_explicit_zero_honored() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_gate_min_chars = 0\n",
+        "\n[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nrecall_gate_min_chars = 0\n",
         "embed-gate-explicit-zero",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8378,7 +8393,7 @@ fn embedding_recall_gate_min_chars_explicit_zero_honored() {
 fn embedding_ann_index_defaults() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"text-embedding-3-small\"\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"nomic-embed-text\"\ndimensions = 768\n",
         "embed-ann-defaults",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8397,7 +8412,7 @@ fn embedding_ann_index_defaults() {
 fn embedding_ann_index_explicit_values_win() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nann_index = true\n\
+        "\n[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nann_index = true\n\
          ann_rebuild_threshold = 50\n",
         "embed-ann-explicit",
     );
@@ -8415,7 +8430,7 @@ fn embedding_ann_index_explicit_values_win() {
 fn embedding_ann_index_staged_threshold_unvalidated() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nann_rebuild_threshold = 25\n",
+        "\n[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nann_rebuild_threshold = 25\n",
         "embed-ann-staged",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8431,7 +8446,7 @@ fn embedding_ann_index_staged_threshold_unvalidated() {
 fn embedding_recall_token_budget_default_is_zero() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"text-embedding-3-small\"\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"nomic-embed-text\"\ndimensions = 768\n",
         "embed-budget-default",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8445,7 +8460,7 @@ fn embedding_recall_token_budget_default_is_zero() {
 fn embedding_recall_token_budget_explicit_wins() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_token_budget = 2000\n",
+        "\n[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nrecall_token_budget = 2000\n",
         "embed-budget-explicit",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8461,7 +8476,7 @@ fn embedding_recall_token_budget_explicit_wins() {
 fn embedding_recall_token_budget_explicit_zero_honored() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_token_budget = 0\n",
+        "\n[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nrecall_token_budget = 0\n",
         "embed-budget-zero",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8476,7 +8491,7 @@ fn embedding_recall_token_budget_explicit_zero_honored() {
 fn embedding_recall_hybrid_default_is_false() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"text-embedding-3-small\"\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"nomic-embed-text\"\ndimensions = 768\n",
         "embed-hybrid-default",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8489,7 +8504,7 @@ fn embedding_recall_hybrid_default_is_false() {
 fn embedding_recall_hybrid_explicit_true_wins() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_hybrid = true\n",
+        "\n[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nrecall_hybrid = true\n",
         "embed-hybrid-true",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8503,7 +8518,7 @@ fn embedding_recall_hybrid_explicit_true_wins() {
 fn embedding_recall_hybrid_explicit_false_honored() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_hybrid = false\n",
+        "\n[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nrecall_hybrid = false\n",
         "embed-hybrid-false",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8521,7 +8536,7 @@ fn embedding_ann_index_zero_threshold_when_armed_is_invalid() {
     let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
-        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nann_index = true\n\
+        "\n[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nann_index = true\n\
          ann_rebuild_threshold = 0\n",
     )
     .unwrap();
@@ -8577,7 +8592,8 @@ async fn embedding_key_hydrates_from_store() {
         r#"
 [embedding]
 base_url = "http://127.0.0.1:11434"
-model = "text-embedding-3-small"
+model = "nomic-embed-text"
+dimensions = 768
 "#,
     )
     .unwrap();
@@ -9497,7 +9513,7 @@ fn skill_refinement_section_parses_and_defaults() {
 fn memory_profile_off_is_byte_identical() {
     let _env = EnvScope::new();
     // No [memory] + a present [embedding] → profile Off, nothing armed.
-    let cfg = load_with_toml("\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\n", "mp-off");
+    let cfg = load_with_toml("\n[embedding]\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\n", "mp-off");
     assert_eq!(cfg.memory_profile, crate::MemoryProfile::Off);
     let e = cfg.embedding.expect("embedding present");
     assert!(!e.recall_hybrid);
@@ -9513,7 +9529,7 @@ fn memory_profile_off_is_byte_identical() {
 fn memory_profile_lite_arms_cheap_fusion_only() {
     let _env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[memory]\nprofile = \"lite\"\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\n",
+        "\n[memory]\nprofile = \"lite\"\n[embedding]\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\n",
         "mp-lite",
     );
     assert_eq!(cfg.memory_profile, crate::MemoryProfile::Lite);
@@ -9533,7 +9549,7 @@ fn memory_profile_lite_arms_cheap_fusion_only() {
 fn memory_profile_smart_arms_the_bundle() {
     let _env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[memory]\nprofile = \"smart\"\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\n",
+        "\n[memory]\nprofile = \"smart\"\n[embedding]\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\n",
         "mp-smart",
     );
     assert_eq!(cfg.memory_profile, crate::MemoryProfile::Smart);
@@ -9554,7 +9570,7 @@ fn memory_profile_smart_explicit_knobs_win() {
     // smart, but the operator explicitly disables hybrid + the wiki sweep.
     let cfg = load_with_toml(
         "\n[memory]\nprofile = \"smart\"\n\
-         [embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\nrecall_hybrid = false\n\
+         [embedding]\ndimensions = 768\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\nrecall_hybrid = false\n\
          [wiki]\nenabled = false\n",
         "mp-override",
     );
@@ -13186,6 +13202,8 @@ app_token = "SECRET-SLACK-APP"
 [email]
 password = "SECRET-EMAIL"
 [embedding]
+model = "nomic-embed-text"
+dimensions = 768
 base_url = "http://127.0.0.1:11434"
 api_key = "SECRET-EMBEDDING"
 "#;
@@ -14491,7 +14509,7 @@ fn every_model_url_is_checked_at_load_with_the_exact_text() {
             "http://8.8.8.8:8899/ is not local (resolves to a public address 8.8.8.8)",
         ),
         (
-            "[embedding]\nbase_url = \"https://api.openai.com\"\n",
+            "[embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"https://api.openai.com\"\n",
             "[embedding] base_url",
             "https://api.openai.com/ is not local (cloud host)",
         ),
@@ -14554,7 +14572,7 @@ fn local_model_urls_load() {
         "[agent]\nprovider = \"openai\"\nmodel = \"qwen3\"\n\
          [openai]\nbase_url = \"http://gpu.lan:8000/v1\"\n\
          [broker]\nbase_url = \"http://127.0.0.1:8899\"\n\
-         [embedding]\nbase_url = \"http://[::1]:11434\"\n\
+         [embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\nbase_url = \"http://[::1]:11434\"\n\
          [routing]\n[routing.endpoints.box]\nkind = \"ollama\"\n\
          base_url = \"http://box.home.arpa:11434\"\n\
          [routing.endpoints.tail]\nkind = \"openai_compat\"\nbase_url = \"http://100.64.0.9:8080\"\n",
@@ -14586,6 +14604,31 @@ fn embedding_section_needs_a_base_url() {
         ),
         other => panic!("{other:?}"),
     }
+    drop(env);
+}
+
+#[test]
+fn embedding_section_needs_model_and_dimensions() {
+    let env = EnvScope::new();
+    let msg = "[embedding] needs model and dimensions for your local embedding model \
+               (for example model = \"nomic-embed-text\", dimensions = 768)";
+    let base = "[embedding]\nbase_url = \"http://127.0.0.1:11434\"\n";
+    let err = load_local(base, "emb-no-model").unwrap_err();
+    match &err {
+        ConfigError::Invalid { field: "embedding.model", reason } => assert_eq!(reason, msg),
+        other => panic!("{other:?}"),
+    }
+    let err = load_local(&format!("{base}model = \"nomic-embed-text\"\n"), "emb-no-dims").unwrap_err();
+    match &err {
+        ConfigError::Invalid { field: "embedding.dimensions", reason } => assert_eq!(reason, msg),
+        other => panic!("{other:?}"),
+    }
+    let cfg = load_local(
+        &format!("{base}model = \"nomic-embed-text\"\ndimensions = 768\n"),
+        "emb-complete",
+    )
+    .unwrap();
+    assert_eq!(cfg.embedding.unwrap().dimensions, 768);
     drop(env);
 }
 

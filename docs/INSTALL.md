@@ -5287,9 +5287,9 @@ dimensions = 768
 # key > the encrypted secrets store.
 ```
 
-`dimensions` must match the model's native output. `base_url`
-has no default; omitted `model` / `dimensions` fall back to
-`text-embedding-3-small` / `1536`, so set them for your model.
+`dimensions` must match the model's native output. `base_url`, `model`
+and `dimensions` have no defaults and are all required: the config
+fails to load without them.
 
 **Keyword fallback.** A `semantic` request silently serves
 keyword results — flagged so you can see it — when (a) no

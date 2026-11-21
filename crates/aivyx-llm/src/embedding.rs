@@ -19,8 +19,6 @@ use tokio_util::sync::CancellationToken;
 use crate::transport::{HttpTransport, ReqwestTransport};
 use crate::LlmError;
 
-const DEFAULT_MODEL: &str = "text-embedding-3-small";
-
 /// Failure modes for an embedding call. Mirrors the
 /// notify-error taxonomy so callers can classify
 /// retryable-vs-not uniformly.
@@ -80,12 +78,12 @@ pub struct OpenAiEmbeddingProvider {
 }
 
 impl OpenAiEmbeddingProvider {
-    /// `base_url` is required (2.0: no cloud default) and must be local
+    /// `base_url` and `model` are required (2.0: no cloud default) and must be local
     /// (`require_local`; blocking DNS for a name that isn't local by
     /// spelling).
     pub fn new(
         base_url: Option<String>,
-        model: Option<String>,
+        model: String,
         api_key: Option<SecretString>,
         dimensions: usize,
     ) -> Result<Self, LlmError> {
@@ -98,7 +96,7 @@ impl OpenAiEmbeddingProvider {
         crate::local_only::check_url(&base_url)?;
         Ok(Self {
             base_url,
-            model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            model,
             api_key,
             dimensions,
             transport: Box::new(ReqwestTransport::new()?),

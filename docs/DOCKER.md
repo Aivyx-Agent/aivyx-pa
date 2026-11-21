@@ -29,7 +29,9 @@ to stand up Aivyx PA as an always-on service** — the homelab / VPS / "give me 
 assistant at `studio.mybox.lan`" deployment — without manually installing the
 binary, the tool processes, a config, and a process supervisor on the host.
 
-`docker compose up` is the idiomatic answer for that audience. It is also the
+`docker compose up` is the idiomatic answer for that audience (the quick start
+needs `--profile ollama` and an `ollama pull` of the model, as in
+[`deploy/docker/README.md`](../deploy/docker/README.md)). It is also the
 natural home for the **headless execution mode** already on the roadmap
 ([`HEADLESS_MODE.md`](HEADLESS_MODE.md)): a non-interactive, gates-don't-block
 daemon *is* a containerized daemon. The two reinforce each other.

@@ -21,7 +21,15 @@ All notable changes to Aivyx are recorded here. This project adheres to
 - **`openai` now means an OpenAI-compatible local server.** It requires
   `[openai] base_url`; its key is optional. The default provider is `llamacpp`
   at `http://127.0.0.1:8080`, and the default model is `local-model`.
-  `[embedding]` needs an explicit local `base_url`.
+  `[embedding]` needs an explicit local `base_url`, `model` and `dimensions`.
+- **`[embedding]` has no default model or dimensions.** The defaults were an
+  OpenAI model (`text-embedding-3-small`, 1536 dimensions). Migration: set
+  `model` and `dimensions` in `[embedding]` (for example `model =
+  "nomic-embed-text"`, `dimensions = 768`); a section without them fails to
+  load with `[embedding] needs model and dimensions for your local embedding
+  model`, and the Studio/IPC writer refuses an incomplete section. 1.x users
+  who relied on the default had 1536-dimension vectors from a cloud model and
+  must re-embed with a local model.
 - **A model URL that isn't local is refused**, at config load, when a provider
   is built and before each connection (so a DNS change can't move traffic off
   your network): `<url> is not local (<reason>) — aivyx is local-only; point it

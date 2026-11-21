@@ -272,6 +272,12 @@ pub const MONEY_CAP_REMOVED: &str =
 pub const EMBEDDING_NEEDS_BASE_URL: &str = "`base_url` is required — aivyx is local-only; \
      point it at an embeddings server on this machine or your own network";
 
+/// The load error for an `[embedding]` section without a `model` or
+/// `dimensions` (2.0: no built-in default — the old one was an OpenAI
+/// model, and silently changing the dimension would re-dimension stores).
+pub const EMBEDDING_NEEDS_MODEL_AND_DIMENSIONS: &str = "[embedding] needs model and dimensions \
+     for your local embedding model (for example model = \"nomic-embed-text\", dimensions = 768)";
+
 /// Where the default provider ([`ProviderKind::LlamaCpp`]) connects when
 /// `[openai] base_url` is unset: `llama-server`'s own default bind (the
 /// same address `init` probes and `scripts/dev-run.sh --provider llamacpp`
@@ -2753,15 +2759,15 @@ pub struct EmbeddingConfig {
     /// Embeddings API base URL (required, local). The provider POSTs to
     /// `{base_url}/v1/embeddings`.
     pub base_url: String,
-    /// Embedding model id. Default [`DEFAULT_EMBEDDING_MODEL`].
+    /// Embedding model id (required; no default since 2.0).
     pub model: String,
     /// API key. `Option` because a local server needs none.
     /// `SourcedSecret` so a stray `{:?}` never leaks it and the
     /// startup banner can show provenance — same pattern as the
     /// anthropic / openai keys (env > TOML > encrypted store).
     pub api_key: Option<SourcedSecret>,
-    /// Expected vector dimensionality. Default
-    /// [`DEFAULT_EMBEDDING_DIMENSIONS`] (text-embedding-3-small).
+    /// Expected vector dimensionality of the model (required; no default
+    /// since 2.0 — e.g. 768 for nomic-embed-text).
     /// The vector store uses this to detect a model swap:
     /// stored vectors with a different length are treated as
     /// unembedded and lazily re-embedded.
@@ -2894,13 +2900,6 @@ pub const DEFAULT_RECALL_WIKI_WEIGHT: f32 = 0.0;
 /// Chapter Lattice (LT.6) — typed-graph ranker weight default: off.
 pub const DEFAULT_RECALL_GRAPH_TYPED_WEIGHT: f32 = 0.0;
 
-/// Default embedding model. `text-embedding-3-small` is the
-/// cheap, widely-supported OpenAI default; local servers
-/// generally accept an arbitrary model string.
-pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
-/// Default vector dimensionality — the native size of
-/// `text-embedding-3-small`.
-pub const DEFAULT_EMBEDDING_DIMENSIONS: usize = 1536;
 /// Phase 76 — default auto-recall top-K. Small on purpose: a
 /// handful of highly-relevant memories beats a wall of
 /// loosely-related ones for prompt quality and token cost.
@@ -10375,8 +10374,8 @@ fn build_email_config(raw: &RawEmail) -> Result<Option<EmailConfig>, ConfigError
 ///
 /// Absent section (every field `None`) → `Ok(None)`: semantic
 /// search disabled, `memory.search` stays keyword-only. Any set
-/// field opts in; omitted fields fall back to the
-/// `DEFAULT_EMBEDDING_*` constants. The API key resolves
+/// field opts in, and then `base_url`, `model` and `dimensions` are all
+/// required (no built-in defaults since 2.0). The API key resolves
 /// env > TOML here; a still-`None` key is filled from the
 /// encrypted store in phase 2 ([`AivyxConfig::hydrate_secrets_from_store`]).
 fn build_embedding_config(
@@ -10412,10 +10411,10 @@ fn build_embedding_config(
         });
     }
 
-    let model = raw
-        .model
-        .clone()
-        .unwrap_or_else(|| DEFAULT_EMBEDDING_MODEL.to_string());
+    let model = raw.model.clone().ok_or(ConfigError::Invalid {
+        field: "embedding.model",
+        reason: EMBEDDING_NEEDS_MODEL_AND_DIMENSIONS.into(),
+    })?;
     if model.trim().is_empty() {
         return Err(ConfigError::Invalid {
             field: "embedding.model",
@@ -10423,8 +10422,10 @@ fn build_embedding_config(
         });
     }
 
-    let dimensions =
-        raw.dimensions.unwrap_or(DEFAULT_EMBEDDING_DIMENSIONS);
+    let dimensions = raw.dimensions.ok_or(ConfigError::Invalid {
+        field: "embedding.dimensions",
+        reason: EMBEDDING_NEEDS_MODEL_AND_DIMENSIONS.into(),
+    })?;
     if dimensions == 0 {
         return Err(ConfigError::Invalid {
             field: "embedding.dimensions",

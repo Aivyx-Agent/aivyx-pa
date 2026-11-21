@@ -935,7 +935,7 @@ parent_role = "researcher"
 # as unembedded and the backfill re-embeds them automatically.
 #
 # Defaults if a field is omitted (but the section is present): none for
-# `base_url` (required). A key, if your local server wants one, resolves env
+# `base_url`, `model` or `dimensions` (all required). A key, if your local server wants one, resolves env
 # (AIVYX_PA_EMBEDDING_API_KEY) > this TOML key > the encrypted secrets store.
 #
 # ----------------------------------------------------------------

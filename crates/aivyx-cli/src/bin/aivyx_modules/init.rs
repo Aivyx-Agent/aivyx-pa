@@ -4327,17 +4327,17 @@ email customers without asking
         );
         cfg.embedding = Some(EmbeddingFields {
             base_url: "http://127.0.0.1:8081".into(),
-            model: aivyx_config::DEFAULT_EMBEDDING_MODEL.into(),
-            dimensions: aivyx_config::DEFAULT_EMBEDDING_DIMENSIONS,
+            model: "nomic-embed-text".into(),
+            dimensions: 768,
             api_key: Some("sk-embed".into()),
         });
         let toml = render_toml(&cfg);
         assert!(toml.contains("[embedding]"), "{toml}");
         assert!(
-            toml.contains("model = \"text-embedding-3-small\""),
+            toml.contains("model = \"nomic-embed-text\""),
             "{toml}"
         );
-        assert!(toml.contains("dimensions = 1536"), "{toml}");
+        assert!(toml.contains("dimensions = 768"), "{toml}");
         assert!(toml.contains("api_key = \"sk-embed\""), "{toml}");
         assert!(toml.contains("profile = \"smart\""), "{toml}");
     }

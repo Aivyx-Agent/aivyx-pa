@@ -58,9 +58,9 @@ fn every_constructor_refuses_a_cloud_or_public_url() {
 
     let embed = OpenAiEmbeddingProvider::new(
         Some("https://api.openai.com".to_string()),
+        "nomic-embed-text".to_string(),
         None,
-        None,
-        1536,
+        768,
     )
     .err()
     .unwrap();
@@ -71,12 +71,12 @@ fn every_constructor_refuses_a_cloud_or_public_url() {
 fn constructors_need_a_url_and_accept_local_ones() {
     let err = OpenAiProvider::new(OpenAiConfig::without_api_key()).err().unwrap();
     assert!(matches!(err, LlmError::Config(ref m) if m.contains("needs a base_url")), "{err:?}");
-    let err = OpenAiEmbeddingProvider::new(None, None, None, 768).err().unwrap();
+    let err = OpenAiEmbeddingProvider::new(None, "nomic-embed-text".to_string(), None, 768).err().unwrap();
     assert!(matches!(err, LlmError::Config(ref m) if m.contains("needs a base_url")), "{err:?}");
 
     for url in ["http://127.0.0.1:8080", "http://192.168.1.20:8080", "http://[::1]:8080"] {
         OpenAiProvider::new(OpenAiConfig::without_api_key().with_base_url(url)).unwrap();
-        OpenAiEmbeddingProvider::new(Some(url.to_string()), None, None, 768).unwrap();
+        OpenAiEmbeddingProvider::new(Some(url.to_string()), "nomic-embed-text".to_string(), None, 768).unwrap();
         OllamaProvider::new(OllamaConfig::default_local().with_base_url(url.to_string())).unwrap();
     }
     // The default Ollama address (localhost) is local by spelling.

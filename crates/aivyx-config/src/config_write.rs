@@ -1783,7 +1783,10 @@ impl std::fmt::Debug for EmbeddingEntryWrite {
     }
 }
 
-/// Patch the `[embedding]` section, touching only the `Some` fields. An
+/// Patch the `[embedding]` section, touching only the `Some` fields. The
+/// merged result must be complete: `base_url`, `model` and `dimensions`
+/// (TOML-only) are all required since 2.0, so a write that would leave
+/// any of them missing is refused. An
 /// explicit-but-blank `base_url`/`model` is refused (would write an
 /// empty string, which the loader's own defaulting treats differently
 /// from "key absent") rather than silently accepted. A `base_url` that is
@@ -1821,6 +1824,20 @@ pub fn write_embedding_section(path: &Path, entry: &EmbeddingEntryWrite) -> Resu
     }
     if let Some(v) = &entry.api_key {
         doc["embedding"]["api_key"] = value(v.as_str());
+    }
+    let present = |key: &str| {
+        doc.get("embedding")
+            .and_then(toml_edit::Item::as_table_like)
+            .and_then(|t| t.get(key))
+            .is_some()
+    };
+    if !(present("base_url") && present("model") && present("dimensions")) {
+        return Err(ConfigWriteError::InvalidEmbeddingConfig {
+            reason: "[embedding] needs base_url, model and dimensions for your local embedding model \
+                     (for example model = \"nomic-embed-text\", dimensions = 768); \
+                     set `dimensions` in config.toml"
+                .to_string(),
+        });
     }
     write_toml_0600(path, &doc.to_string())
 }
@@ -3338,14 +3355,14 @@ mod tests {
     #[test]
     fn embedding_write_touches_only_provided_fields() {
         let path = temp_toml("embedding-partial");
-        std::fs::write(&path, "[embedding]\nbase_url = \"https://old.example\"\nmodel = \"old-model\"\napi_key = \"sk-existing\"\n").unwrap();
+        std::fs::write(&path, "[embedding]\nbase_url = \"http://127.0.0.1:1\"\nmodel = \"old-model\"\ndimensions = 768\napi_key = \"sk-existing\"\n").unwrap();
         write_embedding_section(
             &path,
             &EmbeddingEntryWrite { base_url: None, model: Some("new-model".to_string()), api_key: None },
         )
         .unwrap();
         let contents = std::fs::read_to_string(&path).unwrap();
-        assert!(contents.contains("base_url = \"https://old.example\""), "untouched field survives");
+        assert!(contents.contains("base_url = \"http://127.0.0.1:1\""), "untouched field survives");
         assert!(contents.contains("model = \"new-model\""), "the actual edit applied");
         assert!(contents.contains("api_key = \"sk-existing\""), "secret untouched by None");
     }
@@ -3354,7 +3371,7 @@ mod tests {
     fn embedding_write_refuses_a_non_local_base_url() {
         for url in ["https://api.openai.com/v1", "http://203.0.113.9:8080"] {
             let path = temp_toml("embedding-not-local");
-            std::fs::write(&path, "[embedding]\nmodel = \"m\"\n").unwrap();
+            std::fs::write(&path, "[embedding]\nmodel = \"m\"\ndimensions = 768\n").unwrap();
             let err = write_embedding_section(
                 &path,
                 &EmbeddingEntryWrite { base_url: Some(url.to_string()), model: None, api_key: None },
@@ -3370,10 +3387,48 @@ mod tests {
         }
         // A LAN server is accepted.
         let path = temp_toml("embedding-lan");
-        std::fs::write(&path, "").unwrap();
+        std::fs::write(&path, "[embedding]\nmodel = \"m\"\ndimensions = 768\n").unwrap();
         write_embedding_section(
             &path,
             &EmbeddingEntryWrite { base_url: Some("http://192.168.1.9:8081".to_string()), model: None, api_key: None },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn embedding_write_refuses_an_incomplete_section() {
+        // base_url only: model and dimensions missing.
+        let path = temp_toml("embedding-incomplete");
+        std::fs::write(&path, "").unwrap();
+        let err = write_embedding_section(
+            &path,
+            &EmbeddingEntryWrite { base_url: Some("http://127.0.0.1:8081".to_string()), model: None, api_key: None },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidEmbeddingConfig { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("needs base_url, model and dimensions"), "{msg}");
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("embedding"), "nothing written");
+        // base_url + model but no dimensions: still refused.
+        let err = write_embedding_section(
+            &path,
+            &EmbeddingEntryWrite {
+                base_url: Some("http://127.0.0.1:8081".to_string()),
+                model: Some("nomic-embed-text".to_string()),
+                api_key: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigWriteError::InvalidEmbeddingConfig { .. }));
+        // With dimensions already on disk the same write succeeds.
+        std::fs::write(&path, "[embedding]\ndimensions = 768\n").unwrap();
+        write_embedding_section(
+            &path,
+            &EmbeddingEntryWrite {
+                base_url: Some("http://127.0.0.1:8081".to_string()),
+                model: Some("nomic-embed-text".to_string()),
+                api_key: None,
+            },
         )
         .unwrap();
     }
@@ -3393,19 +3448,19 @@ mod tests {
     #[test]
     fn read_embedding_section_round_trips_and_never_needed_for_the_secret_itself() {
         let path = temp_toml("embedding-read");
-        std::fs::write(&path, "").unwrap();
+        std::fs::write(&path, "[embedding]\ndimensions = 768\n").unwrap();
         write_embedding_section(
             &path,
             &EmbeddingEntryWrite {
                 base_url: Some("http://127.0.0.1:8081".to_string()),
-                model: Some("text-embedding-3-small".to_string()),
+                model: Some("nomic-embed-text".to_string()),
                 api_key: Some("sk-real-secret".to_string()),
             },
         )
         .unwrap();
         let read = read_embedding_section(&path).unwrap();
         assert_eq!(read.base_url.as_deref(), Some("http://127.0.0.1:8081"));
-        assert_eq!(read.model.as_deref(), Some("text-embedding-3-small"));
+        assert_eq!(read.model.as_deref(), Some("nomic-embed-text"));
         // read_embedding_section itself returns the raw value (Task 4's
         // daemon handler is what redacts it before it reaches the wire) —
         // this test only proves the round-trip is byte-correct.

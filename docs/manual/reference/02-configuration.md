@@ -192,9 +192,9 @@ Semantic memory search: the embeddings server, and how recall picks memories for
 | Key | Type | Example | Meaning |
 |---|---|---|---|
 | `base_url` | string | `"http://localhost:11434"` | Embeddings API base URL (required, local). The provider POSTs to `{base_url}/v1/embeddings`. |
-| `model` | string | `"nomic-embed-text"` | Embedding model id. Default `"text-embedding-3-small"`. |
+| `model` | string | `"nomic-embed-text"` | Embedding model id (required; no default since 2.0). |
 | `api_key` | string |  | API key for the embeddings server. Not needed for a local one. |
-| `dimensions` | integer | `768` | Expected vector dimensionality. Default `1536` (text-embedding-3-small). |
+| `dimensions` | integer | `768` | Expected vector dimensionality of the model (required; no default since 2.0 — e.g. 768 for nomic-embed-text). |
 | `rag_top_k` | integer | `5` | Most memories recall may add to a turn. Default 5. |
 | `rag_min_similarity` | number | `0.20` | Recall leaves out a memory less similar than this (0–1) to what you asked, so unrelated memories don't crowd in. |
 | `recall_window_turns` | integer | `1` | How many recent turns (yours included) recall looks at to find relevant memories. Default 1. |
