@@ -1,23 +1,15 @@
 //! `aivyx-cost` — cost governance (Chapter K).
 //!
-//! Free-core **visibility + caps** over LLM spend (not customer billing). This
-//! crate's K.1 surface is the **pricing primitive**: turn a [`TokenCounts`]
-//! record + a model name into a dollar [`Cost`], via a [`Pricing`] table of
-//! shipped defaults that operator config can override. The priced view over
-//! the audit chain (K.2) and budgets (K.3) build on this.
+//! Free-core **visibility + caps** over LLM usage (not customer billing). The
+//! pricing primitive turns a [`TokenCounts`] record + a model name into a
+//! [`Cost`], via a [`Pricing`] table of operator rates.
 //!
-//! Two deliberate semantics keep the numbers honest:
-//!
-//! - **Local models are free.** Ollama / llama / qwen / gemma / … price at
-//!   `$0` with `priced = true` — local inference costs no API dollars.
-//! - **Unknown cloud models are flagged, not guessed.** A model with no known
-//!   rate prices at `$0` with **`priced = false`**, so the report can surface
-//!   "untracked spend — add a `[pricing]` rate" rather than silently
-//!   under-counting.
-//!
-//! Shipped default rates are **approximate published USD/Mtok as of early
-//! 2026** and are a convenience only — `[pricing.<model>]` in `aivyx-pa.toml`
-//! (wired in K.5) is authoritative.
+//! aivyx is local-only (2.0): every model runs on the operator's own machine
+//! or network, so **every model costs `$0`** unless the operator sets an
+//! explicit `[pricing.<model>]` rate (for example to account for electricity
+//! or a shared GPU box). There are no shipped price tables. Reports show
+//! tokens and runs; the dollar column only appears when an operator rate is
+//! set.
 
 use std::collections::HashMap;
 
@@ -112,117 +104,48 @@ impl ModelRate {
 /// The result of pricing a usage record.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Cost {
+    /// Dollars — `0.0` unless the operator set a rate for the model.
     pub usd: f64,
-    /// `false` when no rate is known for the model (an *untracked*, $0 entry
-    /// the report flags — distinct from a genuinely-free local run, which is
-    /// `usd = 0.0, priced = true`).
-    pub priced: bool,
 }
 
-impl Cost {
-    /// A known, computed cost.
-    fn known(usd: f64) -> Self {
-        Cost { usd, priced: true }
-    }
-    /// No rate known — untracked.
-    fn untracked() -> Self {
-        Cost {
-            usd: 0.0,
-            priced: false,
-        }
-    }
-}
-
-/// A model → [`ModelRate`] table: built-in family defaults plus exact-match
-/// operator overrides (overrides win).
+/// A model → [`ModelRate`] table of exact-match operator rates (from
+/// `[pricing.<model>]` config). A model with no rate costs `$0`.
 #[derive(Debug, Clone, Default)]
 pub struct Pricing {
-    /// Exact-model overrides (from `[pricing.<model>]` config in K.5).
+    /// Exact-model operator rates.
     overrides: HashMap<String, ModelRate>,
 }
 
 impl Pricing {
-    /// A pricing table with the built-in family defaults active and no
-    /// overrides.
+    /// An empty pricing table: every model costs `$0`.
     pub fn new() -> Self {
         Pricing::default()
     }
 
-    /// Built-in defaults plus exact-model overrides (from `[pricing.<model>]`
-    /// config). Each override takes precedence over the family default and the
-    /// local-free heuristic.
+    /// A table seeded with exact-model operator rates (from
+    /// `[pricing.<model>]` config).
     pub fn with_overrides(overrides: impl IntoIterator<Item = (String, ModelRate)>) -> Self {
         Pricing {
             overrides: overrides.into_iter().collect(),
         }
     }
 
-    /// Set (or replace) the exact rate for a model — takes precedence over the
-    /// built-in family defaults and the local-free heuristic.
+    /// Set (or replace) the exact rate for a model.
     pub fn set_rate(&mut self, model: impl Into<String>, rate: ModelRate) {
         self.overrides.insert(model.into(), rate);
     }
 
-    /// The rate that *would* apply to `model`, if any is known (override or
-    /// default). `None` for local-free and unknown models — use
-    /// [`cost_of`](Self::cost_of) for the full verdict.
+    /// The operator rate for `model`, if one is set.
     pub fn rate(&self, model: &str) -> Option<ModelRate> {
-        if let Some(r) = self.overrides.get(model) {
-            return Some(*r);
-        }
-        default_rate(model)
+        self.overrides.get(model).copied()
     }
 
-    /// Price a usage record for `model`. Resolution order:
-    /// 1. an exact operator override,
-    /// 2. a **local** family → `$0`, *priced* (free inference),
-    /// 3. a built-in cloud family default,
-    /// 4. otherwise **untracked** (`$0`, `priced = false`).
+    /// Price a usage record for `model`: the operator rate if one is set,
+    /// otherwise `$0` (local inference).
     pub fn cost_of(&self, model: &str, tokens: &TokenCounts) -> Cost {
-        if let Some(rate) = self.overrides.get(model) {
-            return Cost::known(rate.apply(tokens));
+        Cost {
+            usd: self.overrides.get(model).map_or(0.0, |r| r.apply(tokens)),
         }
-        if is_local_model(model) {
-            return Cost::known(0.0);
-        }
-        match default_rate(model) {
-            Some(rate) => Cost::known(rate.apply(tokens)),
-            None => Cost::untracked(),
-        }
-    }
-}
-
-/// Whether a model name denotes **local** (free) inference. Matched by family
-/// substring — local models run on the operator's own hardware, so they cost
-/// no API dollars regardless of token volume.
-pub fn is_local_model(model: &str) -> bool {
-    const LOCAL_FAMILIES: &[&str] = &[
-        "llama", "qwen", "gemma", "mistral", "mixtral", "phi", "deepseek", "codellama",
-        "tinyllama", "nomic", "ollama", "vicuna", "starcoder", "granite",
-    ];
-    let m = model.to_ascii_lowercase();
-    LOCAL_FAMILIES.iter().any(|f| m.contains(f))
-}
-
-/// The built-in default rate for a known **cloud** model family, by substring.
-/// Approximate published USD/Mtok as of early 2026 — a convenience, overridden
-/// by `[pricing.<model>]`. Anthropic cache: read ≈ 0.1× input, write ≈ 1.25×
-/// input; OpenAI cached input ≈ 0.5× input (no separate write class).
-fn default_rate(model: &str) -> Option<ModelRate> {
-    let m = model.to_ascii_lowercase();
-    // Order matters: more specific substrings (e.g. "gpt-4o-mini") first.
-    if m.contains("opus") {
-        Some(ModelRate::io(15.0, 75.0).with_cache(1.5, 18.75))
-    } else if m.contains("sonnet") {
-        Some(ModelRate::io(3.0, 15.0).with_cache(0.3, 3.75))
-    } else if m.contains("haiku") {
-        Some(ModelRate::io(0.8, 4.0).with_cache(0.08, 1.0))
-    } else if m.contains("4o-mini") || m.contains("gpt-4o-mini") {
-        Some(ModelRate::io(0.15, 0.6).with_cache(0.075, 0.0))
-    } else if m.contains("gpt-4o") || m.contains("gpt-4.1") {
-        Some(ModelRate::io(2.5, 10.0).with_cache(1.25, 0.0))
-    } else {
-        None
     }
 }
 
@@ -249,110 +172,43 @@ mod tests {
     }
 
     #[test]
-    fn prices_a_known_cloud_model() {
+    fn every_model_is_free_without_an_operator_rate() {
         let p = Pricing::new();
-        // 1M input + 1M output of Sonnet = $3 + $15 = $18.
-        let c = p.cost_of("claude-sonnet-4-6", &counts(1_000_000, 1_000_000));
-        assert!(c.priced);
-        assert!((c.usd - 18.0).abs() < 1e-9, "got {}", c.usd);
+        for model in ["llama3.1", "qwen3:27b", "claude-sonnet-4-6", "gpt-4o", "mystery-model"] {
+            let c = p.cost_of(model, &counts(5_000_000, 5_000_000));
+            assert_eq!(c.usd, 0.0, "{model} costs nothing without a rate");
+        }
+        assert!(p.rate("claude-opus-4-8").is_none(), "no shipped price tables");
     }
 
     #[test]
-    fn opus_is_pricier_than_haiku() {
-        let p = Pricing::new();
-        let u = counts(1_000_000, 1_000_000);
-        let opus = p.cost_of("claude-opus-4-8", &u).usd;
-        let haiku = p.cost_of("claude-haiku-4-5", &u).usd;
-        assert!(opus > haiku);
-        assert!((opus - 90.0).abs() < 1e-9, "opus 15+75 per Mtok pair");
+    fn with_overrides_seeds_the_table() {
+        let p = Pricing::with_overrides([("llama-box".to_string(), ModelRate::io(1.0, 2.0))]);
+        // 1M in + 1M out → $1 + $2.
+        let c = p.cost_of("llama-box", &counts(1_000_000, 1_000_000));
+        assert!((c.usd - 3.0).abs() < 1e-9);
+        assert_eq!(p.cost_of("other", &counts(1_000_000, 0)).usd, 0.0);
     }
 
     #[test]
-    fn gpt_4o_mini_matches_before_gpt_4o() {
-        let p = Pricing::new();
-        // The mini substring must win over the broader gpt-4o rule.
-        let mini = p.cost_of("gpt-4o-mini", &counts(1_000_000, 0)).usd;
-        assert!((mini - 0.15).abs() < 1e-9, "got {mini}");
-        let full = p.cost_of("gpt-4o", &counts(1_000_000, 0)).usd;
-        assert!((full - 2.5).abs() < 1e-9, "got {full}");
-    }
-
-    #[test]
-    fn cache_tokens_are_priced_by_class() {
-        let p = Pricing::new();
+    fn set_rate_prices_cache_classes() {
+        let mut p = Pricing::new();
+        p.set_rate("qwen", ModelRate::io(0.0, 0.0).with_cache(0.3, 3.75));
         let u = TokenCounts {
             input: 0,
             output: 0,
             cache_read: 1_000_000,
             cache_write: 1_000_000,
         };
-        // Sonnet cache: read 0.3 + write 3.75 = 4.05 per Mtok each.
-        let c = p.cost_of("claude-sonnet-4-6", &u);
-        assert!((c.usd - 4.05).abs() < 1e-9, "got {}", c.usd);
-    }
-
-    #[test]
-    fn local_models_are_free_but_priced() {
-        let p = Pricing::new();
-        for model in ["llama3.1", "qwen3:27b", "gemma2", "mistral-nemo", "phi-4"] {
-            let c = p.cost_of(model, &counts(5_000_000, 5_000_000));
-            assert_eq!(c.usd, 0.0, "{model} local = free");
-            assert!(c.priced, "{model} is tracked-free, not untracked");
-        }
-    }
-
-    #[test]
-    fn unknown_cloud_model_is_untracked_not_zero_priced() {
-        let p = Pricing::new();
-        let c = p.cost_of("some-new-frontier-model", &counts(1_000_000, 1_000_000));
-        assert_eq!(c.usd, 0.0);
-        assert!(!c.priced, "unknown ⇒ flagged untracked, not a real $0");
-    }
-
-    #[test]
-    fn with_overrides_seeds_the_table() {
-        let p = Pricing::with_overrides([
-            ("custom-cloud".to_string(), ModelRate::io(1.0, 2.0)),
-            ("llama-paid".to_string(), ModelRate::io(0.5, 0.5)),
-        ]);
-        // The override applies (1M in + 1M out → $1 + $2).
-        let c = p.cost_of("custom-cloud", &counts(1_000_000, 1_000_000));
-        assert!((c.usd - 3.0).abs() < 1e-9);
-        // And beats the local-free heuristic for the paid llama endpoint.
-        assert!(p.cost_of("llama-paid", &counts(1_000_000, 0)).usd > 0.0);
-        // Defaults still apply to un-overridden models.
-        assert!(p.cost_of("claude-opus-4-8", &counts(1_000_000, 0)).priced);
-    }
-
-    #[test]
-    fn override_takes_precedence_over_defaults_and_local() {
-        let mut p = Pricing::new();
-        // Operator hosts a llama variant on a paid endpoint → real rate.
-        p.set_rate("llama-hosted", ModelRate::io(1.0, 2.0));
-        let c = p.cost_of("llama-hosted", &counts(1_000_000, 1_000_000));
-        assert!(c.priced);
-        assert!((c.usd - 3.0).abs() < 1e-9, "override beat the local-free heuristic");
-
-        // And an override beats a built-in default.
-        p.set_rate("claude-sonnet-4-6", ModelRate::io(99.0, 99.0));
-        let c = p.cost_of("claude-sonnet-4-6", &counts(1_000_000, 0));
-        assert!((c.usd - 99.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn rate_lookup_reports_known_and_unknown() {
-        let p = Pricing::new();
-        assert!(p.rate("claude-opus-4-8").is_some());
-        assert!(p.rate("llama3.1").is_none(), "local has no $ rate");
-        assert!(p.rate("mystery-model").is_none());
+        assert!((p.cost_of("qwen", &u).usd - 4.05).abs() < 1e-9);
+        assert!(p.rate("qwen").is_some());
     }
 
     #[test]
     fn zero_usage_is_zero_cost() {
-        let p = Pricing::new();
-        let c = p.cost_of("claude-opus-4-8", &TokenCounts::default());
-        assert_eq!(c.usd, 0.0);
-        assert!(c.priced);
+        let mut p = Pricing::new();
+        p.set_rate("m", ModelRate::io(9.0, 9.0));
+        assert_eq!(p.cost_of("m", &TokenCounts::default()).usd, 0.0);
     }
 
     #[test]
@@ -364,12 +220,5 @@ mod tests {
         let back = serde_json::to_string(&r).unwrap();
         let r2: ModelRate = serde_json::from_str(&back).unwrap();
         assert_eq!(r, r2);
-    }
-
-    #[test]
-    fn case_insensitive_model_matching() {
-        let p = Pricing::new();
-        assert!(p.cost_of("CLAUDE-OPUS-4-8", &counts(1_000_000, 0)).priced);
-        assert!(is_local_model("Llama3.1"));
     }
 }

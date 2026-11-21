@@ -28,9 +28,6 @@ role = "boh"
 # [openai]
 # base_url = "http://gpu-host.local:11434"
 
-# [anthropic]
-# api_key = "sk-ant-..."   # or set AIVYX_PA_ANTHROPIC_API_KEY
-
 # ----------------------------------------------------------------
 # Storage + filesystem sandbox
 # ----------------------------------------------------------------

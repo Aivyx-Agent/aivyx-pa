@@ -1,15 +1,13 @@
-//! `aivyx-pa cost` — the priced spend report (Chapter K.4).
+//! `aivyx-pa cost` — the usage report (Chapter K.4).
 //!
 //! Read-only, offline (the same cold-start storage open as `audit export` /
 //! `--verify-only`: passphrase required, no session, no daemon). It scans the
 //! HMAC chain for `AuditEvent::LlmCost` events — each carries the model + token
-//! usage of one LLM-backed turn — prices them with the default [`Pricing`]
-//! table, and renders a [`CostReport`]: total spend, a per-model breakdown,
-//! and any **untracked** spend (models with no known rate). `--today` scopes
-//! to the last 24h (the rolling window the per-day budget uses).
+//! usage of one LLM-backed turn — and renders a [`CostReport`]: turns and
+//! tokens in total and per model. `--today` scopes to the last 24h.
 //!
-//! Pricing here is the shipped defaults; operator `[pricing]` overrides land
-//! with K.5.
+//! aivyx is local-only, so runs cost nothing; a dollar column appears only
+//! when the operator set a `[pricing.<model>]` rate.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -93,49 +91,38 @@ pub fn render_cost(report: &CostReport, today: bool) -> String {
     let window = if today { "last 24h" } else { "all time" };
     if report.is_empty() {
         return format!(
-            "Cost report — {window}\n  no LLM spend recorded yet.\n  (local models are free; \
-             cloud turns land here once they run.)\n"
+            "Usage report — {window}\n  no model runs recorded yet.\n  (local models cost \
+             nothing; runs land here once they happen.)\n"
         );
     }
 
-    let mut out = format!("Cost report — {window}\n");
+    let priced = report.usd > 0.0;
+    let mut out = format!("Usage report — {window}\n");
     out.push_str(&format!(
-        "  total: {} over {} turn{}\n\n",
-        usd(report.usd),
+        "  total: {} turn{}, {} tokens{}\n\n",
         report.turns,
         if report.turns == 1 { "" } else { "s" },
+        fmt_tokens(report.tokens.total()),
+        if priced { format!(" ({} at your [pricing] rates)", usd(report.usd)) } else { String::new() },
     ));
 
-    out.push_str(&format!(
-        "  {:<26}{:>7}{:>10}{:>10}{:>12}\n",
-        "model", "turns", "input", "output", "cost",
-    ));
+    out.push_str(&format!("  {:<26}{:>7}{:>10}{:>10}", "model", "turns", "input", "output"));
+    if priced {
+        out.push_str(&format!("{:>12}", "cost"));
+    }
+    out.push('\n');
     for line in report.by_model.values() {
-        let cost = if !line.priced {
-            "untracked".to_string()
-        } else if line.usd == 0.0 {
-            "free".to_string()
-        } else {
-            usd(line.usd)
-        };
         out.push_str(&format!(
-            "  {:<26}{:>7}{:>10}{:>10}{:>12}\n",
+            "  {:<26}{:>7}{:>10}{:>10}",
             truncate(&line.model, 26),
             line.turns,
             fmt_tokens(line.tokens.input),
             fmt_tokens(line.tokens.output),
-            cost,
         ));
-    }
-
-    let untracked = report.untracked_models();
-    if !untracked.is_empty() {
-        out.push_str(&format!(
-            "\n  \u{26a0} {} model{} untracked: {} — add a [pricing] rate to count it.\n",
-            untracked.len(),
-            if untracked.len() == 1 { "" } else { "s" },
-            untracked.join(", "),
-        ));
+        if priced {
+            out.push_str(&format!("{:>12}", usd(line.usd)));
+        }
+        out.push('\n');
     }
     out
 }
@@ -172,14 +159,16 @@ mod tests {
         TokenCounts::new(i, o)
     }
 
-    fn sample_report() -> CostReport {
-        let entries = vec![
-            ("claude-opus-4-8", io(1_000_000, 1_000_000)),
-            ("claude-opus-4-8", io(500_000, 0)),
+    fn entries() -> Vec<(&'static str, TokenCounts)> {
+        vec![
+            ("qwen3.8-27b", io(1_000_000, 1_000_000)),
+            ("qwen3.8-27b", io(500_000, 0)),
             ("llama3.1", io(2_000_000, 2_000_000)),
-            ("mystery-model", io(1_000_000, 0)),
-        ];
-        CostReport::build(entries, &Pricing::new())
+        ]
+    }
+
+    fn sample_report() -> CostReport {
+        CostReport::build(entries(), &Pricing::new())
     }
 
     #[test]
@@ -199,22 +188,25 @@ mod tests {
     }
 
     #[test]
-    fn renders_total_models_and_untracked() {
+    fn renders_turns_and_tokens_without_dollars() {
         let out = render_cost(&sample_report(), false);
-        assert!(out.contains("Cost report — all time"));
-        assert!(out.contains("claude-opus-4-8"));
+        assert!(out.contains("Usage report — all time"));
+        assert!(out.contains("qwen3.8-27b"));
         assert!(out.contains("llama3.1"));
-        assert!(out.contains("free"), "local model shows free");
-        assert!(
-            out.contains("untracked"),
-            "unknown model flagged in its row"
-        );
-        assert!(
-            out.contains("[pricing]"),
-            "untracked warning points at config"
-        );
-        // Opus: (1M in + 1M out) + (0.5M in) = $15+$75 + $7.5 = $97.50.
-        assert!(out.contains("$97.50"), "opus line priced;\n{out}");
+        assert!(out.contains("total: 3 turns, 6.5M tokens"), "{out}");
+        assert!(!out.contains('$'), "no dollar figures without a rate;\n{out}");
+        assert!(!out.contains("untracked"));
+    }
+
+    #[test]
+    fn an_operator_rate_adds_a_cost_column() {
+        let p = Pricing::with_overrides([(
+            "llama3.1".to_string(),
+            aivyx_cost::ModelRate::io(1.0, 1.0),
+        )]);
+        let out = render_cost(&CostReport::build(entries(), &p), false);
+        assert!(out.contains("$4.00 at your [pricing] rates"), "{out}");
+        assert!(out.contains("cost"));
     }
 
     #[test]
@@ -226,7 +218,7 @@ mod tests {
     fn empty_report_renders_hint() {
         let empty = CostReport::build(Vec::<(&str, TokenCounts)>::new(), &Pricing::new());
         let out = render_cost(&empty, false);
-        assert!(out.contains("no LLM spend recorded yet"));
+        assert!(out.contains("no model runs recorded yet"));
     }
 
     #[test]

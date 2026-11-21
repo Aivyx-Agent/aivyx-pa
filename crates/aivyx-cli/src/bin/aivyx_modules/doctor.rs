@@ -8,8 +8,10 @@
 //! starved `num_ctx` — that ruined first impressions). Lemonade Server gets a
 //! reachability + model-downloaded check, aivyx-broker a reachability check
 //! of the broker and the llama-server behind it, and embedded mistral.rs a
-//! build-feature + model-file check. Cloud providers get a lighter
-//! config-presence check. Read-only; no daemon, no passphrase.
+//! build-feature + model-file check, and a generic OpenAI-compatible local
+//! server the same check as llama.cpp. First, a `local-only` row checks that
+//! every model URL is on this machine or the operator's own network (aivyx
+//! is local-only). Read-only; no daemon, no passphrase.
 
 use std::path::{Path, PathBuf};
 
@@ -37,10 +39,9 @@ pub async fn check_provider_for_init() -> Result<bool, String> {
         ProviderKind::Lemonade => check_lemonade(&cfg).await,
         ProviderKind::Broker => check_broker(&cfg).await,
         ProviderKind::MistralRs => check_mistralrs(&cfg),
-        local @ (ProviderKind::LlamaCpp | ProviderKind::Jan) => {
+        local @ (ProviderKind::LlamaCpp | ProviderKind::Jan | ProviderKind::OpenAi) => {
             check_local_openai_server(local, &cfg).await
         }
-        other => check_cloud(other, &cfg),
     })
 }
 
@@ -117,19 +118,41 @@ pub async fn run_doctor() -> Result<(), String> {
     }
     print!("{}", config_warnings_section(&warnings, role_fix.is_none()));
 
-    let provider_ok = match cfg.provider.value {
-        ProviderKind::Ollama => check_ollama(&cfg).await,
-        ProviderKind::Lemonade => check_lemonade(&cfg).await,
-        ProviderKind::Broker => check_broker(&cfg).await,
-        ProviderKind::MistralRs => check_mistralrs(&cfg),
-        local @ (ProviderKind::LlamaCpp | ProviderKind::Jan) => {
-            check_local_openai_server(local, &cfg).await
-        }
-        other => check_cloud(other, &cfg),
-    };
+    // 2.0 — every model URL must be local. The load above skipped this
+    // check so a failure is reported here, as its own row.
+    let urls = cfg.model_urls();
+    let (local_section, local_ok) = tokio::task::spawn_blocking(move || {
+        local_only_section(&urls, &aivyx_route::SystemResolver)
+    })
+    .await
+    .map_err(|e| format!("local-only check failed: {e}"))?;
+    print!("{local_section}");
+    for note in unused_cloud_key_notes(
+        &cfg,
+        std::env::var_os(ENV_ANTHROPIC_API_KEY).is_some_and(|v| !v.is_empty()),
+    ) {
+        println!("  note: {note}");
+    }
+    println!();
 
-    // Chapter Engram — semantic-memory readiness (embedding provider + profile).
-    let memory_ok = check_memory(&cfg).await;
+    // The provider and memory checks talk to those URLs, so they wait
+    // until every one is local.
+    let (provider_ok, memory_ok) = if local_ok {
+        let provider_ok = match cfg.provider.value {
+            ProviderKind::Ollama => check_ollama(&cfg).await,
+            ProviderKind::Lemonade => check_lemonade(&cfg).await,
+            ProviderKind::Broker => check_broker(&cfg).await,
+            ProviderKind::MistralRs => check_mistralrs(&cfg),
+            local @ (ProviderKind::LlamaCpp | ProviderKind::Jan | ProviderKind::OpenAi) => {
+                check_local_openai_server(local, &cfg).await
+            }
+        };
+        // Chapter Engram — semantic-memory readiness (embedding provider + profile).
+        (provider_ok, check_memory(&cfg).await)
+    } else {
+        println!("Provider: not checked until every model URL is local.");
+        (false, true)
+    };
 
     // Chapter Mise — the kitchen vertical health section, only when it's
     // installed (config present). Skipped silently otherwise.
@@ -185,6 +208,65 @@ fn doctor_summary(all_ok: bool, role_fix: Option<&str>) -> Result<String, String
         )),
         (false, None) => Err("one or more checks failed — see the notes above.".into()),
     }
+}
+
+/// The `local-only` row: ✓ when every model URL passes `require_local`,
+/// otherwise one ✗ line per failing URL with its config key and reason.
+/// Returns the section text and whether every URL passed. Pure apart from
+/// `resolver` (blocking DNS for names that aren't local by spelling).
+fn local_only_section(
+    urls: &[(String, String)],
+    resolver: &dyn aivyx_route::Resolve,
+) -> (String, bool) {
+    let mut out = String::from("Local-only:\n");
+    let failures: Vec<String> = urls
+        .iter()
+        .filter_map(|(key, url)| {
+            aivyx_route::require_local_with(url, resolver)
+                .err()
+                .map(|e| format!("{key}: {e}"))
+        })
+        .collect();
+    if failures.is_empty() {
+        out.push_str("  \u{2713} local-only: every model URL is on this machine or your network\n");
+        return (out, true);
+    }
+    for failure in &failures {
+        out.push_str(&format!("  \u{2717} local-only: {failure}\n"));
+    }
+    out.push_str(&format!(
+        "     \u{2192} edit {} so {} at a local server\n",
+        config_path().display(),
+        if failures.len() == 1 { "it points" } else { "they point" },
+    ));
+    (out, false)
+}
+
+/// aivyx's own Anthropic key variable (the config loader's name for it).
+const ENV_ANTHROPIC_API_KEY: &str = "AIVYX_PA_ANTHROPIC_API_KEY";
+
+/// Notes for a stored cloud API key aivyx no longer uses (2.0 removed the
+/// cloud providers). Informational: the key is never deleted. Covers
+/// `[anthropic] api_key` in the config and `AIVYX_PA_ANTHROPIC_API_KEY`
+/// (`prefixed_env_set`); a bare `ANTHROPIC_API_KEY` in the environment is
+/// likely another tool's, so it is not mentioned. The OS keyring holds
+/// only the master passphrase, and keys in the encrypted store need the
+/// passphrase, which the doctor doesn't ask for.
+fn unused_cloud_key_notes(cfg: &AivyxConfig, prefixed_env_set: bool) -> Vec<String> {
+    let Some(key) = &cfg.anthropic_api_key else {
+        return Vec::new();
+    };
+    let place = match key.source {
+        aivyx_config::FieldSource::Toml => "`[anthropic] api_key` in the config".to_string(),
+        aivyx_config::FieldSource::Env if prefixed_env_set => {
+            format!("`{ENV_ANTHROPIC_API_KEY}` in the environment")
+        }
+        _ => return Vec::new(),
+    };
+    vec![format!(
+        "an Anthropic API key is stored ({place}) but unused — aivyx is local-only since \
+         2.0. It is left as it is; remove it yourself if you no longer need it."
+    )]
 }
 
 /// The "Config:" section: each config warning (unknown keys, deprecated
@@ -788,7 +870,13 @@ async fn check_lemonade(cfg: &AivyxConfig) -> bool {
 }
 
 async fn check_lemonade_at(base_url: &str, model: &str) -> bool {
-    let client = crate::routing::discovery_client();
+    let Some(client) = crate::routing::discovery_client() else {
+        fail(
+            "couldn't build the local-only client to reach Lemonade Server",
+            "This is a TLS-init failure on this machine; see the error above.",
+        );
+        return false;
+    };
     let endpoint = aivyx_route::EndpointRef::new("default");
     let config = crate::routing::operator_backend(
         aivyx_route::EndpointKind::Lemonade,
@@ -880,12 +968,13 @@ fn local_server_verdict(
     }
 }
 
-/// llama.cpp / Jan: a local server, so no API key is needed unless it was
-/// started with one — check it answers and serves the model instead.
+/// llama.cpp / Jan / an OpenAI-compatible local server: no API key is
+/// needed unless it was started with one — check it answers and serves the
+/// model instead. (`openai` always has a `base_url`: the config requires it.)
 async fn check_local_openai_server(provider: ProviderKind, cfg: &AivyxConfig) -> bool {
     let default = match provider {
         ProviderKind::Jan => crate::init::DEFAULT_JAN_BASE_URL,
-        _ => crate::init::DEFAULT_LLAMACPP_BASE_URL,
+        _ => aivyx_config::DEFAULT_LLAMACPP_BASE_URL,
     };
     let base_url = cfg
         .openai_base_url
@@ -909,15 +998,16 @@ async fn check_local_openai_server_at(
 ) -> bool {
     let name = match provider {
         ProviderKind::Jan => "Jan",
+        ProviderKind::OpenAi => "OpenAI-compatible server",
         _ => "llama.cpp server",
     };
     // Same joining the OpenAI provider uses for chat: `{base}/v1/...`.
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
     let models: Result<Vec<String>, ProbeError> = async {
-        let mut request = aivyx_llm::local_only::model_client_builder()
+        let client = aivyx_llm::local_only::model_client_builder()
             .build()
-            .unwrap_or_default()
-            .get(&url).timeout(LOCAL_PROBE_TIMEOUT);
+            .map_err(|e| ProbeError::Other(format!("couldn't build the local-only client: {e}")))?;
+        let mut request = client.get(&url).timeout(LOCAL_PROBE_TIMEOUT);
         if let Some(key) = api_key {
             request = request.bearer_auth(key);
         }
@@ -962,7 +1052,9 @@ async fn check_local_openai_server_at(
         }
         LocalServerVerdict::Ready { note } => {
             pass(&format!("{name} is running"));
-            println!("  no API key needed — it runs on this machine");
+            if api_key.is_none() {
+                println!("  no API key needed — it runs on your own machine or network");
+            }
             if let Some(note) = note {
                 println!("  {note}");
             }
@@ -985,9 +1077,16 @@ async fn check_broker(cfg: &AivyxConfig) -> bool {
 }
 
 async fn check_broker_at(base_url: &str) -> bool {
-    let client = aivyx_llm::local_only::model_client_builder()
-        .build()
-        .unwrap_or_default();
+    let client = match aivyx_llm::local_only::model_client_builder().build() {
+        Ok(c) => c,
+        Err(e) => {
+            fail(
+                &format!("couldn't build the local-only client to reach aivyx-broker ({e})"),
+                "This is a TLS-init failure on this machine; see the error above.",
+            );
+            return false;
+        }
+    };
     let base = base_url.trim_end_matches('/');
     let status: Result<serde_json::Value, String> = async {
         client
@@ -1110,27 +1209,6 @@ fn check_mistralrs(cfg: &AivyxConfig) -> bool {
     }
 }
 
-/// Lighter check for cloud providers — confirm the config is wired (a key is
-/// present). The full credential round-trip lives in the `init` wizard.
-fn check_cloud(provider: ProviderKind, cfg: &AivyxConfig) -> bool {
-    println!("Provider: {provider} (model `{}`)\n", cfg.model.value);
-    let has_key = match provider {
-        ProviderKind::OpenAi => cfg.openai_api_key.is_some(),
-        _ => true,
-    };
-    if has_key {
-        pass("an API key is configured");
-        println!("  (run `aivyx-pa init` to re-verify the key against the provider)");
-        true
-    } else {
-        fail(
-            "no API key configured for this provider",
-            "Run `aivyx-pa init` to set one, or switch to a local model with `[agent] provider = \"ollama\"`.",
-        );
-        false
-    }
-}
-
 /// Chapter Engram — the semantic-memory readiness section. Reports the
 /// embedding provider + active profile, and (on the local path) checks the
 /// embedding model is actually pulled — the most common "configured but dark"
@@ -1156,7 +1234,7 @@ async fn check_memory(cfg: &AivyxConfig) -> bool {
             pass("lite recall active (lexical BM25 + co-occurrence, no embeddings)");
             println!(
                 "     → add an [embedding] section (a local Ollama running \
-                 {model}, or OpenAI) and set `profile = smart` for semantic recall.",
+                 {model}, or another local embedding server) and set `profile = smart` for semantic recall.",
                 model = crate::init::RECOMMENDED_EMBED_MODEL
             );
         } else if matches!(cfg.memory_profile, MemoryProfile::Smart) {
@@ -1164,15 +1242,15 @@ async fn check_memory(cfg: &AivyxConfig) -> bool {
                 "  ⚠ `[memory] profile = smart` is set but there is no \
                  [embedding] provider, so semantic recall is inert.\n     → add \
                  an [embedding] section (a local Ollama running {model}, or \
-                 OpenAI), or use `profile = lite` for embedding-free recall.",
+                 another local embedding server), or use `profile = lite` for embedding-free recall.",
                 model = crate::init::RECOMMENDED_EMBED_MODEL
             );
         } else {
             println!(
                 "  memory recall is off (no [embedding] provider, no [memory] profile)\n     → \
                  set `profile = \"lite\"` under [memory] for keyword recall with no setup, \
-                 or add an [embedding] section (a local Ollama running {model}, or OpenAI) \
-                 for recall by meaning.",
+                 or add an [embedding] section (a local Ollama running {model}, or another \
+                 local embedding server) for recall by meaning.",
                 model = crate::init::RECOMMENDED_EMBED_MODEL
             );
         }
@@ -1210,8 +1288,9 @@ async fn check_memory(cfg: &AivyxConfig) -> bool {
         }
         pass(&format!("embedding model `{}` is available", emb.model));
     } else {
-        // Cloud embedding — don't make a paid call; just confirm it's wired.
-        pass("embedding provider configured");
+        // A local server elsewhere on the network (the local-only row passed):
+        // not probed here, just confirm it's wired.
+        pass("embedding provider configured (on your network; not probed)");
     }
 
     if matches!(cfg.memory_profile, MemoryProfile::Off) {
@@ -1380,6 +1459,13 @@ fn load_config_with_role(role_override: Option<String>) -> Result<AivyxConfig, S
         .map_err(|e| format!("failed to load {}: {e}", config_path().display()))
 }
 
+/// The doctor's own load: without the local-only check, which the doctor
+/// reports as its `local-only` row instead of failing to load.
+fn load_for_doctor_with_role(role_override: Option<String>) -> Result<AivyxConfig, String> {
+    AivyxConfig::load_for_diagnostics(&inspection_opts(role_override))
+        .map_err(|e| format!("failed to load {}: {e}", config_path().display()))
+}
+
 fn inspection_opts(role_override: Option<String>) -> LoadOptions {
     LoadOptions {
         toml_path: Some(config_path()),
@@ -1397,14 +1483,14 @@ fn inspection_opts(role_override: Option<String>) -> LoadOptions {
 /// check the rest, and returns the role so the Config section can name the
 /// line to add.
 fn load_config_for_doctor() -> Result<(AivyxConfig, Option<String>), String> {
-    match AivyxConfig::load_from_env_and_toml(&inspection_opts(None)) {
+    match AivyxConfig::load_for_diagnostics(&inspection_opts(None)) {
         Ok(cfg) => Ok((cfg, None)),
         // Set means non-empty, the loader's rule for every env var.
         Err(e) => match start_role_fix(
             &e,
             std::env::var("AIVYX_PA_ROLE").is_ok_and(|v| !v.is_empty()),
         ) {
-            Some(role) => Ok((load_config_with_role(Some(role.clone()))?, Some(role))),
+            Some(role) => Ok((load_for_doctor_with_role(Some(role.clone()))?, Some(role))),
             None => Err(format!("failed to load {}: {e}", config_path().display())),
         },
     }
@@ -1688,6 +1774,116 @@ mod tests {
             "insecure_no_auth: no token at all"
         );
         assert_eq!(studio_sign_in_link(None, None, false, Some("auto")), None, "Studio off");
+    }
+
+    /// A stub resolver: `gpu.lan` needs no lookup; `pub.example.com`
+    /// answers a public address; anything else doesn't resolve.
+    struct Stub;
+
+    impl aivyx_route::Resolve for Stub {
+        fn resolve(&self, host: &str, _port: u16) -> std::io::Result<Vec<std::net::IpAddr>> {
+            match host {
+                "pub.example.com" => Ok(vec!["93.184.216.34".parse().unwrap()]),
+                _ => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such host")),
+            }
+        }
+    }
+
+    fn urls(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(k, u)| (k.to_string(), u.to_string())).collect()
+    }
+
+    #[test]
+    fn the_local_only_row_passes_when_every_url_is_local() {
+        let (out, ok) = local_only_section(
+            &urls(&[
+                ("[openai] base_url", "http://127.0.0.1:8080"),
+                ("[embedding] base_url", "http://gpu.lan:11434"),
+                ("[routing.endpoints.box] base_url", "http://10.0.0.7:8000"),
+            ]),
+            &Stub,
+        );
+        assert!(ok);
+        assert_eq!(
+            out,
+            "Local-only:\n  \u{2713} local-only: every model URL is on this machine or your network\n"
+        );
+        // No URLs at all (every provider at its built-in local default).
+        assert!(local_only_section(&[], &Stub).1);
+    }
+
+    #[test]
+    fn the_local_only_row_names_each_failing_url_with_its_reason() {
+        let (out, ok) = local_only_section(
+            &urls(&[
+                ("[openai] base_url", "https://api.openai.com"),
+                ("[broker] base_url", "http://127.0.0.1:8899"),
+                ("[embedding] base_url", "http://pub.example.com:11434"),
+                ("[routing.endpoints.x] base_url", "http://nowhere.example:1"),
+            ]),
+            &Stub,
+        );
+        assert!(!ok);
+        let tail = " — aivyx is local-only; point it at a model server on this machine or your own network";
+        for line in [
+            format!("  \u{2717} local-only: [openai] base_url: https://api.openai.com/ is not local (cloud host){tail}\n"),
+            format!(
+                "  \u{2717} local-only: [embedding] base_url: http://pub.example.com:11434/ is not local \
+                 (resolves to a public address 93.184.216.34){tail}\n"
+            ),
+            format!(
+                "  \u{2717} local-only: [routing.endpoints.x] base_url: http://nowhere.example:1/ is not \
+                 local (doesn't resolve){tail}\n"
+            ),
+        ] {
+            assert!(out.contains(&line), "missing {line:?} in\n{out}");
+        }
+        assert!(!out.contains("[broker]"), "a local URL is not listed: {out}");
+        assert_eq!(out.matches('\u{2717}').count(), 3);
+        assert!(out.contains("so they point at a local server"), "{out}");
+    }
+
+    /// A config loaded from a minimal TOML (no `[anthropic]`, so the key
+    /// is set by hand below).
+    fn cfg_with_anthropic_key(source: aivyx_config::FieldSource) -> AivyxConfig {
+        let path = std::env::temp_dir().join(format!(
+            "aivyx-doctor-key-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, "[agent]\nprovider = \"llamacpp\"\nmodel = \"m\"\n").unwrap();
+        let mut opts = inspection_opts(None);
+        opts.toml_path = Some(path.clone());
+        let mut cfg = AivyxConfig::load_for_diagnostics(&opts).unwrap();
+        let _ = std::fs::remove_file(&path);
+        cfg.anthropic_api_key = Some(aivyx_config::SourcedSecret::new(
+            secrecy::SecretString::from("sk-ant-x".to_string()),
+            source,
+        ));
+        cfg
+    }
+
+    #[test]
+    fn a_stored_anthropic_key_gets_a_note_and_is_never_shown() {
+        use aivyx_config::FieldSource;
+        let notes = unused_cloud_key_notes(&cfg_with_anthropic_key(FieldSource::Toml), false);
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("`[anthropic] api_key` in the config"), "{}", notes[0]);
+        assert!(notes[0].contains("unused"), "{}", notes[0]);
+        assert!(notes[0].contains("left as it is"), "{}", notes[0]);
+        assert!(!notes[0].contains("sk-ant-x"), "the key itself is never printed");
+
+        let notes = unused_cloud_key_notes(&cfg_with_anthropic_key(FieldSource::Env), true);
+        assert!(notes[0].contains("`AIVYX_PA_ANTHROPIC_API_KEY` in the environment"));
+        // A bare ANTHROPIC_API_KEY is likely another tool's: no note.
+        assert!(unused_cloud_key_notes(&cfg_with_anthropic_key(FieldSource::Env), false).is_empty());
+        // No key: no note.
+        let mut cfg = cfg_with_anthropic_key(FieldSource::Toml);
+        cfg.anthropic_api_key = None;
+        assert!(unused_cloud_key_notes(&cfg, false).is_empty());
     }
 
     #[test]

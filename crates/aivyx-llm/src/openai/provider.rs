@@ -136,7 +136,10 @@ impl OpenAiProvider {
     }
 
     /// A test seam: no constructor check. A real [`ReqwestTransport`]
-    /// still checks every request's URL (an empty `base_url` fails closed).
+    /// still checks every request's URL. An empty `base_url` makes the
+    /// relative URL `/v1/chat/completions`, which the URL check lets through
+    /// (it parses as host `v1`); reqwest then refuses it as a relative URL,
+    /// so nothing is sent.
     pub fn with_transport(
         config: OpenAiConfig,
         transport: Box<dyn HttpTransport>,

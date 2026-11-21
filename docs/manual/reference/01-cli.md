@@ -19,7 +19,7 @@ These work with any command.
 | `--role <name>` | Use a named role (from `[[role]]` in your config) for this session. |
 | `--print-role <name>` | Print a role's full capability envelope and exit. A debugging aid, not covered by the 1.x compatibility promise. |
 | `--no-daemon` | Chat in-process: don't connect to a running daemon or start one. |
-| `--provider <kind>` | Override the configured model provider for this run: `anthropic`, `openai`, `ollama`, `llamacpp`, `jan`, `mistralrs`, `broker` or `lemonade`. `mistralrs` needs a build with the `provider-mistral-rs` feature, which release binaries don't have. |
+| `--provider <kind>` | Override the configured model provider for this run: `ollama`, `llamacpp`, `jan`, `lemonade`, `broker`, `mistralrs` or `openai` (an OpenAI-compatible server on your machine or network; needs `[openai] base_url`). `mistralrs` needs a build with the `provider-mistral-rs` feature, which release binaries don't have. |
 | `--mcp <name:command[:arg1,arg2,…]>` | Attach a stdio MCP server for this session. `--mcp-server` is the old spelling: it still works, with a warning (in aivyx-coder, `--mcp-server` means the opposite: run coder as a server). |
 | `--mcp-sse <name:url>` | Attach an SSE MCP server for this session. |
 | `--version`, `-V` | Print the version and exit. |
@@ -184,6 +184,13 @@ aivyx-pa init [--template <name>] [--list-templates]
 `--template` pre-fills the wizard from a named template (bundled, or yours in
 `~/.local/share/aivyx-pa/templates/`); `--list-templates` lists them.
 
+It offers only models that run on your own machine or network: Ollama,
+llama.cpp, Jan, Lemonade, aivyx-broker (and mistral.rs, when built in), or
+another OpenAI-compatible server, for which it asks the URL and an optional
+key. A URL you type must be local — this machine, a private network address,
+or a name that resolves only to those — or init says why and asks again. For
+recall by meaning it asks for a local embedding server, or you skip it.
+
 ### `aivyx-pa doctor`
 
 Check your setup and say what's wrong: config, store, passphrase, model
@@ -191,6 +198,14 @@ connection, the Studio, installed integrations and packs. Its "Config"
 section lists the config warnings — unknown keys, deprecated spellings,
 conflicting settings — the same list printed when pa starts. They are
 warnings: they do not fail the doctor.
+
+Its "Local-only" row checks every model URL in the config (`[openai]`,
+`[broker]`, `[embedding]` and each `[routing.endpoints.*]` `base_url`): ✓
+when all are local, otherwise one line per URL that isn't, with the reason.
+The doctor still runs when a URL isn't local (pa itself refuses to start);
+it skips the model checks until the URL is fixed. A stored Anthropic key
+(`[anthropic] api_key`, or `AIVYX_PA_ANTHROPIC_API_KEY`) gets a note that it
+is unused; the doctor never deletes it.
 
 ```
 aivyx-pa doctor
@@ -707,7 +722,9 @@ To verify the chain instead, run `aivyx-pa --verify-only`.
 
 ### `aivyx-pa cost`
 
-What your LLM use has cost, priced from the audit log.
+How much you have used your models — turns and tokens per model — read
+from the audit log. Local models cost nothing, so there is no dollar column
+unless you set a `[pricing.<model>]` rate.
 
 ```
 aivyx-pa cost [--today]

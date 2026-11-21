@@ -247,3 +247,37 @@ async fn a_redirect_is_never_followed() {
     assert!(matches!(err, LlmError::Api { status: 308, .. }), "{err:?}");
     assert_eq!(target_hits.load(Ordering::SeqCst), 0, "the redirect target was contacted");
 }
+
+/// A stub resolver answering a public address for every name.
+struct Public;
+
+impl aivyx_route::Resolve for Public {
+    fn resolve(&self, _host: &str, _port: u16) -> std::io::Result<Vec<IpAddr>> {
+        Ok(vec!["203.0.113.7".parse().unwrap()])
+    }
+}
+
+/// A `.lan` name is local by spelling, so the URL check passes it with no
+/// lookup. The connect-time resolver still resolves it, and refuses the
+/// public answer: nothing is sent, and the error is `NotLocal`.
+#[tokio::test]
+async fn the_connect_time_resolver_catches_a_local_spelling_that_resolves_public() {
+    let (port, hits) = server(SSE_OK.to_string()).await;
+    let url = format!("http://gpu.lan:{port}");
+    aivyx_route::require_local_with(&url, &Public).expect("local by spelling, no lookup");
+    let provider = OpenAiProvider::with_transport(
+        OpenAiConfig::without_api_key().with_base_url(url),
+        Box::new(ReqwestTransport::with_resolver(Arc::new(Public)).unwrap()),
+    );
+    let messages = vec![LlmMessage::user_text("hello")];
+    let err = provider
+        .chat_stream(request(&messages), &CancellationToken::new())
+        .await
+        .err()
+        .unwrap();
+    let text = not_local(err);
+    assert!(text.contains("gpu.lan"), "{text}");
+    assert!(text.contains("resolves to a public address 203.0.113.7"), "{text}");
+    assert!(text.ends_with(TAIL), "{text}");
+    assert_eq!(hits.load(Ordering::SeqCst), 0, "nothing reached the server");
+}

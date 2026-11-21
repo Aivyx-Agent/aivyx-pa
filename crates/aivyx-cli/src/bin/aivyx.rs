@@ -2781,9 +2781,9 @@ enum CliMode {
     /// the team in-process and hands the mission to the lead, whose
     /// specialist sub-turns land on the same HMAC chain.
     Team(TeamSubcommand),
-    /// `aivyx-pa cost [--today]`: Chapter K — the priced spend report.
+    /// `aivyx-pa cost [--today]`: Chapter K — the usage report.
     /// Offline (cold-start storage like `audit export`): scans the chain's
-    /// `LlmCost` events, prices them, and prints a per-model breakdown.
+    /// `LlmCost` events and prints turns and tokens per model.
     /// `--today` scopes to the last 24h.
     Cost { today: bool },
     /// `aivyx-pa routing <subcommand>`: model routing Part 3a. Offline:
@@ -4771,7 +4771,7 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
         });
     }
 
-    // Chapter K — `aivyx-pa cost [--today]`: the priced spend report (offline).
+    // Chapter K — `aivyx-pa cost [--today]`: the usage report (offline).
     if !args.is_empty() && args[0] == "cost" {
         let mut today = false;
         for arg in &args[1..] {

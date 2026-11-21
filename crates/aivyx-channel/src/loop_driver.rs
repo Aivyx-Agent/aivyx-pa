@@ -1655,13 +1655,17 @@ mod tests {
             }
         }
 
-        let pricing = aivyx_cost::Pricing::new();
+        // Every model is free unless the operator sets a rate (2.0).
+        let pricing = aivyx_cost::Pricing::with_overrides([(
+            "rated-model".to_string(),
+            aivyx_cost::ModelRate::io(3.0, 15.0),
+        )]);
         let entries = vec![
-            entry(0, cost("claude-sonnet-4-6", 1_000_000, 1_000_000)), // $18
-            entry(1, cost("llama3.1", 9_000_000, 9_000_000)),          // $0 local (free)
+            entry(0, cost("rated-model", 1_000_000, 1_000_000)), // $18 at the rate
+            entry(1, cost("llama3.1", 9_000_000, 9_000_000)),    // $0, no rate
         ];
         let total = sum_turn_cost(&entries, &pricing);
-        assert!((total - 18.0).abs() < 1e-9, "got {total} — local adds $0");
+        assert!((total - 18.0).abs() < 1e-9, "got {total} — an unrated model adds $0");
     }
 
     #[test]

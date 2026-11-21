@@ -15,10 +15,6 @@ provider = "ollama"
 model = "llama3.1"
 # The [[role]] below to start in (there is no `default` role here).
 role = "coder"
-# To use Anthropic Claude instead:
-# provider = "anthropic"
-# model = "claude-sonnet-4-5"
-# (and uncomment the [anthropic] block below)
 
 # Run `ollama pull llama3.1` once.
 # Ollama on this machine, on its default port (http://localhost:11434).
@@ -26,9 +22,6 @@ role = "coder"
 # server-URL key for every local provider, Ollama included:
 # [openai]
 # base_url = "http://gpu-host.local:11434"
-
-# [anthropic]
-# api_key = "sk-ant-..."   # or set AIVYX_PA_ANTHROPIC_API_KEY
 
 # ----------------------------------------------------------------
 # Storage + filesystem sandbox

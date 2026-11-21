@@ -7099,10 +7099,6 @@ fn SettingsPanel() -> Element {
     // Editable form state, seeded from the on-disk snapshot.
     let mut level = use_signal(String::new);
     let mut root = use_signal(String::new);
-    let mut per_run = use_signal(String::new);
-    let mut per_day = use_signal(String::new);
-    let mut on_exceeded = use_signal(|| "deny".to_string());
-    let mut alert_at = use_signal(String::new);
     let mut confirm_open = use_signal(|| false);
     // Chapter Reins — the autonomy dial (level picker + confirm-on-autonomy).
     let mut auto_level = use_signal(String::new);
@@ -7134,10 +7130,6 @@ fn SettingsPanel() -> Element {
                         String::new()
                     },
                 );
-                per_run.set(s.budget.per_run_usd.map(|v| v.to_string()).unwrap_or_default());
-                per_day.set(s.budget.per_day_usd.map(|v| v.to_string()).unwrap_or_default());
-                on_exceeded.set(s.budget.on_exceeded.clone());
-                alert_at.set(s.budget.alert_at.map(|v| v.to_string()).unwrap_or_default());
                 auto_level.set(s.autonomy_level.clone());
             }
             last_seed.set(snap);
@@ -7286,51 +7278,16 @@ fn SettingsPanel() -> Element {
                 }
             }
 
-            // ── Budget (editable) ──
+            // ── Budget (read-only) ──
+            // aivyx is local-only (2.0): every model runs on your own machine
+            // or network, so there is no spend to cap. The config refuses
+            // `[budget] per_*_usd` caps at load.
             div { class: "glass-card settings-section",
                 div { class: "panel-head", h3 { "Budget" } }
-                p { class: "help", "Dollar caps on spend. Leave a cap blank for unlimited." }
-                div { class: "field-row",
-                    label { class: "label-tech", "Per run ($)" }
-                    input {
-                        class: "input", r#type: "number", placeholder: "unlimited",
-                        value: "{per_run}", oninput: move |e| per_run.set(e.value()),
-                    }
-                }
-                div { class: "field-row",
-                    label { class: "label-tech", "Per day ($)" }
-                    input {
-                        class: "input", r#type: "number", placeholder: "unlimited",
-                        value: "{per_day}", oninput: move |e| per_day.set(e.value()),
-                    }
-                }
-                div { class: "field-row",
-                    label { class: "label-tech", "On exceeded" }
-                    select {
-                        class: "input", value: "{on_exceeded}",
-                        onchange: move |e| on_exceeded.set(e.value()),
-                        option { value: "deny", "deny — block the call" }
-                        option { value: "alert", "alert — warn, proceed" }
-                    }
-                }
-                div { class: "field-row",
-                    label { class: "label-tech", "Alert at (0–1)" }
-                    input {
-                        class: "input", r#type: "number", placeholder: "0.8",
-                        value: "{alert_at}", oninput: move |e| alert_at.set(e.value()),
-                    }
-                }
-                div { class: "actions",
-                    button {
-                        class: "btn btn-primary",
-                        onclick: move |_| ws.send(set_budget_query(
-                            parse_opt_f64(&per_run()),
-                            parse_opt_f64(&per_day()),
-                            Some(on_exceeded()),
-                            parse_opt_f64(&alert_at()),
-                        )),
-                        "Save budget"
-                    }
+                p { class: "help",
+                    "Local models cost nothing, so there are no dollar caps. "
+                    code { "aivyx-pa cost" }
+                    " shows turns and tokens per model."
                 }
             }
 
@@ -7484,18 +7441,6 @@ fn set_access_query(level: String, root: Option<String>, confirm: bool) -> Front
     }
 }
 
-fn set_budget_query(
-    per_run_usd: Option<f64>,
-    per_day_usd: Option<f64>,
-    on_exceeded: Option<String>,
-    alert_at: Option<f64>,
-) -> FrontendMessage {
-    FrontendMessage::Query {
-        id: "mc-settings-budget".to_string(),
-        payload: QueryPayload::SetBudget { per_run_usd, per_day_usd, on_exceeded, alert_at },
-    }
-}
-
 fn set_cycle_detection_query(enabled: bool) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-settings-cycle".to_string(),
@@ -7523,17 +7468,6 @@ fn autonomy_confirm_blurb(level: &str) -> &'static str {
              the host."
         }
         _ => "This grants the agent unattended autonomy.",
-    }
-}
-
-/// Parse a numeric form field: empty ⇒ `None` (clear / unlimited), unparseable
-/// ⇒ `None` (the daemon validates and reports anything truly wrong).
-fn parse_opt_f64(s: &str) -> Option<f64> {
-    let t = s.trim();
-    if t.is_empty() {
-        None
-    } else {
-        t.parse().ok()
     }
 }
 

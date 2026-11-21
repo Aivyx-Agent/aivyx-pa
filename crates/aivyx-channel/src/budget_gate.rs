@@ -280,17 +280,27 @@ mod tests {
         let gate =
             ChannelBudgetGate::new(day_cap(100.0), log, Pricing::new(), 1024)
                 .expect("gate");
-        assert!(gate.open_turn("claude-opus-4-8").is_ok());
+        assert!(gate.open_turn("rated-model").is_ok());
+    }
+
+    /// Every model is free without an operator rate (2.0), so the cap
+    /// tests price one model by hand.
+    fn rated() -> Pricing {
+        Pricing::with_overrides([(
+            "rated-model".to_string(),
+            aivyx_cost::ModelRate::io(15.0, 75.0),
+        )])
     }
 
     #[tokio::test]
     async fn over_cap_denies_turn() {
-        // 1M opus output @ $75/Mtok = $75 already committed; a $50 day cap.
-        let log = chain_with_costs(&[("claude-opus-4-8", usage(0, 1_000_000))]).await;
+        // 1M output @ an operator rate of $75/Mtok = $75 already committed;
+        // a $50 day cap.
+        let log = chain_with_costs(&[("rated-model", usage(0, 1_000_000))]).await;
         let gate =
-            ChannelBudgetGate::new(day_cap(50.0), log, Pricing::new(), 1024)
+            ChannelBudgetGate::new(day_cap(50.0), log, rated(), 1024)
                 .expect("gate");
-        match gate.open_turn("claude-opus-4-8") {
+        match gate.open_turn("rated-model") {
             Err(err) => {
                 assert!(err.contains("day budget"), "denial names the day cap: {err}");
             }
@@ -315,24 +325,24 @@ mod tests {
 
     #[tokio::test]
     async fn guard_release_frees_reserved_budget() {
-        // $10 day cap, empty chain. One opus turn estimating ~$6 reserves;
+        // $10 day cap, empty chain. One rated turn estimating ~$6 reserves;
         // a concurrent second reserve of ~$6 would bust ($12 > $10) — but
         // dropping the first guard frees it.
         let log = chain_with_costs(&[]).await;
         // 80K output @ $75/Mtok = $6.00 estimate.
         let gate =
-            ChannelBudgetGate::new(day_cap(10.0), log, Pricing::new(), 80_000)
+            ChannelBudgetGate::new(day_cap(10.0), log, rated(), 80_000)
                 .expect("gate");
-        let g1 = gate.open_turn("claude-opus-4-8").expect("first reserve");
+        let g1 = gate.open_turn("rated-model").expect("first reserve");
         // Second concurrent reserve busts the cap.
         assert!(
-            gate.open_turn("claude-opus-4-8").is_err(),
+            gate.open_turn("rated-model").is_err(),
             "two concurrent $6 reserves exceed the $10 cap"
         );
         drop(g1);
         // After release, a fresh reserve fits again.
         assert!(
-            gate.open_turn("claude-opus-4-8").is_ok(),
+            gate.open_turn("rated-model").is_ok(),
             "releasing the held reservation frees the budget"
         );
     }

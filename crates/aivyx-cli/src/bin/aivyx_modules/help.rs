@@ -94,8 +94,8 @@ pub const GLOBAL_FLAGS: &[GlobalFlag] = &[
     GlobalFlag {
         usage: "--provider <kind>",
         help: &[
-            "anthropic | openai | ollama | llamacpp | jan |",
-            "mistralrs | broker | lemonade.",
+            "ollama | llamacpp | jan | lemonade | broker |",
+            "mistralrs | openai (a local server).",
         ],
     },
     GlobalFlag {
@@ -240,13 +240,13 @@ pub const COMMANDS: &[CommandHelp] = &[
     CommandHelp {
         name: "init",
         group: Group::Setup,
-        summary: "Interactive first-run setup wizard",
+        summary: "Interactive first-run setup wizard (local models only)",
         usage: &["aivyx-pa init [--template <name>] [--list-templates]"],
     },
     CommandHelp {
         name: "doctor",
         group: Group::Setup,
-        summary: "Diagnose config, storage, and provider connectivity",
+        summary: "Check config, storage, local-only models and the provider",
         usage: &["aivyx-pa doctor"],
     },
     CommandHelp {
@@ -500,7 +500,7 @@ pub const COMMANDS: &[CommandHelp] = &[
     CommandHelp {
         name: "cost",
         group: Group::Inspection,
-        summary: "Show the priced LLM spend report",
+        summary: "Show model usage: turns and tokens",
         usage: &["aivyx-pa cost [--today]"],
     },
     CommandHelp {

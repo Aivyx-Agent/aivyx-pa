@@ -28,9 +28,6 @@ role = "assistant"
 # [openai]
 # base_url = "http://gpu-host.local:11434"
 
-# [anthropic]
-# api_key = "sk-ant-..."
-
 # ----------------------------------------------------------------
 # Storage + filesystem sandbox
 # ----------------------------------------------------------------

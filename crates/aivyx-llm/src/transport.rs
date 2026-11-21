@@ -116,16 +116,6 @@ impl ReqwestTransport {
         Ok(ReqwestTransport { client, resolver })
     }
 
-    /// Uses `client` for every request. The per-request local-only URL
-    /// check still applies; the caller owns the client's redirect and
-    /// resolver settings.
-    pub fn from_client(client: reqwest::Client) -> Self {
-        ReqwestTransport {
-            client,
-            resolver: Arc::new(SystemResolver),
-        }
-    }
-
     /// `require_local` on `url`, off the async runtime.
     async fn check(&self, url: &str) -> Result<(), LlmError> {
         check_url_async(url, Arc::clone(&self.resolver)).await
@@ -133,11 +123,15 @@ impl ReqwestTransport {
 }
 
 /// A send error, with its source chain (the local-only resolver's refusal
-/// is a source, not the top-level message).
+/// is a source, not the top-level message). A refusal by the connect-time
+/// resolver is [`LlmError::NotLocal`], like the URL check's.
 fn send_error(e: reqwest::Error) -> LlmError {
     let mut text = e.to_string();
     let mut source = std::error::Error::source(&e);
     while let Some(s) = source {
+        if let Some(not_local) = s.downcast_ref::<aivyx_route::NotLocal>() {
+            return LlmError::NotLocal(not_local.to_string());
+        }
         text.push_str(": ");
         text.push_str(&s.to_string());
         source = s.source();

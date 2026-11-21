@@ -156,8 +156,9 @@ pub struct Facts {
     /// Goals of work in progress.
     pub in_progress: Vec<String>,
     pub spend_24h_usd: Option<f64>,
-    /// `true` when any `LlmCost` in the 24 h window had no known price, so
-    /// `spend_24h_usd` is a lower bound, not the full spend.
+    /// Always `false` since 2.0: every model is local and costs `$0` unless
+    /// the operator sets a rate, so no spend is untracked. Kept so the
+    /// briefing's shape is unchanged.
     pub spend_untracked: bool,
     pub memory_topics: Option<u64>,
     /// Sources that couldn't be read ("reminders", "the audit trail", …).
@@ -476,8 +477,9 @@ pub struct AuditFacts {
     pub changes: Vec<(String, i64)>,
     pub memories_saved: Vec<i64>,
     pub spend_24h_usd: f64,
-    /// `true` when any `LlmCost` in the 24 h window had no known price, so
-    /// `spend_24h_usd` is a lower bound, not the full spend.
+    /// Always `false` since 2.0: every model is local and costs `$0` unless
+    /// the operator sets a rate, so no spend is untracked. Kept so the
+    /// briefing's shape is unchanged.
     pub spend_untracked: bool,
 }
 
@@ -505,11 +507,7 @@ pub fn audit_facts(
                 cache_read: usage.cache_read_input_tokens as u64,
                 cache_write: usage.cache_creation_input_tokens as u64,
             };
-            let cost = pricing.cost_of(model, &counts);
-            a.spend_24h_usd += cost.usd;
-            if !cost.priced {
-                a.spend_untracked = true;
-            }
+            a.spend_24h_usd += pricing.cost_of(model, &counts).usd;
         }
         if t < window_start {
             continue;
@@ -1381,13 +1379,12 @@ mod gather_tests {
             .cost_of("claude-sonnet-5", &aivyx_cost::TokenCounts { input: 1_000_000, ..Default::default() })
             .usd;
         assert!((a.spend_24h_usd - expected).abs() < 1e-9);
-        assert!(!a.spend_untracked, "every model in this fixture is priced");
+        assert!(!a.spend_untracked);
     }
 
-    /// An `LlmCost` entry for a model with no known rate flags the spend as
-    /// a lower bound.
+    /// Since 2.0 a model with no operator rate is free, not untracked.
     #[test]
-    fn audit_facts_flags_unpriced_models_as_untracked() {
+    fn audit_facts_never_flags_a_model_without_a_rate() {
         let pricing = aivyx_cost::Pricing::new();
         let entries = vec![entry(0, NOW - 10, AuditEvent::LlmCost {
             turn_id: aivyx_core::TurnId::new(),
@@ -1396,14 +1393,12 @@ mod gather_tests {
         })];
         let a = audit_facts(&entries, NOW - 3_600, NOW, &pricing);
         assert_eq!(a.spend_24h_usd, 0.0);
-        assert!(a.spend_untracked);
+        assert!(!a.spend_untracked);
     }
 
-    /// A genuinely free local model is `priced = true, usd = 0` — it must
-    /// NOT set `spend_untracked` (it isn't a lower bound, it's exact).
+    /// A local model costs `$0` and does not set `spend_untracked`.
     #[test]
     fn audit_facts_does_not_flag_a_free_local_model() {
-        assert!(aivyx_cost::is_local_model("llama3.1"));
         let pricing = aivyx_cost::Pricing::new();
         let entries = vec![entry(0, NOW - 10, AuditEvent::LlmCost {
             turn_id: aivyx_core::TurnId::new(),

@@ -2,8 +2,10 @@
 //!
 //! Detects every local model runtime (Ollama, Lemonade Server, llama.cpp,
 //! Jan, aivyx-broker), lists every provider with the detected ones first,
-//! never pre-selects a cloud provider, walks the user through model
-//! selection, and writes a ready-to-use `aivyx-pa.toml` config file.
+//! walks the user through model selection, and writes a ready-to-use
+//! `aivyx-pa.toml` config file. aivyx is local-only (2.0): every provider
+//! it offers runs on this machine or the operator's own network, and a
+//! typed server URL must pass the local-only check.
 
 use std::io::{self, BufRead, IsTerminal, Write as IoWrite};
 use std::path::Path;
@@ -22,20 +24,6 @@ use aivyx_channel::profile_draft::{DraftedProfile, IdentityAnswers, draft_identi
 fn config_path() -> std::path::PathBuf {
     aivyx_config::resolve_config_path()
 }
-
-/// Default Anthropic model id presented to the operator on the
-/// model-name prompt. Phase 104 refresh: was
-/// `"claude-sonnet-4-20250514"` (Phase 44, ~1 year stale at
-/// Phase 104 entry); current Sonnet generation is
-/// `claude-sonnet-4-6`.
-#[cfg(test)]
-const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
-
-/// Default OpenAI model id presented to the operator on the
-/// model-name prompt. Phase 104 refresh: was `"gpt-4o"` (Phase
-/// 25); current flagship is `gpt-4.1`.
-#[cfg(test)]
-const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1";
 
 /// Chapter Engram — the recommended local embedding model and its vector
 /// width. Ollama serves it over the OpenAI-compatible `/v1/embeddings`
@@ -191,12 +179,11 @@ async fn pull_ollama_model(
 ///   present); point `[embedding]` at the same local server, no key. A declined
 ///   or failed pull degrades to `None` (semantic memory off) rather than a hard
 ///   error — the operator can add it later.
-/// - **OpenAI** → reuse the operator's key against OpenAI's embeddings endpoint.
-/// - **Anthropic** → `None`: Anthropic has no embeddings API. We note it and
-///   leave semantic memory off rather than render a broken provider.
+/// - **Every other provider** → ask for a local embedding server's URL
+///   (checked with the local-only rule), or skip: semantic memory stays off
+///   and recall is by keywords. There is no cloud default.
 async fn decide_embedding(
     provider: Provider,
-    _api_key: Option<&str>,
     base_url: &str,
     reader: &mut dyn BufRead,
     writer: &mut dyn IoWrite,
@@ -246,39 +233,71 @@ async fn decide_embedding(
                 api_key: None,
             }))
         }
-        // 2.0 (local-only): no cloud embeddings default any more.
-        Provider::Anthropic | Provider::OpenAi => {
-            writeln!(
-                writer,
-                "\nNote: semantic memory stays off. Add an [embedding] section \
-                 pointing at a local server (e.g. Ollama running \
-                 {RECOMMENDED_EMBED_MODEL}) to enable it."
-            )
-            .map_err(|e| format!("write error: {e}"))?;
-            Ok(None)
-        }
-        Provider::Lemonade => {
-            writeln!(
-                writer,
-                "\nMemory: your assistant recalls by keywords for now (no extra model \
-                 needed). For recall by meaning, add an embedding model later (the \
-                 Studio's Settings → Embedding) — Lemonade offers some, such as \
-                 nomic-embed-text-v1-GGUF."
-            )
-            .map_err(|e| format!("write error: {e}"))?;
-            Ok(None)
-        }
-        Provider::LlamaCpp | Provider::Jan | Provider::Broker | Provider::MistralRs => {
-            writeln!(
-                writer,
-                "\nMemory: your assistant recalls by keywords for now (no extra model \
-                 needed). For recall by meaning, add an [embedding] section later — a \
-                 local Ollama running {RECOMMENDED_EMBED_MODEL}, or OpenAI."
-            )
-            .map_err(|e| format!("write error: {e}"))?;
-            Ok(None)
-        }
+        _ => prompt_local_embedding(provider, reader, writer).await,
     }
+}
+
+/// The embedding step for a provider that isn't Ollama: a local embedding
+/// server's URL (an OpenAI-compatible `/v1/embeddings`, checked with the
+/// local-only rule), its model and vector width — or a blank answer to
+/// skip, leaving recall by keywords.
+async fn prompt_local_embedding(
+    provider: Provider,
+    reader: &mut dyn BufRead,
+    writer: &mut dyn IoWrite,
+) -> Result<Option<EmbeddingFields>, String> {
+    let example = if provider == Provider::Lemonade {
+        "Lemonade offers some, such as nomic-embed-text-v1-GGUF"
+    } else {
+        "e.g. a local Ollama running nomic-embed-text at http://127.0.0.1:11434"
+    };
+    writeln!(
+        writer,
+        "\nMemory: your assistant recalls by keywords (no extra model needed). For \
+         recall by meaning, give a local embedding server ({example}), or leave it \
+         blank to skip — you can add one later (the Studio's Settings → Embedding)."
+    )
+    .map_err(|e| format!("write error: {e}"))?;
+    let base_url = loop {
+        let answer = prompt_line("Embedding server URL (blank to skip): ", reader, writer)?;
+        if answer.is_empty() {
+            return Ok(None);
+        }
+        let base = normalize_server_base(&answer);
+        match aivyx_llm::local_only::require_local_async(&base).await {
+            Ok(()) => break base,
+            Err(e) => writeln!(writer, "  {e}").map_err(|e| format!("write error: {e}"))?,
+        }
+    };
+    let model = match prompt_line(
+        &format!("Embedding model [{RECOMMENDED_EMBED_MODEL}]: "),
+        reader,
+        writer,
+    )? {
+        m if m.is_empty() => RECOMMENDED_EMBED_MODEL.to_string(),
+        m => m,
+    };
+    let dimensions = loop {
+        let answer = prompt_line(
+            &format!("Its vector width [{RECOMMENDED_EMBED_DIMENSIONS}]: "),
+            reader,
+            writer,
+        )?;
+        if answer.is_empty() {
+            break RECOMMENDED_EMBED_DIMENSIONS;
+        }
+        match answer.parse::<usize>() {
+            Ok(n) if n > 0 => break n,
+            _ => writeln!(writer, "  A positive whole number, please.")
+                .map_err(|e| format!("write error: {e}"))?,
+        }
+    };
+    Ok(Some(EmbeddingFields {
+        base_url,
+        model,
+        dimensions,
+        api_key: None,
+    }))
 }
 
 /// Extract model names from the Ollama `/api/tags` JSON response.
@@ -354,7 +373,7 @@ fn prompt_line_required(
 /// ```text
 ///   1) Ollama
 ///   2) Lemonade Server
-///   3) Anthropic (cloud)
+///   3) llama.cpp server
 /// Choose [1]:
 /// ```
 fn prompt_choice(
@@ -369,8 +388,8 @@ fn prompt_choice(
 
 /// [`prompt_choice`] with an optional default. With `None` nothing is
 /// pre-selected: the prompt shows no `[n]` hint and an empty answer
-/// re-prompts, so the operator must pick (first-run coherence A4 — `init`
-/// never pre-selects a cloud provider).
+/// re-prompts, so the operator must pick (first-run coherence A4 — with
+/// nothing detected, `init` pre-selects nothing).
 fn prompt_choice_opt(
     prompt: &str,
     options: &[&str],
@@ -792,7 +811,7 @@ fn setup_passphrase(
 // ---------------------------------------------------------------------------
 
 /// The provider the user selected in the wizard — every `[agent] provider`
-/// the config accepts (first-run coherence A4).
+/// the config accepts (first-run coherence A4). All local (2.0).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Provider {
     Ollama,
@@ -806,7 +825,9 @@ enum Provider {
     /// Embedded mistral.rs — offered only when built with
     /// `provider-mistral-rs`.
     MistralRs,
-    Anthropic,
+    /// An OpenAI-compatible server on this machine or the operator's
+    /// network (vLLM, LM Studio, a llama-server elsewhere, …): no default
+    /// address, so `init` asks for its URL, and an optional key.
     OpenAi,
 }
 
@@ -820,13 +841,13 @@ impl Provider {
             Provider::Jan => "jan",
             Provider::Broker => "broker",
             Provider::MistralRs => "mistralrs",
-            Provider::Anthropic => "anthropic",
             Provider::OpenAi => "openai",
         }
     }
 
     /// Parse an `[agent] provider` value (a template's), accepting the same
-    /// aliases the config loader does.
+    /// aliases the config loader does. A removed kind (`anthropic`) is
+    /// `None`, like an unknown one.
     fn from_config_name(name: &str) -> Option<Self> {
         Some(match name.to_ascii_lowercase().as_str() {
             "ollama" => Provider::Ollama,
@@ -835,7 +856,6 @@ impl Provider {
             "jan" => Provider::Jan,
             "broker" | "aivyx-broker" | "aivyx_broker" => Provider::Broker,
             "mistralrs" | "mistral-rs" | "mistral_rs" => Provider::MistralRs,
-            "anthropic" => Provider::Anthropic,
             "openai" => Provider::OpenAi,
             _ => return None,
         })
@@ -850,14 +870,8 @@ impl Provider {
             Provider::Jan => "Jan",
             Provider::Broker => "aivyx-broker",
             Provider::MistralRs => "mistral.rs (embedded)",
-            Provider::Anthropic => "Anthropic (cloud)",
-            Provider::OpenAi => "OpenAI (cloud)",
+            Provider::OpenAi => "Another OpenAI-compatible server (on your machine or network)",
         }
-    }
-
-    /// Runs on this machine — no API key, no per-token cost.
-    fn is_local(self) -> bool {
-        !matches!(self, Provider::Anthropic | Provider::OpenAi)
     }
 
     /// An OpenAI-compatible local server `init` probes, lists models from,
@@ -865,7 +879,11 @@ impl Provider {
     fn is_local_server(self) -> bool {
         matches!(
             self,
-            Provider::Lemonade | Provider::LlamaCpp | Provider::Jan | Provider::Broker
+            Provider::Lemonade
+                | Provider::LlamaCpp
+                | Provider::Jan
+                | Provider::Broker
+                | Provider::OpenAi
         )
     }
 
@@ -874,7 +892,7 @@ impl Provider {
     fn runtime_default_base_url(self) -> Option<&'static str> {
         match self {
             Provider::Lemonade => Some(crate::DEFAULT_LEMONADE_BASE_URL),
-            Provider::LlamaCpp => Some(DEFAULT_LLAMACPP_BASE_URL),
+            Provider::LlamaCpp => Some(aivyx_config::DEFAULT_LLAMACPP_BASE_URL),
             Provider::Jan => Some(DEFAULT_JAN_BASE_URL),
             Provider::Broker => Some(crate::DEFAULT_BROKER_BASE_URL),
             _ => None,
@@ -882,8 +900,8 @@ impl Provider {
     }
 }
 
-/// Every provider in menu order when nothing is detected: local first, then
-/// cloud. mistral.rs is appended to the local group only when built in.
+/// Every provider in menu order when nothing is detected. mistral.rs is
+/// offered only when built in; the generic OpenAI-compatible server is last.
 fn all_providers(include_mistralrs: bool) -> Vec<Provider> {
     let mut v = vec![
         Provider::Ollama,
@@ -895,7 +913,7 @@ fn all_providers(include_mistralrs: bool) -> Vec<Provider> {
     if include_mistralrs {
         v.push(Provider::MistralRs);
     }
-    v.extend([Provider::Anthropic, Provider::OpenAi]);
+    v.push(Provider::OpenAi);
     v
 }
 
@@ -903,8 +921,8 @@ fn all_providers(include_mistralrs: bool) -> Vec<Provider> {
 struct ProviderMenu {
     /// `(provider, label)` in display order.
     entries: Vec<(Provider, String)>,
-    /// The pre-selected entry — never a cloud provider, and `None` when
-    /// nothing local was detected (and no template named a local provider).
+    /// The pre-selected entry: `None` when nothing was detected and no
+    /// template named a provider.
     default: Option<usize>,
     /// No local runtime answered its probe.
     nothing_detected: bool,
@@ -919,8 +937,8 @@ impl ProviderMenu {
 
 /// Build the menu: detected runtimes first (marked "(detected)"), then the
 /// rest in [`all_providers`] order. The first detected runtime is
-/// pre-selected; failing that, a template's provider if it's local; failing
-/// that, nothing.
+/// pre-selected; failing that, a template's provider; failing that,
+/// nothing.
 fn build_provider_menu(
     detected: &[Provider],
     template: Option<Provider>,
@@ -941,9 +959,7 @@ fn build_provider_menu(
     let default = if !nothing_detected {
         Some(0)
     } else {
-        template
-            .filter(|t| t.is_local())
-            .and_then(|t| entries.iter().position(|(p, _)| *p == t))
+        template.and_then(|t| entries.iter().position(|(p, _)| *p == t))
     };
     ProviderMenu {
         entries,
@@ -963,8 +979,8 @@ fn provider_menu_for_this_build(
 
 /// Printed before the menu when no local runtime answered.
 const NOTHING_DETECTED_HINT: &str = "No local model server found. Install Ollama \
-     (https://ollama.com) or Lemonade Server for a free, private local model — or \
-     choose a cloud provider.";
+     (https://ollama.com), llama.cpp or Lemonade Server for a free, private local \
+     model, or choose a server that runs elsewhere on your network.";
 
 /// Show the menu and return the operator's pick.
 fn choose_provider(
@@ -988,9 +1004,6 @@ fn choose_provider(
 /// Per-probe timeout. Loopback answers in milliseconds; a runtime that
 /// takes longer than this to say hello is treated as absent.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
-
-/// llama-server's default, as the `LlamaCpp` arm in `aivyx.rs` resolves it.
-pub(crate) const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
 
 /// Jan's default, as the `Jan` arm in `aivyx.rs` resolves it (its server
 /// root: the OpenAI provider appends `/v1/chat/completions` itself, and a
@@ -1026,7 +1039,7 @@ impl ProbeBases {
         Self {
             ollama: DEFAULT_OLLAMA_BASE_URL.to_string(),
             lemonade: crate::DEFAULT_LEMONADE_BASE_URL.to_string(),
-            llamacpp: "http://127.0.0.1:8080".to_string(),
+            llamacpp: aivyx_config::DEFAULT_LLAMACPP_BASE_URL.to_string(),
             jan: "http://127.0.0.1:1337".to_string(),
             broker: crate::DEFAULT_BROKER_BASE_URL.to_string(),
             dmr: DEFAULT_DMR_BASE_URL.to_string(),
@@ -1045,14 +1058,20 @@ impl ProbeBases {
     }
 }
 
-/// Probe every local runtime concurrently and return the ones that answered
-/// `2xx`, in menu order.
-async fn detect_local_runtimes(bases: &ProbeBases) -> Vec<Provider> {
-    let Ok(client) = reqwest::Client::builder()
+/// The probes' client: the model client (no proxy, no redirects, a
+/// resolver that only returns local addresses) with the short probe
+/// timeouts.
+fn probe_client() -> reqwest::Result<reqwest::Client> {
+    aivyx_llm::local_only::model_client_builder()
         .connect_timeout(PROBE_TIMEOUT)
         .timeout(PROBE_TIMEOUT)
         .build()
-    else {
+}
+
+/// Probe every local runtime concurrently and return the ones that answered
+/// `2xx`, in menu order.
+async fn detect_local_runtimes(bases: &ProbeBases) -> Vec<Provider> {
+    let Ok(client) = probe_client() else {
         return Vec::new();
     };
     let trim = |s: &str| s.trim_end_matches('/').to_string();
@@ -1084,11 +1103,7 @@ async fn detect_local_runtimes(bases: &ProbeBases) -> Vec<Provider> {
 /// Docker Model Runner answering at `bases.dmr`.
 async fn docker_model_runner_answers(bases: &ProbeBases) -> bool {
     let url = format!("{}/v1/models", bases.dmr.trim_end_matches('/'));
-    let Ok(client) = reqwest::Client::builder()
-        .connect_timeout(PROBE_TIMEOUT)
-        .timeout(PROBE_TIMEOUT)
-        .build()
-    else {
+    let Ok(client) = probe_client() else {
         return false;
     };
     client
@@ -1131,41 +1146,69 @@ fn comparable_base(base: &str) -> String {
 }
 
 /// The base URL to write for `provider`, or `None` to leave the key out
-/// because the runtime's own default already points there.
+/// because the runtime's own default already points there. The generic
+/// OpenAI-compatible server has no default, so its URL is always written.
 fn base_url_to_write(provider: Provider, base: &str) -> Option<String> {
-    let default = provider.runtime_default_base_url()?;
     let base = normalize_server_base(base);
+    if provider == Provider::OpenAi {
+        return Some(base);
+    }
+    let default = provider.runtime_default_base_url()?;
     if comparable_base(&base) == comparable_base(default) {
         return None;
     }
     Some(base)
 }
 
-/// Ask where a local server that didn't answer its probe is running.
-fn prompt_server_base_url(
+/// Ask where a local server that didn't answer its probe is running. The
+/// answer must pass the local-only check (this machine or the operator's
+/// own network); a refused one is explained and asked again. The generic
+/// OpenAI-compatible server has no default, so an answer is required.
+async fn prompt_server_base_url(
     provider: Provider,
     bases: &ProbeBases,
     reader: &mut dyn BufRead,
     writer: &mut dyn IoWrite,
 ) -> Result<String, String> {
     let default = bases.base_for(provider).unwrap_or_default();
-    let answer = prompt_line(
-        &format!("{} URL [{default}]: ", provider.label()),
-        reader,
-        writer,
-    )?;
-    let chosen = if answer.is_empty() { default } else { &answer };
-    Ok(normalize_server_base(chosen))
+    loop {
+        let chosen = if default.is_empty() {
+            prompt_line_required(
+                &format!("{} URL (e.g. http://192.168.1.20:8000): ", provider.label()),
+                "A URL is required.",
+                reader,
+                writer,
+            )?
+        } else {
+            let answer = prompt_line(
+                &format!("{} URL [{default}]: ", provider.label()),
+                reader,
+                writer,
+            )?;
+            if answer.is_empty() { default.to_string() } else { answer }
+        };
+        let base = normalize_server_base(&chosen);
+        match aivyx_llm::local_only::require_local_async(&base).await {
+            Ok(()) => return Ok(base),
+            // Re-ask. The defaults are all local, so an empty answer (or
+            // end of input, which reads as empty) ends the loop.
+            Err(e) => writeln!(writer, "  {e}").map_err(|e| format!("write error: {e}"))?,
+        }
+    }
 }
 
 /// Model ids a local server offers, through aivyx-route's discovery (the
 /// same view routing gets): Lemonade via its own catalogue (downloaded
 /// models only), Jan and llama.cpp via OpenAI-compatible `/v1/models` (a
-/// llama.cpp router-mode server via `/models`), and the broker via
-/// OpenAI-compatible against `{base}/v1`.
+/// llama.cpp router-mode server via `/models`), the broker via
+/// OpenAI-compatible against `{base}/v1`, and a generic OpenAI-compatible
+/// server via `/v1/models`. The client is aivyx-route's local-only one (no
+/// proxy, no redirects, local addresses only) — discovery takes route's
+/// reqwest, so `model_client_builder` (aivyx-llm's) can't be used here.
 async fn list_server_models(provider: Provider, base: &str) -> Result<Vec<String>, String> {
     use aivyx_route::{DiscoveryOutcome, EndpointKind, EndpointRef};
-    let client = aivyx_route::discovery::reqwest::Client::new();
+    let client = crate::routing::discovery_client()
+        .ok_or_else(|| "couldn't build the local-only client".to_string())?;
     let endpoint = EndpointRef::new("default");
     let attempts: Vec<(EndpointKind, String)> = match provider {
         Provider::Lemonade => vec![(EndpointKind::Lemonade, base.to_string())],
@@ -1175,6 +1218,7 @@ async fn list_server_models(provider: Provider, base: &str) -> Result<Vec<String
             (EndpointKind::LlamaRouter, base.to_string()),
         ],
         Provider::Broker => vec![(EndpointKind::OpenaiCompat, format!("{base}/v1"))],
+        Provider::OpenAi => vec![(EndpointKind::OpenaiCompat, base.to_string())],
         _ => return Ok(Vec::new()),
     };
     let mut why = String::new();
@@ -1340,9 +1384,12 @@ impl PersonaSeedFields {
 struct InitConfig {
     provider: Provider,
     model: String,
+    /// The optional key of an OpenAI-compatible server started with one
+    /// (`[openai] api_key`). `None` for every other provider.
     api_key: Option<String>,
     /// A local server's base URL, written only when it differs from the
-    /// runtime default (`[openai] base_url`, or `[broker] base_url`).
+    /// runtime default (`[openai] base_url`, or `[broker] base_url`); always
+    /// for the generic OpenAI-compatible server, which has none.
     server_base_url: Option<String>,
     /// mistral.rs's GGUF (`[mistralrs] model_path`).
     mistralrs_model_path: Option<String>,
@@ -1356,8 +1403,8 @@ struct InitConfig {
     confirm_destructive: bool,
     /// Phase 46: enable bundled web search MCP server.
     enable_web_search: bool,
-    /// First-run D3 — the starter routines run on their own (asked on a
-    /// local provider; a cloud provider writes them disabled regardless).
+    /// First-run D3 — the starter routines run on their own (asked; a
+    /// config pack brings its own).
     enable_routines: bool,
     /// Phase 57 / Phase 181 — the full P13 Profile, collected by
     /// the guided identity builder. A field is `None` / empty
@@ -1379,9 +1426,8 @@ struct InitConfig {
     persona_seed: PersonaSeedFields,
     /// Chapter Engram — the embedding provider that makes semantic memory
     /// work out of the box. `Some` renders an `[embedding]` section (local
-    /// Ollama on the local path, OpenAI on the cloud path); `None` leaves
-    /// semantic memory off (e.g. Anthropic-only, which has no embeddings API,
-    /// or a declined/failed local pull).
+    /// Ollama, or a local embedding server the operator named); `None`
+    /// leaves semantic memory off (skipped, or a declined/failed pull).
     embedding: Option<EmbeddingFields>,
 }
 
@@ -1392,8 +1438,8 @@ struct EmbeddingFields {
     base_url: String,
     model: String,
     dimensions: usize,
-    /// `Some` for the cloud (OpenAI) path; `None` for local Ollama, which
-    /// needs no key.
+    /// An embedding server's key. The wizard never sets one (local servers
+    /// are keyless); the renderer writes it when present.
     api_key: Option<String>,
 }
 
@@ -1420,16 +1466,15 @@ fn render_toml(cfg: &InitConfig) -> String {
         escape_toml_string(&cfg.model),
     ));
 
-    // Provider-specific section (API key)
+    // Provider-specific section (server address, optional key)
     match cfg.provider {
-        Provider::Anthropic => {
-            if let Some(key) = &cfg.api_key {
-                out.push_str(&format!("\n[anthropic]\napi_key = \"{key}\"\n"));
-            }
-        }
         Provider::OpenAi => {
+            out.push_str("\n[openai]\n");
+            if let Some(url) = &cfg.server_base_url {
+                out.push_str(&format!("base_url = \"{}\"\n", escape_toml_string(url)));
+            }
             if let Some(key) = &cfg.api_key {
-                out.push_str(&format!("\n[openai]\napi_key = \"{key}\"\n"));
+                out.push_str(&format!("api_key = \"{}\"\n", escape_toml_string(key)));
             }
         }
         Provider::Lemonade | Provider::LlamaCpp | Provider::Jan => {
@@ -1710,15 +1755,14 @@ fn routines_question_intro(web_search: bool) -> String {
 
 /// Render the default starter routines as `[[schedule]]` blocks.
 ///
-/// Gating (operator decisions, 2026-06): the four core routines are ENABLED on
-/// a local (Ollama) provider and written present-but-DISABLED on a cloud
-/// provider — discoverable, a one-line flip to turn on, and cost-aware since
-/// cloud schedules spend tokens. The opt-in `trend-scan` additionally requires
+/// Gating: the four core routines are ENABLED when the operator said yes in
+/// `init`, and written present-but-DISABLED otherwise — discoverable, a
+/// one-line flip to turn on. (Every provider is local since 2.0, so the old
+/// cloud-off rule is gone.) The opt-in `trend-scan` additionally requires
 /// web search (its tool comes from the bundled web-search MCP server, which is
 /// only configured when the operator enabled web search).
 fn render_default_schedules(cfg: &InitConfig) -> String {
-    let local = cfg.provider.is_local();
-    let core_enabled = local && cfg.enable_routines;
+    let core_enabled = cfg.enable_routines;
     let trend_enabled = core_enabled && cfg.enable_web_search;
     let b = |on: bool| if on { "true" } else { "false" };
 
@@ -1726,9 +1770,8 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
     out.push_str(
         "\n# --------------------------------------------------------------------------\n\
          # Default starter routines (cron = \"sec min hour dom mon dow\", local time).\n\
-         # Read-only / observational, scoped to the access level. Enabled on a local\n\
-         # provider; written disabled on a cloud provider (they spend tokens) — flip\n\
-         # `enabled = true` to turn one on.\n\
+         # Read-only / observational, scoped to the access level. Enabled if you\n\
+         # said yes in `aivyx-pa init` — flip `enabled` to turn one on or off.\n\
          # --------------------------------------------------------------------------\n",
     );
 
@@ -1814,8 +1857,8 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
     // refinement, Praxis skill authoring) never fired: the routine named
     // "nightly-reflection" above is a generic prompt TURN, not the
     // reflection scheduler. Plant a real one — daily, off-peak, and
-    // skip-when-idle so a quiet day costs nothing. Same local-on /
-    // cloud-off posture as the routines above.
+    // skip-when-idle so a quiet day costs nothing. On when the routines
+    // above are.
     out.push_str(&format!(
         "\n# The reflection scheduler — drives the self-learning passes \
          (persona\n\
@@ -1832,21 +1875,6 @@ fn render_default_schedules(cfg: &InitConfig) -> String {
     ));
 
     out
-}
-
-/// What to tell a cloud-provider user about routines, if anything.
-fn routines_notice(local: bool, from_pack: bool) -> Option<&'static str> {
-    match (local, from_pack) {
-        (true, _) => None,
-        (false, false) => Some(
-            "Background routines are written to it disabled, since each run spends \
-             tokens — set `enabled = true` under any [[schedule]] you want.",
-        ),
-        (false, true) => Some(
-            "This pack's routines are on, and each run spends tokens — set \
-             `enabled = false` under any [[schedule]] you don't want.",
-        ),
-    }
 }
 
 /// The starter routines a new agent gets: none for a config pack, which
@@ -2377,23 +2405,30 @@ async fn confirm_identity(
 fn build_wizard_provider(
     provider: Provider,
     server_base: Option<&str>,
+    api_key: Option<&str>,
 ) -> Option<Arc<dyn LlmProvider>> {
     match provider {
-        // 2.0 (local-only): no cloud provider to draft with.
-        Provider::Anthropic | Provider::OpenAi => None,
         Provider::Ollama => {
             use aivyx_llm::ollama::{OllamaConfig, OllamaProvider};
             OllamaProvider::new(OllamaConfig::default_local())
                 .ok()
                 .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
         }
-        // The local OpenAI-compatible servers: keyless, at the base the
-        // operator just chose (already `/v1`-free, see
-        // `normalize_server_base`).
-        Provider::Lemonade | Provider::LlamaCpp | Provider::Jan | Provider::Broker => {
+        // The local OpenAI-compatible servers, at the base the operator
+        // just chose (already `/v1`-free, see `normalize_server_base`):
+        // keyless, or the generic server's optional key.
+        Provider::Lemonade
+        | Provider::LlamaCpp
+        | Provider::Jan
+        | Provider::Broker
+        | Provider::OpenAi => {
             use aivyx_llm::openai::{OpenAiConfig, OpenAiProvider};
             let base = server_base?;
-            OpenAiProvider::new(OpenAiConfig::without_api_key().with_base_url(base))
+            let config = match api_key {
+                Some(key) => OpenAiConfig::new(key.to_string()),
+                None => OpenAiConfig::without_api_key(),
+            };
+            OpenAiProvider::new(config.with_base_url(base))
                 .ok()
                 .map(|p| Arc::new(p) as Arc<dyn LlmProvider>)
         }
@@ -2482,9 +2517,9 @@ fn write_config(path: &Path, contents: &str) -> Result<(), String> {
 /// that case.
 struct TemplateDefaults {
     provider: Option<String>,
-    // 2.0 (local-only): only the removed cloud prompts used it as their
-    // model default; local servers list their own models. Kept parsed for
-    // the init rework.
+    // Not read by the wizard: local servers list their own models (the
+    // removed cloud prompts used it as their default). Kept parsed so a
+    // template's model is still known to the tests.
     #[allow(dead_code)]
     model: Option<String>,
     fs_root: Option<String>,
@@ -2621,16 +2656,12 @@ fn render_with_template(
         doc["agent"]["role"] = value(role);
     }
 
-    // Provider-specific API key. Wipe the inactive provider's
-    // api_key block to avoid the template's "alternative
-    // provider commented out" comments leaving stale keys.
+    // Provider-specific server address and optional key.
     match cfg.provider {
-        Provider::Anthropic => {
-            if let Some(key) = &cfg.api_key {
-                doc["anthropic"]["api_key"] = value(key.as_str());
-            }
-        }
         Provider::OpenAi => {
+            if let Some(url) = &cfg.server_base_url {
+                doc["openai"]["base_url"] = value(url.as_str());
+            }
             if let Some(key) = &cfg.api_key {
                 doc["openai"]["api_key"] = value(key.as_str());
             }
@@ -2976,9 +3007,8 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // 3. Detect every local runtime (concurrently, short timeouts) and
     // build the provider menu: detected runtimes first, the first one
     // pre-selected; nothing detected → nothing pre-selected (first-run
-    // coherence A4 — `init` never defaults to a cloud provider). A
-    // template's provider is the default only when it's local and nothing
-    // was detected.
+    // coherence A4). A template's provider is the default only when
+    // nothing was detected.
     let mut probes = ProbeBases::standard();
     let base_url = DEFAULT_OLLAMA_BASE_URL;
     let (mut detected, dmr_answers) = tokio::join!(
@@ -3011,14 +3041,14 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         Some(if detected.contains(&provider) && !(via_dmr && provider == Provider::LlamaCpp) {
             normalize_server_base(probes.base_for(provider).unwrap_or_default())
         } else {
-            prompt_server_base_url(provider, &probes, &mut reader, &mut writer)?
+            prompt_server_base_url(provider, &probes, &mut reader, &mut writer).await?
         })
     } else {
         None
     };
     let mut mistralrs_model_path = None;
 
-    // 4. Provider-specific: model or API key.
+    // 4. Provider-specific: the model (and the generic server's optional key).
     let (model, api_key) = match provider {
         Provider::Ollama => {
             let models = list_ollama_models(base_url).await.unwrap_or_default();
@@ -3066,6 +3096,16 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
             let model = select_server_model(provider, base, &mut reader, &mut writer).await?;
             (model, None)
         }
+        Provider::OpenAi => {
+            let base = server_base.as_deref().unwrap_or_default();
+            let model = select_server_model(provider, base, &mut reader, &mut writer).await?;
+            let key = prompt_line(
+                "API key, if the server was started with one (blank for none): ",
+                &mut reader,
+                &mut writer,
+            )?;
+            (model, opt(key))
+        }
         Provider::MistralRs => {
             let path = prompt_mistralrs_model_path(&mut reader, &mut writer)?;
             // `[agent] model` names the model for display and cost
@@ -3076,18 +3116,6 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
                 .unwrap_or_else(|| "mistralrs".to_string());
             mistralrs_model_path = Some(path);
             (model, None)
-        }
-        // 2.0 (local-only): the cloud providers and their key checks are
-        // gone from aivyx-llm. (Task 7 removes them from the menu too.)
-        Provider::Anthropic => {
-            return Err(aivyx_config::removed_provider_message("anthropic"));
-        }
-        Provider::OpenAi => {
-            return Err(
-                "OpenAI's cloud API was removed in 2.0 — aivyx is local-only; choose a local \
-                 server (llama.cpp, Ollama, Jan, Lemonade or the broker)"
-                    .to_string(),
-            );
         }
     };
 
@@ -3105,7 +3133,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // falls back to the guided manual prompts (local-first — the
     // builder never requires an LLM).
     let draft_provider =
-        build_wizard_provider(provider, server_base.as_deref());
+        build_wizard_provider(provider, server_base.as_deref(), api_key.as_deref());
     let identity = confirm_identity(
         &mut reader,
         &mut writer,
@@ -3246,9 +3274,9 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         &mut writer,
     )?;
 
-    // First-run D3 — the starter routines run on their own, so ask (a cloud
-    // provider writes them disabled anyway: each run spends tokens).
-    let enable_routines = if !template_defaults.from_pack && provider.is_local() {
+    // First-run D3 — the starter routines run on their own, so ask (a
+    // config pack brings its own).
+    let enable_routines = if !template_defaults.from_pack {
         writeln!(writer, "{}", routines_question_intro(enable_web_search))
             .map_err(|e| format!("write error: {e}"))?;
         prompt_yes_no("Turn these on?", true, &mut reader, &mut writer)?
@@ -3260,7 +3288,6 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
     // from first boot (pulls the local embedding model on the Ollama path).
     let embedding = decide_embedding(
         provider,
-        api_key.as_deref(),
         base_url,
         &mut reader,
         &mut writer,
@@ -3329,9 +3356,6 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
             config_file.display()
         );
     }
-    if let Some(n) = routines_notice(cfg.provider.is_local(), from_pack) {
-        eprintln!("{n}");
-    }
 
     // First-run D2 — the passphrase, chosen now.
     let passphrase = setup_passphrase(
@@ -3385,19 +3409,17 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         )?;
     }
 
-    // 6b. Chapter P — for the local path, confirm the model actually answers
-    // before the first real turn. Last, so "ready" comes after every
-    // question, not before the passphrase. Best-effort: the config is
-    // written, so a failed check is informational, not fatal.
-    if cfg.provider.is_local() {
-        eprintln!("\nChecking your model…");
-        match crate::doctor::check_provider_for_init().await {
-            Ok(true) => eprintln!("\n✓ Ready."),
-            Ok(false) => eprintln!(
-                "\nFix what's marked above, then `aivyx-pa doctor` re-checks any time."
-            ),
-            Err(e) => eprintln!("{e}"),
-        }
+    // 6b. Chapter P — confirm the model actually answers before the first
+    // real turn. Last, so "ready" comes after every question, not before
+    // the passphrase. Best-effort: the config is written, so a failed check
+    // is informational, not fatal.
+    eprintln!("\nChecking your model…");
+    match crate::doctor::check_provider_for_init().await {
+        Ok(true) => eprintln!("\n✓ Ready."),
+        Ok(false) => eprintln!(
+            "\nFix what's marked above, then `aivyx-pa doctor` re-checks any time."
+        ),
+        Err(e) => eprintln!("{e}"),
     }
 
     eprintln!("\nNext steps:");
@@ -3410,7 +3432,7 @@ async fn run_init_wizard_inner(template_defaults: TemplateDefaults) -> Result<()
         eprintln!("{}", NO_DAEMON_NEXT_STEP);
     }
     eprintln!("  aivyx-pa doctor            — re-check your setup any time");
-    if cfg.provider.is_local() && cfg.provider != Provider::MistralRs {
+    if cfg.provider != Provider::MistralRs {
         eprintln!(
             "\nOn a capable GPU (e.g. a 24GB card) you can run a bigger model with more \
              context — see https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/LOCAL_HOSTING.md"
@@ -4327,9 +4349,9 @@ email customers without asking
     #[test]
     fn render_without_embedding_writes_lite_memory() {
         let cfg = init_config_no_profile(
-            Provider::Anthropic,
-            "claude-sonnet-4-6",
-            Some("sk-ant"),
+            Provider::LlamaCpp,
+            "qwen.gguf",
+            None,
             "data/aivyx.redb",
             "/home/user/workspace",
             false,
@@ -4376,29 +4398,39 @@ email customers without asking
         assert_eq!(emb.dimensions, 768);
     }
 
-    /// `decide_embedding` for Anthropic is `None` (no embeddings API).
+    /// 2.0 (local-only): every provider but Ollama is asked for a local
+    /// embedding server; a blank answer skips (no cloud default).
     #[tokio::test]
-    async fn decide_embedding_anthropic_is_none() {
-        let mut r = std::io::Cursor::new(&b""[..]);
-        let mut w = Vec::new();
-        let got = decide_embedding(Provider::Anthropic, Some("sk-ant"), "", &mut r, &mut w)
-            .await
-            .unwrap();
-        assert!(got.is_none());
+    async fn decide_embedding_skips_on_a_blank_answer() {
+        for provider in [Provider::OpenAi, Provider::LlamaCpp, Provider::Lemonade] {
+            let mut r = std::io::Cursor::new(&b"\n"[..]);
+            let mut w = Vec::new();
+            let got = decide_embedding(provider, "", &mut r, &mut w).await.unwrap();
+            assert!(got.is_none(), "{provider:?}");
+            let out = String::from_utf8(w).unwrap();
+            assert!(out.contains("Embedding server URL (blank to skip)"), "{out}");
+            assert!(!out.to_lowercase().contains("openai"), "no cloud suggestion: {out}");
+        }
     }
 
-    /// 2.0 (local-only): `decide_embedding` for OpenAI no longer writes the
-    /// cloud embeddings default, key or not.
+    /// A non-local embedding URL is refused with the local-only text and
+    /// asked again; a local one, with the defaults, is used.
     #[tokio::test]
-    async fn decide_embedding_openai_is_none() {
-        let mut r = std::io::Cursor::new(&b""[..]);
+    async fn decide_embedding_takes_only_a_local_url() {
+        let mut r = std::io::Cursor::new(
+            &b"https://api.openai.com/v1\nhttp://192.168.1.20:11434/v1\n\n\n"[..],
+        );
         let mut w = Vec::new();
-        for key in [Some("sk-x"), None] {
-            let got = decide_embedding(Provider::OpenAi, key, "", &mut r, &mut w)
-                .await
-                .unwrap();
-            assert!(got.is_none(), "no cloud embeddings default");
-        }
+        let got = decide_embedding(Provider::LlamaCpp, "", &mut r, &mut w)
+            .await
+            .unwrap()
+            .expect("a local URL was given");
+        let out = String::from_utf8(w).unwrap();
+        assert!(out.contains("https://api.openai.com/ is not local (cloud host)"), "{out}");
+        assert_eq!(got.base_url, "http://192.168.1.20:11434");
+        assert_eq!(got.model, RECOMMENDED_EMBED_MODEL);
+        assert_eq!(got.dimensions, RECOMMENDED_EMBED_DIMENSIONS);
+        assert_eq!(got.api_key, None);
     }
 
     #[test]
@@ -4408,14 +4440,6 @@ email customers without asking
         assert!(with.contains("  • each night, tidying up its memory"), "{with}");
         assert!(with.contains("web scan for news on what you've said you use it for"), "{with}");
         assert!(!without.contains("web scan"), "{without}");
-    }
-
-    #[test]
-    fn routines_notice_matches_what_was_written() {
-        assert_eq!(routines_notice(true, false), None);
-        assert_eq!(routines_notice(true, true), None);
-        assert!(routines_notice(false, false).unwrap().contains("disabled"));
-        assert!(routines_notice(false, true).unwrap().contains("routines are on"));
     }
 
     #[test]
@@ -4590,8 +4614,9 @@ email customers without asking
             "trend-scan needs web search"
         );
 
-        // Cloud: all five written, every one disabled (discoverable, cost-aware).
-        let cfg = init_config_no_profile(Provider::Anthropic, "claude", Some("k"), "s", "/r", true);
+        // Declined in init: all five written, every one disabled (discoverable).
+        let mut cfg = init_config_no_profile(Provider::OpenAi, "m", Some("k"), "s", "/r", true);
+        cfg.enable_routines = false;
         let toml = render_default_schedules(&cfg);
         assert_eq!(count(&toml), 5);
         for name in [
@@ -4603,7 +4628,7 @@ email customers without asking
         ] {
             assert!(
                 !enabled_of(&toml, name),
-                "cloud routine {name} must be disabled"
+                "declined routine {name} must be disabled"
             );
         }
     }
@@ -4628,8 +4653,9 @@ email customers without asking
             "a quiet day must cost nothing"
         );
 
-        // Cloud: written but disabled (cost-aware), same as the routines.
-        let cfg = init_config_no_profile(Provider::Anthropic, "claude", Some("k"), "s", "/r", true);
+        // Declined: written but disabled, same as the routines.
+        let mut cfg = init_config_no_profile(Provider::OpenAi, "m", None, "s", "/r", true);
+        cfg.enable_routines = false;
         let toml = render_default_schedules(&cfg);
         let doc: DocumentMut = toml.parse().unwrap();
         let rs = doc["reflection_schedule"].as_array_of_tables().unwrap();
@@ -4640,7 +4666,7 @@ email customers without asking
                 .get("enabled")
                 .and_then(|v| v.as_bool()),
             Some(false),
-            "cloud reflection must be written disabled"
+            "declined reflection must be written disabled"
         );
     }
 
@@ -4839,52 +4865,32 @@ email customers without asking
         p
     }
 
+    /// The generic OpenAI-compatible server: its URL is always written
+    /// (it has no default), with the optional key, and nothing cloud.
     #[test]
-    fn render_toml_anthropic() {
-        let cfg = init_config_no_profile(
-            Provider::Anthropic,
-            DEFAULT_ANTHROPIC_MODEL,
-            Some("sk-ant-test123"),
-            "store.redb",
-            ".",
-            false,
-        );
-        let toml = render_toml(&cfg);
-        assert!(toml.contains("provider = \"anthropic\""));
-        assert!(toml.contains("[anthropic]"));
-        assert!(toml.contains("api_key = \"sk-ant-test123\""));
-        assert!(!toml.contains("[openai]"));
-        // Phase 104 — pin the refreshed default model so a future
-        // stale-default regression fails this test loudly.
-        assert!(toml.contains("model = \"claude-sonnet-4-6\""));
-    }
-
-    #[test]
-    fn render_toml_openai() {
-        let cfg = init_config_no_profile(
+    fn render_toml_openai_compatible_server() {
+        let mut cfg = init_config_no_profile(
             Provider::OpenAi,
-            DEFAULT_OPENAI_MODEL,
-            Some("sk-openai-xyz"),
+            "qwen3.8-27b",
+            Some("local-key"),
             "store.redb",
             ".",
             false,
         );
+        cfg.server_base_url = base_url_to_write(Provider::OpenAi, "http://192.168.1.20:8000/v1/");
         let toml = render_toml(&cfg);
-        assert!(toml.contains("provider = \"openai\""));
-        assert!(toml.contains("[openai]"));
-        assert!(toml.contains("api_key = \"sk-openai-xyz\""));
-        assert!(!toml.contains("[anthropic]"));
-        // Phase 104 — pin the refreshed default model.
-        assert!(toml.contains("model = \"gpt-4.1\""));
-    }
+        assert!(toml.contains("provider = \"openai\""), "{toml}");
+        assert!(
+            toml.contains("[openai]\nbase_url = \"http://192.168.1.20:8000\"\napi_key = \"local-key\"\n"),
+            "{toml}"
+        );
+        assert!(!toml.contains("anthropic"), "{toml}");
 
-    /// Phase 104 — pin the refreshed default model constants so a
-    /// future stale-default regression fails loudly at the constant
-    /// rather than at one of the `render_toml_*` integration tests.
-    #[test]
-    fn default_models_are_current() {
-        assert_eq!(DEFAULT_ANTHROPIC_MODEL, "claude-sonnet-4-6");
-        assert_eq!(DEFAULT_OPENAI_MODEL, "gpt-4.1");
+        // Keyless: just the URL.
+        cfg.api_key = None;
+        let toml = render_toml(&cfg);
+        assert!(toml.contains("[openai]\nbase_url = \"http://192.168.1.20:8000\"\n"), "{toml}");
+        assert!(!toml.contains("api_key"), "{toml}");
     }
 
     /// Pin the empty-Ollama-models hint so it always names a concrete,
@@ -5359,9 +5365,9 @@ email customers without asking
             profile_communication_style: Some("terse, conclusion-first".into()),
             profile_primary_use_cases: vec!["personal-finance analysis".into()],
             ..init_config_no_profile(
-                Provider::Anthropic,
-                DEFAULT_ANTHROPIC_MODEL,
-                Some("sk-ant-x"),
+                Provider::LlamaCpp,
+                "qwen.gguf",
+                None,
                 "store.redb",
                 ".",
                 false,
@@ -5561,11 +5567,12 @@ email customers without asking
                 Provider::LlamaCpp,
                 Provider::Jan,
                 Provider::Broker,
-                Provider::Anthropic,
                 Provider::OpenAi,
             ]
         );
         assert!(menu.entries.iter().all(|(_, label)| !label.contains("(detected)")));
+        // Every entry is local: nothing names a cloud.
+        assert!(menu.entries.iter().all(|(_, label)| !label.contains("cloud")));
     }
 
     #[test]
@@ -5579,7 +5586,6 @@ email customers without asking
                 Provider::Ollama,
                 Provider::LlamaCpp,
                 Provider::Broker,
-                Provider::Anthropic,
                 Provider::OpenAi,
             ]
         );
@@ -5603,18 +5609,18 @@ email customers without asking
     }
 
     #[test]
-    fn provider_menu_template_provider_is_preselected_only_when_local() {
+    fn provider_menu_template_provider_is_preselected_when_nothing_is_detected() {
         // Nothing detected: a template's local provider is the default...
         let menu = build_provider_menu(&[], Some(Provider::Ollama), false);
         assert_eq!(menu.default.map(|i| menu.entries[i].0), Some(Provider::Ollama));
         // ...but a detected runtime still wins over it...
         let menu = build_provider_menu(&[Provider::Lemonade], Some(Provider::Ollama), false);
         assert_eq!(menu.default.map(|i| menu.entries[i].0), Some(Provider::Lemonade));
-        // ...and a cloud provider is never pre-selected, template or not.
-        let menu = build_provider_menu(&[], Some(Provider::Anthropic), false);
-        assert_eq!(menu.default, None);
+        // ...and the generic OpenAI-compatible server is local too.
         let menu = build_provider_menu(&[], Some(Provider::OpenAi), false);
-        assert_eq!(menu.default, None);
+        assert_eq!(menu.default.map(|i| menu.entries[i].0), Some(Provider::OpenAi));
+        // No template, nothing detected: nothing pre-selected.
+        assert_eq!(build_provider_menu(&[], None, false).default, None);
     }
 
     #[test]
@@ -5625,14 +5631,21 @@ email customers without asking
             Provider::LlamaCpp,
             Provider::Jan,
             Provider::Broker,
-            Provider::Anthropic,
             Provider::OpenAi,
             Provider::MistralRs,
         ] {
             assert_eq!(Provider::from_config_name(p.config_name()), Some(p));
+            // Every kind init offers is one the config accepts (all local).
+            assert!(
+                p.config_name().parse::<aivyx_config::ProviderKind>().is_ok(),
+                "{}",
+                p.config_name()
+            );
         }
         assert_eq!(Provider::from_config_name("llama-cpp"), Some(Provider::LlamaCpp));
         assert_eq!(Provider::from_config_name("nope"), None);
+        // The removed cloud kind is not a choice.
+        assert_eq!(Provider::from_config_name("anthropic"), None);
     }
 
     #[test]
@@ -5657,8 +5670,9 @@ email customers without asking
         assert_eq!(got, Provider::Lemonade);
         let out = String::from_utf8(output).unwrap();
         assert!(out.contains(
-            "No local model server found. Install Ollama (https://ollama.com) or Lemonade \
-             Server for a free, private local model — or choose a cloud provider."
+            "No local model server found. Install Ollama (https://ollama.com), llama.cpp or \
+             Lemonade Server for a free, private local model, or choose a server that runs \
+             elsewhere on your network."
         ));
         assert!(out.contains("Please enter a number"), "the empty answer re-prompted");
     }
@@ -5707,7 +5721,11 @@ email customers without asking
         );
         // Providers with no base-URL key never write one.
         assert_eq!(base_url_to_write(Provider::Ollama, "http://x"), None);
-        assert_eq!(base_url_to_write(Provider::Anthropic, "http://x"), None);
+        // The generic OpenAI-compatible server has no default: always written.
+        assert_eq!(
+            base_url_to_write(Provider::OpenAi, "http://127.0.0.1:8080/v1"),
+            Some("http://127.0.0.1:8080".to_string())
+        );
     }
 
     /// Load `toml` through the real config loader.
@@ -5829,13 +5847,12 @@ email customers without asking
     }
 
     #[test]
-    fn local_providers_get_enabled_routines_cloud_ones_do_not() {
-        for p in [Provider::Lemonade, Provider::LlamaCpp, Provider::Jan, Provider::Broker] {
-            assert!(p.is_local());
+    fn every_provider_gets_enabled_routines_when_asked() {
+        for p in all_providers(true) {
             let s = render_default_schedules(&local_cfg(p, "m"));
             assert!(s.contains("enabled = true"), "{p:?}");
+            assert!(!s.contains("cloud"), "{p:?}: {s}");
         }
-        assert!(!Provider::Anthropic.is_local() && !Provider::OpenAi.is_local());
     }
 
     #[tokio::test]
@@ -5911,20 +5928,49 @@ email customers without asking
         assert!(out.contains("Couldn't list models"), "{out:?}");
     }
 
-    #[test]
-    fn prompt_server_base_url_defaults_to_the_standard_address() {
+    #[tokio::test]
+    async fn prompt_server_base_url_defaults_to_the_standard_address() {
         let probes = ProbeBases::standard();
         let mut input = Cursor::new(b"\nhttp://10.0.0.9:1337/v1\n" as &[u8]);
         let mut output = Vec::new();
         assert_eq!(
-            prompt_server_base_url(Provider::Lemonade, &probes, &mut input, &mut output).unwrap(),
+            prompt_server_base_url(Provider::Lemonade, &probes, &mut input, &mut output)
+                .await
+                .unwrap(),
             "http://127.0.0.1:13305/api"
         );
         assert_eq!(
-            prompt_server_base_url(Provider::Jan, &probes, &mut input, &mut output).unwrap(),
+            prompt_server_base_url(Provider::Jan, &probes, &mut input, &mut output)
+                .await
+                .unwrap(),
             "http://10.0.0.9:1337",
             "a trailing /v1 is dropped -- the provider appends it"
         );
+    }
+
+    /// A typed URL must be local: a cloud host or public IP is refused with
+    /// the local-only text and asked again (no lookup: both are refused by
+    /// spelling). The generic OpenAI-compatible server needs an answer.
+    #[tokio::test]
+    async fn prompt_server_base_url_refuses_a_non_local_url_and_asks_again() {
+        let probes = ProbeBases::standard();
+        let mut input = Cursor::new(
+            b"\nhttps://api.openai.com/v1\nhttp://203.0.113.7:8000\nhttp://192.168.1.20:8000/v1\n"
+                as &[u8],
+        );
+        let mut output = Vec::new();
+        let got = prompt_server_base_url(Provider::OpenAi, &probes, &mut input, &mut output)
+            .await
+            .unwrap();
+        assert_eq!(got, "http://192.168.1.20:8000");
+        let out = String::from_utf8(output).unwrap();
+        assert!(out.contains("A URL is required."), "{out}");
+        assert!(out.contains("https://api.openai.com/ is not local (cloud host)"), "{out}");
+        assert!(
+            out.contains("http://203.0.113.7:8000/ is not local (resolves to a public address 203.0.113.7)"),
+            "{out}"
+        );
+        assert!(out.contains("aivyx is local-only"), "{out}");
     }
 
     #[test]

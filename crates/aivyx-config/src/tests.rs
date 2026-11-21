@@ -14683,3 +14683,33 @@ constrain_tool_calls = true
     assert!(cfg2.openai_constrain_tool_calls);
     drop(env);
 }
+
+/// Task 7 — doctor's load skips the local-only check, so a non-local URL
+/// is still listed by `model_urls()` and reported as its own row.
+#[test]
+fn the_diagnostics_load_keeps_a_non_local_url_for_doctor_to_report() {
+    let _env = EnvScope::new();
+    let tmp = TempDir::new("diagnostics-load");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    std::fs::write(
+        &toml_path,
+        "[openai]\nbase_url = \"https://api.openai.com\"\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\ndimensions = 8\n",
+    )
+    .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        ..LoadOptions::test_env_only()
+    };
+    assert!(matches!(
+        AivyxConfig::load_from_env_and_toml_with(&opts, &StubResolver),
+        Err(ConfigError::NotLocal { .. })
+    ));
+    let cfg = AivyxConfig::load_for_diagnostics(&opts).unwrap();
+    assert_eq!(
+        cfg.model_urls(),
+        vec![
+            ("[openai] base_url".to_string(), "https://api.openai.com".to_string()),
+            ("[embedding] base_url".to_string(), "http://127.0.0.1:11434".to_string()),
+        ]
+    );
+}

@@ -1493,14 +1493,14 @@ pub struct AivyxConfig {
     /// time via [`resolve_ollama_prompt_strategy`].
     pub ollama_prompt_strategies: BTreeMap<String, OllamaFamilyStrategy>,
     /// Chapter K — `[pricing.<model>]` operator rate overrides (USD/Mtok
-    /// per token class). Empty ⇒ the built-in default table only. Each entry
-    /// overrides the default for its exact model id; consumed by the cost
-    /// report + the loop's dollar cap. Validated non-negative at load.
+    /// per token class). Empty ⇒ every model costs `$0` (local-only, no
+    /// shipped price tables). Each entry sets the rate for its exact model
+    /// id; consumed by the cost report. Validated non-negative at load.
     pub pricing: BTreeMap<String, aivyx_cost::ModelRate>,
-    /// Chapter K (K.4.2) — `[budget]` dollar caps on spend. Defaults to
-    /// uncapped (`BudgetConfig::default()`, both caps `None`); the operator
-    /// opts in with `per_run_usd` / `per_day_usd`. Consumed by the turn-loop
-    /// budget gate via a `BudgetEnforcer`.
+    /// Chapter K (K.4.2) — `[budget]`. Its `*_usd` dollar caps are
+    /// **unused since 2.0** (local-only: every model costs `$0`) and refused
+    /// at load, so they are always `None`; the fields stay so old files
+    /// parse. Consumed by the turn-loop budget gate via a `BudgetEnforcer`.
     pub budget: aivyx_cost::BudgetConfig,
     /// Chapter Throttle (TH.3) — `[rate_limit]` tool-call caps. Defaults to
     /// uncapped (`RateLimitConfig::default()`); the operator opts in with
@@ -3658,12 +3658,10 @@ pub struct LoopConfig {
     /// a token cap, not a dollar cap, and counts all turns in the
     /// run window (see the Phase 176 doc).
     pub max_run_tokens: Option<u64>,
-    /// Chapter K — per-run **dollar**-budget cap. A run stops once
-    /// the priced spend (`LlmCost` events over the run window,
-    /// priced by the default table) reaches this. `None` → no
-    /// dollar cap. Complements `max_run_tokens`: tokens bound
-    /// volume, dollars bound cost (local models are free, so they
-    /// never advance this cap).
+    /// Chapter K — per-run **dollar**-budget cap. **Unused since 2.0**
+    /// (local-only: every model costs `$0`): always `None`, because the
+    /// loader refuses a set `[loop] max_run_usd`. The field stays so old
+    /// files parse; use `max_run_tokens` to bound a run.
     pub max_run_usd: Option<f64>,
     /// Chapter Circuit (CI.1) — cross-iteration stall breaker. A
     /// run stops once this many *consecutive* iterations make no
@@ -6242,7 +6240,8 @@ struct RawLoop {
     // Phase 176 — per-run token-budget cap.
     #[serde(default)]
     max_run_tokens: Option<u64>,
-    // Chapter K — per-run dollar-budget cap.
+    // Chapter K — per-run dollar-budget cap. Unused since 2.0; refused at
+    // load when set (kept so the key is recognised, not unknown).
     #[serde(default)]
     max_run_usd: Option<f64>,
     // Chapter Circuit (CI.1) — cross-iteration stall breaker.
@@ -6894,6 +6893,15 @@ impl AivyxConfig {
         let config = Self::load_unchecked(opts)?;
         config.check_local_with(resolver)?;
         Ok(config)
+    }
+
+    /// The env + TOML load **without** the local-only check, for
+    /// diagnostics only: `aivyx-pa doctor` uses it so a non-local URL is
+    /// reported as its own row (via [`model_urls`](Self::model_urls))
+    /// instead of stopping the whole check. Never build a provider from a
+    /// config loaded this way without checking it first.
+    pub fn load_for_diagnostics(opts: &LoadOptions) -> Result<Self, ConfigError> {
+        Self::load_unchecked(opts)
     }
 
     /// Every model URL this config points at, with the config key that
