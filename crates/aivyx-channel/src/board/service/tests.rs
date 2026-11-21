@@ -240,6 +240,10 @@ async fn wait_not_running(fx: &Fx, id: &str) -> Task {
     loop {
         let t = fx.board.task(id).await.unwrap();
         if t.state != TaskState::Running {
+            // `change_task` writes the task and then its audit event under
+            // the write lock; taking the lock once waits out that gap, so
+            // callers can assert on the audit ops right away.
+            drop(fx.board.inner.write_lock.lock().await);
             return t;
         }
         assert!(
