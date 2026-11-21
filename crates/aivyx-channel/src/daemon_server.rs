@@ -5190,6 +5190,9 @@ async fn handle_query(
         | QueryPayload::BoardPauseAgent { .. }
         | QueryPayload::BoardResumeAgent { .. }
         | QueryPayload::BoardRemoveAgent { .. }
+        | QueryPayload::BoardWorkspaces
+        | QueryPayload::BoardAddWorkspace { .. }
+        | QueryPayload::BoardRemoveWorkspace { .. }
         | QueryPayload::BoardWakeAgent { .. } => QueryResponsePayload::QueryError {
             code: "board_unavailable".into(),
             message: "the board is answered by the connection loop".into(),

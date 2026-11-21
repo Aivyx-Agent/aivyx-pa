@@ -546,6 +546,14 @@ the daemon starts it in the background and answers at once with
 queries find agents by name. `BoardWakeAgent` answers `board_unavailable` when
 the daemon runs no heartbeat.
 
+Coder workspaces: **`BoardWorkspaces`** → `BoardWorkspaces { workspaces }`
+(the snapshot carries them too); **`BoardAddWorkspace { name, path }`** →
+`BoardCreated { id }` (the daemon canonicalizes and validates the path and
+refuses relative paths); **`BoardRemoveWorkspace { name }`** → `BoardAck`.
+`Owner::Coder { workspace }` and `WorksAs::Coder { workspace }` carry the
+workspace id; the CLI resolves `coder:<name>` through `BoardWorkspaces`.
+Errors use the same `board_*` codes.
+
 ### Operator activity
 
 The daemon tracks one clock per process (`aivyx-channel::activity::
@@ -557,7 +565,8 @@ operator), `ResolveApproval`, `ResolveGate`,
 `ResolveParkedStep`, `CompleteReminder`, `SnoozeReminder`, and the board's
 decisions `BoardStart`, `BoardApprove`, `BoardSendBack` and `BoardCancel`,
 and its agent changes `BoardCreateAgent`, `BoardEditAgent`, `BoardPauseAgent`,
-`BoardResumeAgent`, `BoardRemoveAgent` and `BoardWakeAgent`.
+`BoardResumeAgent`, `BoardRemoveAgent` and `BoardWakeAgent`, and its
+workspace changes `BoardAddWorkspace` and `BoardRemoveWorkspace`.
 Everything else, `GetBriefing`, `GetReminders`, the board's reads and its
 task creates, assigns and comments included, never touches the clock.
 

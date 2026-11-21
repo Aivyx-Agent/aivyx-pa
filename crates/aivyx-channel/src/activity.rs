@@ -136,6 +136,8 @@ pub fn is_operator_action(msg: &FrontendMessage) -> bool {
                 | QueryPayload::BoardResumeAgent { .. }
                 | QueryPayload::BoardRemoveAgent { .. }
                 | QueryPayload::BoardWakeAgent { .. }
+                | QueryPayload::BoardAddWorkspace { .. }
+                | QueryPayload::BoardRemoveWorkspace { .. }
         ),
         _ => false,
     }
@@ -221,6 +223,11 @@ mod tests {
             FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardResumeAgent { name: "a".into() } },
             FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardRemoveAgent { name: "a".into() } },
             FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardWakeAgent { name: "a".into() } },
+            FrontendMessage::Query {
+                id: "x".into(),
+                payload: QueryPayload::BoardAddWorkspace { name: "w".into(), path: "/p".into() },
+            },
+            FrontendMessage::Query { id: "x".into(), payload: QueryPayload::BoardRemoveWorkspace { name: "w".into() } },
         ];
         for m in &yes {
             assert!(is_operator_action(m), "{m:?}");

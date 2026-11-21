@@ -3280,6 +3280,12 @@ async fn team_queries_without_service_return_query_error() {
         ("board-task", QueryPayload::BoardTask { task_id: "t-x".into() }),
         ("board-approve", QueryPayload::BoardApprove { task_id: "t-x".into() }),
         ("board-agents", QueryPayload::BoardAgents),
+        ("board-workspaces", QueryPayload::BoardWorkspaces),
+        (
+            "board-add-workspace",
+            QueryPayload::BoardAddWorkspace { name: "proj".into(), path: "/tmp".into() },
+        ),
+        ("board-remove-workspace", QueryPayload::BoardRemoveWorkspace { name: "proj".into() }),
         ("board-wake-agent", QueryPayload::BoardWakeAgent { name: "ana".into() }),
         ("board-remove-agent", QueryPayload::BoardRemoveAgent { name: "ana".into() }),
         (

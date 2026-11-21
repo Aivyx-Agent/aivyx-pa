@@ -407,15 +407,20 @@ aivyx-pa board goal list
 aivyx-pa board project add <goal> "<title>" [--description "<text>"]
 aivyx-pa board project list [--goal <id>]
 aivyx-pa board task add (--project <id> | --parent <task>) "<title>"
-    [--description "<text>"] [--owner role:<name>|team|agent:<name>] [--no-review]
+    [--description "<text>"] [--owner role:<name>|team|agent:<name>|coder:<name>]
+    [--no-review]
 aivyx-pa board agent list
-aivyx-pa board agent add <name> --works-as role:<name>|team [--title "<t>"]
+aivyx-pa board agent add <name> --works-as role:<name>|team|coder:<name>
+    [--title "<t>"]
     [--reports-to <agent>] [--heartbeat "<cron>"] [--wake-on-assign]
 aivyx-pa board agent edit <name> [--name <new>] [--title "<t>"]
-    [--reports-to <agent>|--no-reports-to] [--works-as role:<name>|team]
+    [--reports-to <agent>|--no-reports-to] [--works-as role:<name>|team|coder:<name>]
     [--heartbeat "<cron>"|--no-heartbeat] [--wake-on-assign|--no-wake-on-assign]
 aivyx-pa board agent pause|resume|remove|wake <name>
-aivyx-pa board assign <task> role:<name>|team|agent:<name>|none
+aivyx-pa board workspace list
+aivyx-pa board workspace add <name> <path>
+aivyx-pa board workspace remove <name>
+aivyx-pa board assign <task> role:<name>|team|agent:<name>|coder:<name>|none
 aivyx-pa board start <task>
 aivyx-pa board approve <task>
 aivyx-pa board send-back <task> "<why>"
@@ -427,6 +432,16 @@ aivyx-pa board comment <task> "<text>"
 thread (comments, state changes and run results). A task needs `--no-review`
 to go straight to done when its run succeeds; otherwise it waits in review for
 `approve` or `send-back`.
+
+A workspace is a folder `aivyx-coder` may work in. `workspace add` takes a
+name (letters, digits, `-`, `_`) and a path; a relative path is made absolute
+against the current directory, and the daemon canonicalizes it and refuses `/`,
+your home folder itself, and pa's own data and config folders. `workspace list`
+prints one line per workspace: `<name>  <path>  <busy|idle>  open <n>`. A
+workspace can't be removed while an open task is owned by it or an agent works
+as it. `coder:<name>` is accepted wherever `role:`, `team` and `agent:` are
+(`assign`, `task add --owner`, `agent add|edit --works-as`): a task owned that
+way is worked by `aivyx-coder --auto` in the workspace.
 
 A standing agent is a named worker on the board: it works as a role or as the
 team, may report to another agent, and picks up the To-do tasks assigned to it

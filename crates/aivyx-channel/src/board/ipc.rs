@@ -66,6 +66,9 @@ pub async fn handle_board_query(
             | QueryPayload::BoardResumeAgent { .. }
             | QueryPayload::BoardRemoveAgent { .. }
             | QueryPayload::BoardWakeAgent { .. }
+            | QueryPayload::BoardWorkspaces
+            | QueryPayload::BoardAddWorkspace { .. }
+            | QueryPayload::BoardRemoveWorkspace { .. }
     );
     if !is_board {
         return None;
@@ -116,6 +119,14 @@ pub async fn handle_board_query(
         QueryPayload::BoardPauseAgent { name } => ack(svc.set_agent_paused(name, true).await),
         QueryPayload::BoardResumeAgent { name } => ack(svc.set_agent_paused(name, false).await),
         QueryPayload::BoardRemoveAgent { name } => ack(svc.remove_agent(name).await),
+        QueryPayload::BoardWorkspaces => match svc.workspaces().await {
+            Ok(workspaces) => QueryResponsePayload::BoardWorkspaces { workspaces },
+            Err(e) => board_error(&e),
+        },
+        QueryPayload::BoardAddWorkspace { name, path } => {
+            created(svc.add_workspace(name, path).await)
+        }
+        QueryPayload::BoardRemoveWorkspace { name } => ack(svc.remove_workspace(name).await),
         QueryPayload::BoardWakeAgent { name } => {
             let Some(hb) = heartbeat else {
                 return Some(error(

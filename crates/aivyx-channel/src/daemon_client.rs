@@ -1755,6 +1755,43 @@ pub async fn board_agents(socket_path: &Path) -> Result<Vec<aivyx_ipc::board::Ag
     }
 }
 
+/// The coder workspaces.
+pub async fn board_workspaces(
+    socket_path: &Path,
+) -> Result<Vec<aivyx_ipc::board::Workspace>, DaemonError> {
+    match send_query(socket_path, "board-workspaces", QueryPayload::BoardWorkspaces).await? {
+        QueryResponsePayload::BoardWorkspaces { workspaces } => Ok(workspaces),
+        QueryResponsePayload::QueryError { code, message } => Err(board_err(code, message)),
+        other => Err(DaemonError::Protocol(format!(
+            "expected BoardWorkspaces, got {other:?}"
+        ))),
+    }
+}
+
+/// Register a coder workspace; returns its id. The daemon validates the path.
+pub async fn board_add_workspace(
+    socket_path: &Path,
+    name: String,
+    path: String,
+) -> Result<String, DaemonError> {
+    board_create(
+        socket_path,
+        "board-add-workspace",
+        QueryPayload::BoardAddWorkspace { name, path },
+    )
+    .await
+}
+
+/// Remove a coder workspace, found by name.
+pub async fn board_remove_workspace(socket_path: &Path, name: String) -> Result<(), DaemonError> {
+    board_ack(
+        socket_path,
+        "board-remove-workspace",
+        QueryPayload::BoardRemoveWorkspace { name },
+    )
+    .await
+}
+
 /// A21 — add a standing agent; returns its id.
 pub async fn board_create_agent(
     socket_path: &Path,

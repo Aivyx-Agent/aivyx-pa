@@ -11179,7 +11179,8 @@ async fn read_task(
                         QueryResponsePayload::BoardAck
                         | QueryResponsePayload::BoardCreated { .. }
                         | QueryResponsePayload::BoardStarted { .. }
-                        | QueryResponsePayload::BoardAgents { .. },
+                        | QueryResponsePayload::BoardAgents { .. }
+                        | QueryResponsePayload::BoardWorkspaces { .. },
                     ..
                 } => {
                     ws.send(board_view::snapshot_query());

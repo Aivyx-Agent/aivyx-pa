@@ -568,6 +568,13 @@ pub enum QueryPayload {
     BoardResumeAgent { name: String },
     /// A21 — remove an agent. Responds with `BoardAck`.
     BoardRemoveAgent { name: String },
+    /// Coder workspaces. Responds with `BoardWorkspaces`.
+    BoardWorkspaces,
+    /// Register a coder workspace. The daemon canonicalizes and validates
+    /// the path. Responds with `BoardCreated`.
+    BoardAddWorkspace { name: String, path: String },
+    /// Remove a coder workspace, found by name. Responds with `BoardAck`.
+    BoardRemoveWorkspace { name: String },
     /// A21 — wake an agent now. The wake runs in the background; responds
     /// at once with `BoardWoke { started: 0 }`.
     BoardWakeAgent { name: String },
@@ -1559,6 +1566,8 @@ pub enum QueryResponsePayload {
     BoardStarted { mission_id: String },
     /// A20 — a board change that returns nothing.
     BoardAck,
+    /// Response to [`QueryPayload::BoardWorkspaces`].
+    BoardWorkspaces { workspaces: Vec<crate::board::Workspace> },
     /// A21 — response to [`QueryPayload::BoardAgents`].
     BoardAgents { agents: Vec<crate::board::Agent> },
     /// A21 — response to [`QueryPayload::BoardWakeAgent`]. `started` is the
@@ -3866,6 +3875,9 @@ mod tests {
             QueryPayload::BoardResumeAgent { name: "ana".into() },
             QueryPayload::BoardRemoveAgent { name: "ana".into() },
             QueryPayload::BoardWakeAgent { name: "ana".into() },
+            QueryPayload::BoardWorkspaces,
+            QueryPayload::BoardAddWorkspace { name: "proj".into(), path: "/srv/proj".into() },
+            QueryPayload::BoardRemoveWorkspace { name: "proj".into() },
         ];
         for q in queries {
             let json = serde_json::to_string(&q).unwrap();
@@ -3879,6 +3891,7 @@ mod tests {
             QueryResponsePayload::BoardStarted { mission_id: "m".into() },
             QueryResponsePayload::BoardAck,
             QueryResponsePayload::BoardAgents { agents: vec![] },
+            QueryResponsePayload::BoardWorkspaces { workspaces: vec![] },
             QueryResponsePayload::BoardWoke { started: 0 },
         ];
         for r in responses {

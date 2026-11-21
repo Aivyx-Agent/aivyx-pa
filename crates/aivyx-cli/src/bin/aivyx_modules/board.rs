@@ -8,15 +8,15 @@ use std::path::Path;
 
 use aivyx_capability::display::neutralise;
 use aivyx_channel::daemon_client::{
-    board_agents, board_approve, board_assign, board_cancel, board_comment, board_create_agent,
+    board_add_workspace, board_agents, board_approve, board_assign, board_cancel, board_comment, board_create_agent,
     board_create_goal, board_create_project, board_create_task, board_edit_agent,
-    board_pause_agent, board_remove_agent, board_resume_agent, board_send_back, board_snapshot,
-    board_start, board_task, board_wake_agent, daemon_is_running,
+    board_pause_agent, board_remove_agent, board_remove_workspace, board_resume_agent, board_send_back, board_snapshot,
+    board_start, board_task, board_wake_agent, board_workspaces, daemon_is_running,
 };
 use aivyx_channel::daemon_ipc::default_socket_path;
 use aivyx_ipc::board::{
     Agent, Author, BoardSnapshot, EntryKind, NewAgent, NewTask, Owner, RunOutcome, Task,
-    TaskState, WorksAs,
+    TaskState, WorksAs, Workspace,
 };
 
 pub const USAGE: &str = "usage:
@@ -27,15 +27,21 @@ pub const USAGE: &str = "usage:
   aivyx-pa board project add <goal> \"<title>\" [--description \"<text>\"]
   aivyx-pa board project list [--goal <id>]
   aivyx-pa board task add (--project <id> | --parent <task>) \"<title>\"
-      [--description \"<text>\"] [--owner role:<name>|team|agent:<name>] [--no-review]
+      [--description \"<text>\"] [--no-review]
+      [--owner role:<name>|team|agent:<name>|coder:<name>]
   aivyx-pa board agent list
-  aivyx-pa board agent add <name> --works-as role:<name>|team [--title \"<t>\"]
+  aivyx-pa board agent add <name> --works-as role:<name>|team|coder:<name>
+      [--title \"<t>\"]
       [--reports-to <agent>] [--heartbeat \"<cron>\"] [--wake-on-assign]
   aivyx-pa board agent edit <name> [--name <new>] [--title \"<t>\"]
-      [--reports-to <agent>|--no-reports-to] [--works-as role:<name>|team]
+      [--reports-to <agent>|--no-reports-to]
+      [--works-as role:<name>|team|coder:<name>]
       [--heartbeat \"<cron>\"|--no-heartbeat] [--wake-on-assign|--no-wake-on-assign]
   aivyx-pa board agent pause|resume|remove|wake <name>
-  aivyx-pa board assign <task> role:<name>|team|agent:<name>|none
+  aivyx-pa board workspace list
+  aivyx-pa board workspace add <name> <path>
+  aivyx-pa board workspace remove <name>
+  aivyx-pa board assign <task> role:<name>|team|agent:<name>|coder:<name>|none
   aivyx-pa board start <task>
   aivyx-pa board approve <task>
   aivyx-pa board send-back <task> \"<why>\"
@@ -87,7 +93,7 @@ pub enum BoardCommand {
         name: String,
         title: Option<String>,
         reports_to: Option<String>,
-        works_as: WorksAs,
+        works_as: WorksAsArg,
         heartbeat: Option<String>,
         wake_on_assign: bool,
     },
@@ -96,9 +102,17 @@ pub enum BoardCommand {
         new_name: Option<String>,
         title: Option<String>,
         reports_to: Change<String>,
-        works_as: Option<WorksAs>,
+        works_as: Option<WorksAsArg>,
         heartbeat: Change<String>,
         wake_on_assign: Option<bool>,
+    },
+    WorkspaceList,
+    WorkspaceAdd {
+        name: String,
+        path: String,
+    },
+    WorkspaceRemove {
+        name: String,
     },
     AgentPause {
         name: String,
@@ -139,6 +153,17 @@ pub enum AssignTo {
     Team,
     Role(String),
     Agent(String),
+    /// A coder workspace, by name.
+    Coder(String),
+}
+
+/// What an agent works as. A coder workspace is named; the name becomes its
+/// id when the command runs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorksAsArg {
+    Team,
+    Role(String),
+    Coder(String),
 }
 
 /// What an `agent edit` does to an optional field.
@@ -169,30 +194,41 @@ fn parse_state(s: &str) -> Result<TaskState, String> {
     }
 }
 
-/// `role:<name>` | `team` | `agent:<name>` | `none`.
+/// `role:<name>` | `team` | `agent:<name>` | `coder:<name>` | `none`.
 pub fn parse_assign(s: &str) -> Result<AssignTo, String> {
     match s {
-        "team" => Ok(AssignTo::Team),
-        "none" => Ok(AssignTo::None),
-        _ => match (s.strip_prefix("role:"), s.strip_prefix("agent:")) {
-            (Some(name), _) if !name.is_empty() => Ok(AssignTo::Role(name.into())),
-            (_, Some(name)) if !name.is_empty() => Ok(AssignTo::Agent(name.into())),
-            _ => Err(format!(
-                "unknown owner `{s}` (use role:<name>, team, agent:<name> or none)"
-            )),
-        },
+        "team" => return Ok(AssignTo::Team),
+        "none" => return Ok(AssignTo::None),
+        _ => {}
+    }
+    let named = |prefix: &str| s.strip_prefix(prefix).filter(|n| !n.is_empty());
+    if let Some(name) = named("role:") {
+        Ok(AssignTo::Role(name.into()))
+    } else if let Some(name) = named("agent:") {
+        Ok(AssignTo::Agent(name.into()))
+    } else if let Some(name) = named("coder:") {
+        Ok(AssignTo::Coder(name.into()))
+    } else {
+        Err(format!(
+            "unknown owner `{s}` (use role:<name>, team, agent:<name>, coder:<name> or none)"
+        ))
     }
 }
 
-/// `role:<name>` | `team`.
-pub fn parse_works_as(s: &str) -> Result<WorksAs, String> {
-    match s {
-        "team" => Ok(WorksAs::Team),
-        _ => match s.strip_prefix("role:") {
-            Some(name) if !name.is_empty() => Ok(WorksAs::Role { name: name.into() }),
-            _ => Err(format!("unknown works-as `{s}` (use role:<name> or team)")),
-        },
+/// `role:<name>` | `team` | `coder:<name>`.
+pub fn parse_works_as(s: &str) -> Result<WorksAsArg, String> {
+    if s == "team" {
+        return Ok(WorksAsArg::Team);
     }
+    if let Some(name) = s.strip_prefix("role:").filter(|n| !n.is_empty()) {
+        return Ok(WorksAsArg::Role(name.into()));
+    }
+    if let Some(name) = s.strip_prefix("coder:").filter(|n| !n.is_empty()) {
+        return Ok(WorksAsArg::Coder(name.into()));
+    }
+    Err(format!(
+        "unknown works-as `{s}` (use role:<name>, team or coder:<name>)"
+    ))
 }
 
 /// Positional words and `--flag value` pairs, in the order given. `bools`
@@ -278,6 +314,7 @@ pub fn parse(args: &[String]) -> Result<BoardCommand, String> {
             _ => Err(USAGE.to_string()),
         },
         "agent" => parse_agent(rest),
+        "workspace" => parse_workspace(rest),
         "goal" => match rest.split_first() {
             Some((a, r)) if a == "add" => {
                 let s = split(r, &["--description"], &[])?;
@@ -395,7 +432,7 @@ fn parse_agent(rest: &[String]) -> Result<BoardCommand, String> {
             };
             let Some(works_as) = s.value("--works-as") else {
                 return Err(format!(
-                    "`agent add` needs `--works-as role:<name>|team`\n{USAGE}"
+                    "`agent add` needs `--works-as role:<name>|team|coder:<name>`\n{USAGE}"
                 ));
             };
             Ok(BoardCommand::AgentAdd {
@@ -449,6 +486,32 @@ fn parse_agent(rest: &[String]) -> Result<BoardCommand, String> {
     }
 }
 
+fn parse_workspace(rest: &[String]) -> Result<BoardCommand, String> {
+    let Some((sub, rest)) = rest.split_first() else {
+        return Err(USAGE.to_string());
+    };
+    match (sub.as_str(), rest) {
+        ("list", []) => Ok(BoardCommand::WorkspaceList),
+        ("add", [name, path]) => Ok(BoardCommand::WorkspaceAdd {
+            name: name.clone(),
+            path: path.clone(),
+        }),
+        ("remove", [name]) => Ok(BoardCommand::WorkspaceRemove { name: name.clone() }),
+        _ => Err(USAGE.to_string()),
+    }
+}
+
+/// A path as given, made absolute against the current directory when it is
+/// relative. The daemon canonicalizes and validates it either way.
+fn absolute_path(path: &str, cwd: &Path) -> String {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        path.to_string()
+    } else {
+        cwd.join(p).to_string_lossy().into_owned()
+    }
+}
+
 fn one_task(rest: &[String]) -> Result<String, String> {
     match rest {
         [task] => Ok(task.clone()),
@@ -479,7 +542,8 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
         BoardCommand::Show { task } => {
             let t = board_task(&socket, task).await.map_err(e)?;
             let agents = board_agents(&socket).await.map_err(e)?;
-            print!("{}", render_task(&t, &agents));
+            let snap = board_snapshot(&socket).await.map_err(e)?;
+            print!("{}", render_task(&t, &agents, &snap.workspaces));
         }
         BoardCommand::GoalAdd { title, description } => {
             let id = board_create_goal(&socket, title, description)
@@ -547,7 +611,7 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
         BoardCommand::AgentList => {
             let agents = board_agents(&socket).await.map_err(e)?;
             let snap = board_snapshot(&socket).await.map_err(e)?;
-            print!("{}", render_agents(&agents, &snap.tasks));
+            print!("{}", render_agents(&agents, &snap.tasks, &snap.workspaces));
         }
         BoardCommand::AgentAdd {
             name,
@@ -561,6 +625,7 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
                 Some(boss) => Some(resolve_agent(&socket, &boss).await?),
                 None => None,
             };
+            let works_as = resolve_works_as(&socket, works_as).await?;
             board_create_agent(
                 &socket,
                 NewAgent {
@@ -586,6 +651,10 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
             heartbeat,
             wake_on_assign,
         } => {
+            let works_as = match works_as {
+                Some(w) => Some(resolve_works_as(&socket, w).await?),
+                None => None,
+            };
             let mut agent = NewAgent {
                 name: new_name.clone(),
                 title,
@@ -607,6 +676,24 @@ pub async fn run_board(cmd: BoardCommand) -> Result<(), String> {
                 .await
                 .map_err(e)?;
             println!("Updated agent {}", neutralise(new_name.as_deref().unwrap_or(&name)));
+        }
+        BoardCommand::WorkspaceList => {
+            let snap = board_snapshot(&socket).await.map_err(e)?;
+            let agents = board_agents(&socket).await.map_err(e)?;
+            print!("{}", render_workspaces(&snap.workspaces, &snap.tasks, &agents));
+        }
+        BoardCommand::WorkspaceAdd { name, path } => {
+            let cwd = std::env::current_dir().map_err(|err| err.to_string())?;
+            board_add_workspace(&socket, name.clone(), absolute_path(&path, &cwd))
+                .await
+                .map_err(e)?;
+            println!("Added workspace {}", neutralise(&name));
+        }
+        BoardCommand::WorkspaceRemove { name } => {
+            board_remove_workspace(&socket, name.clone())
+                .await
+                .map_err(e)?;
+            println!("Removed workspace {}", neutralise(&name));
         }
         BoardCommand::AgentPause { name } => {
             board_pause_agent(&socket, name.clone()).await.map_err(e)?;
@@ -692,7 +779,42 @@ async fn resolve_owner(socket: &Path, to: AssignTo) -> Result<(Option<Owner>, St
             let id = resolve_agent(socket, &name).await?;
             (Some(Owner::Agent { id }), format!("agent:{name}"))
         }
+        AssignTo::Coder(name) => {
+            let workspace = resolve_workspace(socket, &name).await?;
+            (Some(Owner::Coder { workspace }), format!("coder:{name}"))
+        }
     })
+}
+
+/// What an agent works as, as the wire type; a workspace's name becomes its id.
+async fn resolve_works_as(socket: &Path, to: WorksAsArg) -> Result<WorksAs, String> {
+    Ok(match to {
+        WorksAsArg::Team => WorksAs::Team,
+        WorksAsArg::Role(name) => WorksAs::Role { name },
+        WorksAsArg::Coder(name) => WorksAs::Coder {
+            workspace: resolve_workspace(socket, &name).await?,
+        },
+    })
+}
+
+/// A workspace's name to its id.
+async fn resolve_workspace(socket: &Path, name: &str) -> Result<String, String> {
+    let list = board_workspaces(socket).await.map_err(|e| e.to_string())?;
+    workspace_id(&list, name)
+}
+
+fn workspace_id(list: &[Workspace], name: &str) -> Result<String, String> {
+    list.iter()
+        .find(|w| w.name == name)
+        .map(|w| w.id.clone())
+        .ok_or_else(|| format!("no workspace named `{}`", neutralise(name)))
+}
+
+fn workspace_name(workspaces: &[Workspace], id: &str) -> String {
+    workspaces
+        .iter()
+        .find(|w| w.id == id)
+        .map_or_else(|| id.to_string(), |w| w.name.clone())
 }
 
 /// An agent's name to its id.
@@ -705,11 +827,13 @@ async fn resolve_agent(socket: &Path, name: &str) -> Result<String, String> {
         .ok_or_else(|| format!("no agent named `{name}`"))
 }
 
-fn owner_label(owner: Option<&Owner>, agents: &[Agent]) -> String {
+fn owner_label(owner: Option<&Owner>, agents: &[Agent], workspaces: &[Workspace]) -> String {
     match owner {
         Some(Owner::Role { name }) => format!("role:{name}"),
         Some(Owner::Team) => "team".into(),
-        Some(Owner::Coder { workspace }) => format!("coder:{workspace}"),
+        Some(Owner::Coder { workspace }) => {
+            format!("coder:{}", workspace_name(workspaces, workspace))
+        }
         Some(Owner::Agent { id }) => agents
             .iter()
             .find(|a| a.id == *id)
@@ -774,7 +898,7 @@ pub fn render_list(snap: &BoardSnapshot, filter: &ListFilter) -> String {
                 "  {}  {}  {}  {}\n",
                 neutralise(&t.id),
                 state_label(t.state),
-                neutralise(&owner_label(t.owner.as_ref(), agents)),
+                neutralise(&owner_label(t.owner.as_ref(), agents, &snap.workspaces)),
                 neutralise(&t.title)
             ));
         }
@@ -787,7 +911,7 @@ pub fn render_list(snap: &BoardSnapshot, filter: &ListFilter) -> String {
 
 /// The org chart: roots (no boss, or a boss that's gone) first, each with
 /// its reports indented two spaces beneath.
-pub fn render_agents(agents: &[Agent], tasks: &[Task]) -> String {
+pub fn render_agents(agents: &[Agent], tasks: &[Task], workspaces: &[Workspace]) -> String {
     if agents.is_empty() {
         return "No agents.\n".into();
     }
@@ -804,7 +928,7 @@ pub fn render_agents(agents: &[Agent], tasks: &[Task]) -> String {
         .collect();
     by_name(&mut roots);
     for root in roots {
-        agent_lines(root, agents, tasks, 0, false, &mut seen, &mut out);
+        agent_lines(root, agents, (tasks, workspaces), 0, false, &mut seen, &mut out);
     }
     // Agents a stored loop left unreached: show each as a root, marked.
     let mut rest: Vec<&Agent> = agents
@@ -813,7 +937,7 @@ pub fn render_agents(agents: &[Agent], tasks: &[Task]) -> String {
         .collect();
     by_name(&mut rest);
     for a in rest {
-        agent_lines(a, agents, tasks, 0, true, &mut seen, &mut out);
+        agent_lines(a, agents, (tasks, workspaces), 0, true, &mut seen, &mut out);
     }
     out
 }
@@ -821,7 +945,7 @@ pub fn render_agents(agents: &[Agent], tasks: &[Task]) -> String {
 fn agent_lines<'a>(
     agent: &'a Agent,
     agents: &'a [Agent],
-    tasks: &[Task],
+    board: (&[Task], &[Workspace]),
     depth: usize,
     in_loop: bool,
     seen: &mut Vec<&'a str>,
@@ -830,6 +954,7 @@ fn agent_lines<'a>(
     if seen.contains(&agent.id.as_str()) {
         return;
     }
+    let (tasks, workspaces) = board;
     seen.push(&agent.id);
     let open = tasks
         .iter()
@@ -839,7 +964,9 @@ fn agent_lines<'a>(
     let works_as = match &agent.works_as {
         WorksAs::Role { name } => format!("role:{name}"),
         WorksAs::Team => "team".into(),
-        WorksAs::Coder { workspace } => format!("coder:{workspace}"),
+        WorksAs::Coder { workspace } => {
+            format!("coder:{}", workspace_name(workspaces, workspace))
+        }
     };
     let mut line = format!("{}{}", "  ".repeat(depth), neutralise(&agent.name));
     if !agent.title.is_empty() {
@@ -867,8 +994,41 @@ fn agent_lines<'a>(
         .collect();
     children.sort_by(|a, b| a.name.cmp(&b.name));
     for child in children {
-        agent_lines(child, agents, tasks, depth + 1, in_loop, seen, out);
+        agent_lines(child, agents, board, depth + 1, in_loop, seen, out);
     }
+}
+
+/// One line per workspace, in name order. Busy means a running task is owned
+/// by it; `open` counts the open tasks owned by it, directly or through an
+/// agent that works as it.
+pub fn render_workspaces(workspaces: &[Workspace], tasks: &[Task], agents: &[Agent]) -> String {
+    if workspaces.is_empty() {
+        return "No workspaces.\n".into();
+    }
+    let mut sorted: Vec<&Workspace> = workspaces.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let owned_by = |t: &Task, ws: &Workspace| match &t.owner {
+        Some(Owner::Coder { workspace }) => *workspace == ws.id,
+        Some(Owner::Agent { id }) => agents.iter().any(|a| {
+            a.id == *id && matches!(&a.works_as, WorksAs::Coder { workspace } if *workspace == ws.id)
+        }),
+        _ => false,
+    };
+    let mut out = String::new();
+    for ws in sorted {
+        let mine = || tasks.iter().filter(|t| owned_by(t, ws));
+        let busy = mine().any(|t| t.state == TaskState::Running);
+        let open = mine()
+            .filter(|t| matches!(t.state, TaskState::Todo | TaskState::Running | TaskState::Review))
+            .count();
+        out.push_str(&format!(
+            "{}  {}  {}  open {open}\n",
+            neutralise(&ws.name),
+            neutralise(&ws.path),
+            if busy { "busy" } else { "idle" }
+        ));
+    }
+    out
 }
 
 pub fn render_goals(snap: &BoardSnapshot) -> String {
@@ -907,7 +1067,7 @@ pub fn render_projects(snap: &BoardSnapshot, goal: Option<&str>) -> String {
 }
 
 /// The task's fields, then its thread, one entry per line.
-pub fn render_task(t: &Task, agents: &[Agent]) -> String {
+pub fn render_task(t: &Task, agents: &[Agent], workspaces: &[Workspace]) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "{}  {}\n",
@@ -917,7 +1077,7 @@ pub fn render_task(t: &Task, agents: &[Agent]) -> String {
     out.push_str(&format!("  state:    {}\n", state_label(t.state)));
     out.push_str(&format!(
         "  owner:    {}\n",
-        neutralise(&owner_label(t.owner.as_ref(), agents))
+        neutralise(&owner_label(t.owner.as_ref(), agents, workspaces))
     ));
     out.push_str(&format!("  project:  {}\n", neutralise(&t.project_id)));
     if let Some(p) = &t.parent_task {
@@ -1174,7 +1334,7 @@ mod tests {
                 name: "ana".into(),
                 title: Some("Lead writer".into()),
                 reports_to: Some("boss".into()),
-                works_as: WorksAs::Role { name: "writer".into() },
+                works_as: WorksAsArg::Role("writer".into()),
                 heartbeat: Some("0 0 9 * * *".into()),
                 wake_on_assign: true,
             }
@@ -1185,7 +1345,7 @@ mod tests {
                 name: "bo".into(),
                 title: None,
                 reports_to: None,
-                works_as: WorksAs::Team,
+                works_as: WorksAsArg::Team,
                 heartbeat: None,
                 wake_on_assign: false,
             }
@@ -1197,7 +1357,7 @@ mod tests {
                 new_name: Some("anna".into()),
                 title: Some("T".into()),
                 reports_to: Change::Set("boss".into()),
-                works_as: Some(WorksAs::Team),
+                works_as: Some(WorksAsArg::Team),
                 heartbeat: Change::Set("* * * * *".into()),
                 wake_on_assign: Some(false),
             }
@@ -1299,7 +1459,7 @@ mod tests {
             task("t-2", "p", TaskState::Review, Some(Owner::Agent { id: "a-2".into() })),
             task("t-3", "p", TaskState::Done, Some(Owner::Agent { id: "a-2".into() })),
         ];
-        let out = render_agents(&[boss, ana, deep, solo], &tasks);
+        let out = render_agents(&[boss, ana, deep, solo], &tasks, &[]);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 4, "{out}");
         assert_eq!(
@@ -1312,14 +1472,14 @@ mod tests {
         );
         assert!(lines[2].starts_with("    deep  works as team"), "{out}");
         assert!(lines[3].starts_with("solo  works as team"), "{out}");
-        assert_eq!(render_agents(&[], &[]), "No agents.\n");
+        assert_eq!(render_agents(&[], &[], &[]), "No agents.\n");
     }
 
     #[test]
     fn a_stored_loop_still_renders_and_names_sort() {
         let a = agent("a-1", "zed", Some("a-2"));
         let b = agent("a-2", "amy", Some("a-1"));
-        let out = render_agents(&[a, b], &[]);
+        let out = render_agents(&[a, b], &[], &[]);
         assert_eq!(out.lines().count(), 2, "{out}");
         assert!(out.contains("zed") && out.contains("amy"), "{out}");
         assert!(out.lines().all(|l| l.contains("(reports-to loop)")), "{out}");
@@ -1332,7 +1492,7 @@ mod tests {
             agent("a-4", "yan", Some("a-1")),
             agent("a-5", "bob", Some("a-1")),
         ];
-        let out = render_agents(&agents, &[]);
+        let out = render_agents(&agents, &[], &[]);
         let names: Vec<&str> = out
             .lines()
             .map(|l| l.split_whitespace().next().unwrap())
@@ -1344,7 +1504,7 @@ mod tests {
     fn agent_text_is_neutralised_and_owners_show_the_name() {
         let mut a = agent("a-1", "ana", None);
         a.title = "x\u{1b}[31mred".into();
-        let out = render_agents(&[a.clone()], &[]);
+        let out = render_agents(&[a.clone()], &[], &[]);
         assert!(!out.contains('\u{1b}'), "{out}");
 
         let mut snap = snap();
@@ -1352,11 +1512,124 @@ mod tests {
         snap.tasks[0].owner = Some(Owner::Agent { id: "a-1".into() });
         let out = render_list(&snap, &ListFilter::default());
         assert!(out.contains("t-1  todo  agent:ana  title t-1"), "{out}");
-        let out = render_task(&snap.tasks[0], &[a]);
+        let out = render_task(&snap.tasks[0], &[a], &[]);
         assert!(out.contains("owner:    agent:ana"), "{out}");
         // A removed agent's id still shows, not nothing.
-        let out = render_task(&snap.tasks[0], &[]);
+        let out = render_task(&snap.tasks[0], &[], &[]);
         assert!(out.contains("owner:    agent:a-1"), "{out}");
+    }
+
+    fn ws(id: &str, name: &str, path: &str) -> Workspace {
+        Workspace {
+            id: id.into(),
+            name: name.into(),
+            path: path.into(),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn every_workspace_and_coder_form_parses() {
+        assert_eq!(p("workspace list").unwrap(), BoardCommand::WorkspaceList);
+        assert_eq!(
+            p("workspace add proj /srv/proj").unwrap(),
+            BoardCommand::WorkspaceAdd { name: "proj".into(), path: "/srv/proj".into() }
+        );
+        assert_eq!(
+            p("workspace remove proj").unwrap(),
+            BoardCommand::WorkspaceRemove { name: "proj".into() }
+        );
+        assert_eq!(parse_assign("coder:proj").unwrap(), AssignTo::Coder("proj".into()));
+        match p("task add --project p-1 \"x\" --owner coder:proj").unwrap() {
+            BoardCommand::TaskAdd { owner, .. } => assert_eq!(owner, AssignTo::Coder("proj".into())),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            p("assign t-1 coder:proj").unwrap(),
+            BoardCommand::Assign { task: "t-1".into(), owner: AssignTo::Coder("proj".into()) }
+        );
+        match p("agent add ana --works-as coder:proj").unwrap() {
+            BoardCommand::AgentAdd { works_as, .. } => {
+                assert_eq!(works_as, WorksAsArg::Coder("proj".into()))
+            }
+            other => panic!("{other:?}"),
+        }
+        match p("agent edit ana --works-as coder:proj").unwrap() {
+            BoardCommand::AgentEdit { works_as, .. } => {
+                assert_eq!(works_as, Some(WorksAsArg::Coder("proj".into())))
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn bad_workspace_input_is_refused() {
+        assert!(p("workspace").is_err());
+        assert!(p("workspace list extra").is_err());
+        assert!(p("workspace add proj").is_err());
+        assert!(p("workspace add proj /a /b").is_err());
+        assert!(p("workspace remove").is_err());
+        assert!(p("workspace frob x").is_err());
+        assert!(p("assign t-1 coder:").is_err());
+        assert!(p("agent add ana --works-as coder:").is_err());
+        let e = p("assign t-1 bob").unwrap_err();
+        assert!(e.contains("coder:<name>"), "{e}");
+    }
+
+    #[test]
+    fn relative_paths_become_absolute_and_absolute_ones_stay() {
+        let cwd = Path::new("/home/me");
+        assert_eq!(absolute_path("proj", cwd), "/home/me/proj");
+        assert_eq!(absolute_path("./proj", cwd), "/home/me/./proj");
+        assert_eq!(absolute_path("/srv/proj", cwd), "/srv/proj");
+    }
+
+    #[test]
+    fn a_workspace_name_resolves_to_its_id() {
+        let list = [ws("w-1", "proj", "/p")];
+        assert_eq!(workspace_id(&list, "proj").unwrap(), "w-1");
+        let e = workspace_id(&list, "no\x1b[31mpe").unwrap_err();
+        assert!(e.contains("no workspace named") && !e.contains('\x1b'), "{e:?}");
+    }
+
+    #[test]
+    fn workspaces_render_busy_idle_and_open_in_name_order() {
+        let list = [ws("w-2", "zed", "/z"), ws("w-1", "alpha", "/a")];
+        let mut ana = agent("a-1", "ana", None);
+        ana.works_as = WorksAs::Coder { workspace: "w-2".into() };
+        let tasks = [
+            task("t-1", "p", TaskState::Running, Some(Owner::Coder { workspace: "w-1".into() })),
+            task("t-2", "p", TaskState::Todo, Some(Owner::Coder { workspace: "w-1".into() })),
+            task("t-3", "p", TaskState::Done, Some(Owner::Coder { workspace: "w-1".into() })),
+            task("t-4", "p", TaskState::Review, Some(Owner::Agent { id: "a-1".into() })),
+            task("t-5", "p", TaskState::Running, Some(Owner::Team)),
+        ];
+        assert_eq!(
+            render_workspaces(&list, &tasks, &[ana]),
+            "alpha  /a  busy  open 2\nzed  /z  idle  open 1\n"
+        );
+        assert_eq!(render_workspaces(&[], &[], &[]), "No workspaces.\n");
+    }
+
+    #[test]
+    fn workspace_text_is_neutralised_and_labels_show_the_name() {
+        let list = [ws("w-1", "pro\x1b[31mj", "/p\x1b[2Jath")];
+        let out = render_workspaces(&list, &[], &[]);
+        assert!(!out.contains('\x1b'), "{out:?}");
+        let mut a = agent("a-1", "ana", None);
+        a.works_as = WorksAs::Coder { workspace: "w-1".into() };
+        let out = render_agents(&[a], &[], &[ws("w-1", "proj", "/p")]);
+        assert!(out.contains("works as coder:proj"), "{out}");
+        let mut snap = snap();
+        snap.workspaces = vec![ws("w-1", "proj", "/p")];
+        snap.tasks[0].owner = Some(Owner::Coder { workspace: "w-1".into() });
+        let out = render_list(&snap, &ListFilter::default());
+        assert!(out.contains("t-1  todo  coder:proj  title t-1"), "{out}");
+        let out = render_task(&snap.tasks[0], &[], &snap.workspaces);
+        assert!(out.contains("owner:    coder:proj"), "{out}");
+        // A removed workspace's id still shows, not nothing.
+        let out = render_task(&snap.tasks[0], &[], &[]);
+        assert!(out.contains("owner:    coder:w-1"), "{out}");
     }
 
     fn task(id: &str, project: &str, state: TaskState, owner: Option<Owner>) -> Task {
@@ -1489,7 +1762,7 @@ mod tests {
                 },
             },
         ];
-        let out = render_task(&t, &[]);
+        let out = render_task(&t, &[], &[]);
         assert!(out.contains("operator  go"), "{out}");
         assert!(
             !out.contains('\u{1b}'),
@@ -1521,7 +1794,7 @@ mod tests {
                 cost_usd: None,
             },
         }];
-        let out = render_task(&t, &[]);
+        let out = render_task(&t, &[], &[]);
         assert!(
             out.contains("agent  run m-2 failed: it broke, —\n"),
             "{out}"
