@@ -124,7 +124,7 @@ In a role run, and only there, the agent has two tools, both under the
 - `board.subtask { title, description }`: add an unowned subtask under the
   run's own task. Its description starts with "(written by an agent) ", so
   you (and the subtask's own run, which reads it as its brief) can tell it
-  from yours. You assign and start it.
+  from yours; the brief also marks its title "Task (written by an agent)". You assign and start it.
 
 The model never names a task: the board knows which task each role run's
 session is working, and refuses a call from any other session. Agents can't
@@ -241,9 +241,12 @@ result like any other run's. Amendment A22
 
 **Local only.** aivyx-pa and aivyx-coder are local-first and use only local
 models. pa never passes a cloud credential to coder: it removes its own
-secrets (`AIVYX_PA_*`) and the well-known cloud-provider key variables
-(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and the like) from coder's
-environment. Point coder's own config (`~/.config/aivyx-coder/config.toml`,
+secrets (`AIVYX_PA_*`), the well-known cloud-provider credential variables
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AWS_SECRET_ACCESS_KEY`,
+`GOOGLE_APPLICATION_CREDENTIALS`, `HF_TOKEN` and the like) and any variable
+whose name ends in `_API_KEY`, `_API_TOKEN`, `_SECRET_ACCESS_KEY` or
+`_SESSION_TOKEN` from coder's environment. If your local llama-server needs
+a key, put it in coder's own config, not in a variable with such a name. Point coder's own config (`~/.config/aivyx-coder/config.toml`,
 `[backend] base_url`) at your local llama-server.
 
 ### Workspaces
@@ -269,8 +272,10 @@ aivyx-pa board workspace remove shop
   has gone, or now resolves somewhere refused, doesn't start.
 - `workspace list` prints `<name>  <path>  <busy|idle>  open <n>`: whether
   a coder run is working in it, and how many open tasks it owns.
-- Removing a workspace is refused while a To-do, Running or Review task is
-  owned by it, or while an agent works as it. To change a workspace's path,
+- Removing a workspace is refused ("the workspace is in use") while a
+  To-do, Running or Review task is owned by it, while an agent works as it,
+  or while a coder run is still in it (after a Cancel, until coder has
+  actually stopped). To change a workspace's path,
   remove it and add it again.
 - Board tools, runs, team specialists and federation peers can't register
   or remove a workspace, and nothing else ever supplies a path: a run can
@@ -309,14 +314,21 @@ How it ends is decided by coder's exit code:
 | 2 | To do | "coder's budget ran out" |
 | 3 | To do | "coder failed: <its last stderr lines>" |
 | 4 | To do | "coder stopped: possible prompt injection" |
-| 130, or Cancel | Cancelled | — |
+| your Cancel | Cancelled | — |
+| 130 without a Cancel | To do | "coder was stopped by a signal (130)" |
 | couldn't start | To do | the error |
-| anything else, or a signal | To do | "coder exited unexpectedly (<code>)" |
+| anything else | To do | "coder exited unexpectedly (<code>)" |
+| killed by a signal | To do | "coder exited unexpectedly (killed by a signal)" |
+
+Only your own Cancel ends a task Cancelled. A 130 without one means a
+signal reached coder from outside the board (a daemon stop or restart, say),
+so the task goes back to To do and can be started again.
 
 The run entry's token count is the report's prompt plus completion tokens,
-and its answer ends with "N changed files; N checkpoints — undo with /undo
-in aivyx-coder". If coder wrote no report, the exit code still decides and
-the note says "(coder wrote no report)".
+and its answer starts with "N changed files, N checkpoints — undo: run
+aivyx-coder --resume in the workspace, then /undo", then coder's notice (or,
+for a run that went back to To do, the reason). If coder wrote no report,
+the exit code still decides and the note says "(coder wrote no report)".
 
 Things to know:
 
@@ -340,8 +352,6 @@ Things to know:
   note, and the next run starts from the folder as it is now.
 - **Cancel, the ceiling and a restart don't undo anything:** edits coder
   made before it stopped stay in the folder. Use `/undo` as above.
-- `board show` cuts a run's answer at 200 characters, so with a long
-  notice the counts at its end may not show there.
 - **A very long brief** (over about 128 KiB, the system's limit on one
   argument) can't be passed, so the start fails and the task goes back to
   To do with the error.
@@ -358,12 +368,17 @@ Things to know:
   (an hour by default) usually stops it first, with exit 2.
 - **Cancel** sends SIGTERM the same way (a kill 30 s later), and the task
   ends Cancelled.
-- **Daemon stop or restart** kills the coder process; at startup the
-  restart sweep puts the task back in To do, "interrupted by a daemon
-  restart", and closes its mission record, as for role runs.
-- **On macOS**, a hard kill (after the 30 s grace) can leave behind a
-  command coder had started (a test run, say): coder's clean-up of its own
-  children when it dies is Linux-only.
+- **Daemon stop or restart** stops coder. coder runs in its own process
+  group, so a Ctrl-C in pa's terminal doesn't reach it directly; pa stops it
+  as it exits. On Linux a pa crash stops coder too (coder gets SIGTERM when
+  pa dies). The task goes back to To do: either the run itself ends
+  "coder was stopped by a signal (130)", or at startup the restart sweep
+  puts it back, "interrupted by a daemon restart", and closes its mission
+  record, as for role runs.
+- **On macOS**, a hard kill (after the 30 s grace) or a pa crash can leave
+  coder, or a command it had started (a test run, say), running: coder's
+  clean-up of its own children when it dies is Linux-only, and so is the
+  stop on pa's death.
 
 ### No turn lock: share a llama with aivyx-broker
 

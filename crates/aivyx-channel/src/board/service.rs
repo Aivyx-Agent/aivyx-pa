@@ -41,7 +41,7 @@ const TEAM_POLL: Duration = Duration::from_secs(2);
 const ABORT_TRIES: u32 = 30;
 
 /// The prefix of a subtask description `board.subtask` wrote.
-const AGENT_WRITTEN: &str = "(written by an agent) ";
+pub(crate) const AGENT_WRITTEN: &str = "(written by an agent) ";
 
 /// The halt reason of a paused team mission whose board task was cancelled.
 const CANCELLED_REASON: &str = "its board task was cancelled";
@@ -458,16 +458,18 @@ impl BoardService {
         Ok(ws.id)
     }
 
-    /// Refused while an open task is owned by the workspace or an agent
-    /// works as it.
+    /// Refused while an open task is owned by the workspace, an agent works
+    /// as it, or a coder run is still in it (the busy set; a cancelled run
+    /// stays there until coder has actually stopped).
     pub async fn remove_workspace(&self, name: &str) -> Result<(), BoardError> {
         let _w = self.inner.write_lock.lock().await;
         let ws = self.workspace_by_name(name).await?;
         let h = &self.deps().store;
         let agents = store::list_agents(h).await?;
-        let in_use = agents
-            .iter()
-            .any(|a| matches!(&a.works_as, WorksAs::Coder { workspace } if *workspace == ws.id))
+        let in_use = self.workspace_busy(&ws.id)
+            || agents.iter().any(
+                |a| matches!(&a.works_as, WorksAs::Coder { workspace } if *workspace == ws.id),
+            )
             || store::list_tasks(h).await?.iter().any(|t| {
                 matches!(t.state, TaskState::Todo | TaskState::Running | TaskState::Review)
                     && matches!(&t.owner, Some(Owner::Coder { workspace }) if *workspace == ws.id)
@@ -1027,6 +1029,7 @@ impl BoardService {
                 brief: text,
                 ceiling: self.inner.coder_ceiling,
                 grace: self.inner.coder_grace,
+                extra_env: Vec::new(),
             };
             (registration, spec)
         };

@@ -68,6 +68,10 @@ pub struct CoderRunSpec {
     pub brief: String,
     pub ceiling: Duration,
     pub grace: Duration,
+    /// Extra variables set on the child before the scrub (a test seam: the
+    /// scrub must still remove any secret-shaped name given here). Empty in
+    /// the daemon.
+    pub extra_env: Vec<(String, String)>,
 }
 
 /// What coder's `--report` file says (the fields pa uses).
@@ -164,7 +168,10 @@ pub fn to_run_result(o: &CoderOutcome) -> (RunOutcome, String, u64) {
             }
         }
         Some(4) => failed(format!("coder stopped: possible prompt injection{missing}")),
-        Some(130) => (RunOutcome::Cancelled, String::new(), tokens),
+        // Only pa's own Cancel is terminal: a 130 without one is a daemon
+        // stop or restart (or a Ctrl-C) reaching coder, and the task goes
+        // back to To do so the restart sweep can pick it up.
+        Some(130) => failed(format!("coder was stopped by a signal (130){missing}")),
         Some(code) => failed(format!("coder exited unexpectedly ({code}){missing}")),
         None => failed(format!(
             "coder exited unexpectedly (killed by a signal){missing}"
@@ -172,11 +179,13 @@ pub fn to_run_result(o: &CoderOutcome) -> (RunOutcome, String, u64) {
     }
 }
 
-/// `note` plus the changed-file and checkpoint counts, when there is a report.
+/// The changed-file and checkpoint counts and the undo hint first (so a
+/// shortened view still shows them), then `note`, when there is a report.
 fn with_counts(note: &str, report: Option<&CoderReport>) -> String {
     match report {
         Some(r) => format!(
-            "{note}\n\n{} changed file{}; {} checkpoint{} — undo with /undo in aivyx-coder",
+            "{} changed file{}, {} checkpoint{} — undo: run aivyx-coder --resume in the \
+             workspace, then /undo\n\n{note}",
             r.changed_files,
             if r.changed_files == 1 { "" } else { "s" },
             r.checkpoints,
@@ -283,16 +292,40 @@ const CLOUD_CREDENTIAL_VARS: &[&str] = &[
     "FIREWORKS_API_KEY",
     "PERPLEXITY_API_KEY",
     "AZURE_OPENAI_API_KEY",
+    "AZURE_API_KEY",
+    "AZURE_OPENAI_KEY",
     "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
 ];
 
-/// pa's own secrets (passphrase, API and bot tokens: `AIVYX_PA_*`) and
-/// cloud-provider credentials stay with pa.
+/// Any variable whose name ends in one of these is treated as a credential
+/// too (catches providers the list doesn't name).
+const CREDENTIAL_SUFFIXES: &[&str] = &[
+    "_API_KEY",
+    "_API_TOKEN",
+    "_SECRET_ACCESS_KEY",
+    "_SESSION_TOKEN",
+];
+
+/// Whether `name` is one pa keeps from a worker: pa's own secrets
+/// (passphrase, API and bot tokens: `AIVYX_PA_*`), a listed cloud
+/// credential, or a credential-shaped name.
+fn is_withheld(name: &str) -> bool {
+    name.starts_with("AIVYX_PA_")
+        || CLOUD_CREDENTIAL_VARS.contains(&name)
+        || CREDENTIAL_SUFFIXES.iter().any(|s| name.ends_with(s))
+}
+
+/// Remove every withheld name in `names` from the child's environment.
+/// Names that aren't UTF-8 are skipped (no credential name is).
 fn strip_pa_env(cmd: &mut Command, names: impl Iterator<Item = OsString>) {
     for k in names {
-        if k.to_str()
-            .is_some_and(|k| k.starts_with("AIVYX_PA_") || CLOUD_CREDENTIAL_VARS.contains(&k))
-        {
+        if k.to_str().is_some_and(is_withheld) {
             cmd.env_remove(k);
         }
     }
@@ -328,7 +361,48 @@ pub async fn run(spec: CoderRunSpec, cancel: CancellationToken) -> CoderOutcome 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    strip_pa_env(&mut cmd, std::env::vars_os().map(|(k, _)| k));
+    for (k, v) in &spec.extra_env {
+        cmd.env(k, v);
+    }
+    strip_pa_env(
+        &mut cmd,
+        std::env::vars_os()
+            .map(|(k, _)| k)
+            .chain(spec.extra_env.iter().map(|(k, _)| OsString::from(k))),
+    );
+    // Its own process group, so a terminal Ctrl-C to pa doesn't reach coder
+    // directly; pa stops it itself (cancel, the ceiling, kill_on_drop). The
+    // signals in `stop` go to `child.id()`, the group leader, unchanged.
+    #[cfg(unix)]
+    cmd.process_group(0);
+    // On Linux coder also gets SIGTERM when pa dies (a crash or a SIGKILL),
+    // as aivyx-coder does for its own children. The death signal follows
+    // the spawning thread: `run` spawns from a runtime worker thread, which
+    // lives as long as the daemon's runtime.
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: `getpid` is always safe; the closure runs in the forked
+        // child before exec and makes only async-signal-safe calls (prctl,
+        // getppid), with no allocation.
+        let parent = unsafe { libc::getpid() };
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::prctl(
+                    libc::PR_SET_PDEATHSIG,
+                    libc::SIGTERM as libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                ) != 0
+                    || libc::getppid() != parent
+                {
+                    // pa is already gone (or prctl failed): don't start.
+                    return Err(std::io::Error::from_raw_os_error(libc::EOWNERDEAD));
+                }
+                Ok(())
+            });
+        }
+    }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -422,18 +496,25 @@ pub(crate) mod tests {
     fn exit_0_succeeds_with_the_notice_and_the_counts() {
         let r = to_run_result(&exited(0, Some(report("Added parse() and its test."))));
         assert_eq!(r.0, RunOutcome::Succeeded);
-        assert!(r.1.contains("Added parse() and its test."), "{}", r.1);
-        assert!(r.1.contains("2 changed files"), "{}", r.1);
-        assert!(r.1.contains("4 checkpoints"), "{}", r.1);
-        assert!(r.1.contains("undo with /undo"), "{}", r.1);
+        assert_eq!(
+            r.1,
+            "2 changed files, 4 checkpoints — undo: run aivyx-coder --resume in the \
+             workspace, then /undo\n\nAdded parse() and its test."
+        );
         assert_eq!(r.2, 123);
+        let mut one = report("x");
+        one.changed_files = 1;
+        one.checkpoints = 1;
+        let r = to_run_result(&exited(0, Some(one)));
+        assert!(r.1.starts_with("1 changed file, 1 checkpoint — undo:"), "{}", r.1);
     }
 
     #[test]
     fn exit_1_succeeds_with_a_failed_check() {
         let r = to_run_result(&exited(1, Some(report("Done."))));
         assert_eq!(r.0, RunOutcome::Succeeded);
-        assert!(r.1.starts_with("Done. — a check failed"), "{}", r.1);
+        assert!(r.1.starts_with("2 changed files, 4 checkpoints — undo:"), "{}", r.1);
+        assert!(r.1.ends_with("\n\nDone. — a check failed"), "{}", r.1);
         assert_eq!(r.2, 123);
     }
 
@@ -442,7 +523,8 @@ pub(crate) mod tests {
         let r = to_run_result(&exited(2, Some(report("x"))));
         assert_eq!(reason(&r), "coder's budget ran out");
         assert_eq!(r.2, 123);
-        assert!(r.1.contains("4 checkpoints"), "{}", r.1);
+        assert!(r.1.starts_with("2 changed files, 4 checkpoints — undo:"), "{}", r.1);
+        assert!(r.1.ends_with("\n\ncoder's budget ran out"), "{}", r.1);
 
         let mut o = exited(3, None);
         o.tail = "warming up\n\nerror: backend refused\nbye\n".into();
@@ -452,6 +534,8 @@ pub(crate) mod tests {
             "coder failed: warming up / error: backend refused / bye (coder wrote no report)"
         );
         assert_eq!(r.2, 0);
+        // No report: the answer is just the reason.
+        assert_eq!(r.1, reason(&r));
 
         let r = to_run_result(&exited(4, Some(report("x"))));
         assert_eq!(reason(&r), "coder stopped: possible prompt injection");
@@ -461,8 +545,25 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn exit_130_and_a_cancel_are_cancelled() {
-        assert_eq!(to_run_result(&exited(130, None)).0, RunOutcome::Cancelled);
+    fn exit_130_without_a_cancel_goes_to_todo() {
+        // A daemon stop or restart (or a Ctrl-C) reaching coder: not terminal.
+        let r = to_run_result(&exited(130, None));
+        assert_eq!(
+            reason(&r),
+            "coder was stopped by a signal (130) (coder wrote no report)"
+        );
+        let r = to_run_result(&exited(130, Some(report("x"))));
+        assert_eq!(reason(&r), "coder was stopped by a signal (130)");
+    }
+
+    #[test]
+    fn a_pa_cancel_is_cancelled() {
+        let o = CoderOutcome {
+            exit: Some(130),
+            cancelled: true,
+            ..CoderOutcome::default()
+        };
+        assert_eq!(to_run_result(&o).0, RunOutcome::Cancelled);
         let o = CoderOutcome {
             exit: Some(0),
             cancelled: true,
@@ -567,6 +668,7 @@ pub(crate) mod tests {
             brief: "Work this task".into(),
             ceiling: Duration::from_secs(20),
             grace: Duration::from_millis(500),
+            extra_env: Vec::new(),
         }
     }
 
@@ -724,51 +826,114 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn pa_env_is_stripped_and_nothing_else() {
+    fn pa_env_and_credentials_are_stripped_and_nothing_else() {
+        let withheld = [
+            // pa's own
+            "AIVYX_PA_PASSPHRASE",
+            "AIVYX_PA_OPENAI_API_KEY",
+            // the list
+            "OPENAI_API_KEY",
+            "OPENAI_ORG_ID",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "AZURE_API_KEY",
+            "AZURE_OPENAI_KEY",
+            "HF_TOKEN",
+            "HUGGING_FACE_HUB_TOKEN",
+            // the suffixes
+            "SOMECLOUD_API_KEY",
+            "SOMECLOUD_API_TOKEN",
+            "OTHER_SECRET_ACCESS_KEY",
+            "OTHER_SESSION_TOKEN",
+        ];
+        let kept = [
+            "AIVYX_CODER",
+            "HOME",
+            "PATH",
+            "CARGO_HOME",
+            "RUST_LOG",
+            "API_KEY_HINT",
+            "XDG_SESSION_TYPE",
+        ];
         let mut cmd = Command::new("x");
         strip_pa_env(
             &mut cmd,
-            [
-                "AIVYX_PA_PASSPHRASE",
-                "AIVYX_CODER",
-                "HOME",
-                "AIVYX_PA_OPENAI_API_KEY",
-            ]
-            .into_iter()
-            .map(OsString::from),
+            withheld
+                .iter()
+                .chain(kept.iter())
+                .map(|k| OsString::from(*k)),
         );
-        let mut removed: Vec<_> = cmd
+        let mut removed: Vec<String> = cmd
             .as_std()
             .get_envs()
-            .map(|(k, v)| (k.to_str().unwrap().to_string(), v.is_none()))
+            .map(|(k, v)| {
+                assert!(v.is_none());
+                k.to_str().unwrap().to_string()
+            })
             .collect();
         removed.sort();
-        assert_eq!(
-            removed,
-            [
-                ("AIVYX_PA_OPENAI_API_KEY".to_string(), true),
-                ("AIVYX_PA_PASSPHRASE".to_string(), true)
-            ]
+        let mut want: Vec<String> = withheld.iter().map(|k| k.to_string()).collect();
+        want.sort();
+        assert_eq!(removed, want);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_names_are_skipped() {
+        use std::os::unix::ffi::OsStringExt;
+        let mut cmd = Command::new("x");
+        strip_pa_env(
+            &mut cmd,
+            [OsString::from_vec(b"AIVYX_PA_\xff".to_vec())].into_iter(),
         );
+        assert_eq!(cmd.as_std().get_envs().count(), 0);
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn the_child_sees_no_pa_or_cloud_secrets() {
-        // SAFETY: test-only; the names are unique to this test or canaries.
-        unsafe {
-            std::env::set_var("AIVYX_PA_ENVTEST_SECRET", "x");
-            std::env::set_var("OPENAI_API_KEY", "x");
-            std::env::set_var("AIVYX_ENVTEST_ORDINARY", "visible");
-        }
+        // Canaries go in through the spec (no process-wide `set_var`, which
+        // would race other tests' spawns); the scrub must still remove them.
         let d = tempfile::tempdir().unwrap();
         let bin = fake_coder(d.path(), "envdump", "env > env.txt\nexit 0");
-        let o = run(spec(bin, d.path()), CancellationToken::new()).await;
+        let mut s = spec(bin, d.path());
+        s.extra_env = [
+            ("AIVYX_PA_ENVTEST_SECRET", "x"),
+            ("OPENAI_API_KEY", "x"),
+            ("AWS_SECRET_ACCESS_KEY", "x"),
+            ("ENVTEST_CLOUD_API_TOKEN", "x"),
+            ("AIVYX_ENVTEST_ORDINARY", "visible"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let o = run(s, CancellationToken::new()).await;
         assert_eq!(o.exit, Some(0));
         let env = std::fs::read_to_string(d.path().join("env.txt")).unwrap();
         assert!(!env.contains("AIVYX_PA_"), "{env}");
         assert!(!env.contains("OPENAI_API_KEY"), "{env}");
+        assert!(!env.contains("AWS_SECRET_ACCESS_KEY"), "{env}");
+        assert!(!env.contains("ENVTEST_CLOUD_API_TOKEN"), "{env}");
         assert!(env.contains("AIVYX_ENVTEST_ORDINARY=visible"), "{env}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn the_child_runs_in_its_own_process_group() {
+        let d = tempfile::tempdir().unwrap();
+        // `$$` is the shell's pid; field 5 of /proc/self/stat is the pgid.
+        let bin = fake_coder(
+            d.path(),
+            "pgrp",
+            "echo $$ > pid.txt\ncut -d' ' -f5 /proc/$$/stat > pgid.txt\nexit 0",
+        );
+        let o = run(spec(bin, d.path()), CancellationToken::new()).await;
+        assert_eq!(o.exit, Some(0));
+        let pid = std::fs::read_to_string(d.path().join("pid.txt")).unwrap();
+        let pgid = std::fs::read_to_string(d.path().join("pgid.txt")).unwrap();
+        assert_eq!(pid.trim(), pgid.trim());
     }
 
     #[cfg(unix)]

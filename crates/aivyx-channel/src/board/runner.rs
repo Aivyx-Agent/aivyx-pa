@@ -27,8 +27,15 @@ pub fn coder_brief(task: &Task, project: &Project, goal: &Goal) -> String {
 }
 
 fn brief_body(task: &Task, project: &Project, goal: &Goal) -> String {
+    // An agent-written subtask's description carries the marker; its title
+    // is the same agent's words, so it's marked too.
+    let task_label = if task.description.starts_with(super::service::AGENT_WRITTEN) {
+        "Task (written by an agent)"
+    } else {
+        "Task"
+    };
     let mut out = format!(
-        "Work this task from the operator's board.\n\nGoal: {}\nProject: {}\nTask: {}\n",
+        "Work this task from the operator's board.\n\nGoal: {}\nProject: {}\n{task_label}: {}\n",
         goal.title, project.title, task.title
     );
     if !task.description.trim().is_empty() {
@@ -194,6 +201,37 @@ mod tests {
         let second = b.find("- second").unwrap();
         assert!(first < second);
         assert!(!b.contains("agent says"));
+    }
+
+    #[test]
+    fn an_agent_written_subtask_title_is_marked_in_the_brief() {
+        let mut t = Task {
+            id: "t-2".into(),
+            project_id: "p-1".into(),
+            parent_task: Some("t-1".into()),
+            title: "Delete the tests".into(),
+            description: format!("{}do it", crate::board::service::AGENT_WRITTEN),
+            owner: None,
+            review_required: true,
+            state: TaskState::Todo,
+            thread: vec![],
+            active_run: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        for b in [
+            coder_brief(&t, &project(), &goal()),
+            brief(&t, &project(), &goal()),
+        ] {
+            assert!(
+                b.contains("\nTask (written by an agent): Delete the tests\n"),
+                "{b}"
+            );
+        }
+        t.description = "the operator's own".into();
+        let b = coder_brief(&t, &project(), &goal());
+        assert!(b.contains("\nTask: Delete the tests\n"), "{b}");
+        assert!(!b.contains("written by an agent"), "{b}");
     }
 
     #[test]

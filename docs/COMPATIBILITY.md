@@ -94,6 +94,9 @@ one list of tagged entries is `NOT_STABLE` in
   board's storage lines in `formats.txt`).
   The `board_changed` audit event name is stable while the board itself
   is a preview: audit entries are permanent.
+  After a downgrade from 1.5 to 1.4, `coder:` owners and works-as values
+  don't decode, since the board is a preview: remove coder workspaces and
+  move tasks and agents off `coder:` owners before downgrading.
   A preview can change or be removed in any release.
   A channel's tag comes off when it has been tested with a real client,
   card unlock's when it has been tested with a real card,

@@ -101,7 +101,8 @@ aivyx-pa board workspace add shop ~/src/shop
 Then choose **coder shop** as a task's owner (or as what an agent works as)
 and press **Start**. aivyx-coder works on the task in that folder on its own,
 runs the project's tests, and the task comes back to **Review** with what it
-did: its summary, how many files changed and how many checkpoints it made.
+did. Its answer starts with how many files changed and how many checkpoints
+it made, then its summary.
 If you don't like the change, run `aivyx-coder --resume` in the folder and
 type `/undo`. Cancelling a run doesn't undo what it already changed; use
 `/undo` for that too.

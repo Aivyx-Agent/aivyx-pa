@@ -18,13 +18,20 @@ All notable changes to Aivyx are recorded here. This project adheres to
   agent can work as a coder workspace. Start runs `aivyx-coder --auto
   <brief> --headless --report <tmp>/report.json` in the workspace
   (`$AIVYX_CODER`, or `aivyx-coder` on `PATH`), with pa's `AIVYX_PA_*`
-  variables and well-known cloud-provider credentials removed from its
-  environment: pa and coder are local-only, so point coder's config at
+  variables, well-known cloud-provider credentials and any `*_API_KEY`,
+  `*_API_TOKEN`, `*_SECRET_ACCESS_KEY` or `*_SESSION_TOKEN` variable removed
+  from its environment: pa and coder are local-only, so point coder's config at
   your local llama-server. coder's exit code decides the result: 0 and 1
-  go to Review (Done with review off) with coder's notice, the token
-  count, the changed-file and checkpoint counts ("undo with /undo in
-  aivyx-coder"); 2, 3 and 4 go back to To do with the reason; 130 or a
-  Cancel ends Cancelled. One coder run per workspace ("the workspace is
+  go to Review (Done with review off) with the token count and an answer
+  that starts with the changed-file and checkpoint counts ("undo: run
+  aivyx-coder --resume in the workspace, then /undo") and then coder's
+  notice; 2, 3 and 4 go back to To do with the reason; only your Cancel
+  ends Cancelled, and a 130 without one (a daemon stop or restart reaching
+  coder) goes back to To do, "coder was stopped by a signal (130)"; death
+  by a signal goes back to To do. coder runs in its own process group, and
+  on Linux it stops if pa crashes (on macOS a hard kill or a pa crash can
+  leave it running). Removing a workspace is also refused while a coder run
+  is still in it. One coder run per workspace ("the workspace is
   busy"), a 4 h ceiling (SIGTERM, a kill 30 s later), no turn lock (use
   aivyx-broker to share a llama-server), a `coder:<name>` mission record,
   and the restart sweep returns an interrupted run's task to To do. The

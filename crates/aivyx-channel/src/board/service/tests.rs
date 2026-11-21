@@ -161,6 +161,17 @@ async fn fixture_on(
     audit: Arc<PersistentAuditLog>,
     setup: Setup,
 ) -> Fx {
+    fixture_timed(dir, storage, audit, setup, Duration::from_millis(500)).await
+}
+
+/// [`fixture_on`] with a coder SIGTERM grace of `grace`.
+async fn fixture_timed(
+    dir: tempfile::TempDir,
+    storage: Arc<dyn Storage>,
+    audit: Arc<PersistentAuditLog>,
+    setup: Setup,
+    grace: Duration,
+) -> Fx {
     let missions = storage.domain(KeyDomain::Missions);
     let deps = BoardDeps {
         store: storage.domain(KeyDomain::Board),
@@ -185,7 +196,7 @@ async fn fixture_on(
             deps,
             Duration::from_millis(20),
             Duration::from_secs(20),
-            Duration::from_millis(500),
+            grace,
         ),
         audit,
         missions,
@@ -2099,8 +2110,16 @@ async fn a_workspace_in_use_cannot_be_removed() {
     )
     .await;
     let busy = Err(BoardError::NotAllowed("the workspace is in use"));
+    // To do, then Review: both open.
     assert_eq!(fx.board.remove_workspace("proj").await, busy);
-    fx.board.assign(&t, None).await.unwrap();
+    let h = &fx.board.inner.deps.store;
+    let mut task = store::get_task(h, &t).await.unwrap().unwrap();
+    task.state = TaskState::Review;
+    store::put_task(h, &task).await.unwrap();
+    assert_eq!(fx.board.remove_workspace("proj").await, busy);
+    // Done: no longer open.
+    task.state = TaskState::Done;
+    store::put_task(h, &task).await.unwrap();
     let a = fx
         .board
         .create_agent(new_agent(
@@ -2275,9 +2294,14 @@ mod coder {
         let (run_mid, outcome, answer, tokens) = last_run(&task);
         assert_eq!(run_mid, mid);
         assert_eq!(outcome, RunOutcome::Succeeded);
-        assert!(answer.contains("Added parse() and its test."), "{answer}");
-        assert!(answer.contains("2 changed files"), "{answer}");
-        assert!(answer.contains("3 checkpoints — undo with /undo"), "{answer}");
+        assert!(
+            answer.starts_with(
+                "2 changed files, 3 checkpoints — undo: run aivyx-coder --resume in the \
+                 workspace, then /undo\n\n"
+            ),
+            "{answer}"
+        );
+        assert!(answer.ends_with("Added parse() and its test."), "{answer}");
         assert_eq!(tokens, 120);
         assert_eq!(task.active_run, None);
         // The mission record.
@@ -2332,7 +2356,11 @@ mod coder {
                 reason: "coder's budget ran out".into()
             }
         );
-        assert!(answer.contains("3 checkpoints"), "{answer}");
+        assert!(
+            answer.starts_with("2 changed files, 3 checkpoints — undo:"),
+            "{answer}"
+        );
+        assert!(answer.ends_with("coder's budget ran out"), "{answer}");
         assert_eq!(tokens, 120);
         assert_eq!(
             mission_state(&fx, &mid).await,
@@ -2342,14 +2370,20 @@ mod coder {
     }
 
     #[tokio::test]
-    async fn exit_130_from_coder_ends_cancelled() {
+    async fn exit_130_without_a_pa_cancel_goes_back_to_todo() {
+        // A daemon stop or restart reaching coder too: not terminal.
         let fx = plain_fx().await;
         write_coder(&fx, "exit 130");
         let (ws, t) = coder_task(&fx).await;
         fx.board.start(&t).await.unwrap();
         let task = wait_not_running(&fx, &t).await;
-        assert_eq!(task.state, TaskState::Cancelled);
-        assert_eq!(last_run(&task).1, RunOutcome::Cancelled);
+        assert_eq!(task.state, TaskState::Todo);
+        assert_eq!(
+            last_run(&task).1,
+            RunOutcome::Failed {
+                reason: "coder was stopped by a signal (130) (coder wrote no report)".into()
+            }
+        );
         wait_idle(&fx, &ws).await;
     }
 
@@ -2417,6 +2451,46 @@ mod coder {
             TaskState::Review
         );
         wait_idle(&fx, &ws).await;
+    }
+
+    #[tokio::test]
+    async fn a_workspace_with_a_coder_still_in_it_cannot_be_removed() {
+        // A long grace, and a fake that keeps going after SIGTERM until the
+        // test releases it: the cancelled task is terminal at once, but
+        // coder is still in the workspace.
+        let (dir, storage, audit) = open().await;
+        let fx = fixture_timed(
+            dir,
+            storage,
+            audit,
+            Setup {
+                agent: Arc::new(ScriptedAgent::new(Reply::Done("done".into()))),
+                team: None,
+                notify: None,
+            },
+            Duration::from_secs(20),
+        )
+        .await;
+        write_coder(
+            &fx,
+            "trap 'touch got-term' TERM\ntouch trap-ready\ni=0\nwhile [ ! -f release ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done\nexit 130",
+        );
+        let (ws, t) = coder_task(&fx).await;
+        fx.board.start(&t).await.unwrap();
+        let path = std::path::PathBuf::from(fx.board.workspaces().await.unwrap()[0].path.clone());
+        wait_trap_ready(&path).await;
+        let in_use = Err(BoardError::NotAllowed("the workspace is in use"));
+        // Running.
+        assert_eq!(fx.board.remove_workspace("proj").await, in_use);
+        fx.board.cancel(&t).await.unwrap();
+        assert_eq!(fx.board.task(&t).await.unwrap().state, TaskState::Cancelled);
+        // Cancelled, but coder hasn't stopped: the busy set refuses it.
+        assert!(fx.board.workspace_busy(&ws));
+        assert_eq!(fx.board.remove_workspace("proj").await, in_use);
+        std::fs::write(path.join("release"), "").unwrap();
+        wait_idle(&fx, &ws).await;
+        assert!(path.join("got-term").exists());
+        fx.board.remove_workspace("proj").await.unwrap();
     }
 
     #[tokio::test]

@@ -52,11 +52,24 @@ captured (the last 64 KiB kept) and `kill_on_drop`. The binary is
 Exit codes: 0 goes to Review (Done with review off) with the report's notice;
 1 the same, with "a check failed" added; 2 back to To do, "coder's budget ran
 out"; 3 back to To do with the last stderr lines; 4 back to To do, "possible
-prompt injection"; 130 or a Cancel is Cancelled; a spawn error, any other
-code, or death by a signal is To do with the reason. Tokens are the report's
-prompt plus completion tokens; the answer also names the changed files and the
-checkpoints (undo with `/undo` in aivyx-coder). A missing report doesn't fail
-the run by itself.
+prompt injection"; only pa's own Cancel is Cancelled; 130 without one (a
+daemon stop, restart or Ctrl-C reaching coder) is To do, "coder was stopped
+by a signal (130)", so the task isn't left terminal; a spawn error, any other
+code, or death by a signal ("killed by a signal") is To do with the reason.
+Tokens are the report's prompt plus completion tokens; the answer starts with
+the changed-file and checkpoint counts and the undo hint (`aivyx-coder
+--resume` in the workspace, then `/undo`), then the notice or the reason. A
+missing report doesn't fail the run by itself.
+
+The child runs in its own process group (a terminal Ctrl-C to pa doesn't reach
+it directly) and, on Linux, with `PR_SET_PDEATHSIG` = SIGTERM, so a pa crash
+stops it; on macOS a hard kill or a pa crash can leave coder or a command it
+started running. pa removes `AIVYX_PA_*`, a list of cloud-provider credential
+variables, and any name ending in `_API_KEY`, `_API_TOKEN`,
+`_SECRET_ACCESS_KEY` or `_SESSION_TOKEN` from the child's environment. An
+agent-written subtask's title is marked in the brief ("Task (written by an
+agent)"), as its description already is. Removing a workspace is also refused
+while a coder run is still in it.
 
 Limits: one coder run per workspace (a second Start is refused, "the
 workspace is busy"); a 4 h ceiling, then SIGTERM and, 30 s later, a kill;
