@@ -190,7 +190,7 @@ pub trait TurnPlanner: Send + Sync {
         TokenUsage::default()
     }
 
-    /// The model this planner runs on (e.g. `claude-opus-4-8`). The turn loop
+    /// The model this planner runs on (e.g. `qwen3-8b`). The turn loop
     /// pairs it with [`turn_usage`](Self::turn_usage) into the Chapter-K
     /// `AuditTag::LlmCost` event so spend can be priced per turn.
     /// **Deterministic planners return `""`** — the loop then emits no

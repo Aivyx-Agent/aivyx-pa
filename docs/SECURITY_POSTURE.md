@@ -22,7 +22,7 @@
 | Can the agent run arbitrary shell commands? | **Only at Trusted tier, on the Local channel, within the operator-chosen `fs_root`.** Remote channels never get `shell.exec`. |
 | Can it reach the whole machine? | **Only if the operator sets `[access] level = full`** (default is `sandbox` = `~/aivyx-pa-sandbox`). |
 | Can it perform irreversible actions unattended? | **No** — destructive/outbound ops escalate, and unattended runs *reject-and-abort* at any escalation (never auto-approve). See §3. |
-| Can it spend money without limit? | **No** — the autonomous loop enforces token + dollar + iteration + wall-clock caps. See §4. |
+| Can it spend money without limit? | **No** — the autonomous loop enforces token + iteration + wall-clock caps. See §4. |
 | Can it grant itself new powers? | **No** — `config.write`, `role.update`, `role.switch`, `tool.allowlist` are Kernel-tier, above the agent's ceiling. See §5. |
 | Can it arm its own autonomy loop? | **No** — there is no tool to arm the loop or change access; the operator does it. See §5. |
 | Is every action recorded? | **Yes** — one tamper-evident HMAC audit chain, no exceptions. See §6. |
@@ -141,9 +141,8 @@ in priority order:
 1. operator stop request,
 2. **wall-clock cap** (`[loop] max_run_secs`),
 3. **token budget** (`max_run_tokens`),
-4. **dollar budget** (`max_run_usd`),
-5. **iteration cap** (`max_iterations`),
-6. backlog empty.
+4. **iteration cap** (`max_iterations`),
+5. backlog empty.
 
 Between iterations it runs a **post-iteration verification gate** — a "red"
 result (e.g. the build/tests no longer pass) stops the run immediately.
@@ -152,7 +151,7 @@ Within a single turn, independent guardrails apply regardless of the loop:
 `MAX_STEPS_PER_TURN`, the per-turn wall-clock deadline
 (`[agent] turn_timeout_secs`), and two runaway breakers — the
 consecutive-identical-call breaker (Chapter Bridle) and the small-cycle
-`A,B,A,B…` breaker (Chapter Halter). The per-call dollar/token **budget
+`A,B,A,B…` breaker (Chapter Halter). The per-call token **budget
 gate** (Chapter K) caps spend independently of the loop. See
 [`COST_GOVERNANCE.md`](COST_GOVERNANCE.md).
 
@@ -212,7 +211,7 @@ Honest about the edges, because pretending they don't exist is its own
 security failure:
 
 - **`confirm_destructive` is the linchpin.** `full` + `confirm_destructive
-  = off` + armed loop + no dollar cap removes most of §3–§4: the agent can
+  = off` + armed loop + no token cap removes most of §3–§4: the agent can
   then do essentially anything the OS user can, unattended, including
   irreversible actions. This configuration is *possible* and is precisely
   the "open-ended autonomy" scenario. It should be a deliberate, eyes-open
@@ -341,7 +340,7 @@ security failure:
 | **Shared / untrusted** | `sandbox` | n/a | off | The default. Nothing escapes the sandbox. |
 | **Personal assistant** | `home` | **on** | off or capped | Friction-free reversible help; a hard gate on irreversible ops. The recommended everyday setup. |
 | **Supervised builder** | `workspace` | **on** | armed, capped | Autonomous within a project tree; budget/iteration/time caps; a human approves anything destructive. |
-| **Full autonomy (eyes-open)** | `full` | your call | armed, capped | Genuine infra-operator potential. Treat the host as the agent's blast radius; isolate credentials; keep the dollar cap. Turning `confirm_destructive` off here is opting into an agent that can reshape the machine on its own. |
+| **Full autonomy (eyes-open)** | `full` | your call | armed, capped | Genuine infra-operator potential. Treat the host as the agent's blast radius; isolate credentials; keep the token cap. Turning `confirm_destructive` off here is opting into an agent that can reshape the machine on its own. |
 
 **Defense-in-depth the architecture does not provide for you:** run the
 daemon as a **dedicated least-privileged OS user**, on an **isolated host
@@ -374,6 +373,6 @@ capability model contains the *agent*; OS-level isolation contains the
 - [`AUTONOMY.md`](AUTONOMY.md) — the operator-facing **autonomy dial** (Chapter Reins) that composes this containment model into one end-user choice.
 - [`ACCESS_LEVELS.md`](ACCESS_LEVELS.md) — the reach lever (Chapter N).
 - [`HEADLESS_MODE.md`](HEADLESS_MODE.md) — attended vs unattended gate policy (Chapter H).
-- [`COST_GOVERNANCE.md`](COST_GOVERNANCE.md) — budgets and the dollar cap (Chapter K).
+- [`COST_GOVERNANCE.md`](COST_GOVERNANCE.md) — budgets and token caps (Chapter K).
 - [`NONAGON.md`](NONAGON.md) — team attenuation (NT-02).
 - [`TOOLS.md`](TOOLS.md) — the full tool catalog with scope + tier per tool.

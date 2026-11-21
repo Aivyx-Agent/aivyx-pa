@@ -232,7 +232,7 @@ while holding every safety invariant Aivyx PA already guarantees.
 |---|---|---|
 | **Access level + root** | ✅ Editable, **confirm-first** on expansion | The flagship; security-sensitive (Ch. N). Mirrors `aivyx-pa access set`. |
 | **Autonomy level** | ✅ Editable, **confirm-first** on `autonomous`/`unleashed` | The autonomy dial (Ch. Reins). Level picker; mirrors `aivyx-pa autonomy set`. Per-domain overrides + allowlist stay CLI/hand-edit. |
-| **Budgets** (`per_run_usd`, `per_day_usd`, `on_exceeded`, `alert_at`) | ✅ Editable | Low-risk numeric caps (Ch. K). |
+| **Budgets** (`on_exceeded`, `alert_at`; token caps) | ✅ Editable | Low-risk numeric caps (Ch. K). The `*_usd` money caps were removed in 2.0 and are refused at load, by the Studio and by IPC. |
 | **Provider / model / num_ctx** | 👁 **Read-only** + "change via `aivyx-pa init`" | Editing risks a daemon that won't start (bad model) and touches API keys in the encrypted store/env — out of v1. |
 | **Profile** | ❌ A future Agents/Persona screen | Already served read-only by `GetProfile`; editing is its own surface. |
 
@@ -248,7 +248,7 @@ while holding every safety invariant Aivyx PA already guarantees.
 - **`SetAutonomyLevel { level, confirm }`** (Ch. Reins) — same shape; the daemon
   enforces `autonomous`/`unleashed` ⇒ `confirm == true` **server-side**, writes
   only `[autonomy] level` (overrides + allowlist preserved).
-- **`SetBudget { per_run_usd, per_day_usd, on_exceeded, alert_at }`**.
+- **`SetBudget { on_exceeded, alert_at, … }`** — the `per_run_usd` / `per_day_usd` money caps were removed in 2.0 and are refused.
 - Both writes: rewrite the toml section via the §8.1(3) helper → append a new
   **`ConfigChanged`** audit event → respond with the fresh snapshot +
   `restart_required: true`.

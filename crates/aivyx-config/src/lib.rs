@@ -3657,9 +3657,8 @@ pub struct LoopConfig {
     /// a token cap, not a dollar cap, and counts all turns in the
     /// run window (see the Phase 176 doc).
     pub max_run_tokens: Option<u64>,
-    /// Chapter K — per-run **dollar**-budget cap. **Unused since 2.0**
-    /// (local-only: every model costs `$0`): always `None`, because the
-    /// loader refuses a set `[loop] max_run_usd`. The field stays so old
+    /// Removed in 2.0 (local-only: every model costs `$0`): always `None`,
+    /// because the loader refuses a set `[loop] max_run_usd`. The field stays so old
     /// files parse; use `max_run_tokens` to bound a run.
     pub max_run_usd: Option<f64>,
     /// Chapter Circuit (CI.1) — cross-iteration stall breaker. A

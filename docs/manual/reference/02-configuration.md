@@ -43,7 +43,7 @@ The model the agent uses and how a turn behaves. Pairs with one provider section
 |---|---|---|---|
 | `model` | string |  | The model id, as the provider names it (e.g. `qwen3:14b`). |
 | `system_prompt` | string |  | Extra instructions added to the agent's system prompt. |
-| `provider` | `openai` \| `ollama` \| `llamacpp` \| `jan` \| `mistralrs` \| `broker` \| `lemonade` | `"openai"` | Which backend serves the model. |
+| `provider` | `openai` \| `ollama` \| `llamacpp` \| `jan` \| `mistralrs` \| `broker` \| `lemonade` | `"llamacpp"` | Which backend serves the model. |
 | `turn_timeout_secs` | integer |  | Per-turn wall-clock deadline override (seconds). Unset → the built-in 120s default. |
 | `cycle_detection` | bool |  | Small-cycle breaker switch. `true` arms the loop's repeating-cycle detector (catches `A,B,A,B,…` that the consecutive-identical breaker misses) with the built-in defaults. |
 | `conversation_history_messages` | integer |  | Conversation-history replay depth in messages (user and assistant lines each count as one). Unset → `8`; `0` disables. |
@@ -194,7 +194,7 @@ Semantic memory search: the embeddings server, and how recall picks memories for
 | `base_url` | string | `"http://localhost:11434"` | Embeddings API base URL (required, local). The provider POSTs to `{base_url}/v1/embeddings`. |
 | `model` | string | `"nomic-embed-text"` | Embedding model id (required; no default since 2.0). |
 | `api_key` | string |  | API key for the embeddings server. Not needed for a local one. |
-| `dimensions` | integer | `768` | Expected vector dimensionality of the model (required; no default since 2.0 — e.g. 768 for nomic-embed-text). |
+| `dimensions` | integer | `768` | Expected vector dimensionality of the model (required; no default since 2.0 — e.g. 768 for nomic-embed-text). The vector store uses this to detect a model swap: stored vectors with a different length are treated as unembedded and lazily re-embedded. |
 | `rag_top_k` | integer | `5` | Most memories recall may add to a turn. Default 5. |
 | `rag_min_similarity` | number | `0.20` | Recall leaves out a memory less similar than this (0–1) to what you asked, so unrelated memories don't crowd in. |
 | `recall_window_turns` | integer | `1` | How many recent turns (yours included) recall looks at to find relevant memories. Default 1. |
@@ -932,7 +932,7 @@ The autonomous loop: works through a queue of stories until done or a limit is h
 | `max_run_secs` | integer |  | Wall-clock cap (seconds). A run stops once it has been running this long (checked between iterations). |
 | `progress_inject_count` | integer |  | How many recent progress-log notes the driver injects into each fresh iteration's prompt (the cross-iteration learning, the Ralph `progress.txt` analog). `0` disables injection. |
 | `max_run_tokens` | integer |  | Per-run token-budget cap. A run stops once the total token usage (input + output) of every turn that completes during the run exceeds this. |
-| `max_run_usd` | number |  | Per-run **dollar**-budget cap. **Unused since 2.0** (local-only: every model costs `$0`): always Unset, because the loader refuses a set `[loop] max_run_usd`. |
+| `max_run_usd` | number |  | Removed in 2.0 (local-only: every model costs `$0`): always Unset, because the loader refuses a set `[loop] max_run_usd`. The field stays so old files parse; use `max_run_tokens` to bound a run. |
 | `max_idle_iterations` | integer |  | Cross-iteration stall breaker. A run stops once this many *consecutive* iterations make no progress — neither completing/delegating a story (the backlog shrinks) nor recording a fresh progress note. |
 | `resume_on_boot` | bool |  | Auto-resume an interrupted run on daemon boot. When `true`, a daemon restart while a run was active (a crash or a `systemctl restart`) re-starts the run if the backlog still has pending stories — so a "runs for days" agent under `Restart=on-failure` keeps working instead of silently stopping. |
 | `verify_completion` | bool |  | Verify story completion with an LLM acceptance judge. When `true`, `loop.complete` is gated: the judge checks the agent's `summary` against the story's acceptance criteria (its `body`) and a FAIL keeps the story `Pending` (the agent is told why) instead of trusting the self-report. |
@@ -942,7 +942,7 @@ The autonomous loop: works through a queue of stories until done or a limit is h
 
 ### `[pricing.<name>]`
 
-Per-model prices, in USD per million tokens, overriding the built-in table. Used for cost reports and budgets.
+Optional per-model rate overrides, in USD per million tokens. Local models cost `$0` by default; used only for cost reports.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
@@ -953,13 +953,13 @@ Per-model prices, in USD per million tokens, overriding the built-in table. Used
 
 ### `[budget]`
 
-Spending caps in USD (and tokens), and what happens when one is reached.
+Token caps, and what happens when one is reached. The `*_usd` money caps were removed in 2.0 and are refused at load.
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `per_run_usd` | number |  | Max USD per **run** — one mission / loop run / session. |
-| `per_day_usd` | number |  | Max USD per **rolling day**. **Unused since 2.0**, like `per_run_usd`. |
-| `per_mission_usd` | number |  | Most USD one team mission started by the loop may spend across all its specialists. Unset means no cap. |
+| `per_run_usd` | number |  | Removed in 2.0 (local-only: every model costs `$0`); refused at load. Kept so old files still parse. |
+| `per_day_usd` | number |  | Removed in 2.0, like `per_run_usd`; refused at load. |
+| `per_mission_usd` | number |  | Removed in 2.0 (local-only: every model costs `$0`); refused at load. Use `per_mission_tokens`. |
 | `per_mission_tokens` | integer |  | Max **tokens** a single team mission may spend. Unset ⇒ unbounded. |
 | `on_exceeded` | `alert` \| `deny` |  | Whether exceeding a cap alerts or denies. |
 | `alert_at` | number |  | Warn once spend crosses this fraction of a cap (e.g. `0.8` = 80%). |

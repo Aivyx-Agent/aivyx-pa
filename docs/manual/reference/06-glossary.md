@@ -131,7 +131,7 @@ to today; most have a design doc under `docs/`.
 | Almanac | The Studio's Tools screen. |
 | Anchor | Running the daemon as a background service (`aivyx-pa daemon install`). |
 | Atlas | The tool catalog, [`docs/TOOLS.md`](https://github.com/Aivyx-Agent/aivyx-pa/blob/main/docs/TOOLS.md), and `tools.list`. |
-| Ballast | Per-mission spending caps (`[budget] per_mission_*`). |
+| Ballast | Per-mission token caps (`[budget] per_mission_tokens`); the `per_mission_usd` money cap was removed in 2.0. |
 | Bridle | Guards for local tool-calling, including the loop breakers that stop a turn repeating itself. |
 | Brigade | The kitchen pack's tools. |
 | Bulwark | Fencing untrusted tool output (web pages, email…) so the model treats it as data, not instructions. |
@@ -144,7 +144,7 @@ to today; most have a design doc under `docs/`.
 | Freight | Signed, binary vertical-pack bundles. |
 | Gatehouse | The rule that the Studio can't be exposed beyond your machine without a sign-in token. |
 | Harbor | The container image and server deployment. |
-| K | Cost governance: token pricing, the spend ledger and `[budget]`. |
+| K | Cost governance: token accounting, the cost ledger and `[budget]`. |
 | Keyring | Keeping the passphrase in the OS credential store. |
 | Lantern | The Studio's MCP screen. |
 | Lattice | The typed knowledge graph (`[graph]`, `graph.query`). |

@@ -299,7 +299,7 @@ memory or their files beyond what the request needs and your tools return.";
 /// constructor signature.
 #[derive(Clone)]
 pub struct LlmPlannerConfig {
-    /// Provider-specific model id, e.g. `"claude-haiku-4-5-20251001"`.
+    /// Provider-specific model id, e.g. `"qwen3-8b"`.
     pub model: String,
     /// Optional system prompt. `None` means the provider's default
     /// (usually empty) is used.

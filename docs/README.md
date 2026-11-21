@@ -97,8 +97,8 @@ edited freely when a new adapter or subsystem teaches us something new.
   seed + live `SeedPersona` IPC + LLM "describe it" drafting), planted on the
   signed chain. ✅ complete.
 - [`COST_GOVERNANCE.md`](COST_GOVERNANCE.md) — **token accounting + budgets**
-  (Chapter K): per-turn dollar pricing, the `LlmCost` audit event, `aivyx-pa cost`,
-  and `[budget]` caps that alert/deny. ✅ shipped.
+  (Chapter K): per-turn token accounting, the `LlmCost` audit event, `aivyx-pa cost`,
+  and `[budget]` token caps that alert/deny (the `*_usd` money caps were removed in 2.0). ✅ shipped.
 - [`RATE_LIMITS.md`](RATE_LIMITS.md) — **tool-call rate limits & quotas**
   (Chapter Throttle): the per-tool / per-turn / sliding-window gate that bounds
   *how often* tools run — the budget gate's sibling for call counts; closes

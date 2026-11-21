@@ -71,7 +71,7 @@
   (`SharedLoopState`, `run_loop_driver`, `decide()` termination). Headless
   generalizes that posture from the loop to **any** run, and gives the loop a
   defined stance for the escalations it can hit mid-iteration.
-- **Guardrails already in place.** The per-run dollar/token `BudgetGate`
+- **Guardrails already in place.** The per-run token `BudgetGate`
   (Chapter K), the iteration/wall-clock caps (Phase 174/176), capability
   attenuation, and the audit chain — all of which a headless run still rides.
 

@@ -360,7 +360,9 @@ parent_role = "researcher"
 # worked example.
 #
 # [agent]
-# provider = "openai"
+# provider = "llamacpp"
+#
+# For an OpenAI-compatible local server, set provider = "openai" and:
 #
 # [openai]
 # base_url = "http://192.168.1.20:8000"  # required; must be local

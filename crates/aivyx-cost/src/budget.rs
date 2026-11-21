@@ -36,20 +36,15 @@ pub enum BudgetAction {
 /// Spending caps. `None` ⇒ that dimension is unlimited.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BudgetConfig {
-    /// Max USD per **run** — one mission / loop run / session.
-    ///
-    /// **Unused since 2.0** (local-only: every model costs `$0`). Kept so old
-    /// files still parse; the config loader refuses a set value.
+    /// Removed in 2.0 (local-only: every model costs `$0`); refused at load.
+    /// Kept so old files still parse. Use a token cap instead.
     #[serde(default)]
     pub per_run_usd: Option<f64>,
-    /// Max USD per **rolling day**. **Unused since 2.0**, like `per_run_usd`.
+    /// Removed in 2.0, like `per_run_usd`; refused at load.
     #[serde(default)]
     pub per_day_usd: Option<f64>,
-    /// Chapter Ballast (Opp D) — max USD a **single loop-delegated team
-    /// mission** may spend across all its specialist sub-turns. `None` ⇒
-    /// unbounded (today's behavior). Enforced at wave boundaries by the team
-    /// mission driver, distinct from `per_run_usd` (the whole loop run window).
-    /// **Unused since 2.0**, like `per_run_usd`.
+    /// Removed in 2.0, like `per_run_usd`; refused at load. Use
+    /// `per_mission_tokens` to bound a loop-delegated team mission.
     #[serde(default)]
     pub per_mission_usd: Option<f64>,
     /// Chapter Ballast (Opp D) — max **tokens** a single team mission may spend.

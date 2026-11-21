@@ -192,7 +192,7 @@ pub enum AuditEvent {
     /// rate correction re-prices history without rewriting the chain.
     LlmCost {
         turn_id: TurnId,
-        /// The model the turn ran on (e.g. `claude-opus-4-8`, `llama3.1`).
+        /// The model the turn ran on (e.g. `qwen3-8b`, `llama3.1`).
         model: String,
         usage: TokenUsage,
     },

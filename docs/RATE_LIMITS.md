@@ -23,7 +23,7 @@ Today the only call-frequency bound is `max_iterations` on the **autonomous
 loop** (`loop_driver.rs`). *Within* a single turn — and across a Nonagon
 mission or a loop iteration — the agent can call `web.fetch` / `shell.exec` /
 any tool an unbounded number of times, limited only by LLM behaviour and the
-dollar budget (if one is set, and only for *model* calls, not tool calls).
+token budget (if one is set, and only for *model* calls, not tool calls).
 
 For a security-focused framework that runs **unattended** (the Ralph loop,
 daemon-side teams, cron/webhook triggers), that is a real exposure:
@@ -39,7 +39,7 @@ Capabilities and budgets do not cover this. Throttle does.
 
 ## 2. The key insight — mirror the budget gate, don't invent
 
-Chapter K already shipped the exact shape this needs, for dollars. Throttle is
+Chapter K already shipped the exact shape this needs, for model spend. Throttle is
 its sibling for **call counts**, reusing the same proven pattern rather than a
 new mechanism:
 
@@ -48,7 +48,7 @@ new mechanism:
 | `BudgetGate` trait in `aivyx-core` (keeps `ConcreteAgent` decoupled) | `RateGate` trait in `aivyx-core`, same role |
 | `BudgetAction::{Alert, Deny}` | `RateAction::{Alert, Deny}` |
 | pre-call **reserve** = dollar deny gate | pre-call **check** = call-count deny gate |
-| `[budget]` config (`per_run_usd` / `per_day_usd`) | `[rate_limit]` config (call caps, per-tool overrides) |
+| `[budget]` config (token caps; the `*_usd` money caps were removed in 2.0) | `[rate_limit]` config (call caps, per-tool overrides) |
 | `AuditEvent::LlmCost` per turn | `AuditEvent::RateLimited` per throttled call |
 | `aivyx-pa cost [--today]` surfacing | a line in `aivyx-pa loop status` / report |
 

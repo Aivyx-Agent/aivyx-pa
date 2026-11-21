@@ -24,7 +24,7 @@ to any screen by name.
 | **Memory** | Browse and search everything your assistant has learned, including its Learning digest (moved here from the Command Center). |
 | **Wiki** | Your assistant's knowledge as readable per-topic pages (needs the smart memory profile). |
 | **Graph** | Your assistant's knowledge as a map of things and the named relationships between them (needs the smart memory profile — see [Memory](05-memory.md)). |
-| **Settings** | Access level, autonomy and spending budgets (see [Access & settings](08-access-and-settings.md)). |
+| **Settings** | Access level, autonomy and token budgets (see [Access & settings](08-access-and-settings.md)). |
 | **Agents** | Edit the Profile and approve the character changes your assistant proposes (see [Skills & personality](06-skills-and-persona.md)). |
 | **Skills** | The library of things your assistant has learned to do. |
 | **Teams** | View and edit your team of specialists (see [Teams](07-teams.md)). |
@@ -46,12 +46,12 @@ assistant in its own voice, in this order:
 
 - **Instrument strip.** A ruled line of readings — daemon status, the model
   and its context window ("32k context"; nothing when it's the server's
-  default), today's spend against your budget (24 h, rolling), what it
+  default), today's token use (24 h, rolling), what it
   remembers ("remembers 7 topics", or "nothing remembered yet"), and
   whether the record of what it did is intact ("record intact", or
   "record altered"). Click any reading to jump to the screen it belongs
   to; a reading turns warn or rust when something needs attention
-  (offline, spend at 80% or more of budget, an altered record).
+  (offline, token use at 80% or more of a cap, an altered record).
 - **Greeting.** A time-of-day headline, then the date and when you were last
   active — "Wednesday 1 October · last here 9 h ago".
 - **Needs you.** Everything waiting on you: your own pending chat approval,

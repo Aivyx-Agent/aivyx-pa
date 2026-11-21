@@ -61,8 +61,7 @@ the planner is told to plan no human gates, and a step that needs you parks
 in the review queue instead of waiting at a gate. If the mission stops
 early (a specialist that can't finish its turn, a budget cap), the task
 goes back to To do with the reason. A team run's tokens and cost are
-counted only when a mission budget is set (`[budget] per_mission_tokens` or
-`per_mission_usd`); otherwise its run entry shows "—" instead of a token
+counted only when a mission budget is set (`[budget] per_mission_tokens`); otherwise its run entry shows "—" instead of a token
 count.
 
 ## The brief

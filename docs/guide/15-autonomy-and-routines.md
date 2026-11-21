@@ -194,17 +194,17 @@ longer jobs you can describe up front.
 [loop]
 enabled = true
 max_iterations = 20       # hard stop
-max_run_usd = 2.00        # spending stop
+max_run_tokens = 500000   # token stop
 gate_command = "cargo test"   # what "green" means, if you have a test suite
 ```
 
-Every run stops at its first limit — iterations, time, tokens, dollars, or
+Every run stops at its first limit — iterations, time, tokens, or
 several attempts in a row that get nowhere — and, like every unattended
 run, refuses irreversible steps rather than waiting for you.
 
 ## Budgets keep it honest
 
-Local models cost nothing, so there are no dollar caps — a money cap in the
-config is refused. To bound something that runs on its own, use token or run
+Local models cost nothing, so there are no dollar caps: `max_run_usd` and the
+`[budget]` `*_usd` keys were removed in 2.0 and are refused at load. To bound something that runs on its own, use token or run
 caps: a team mission's `per_mission_tokens`, and the loop's `max_run_tokens`.
 See [Access and settings](08-access-and-settings.md).

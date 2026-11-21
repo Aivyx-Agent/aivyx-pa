@@ -18,7 +18,7 @@ Recall finds memories by keyword and — when an embeddings model is set up —
 by meaning, so asking about "the trip to Japan" finds the note that says
 "flights to Tokyo booked for May". Setup arranges embeddings for you with Ollama (it offers to
 download a small model). Any other local server needs an `[embedding]` section
-with an explicit local `base_url`; until then recall is keyword-only.
+with an explicit local `base_url`, `model` and `dimensions`; until then recall is keyword-only.
 
 ## The Memory screen
 
