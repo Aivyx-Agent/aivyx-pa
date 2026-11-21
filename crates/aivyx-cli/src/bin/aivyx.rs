@@ -248,7 +248,6 @@ use aivyx_dataread::{
     DataCsvTool, DataPdfTool, DataPdfWriteTool, DataXlsxTool, DataXlsxWriteTool, ReaderSandbox,
 };
 use aivyx_llm::LlmProvider;
-use aivyx_llm::anthropic::{AnthropicConfig, AnthropicProvider};
 use aivyx_llm::openai::{DEFAULT_OLLAMA_BASE_URL, OpenAiConfig, OpenAiProvider};
 use aivyx_memory::{
     Memory, MemoryForgetTool, MemoryReadTool, MemorySearchTool, MemoryWriteTool, RedbMemory,
@@ -1423,8 +1422,6 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
         let access = routing::CloudAccess {
             escalation: config.routing_escalation.clone(),
-            anthropic_key: config.anthropic_api_key.as_ref().map(|k| k.value.clone()),
-            openai_key: config.openai_api_key.as_ref().map(|k| k.value.clone()),
             classifier: config.routing_classifier.clone(),
             ..routing::CloudAccess::default()
         };
@@ -2100,7 +2097,7 @@ fn print_config_banner(config: &AivyxConfig) {
             // Phase 133 — llama-server default.
             eprintln!(
                 "  base_url          = {:?} (default)",
-                "http://localhost:8080",
+                aivyx_config::DEFAULT_LLAMACPP_BASE_URL,
             );
         } else if config.provider.value == aivyx_config::ProviderKind::Jan {
             // Phase 133 — Jan default.
@@ -6226,31 +6223,15 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 let value = args
                     .get(i + 1)
                     .ok_or_else(|| {
-                        "`--provider` requires a value: `anthropic`, `openai`, `ollama`, `llamacpp`, `jan`, `mistralrs`, `broker`, or `lemonade`"
+                        "`--provider` requires a value: `llamacpp`, `ollama`, `jan`, `lemonade`, `broker`, `mistralrs`, or `openai` (an OpenAI-compatible local server)"
                             .to_string()
                     })?;
-                cli_provider = Some(match value.as_str() {
-                    "anthropic" => ProviderKind::Anthropic,
-                    "openai" => ProviderKind::OpenAi,
-                    "ollama" => ProviderKind::Ollama,
-                    // Phase 133 — accept the same aliases as the
-                    // serde alias attribute on the enum.
-                    "llamacpp" | "llama-cpp" | "llama_cpp" => ProviderKind::LlamaCpp,
-                    "jan" => ProviderKind::Jan,
-                    // Phase 134 — embedded mistralrs.
-                    "mistralrs" | "mistral-rs" | "mistral_rs" => ProviderKind::MistralRs,
-                    // GPU-slot broker coordination — accept the same
-                    // alias as the serde alias attribute on the enum.
-                    "broker" => ProviderKind::Broker,
-                    "lemonade" => ProviderKind::Lemonade,
-                    other => {
-                        return Err(format!(
-                            "unrecognized provider `{other}`. \
-                             Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs, broker, \
-                             lemonade"
-                        ));
-                    }
-                });
+                // The config crate's one parser: the same names, aliases and
+                // errors (the removed-kind text) as `[agent] provider` and
+                // `AIVYX_PA_PROVIDER`.
+                cli_provider = Some(
+                    ProviderKind::parse(value).map_err(|reason| format!("--provider: {reason}"))?,
+                );
                 i += 2;
             }
             // `--mcp-server` is the deprecated spelling (R20): in aivyx-coder
@@ -7629,7 +7610,8 @@ async fn run_async(
     let default_skills_section: String =
         aivyx_core::render_default_skills_section(&skill_defaults_loader);
     let AivyxConfig {
-        anthropic_api_key,
+        // 2.0 (local-only): deprecated and unused (kept so it still parses).
+        anthropic_api_key: _,
         openai_api_key,
         openai_base_url,
         // Chapter Emboss (EB.2) — applied to the llama.cpp-family
@@ -8215,35 +8197,28 @@ async fn run_async(
         config_broker_base_url.as_deref(),
     )
     .map(str::to_owned);
-    // Model routing Part 3b — likewise the API keys: a cloud
-    // `[routing.endpoints.*]` uses the operator's own key for its kind.
+    // Model routing Part 3b — the escalation settings (2.0: no cloud keys).
     let mut routing_access = routing::CloudAccess {
         escalation: config_routing_escalation,
-        anthropic_key: anthropic_api_key.as_ref().map(|k| k.value.clone()),
-        openai_key: openai_api_key.as_ref().map(|k| k.value.clone()),
         classifier: config_routing_classifier,
         // Set below, once the routing guard and the audit log exist.
         ..routing::CloudAccess::default()
     };
     let provider: Arc<dyn LlmProvider> = match provider_kind.value {
-        ProviderKind::Anthropic => {
-            let api_key = anthropic_api_key
-                .expect("anthropic_api_key validated non-None before run_async")
-                .value;
-            let p = AnthropicProvider::new(AnthropicConfig::new(api_key))
-                .map_err(|e| format!("failed to build Anthropic provider: {e}"))?;
-            Arc::new(p)
-        }
         ProviderKind::OpenAi => {
-            let api_key = openai_api_key
-                .expect("openai_api_key validated non-None before run_async")
-                .value;
-            let mut cfg = OpenAiConfig::new(api_key);
-            if let Some(base_url) = openai_base_url {
-                cfg = cfg.with_base_url(base_url.value);
+            // 2.0 (local-only): an OpenAI-compatible local server. The
+            // config loader requires `[openai] base_url` (and checks it is
+            // local); the key is optional, as for llama-server.
+            let base_url = openai_base_url
+                .map(|s| s.value)
+                .ok_or("provider \"openai\" needs [openai] base_url")?;
+            let cfg = match openai_api_key {
+                Some(k) => OpenAiConfig::new(k.value),
+                None => OpenAiConfig::without_api_key(),
             }
+            .with_base_url(base_url);
             let p = OpenAiProvider::new(cfg)
-                .map_err(|e| format!("failed to build OpenAI provider: {e}"))?;
+                .map_err(|e| format!("failed to build OpenAI-compatible provider: {e}"))?;
             Arc::new(p)
         }
         ProviderKind::Ollama => {
@@ -8296,7 +8271,7 @@ async fn run_async(
         ProviderKind::LlamaCpp => {
             // Phase 133 — route through the OpenAI-compat provider
             // against `llama-server`'s default port. Defaults to
-            // `http://localhost:8080`; operator overrides via
+            // `http://127.0.0.1:8080`; operator overrides via
             // `[openai] base_url` in aivyx-pa.toml.
             //
             // No native /api/chat equivalent — llama-server speaks
@@ -8305,10 +8280,9 @@ async fn run_async(
             // so we use `OpenAiConfig::without_api_key` as the
             // baseline and layer a real key on top only when the
             // operator supplied one.
-            const DEFAULT_LLAMACPP_BASE_URL: &str = "http://localhost:8080";
             let base_url = openai_base_url
                 .map(|s| s.value)
-                .unwrap_or_else(|| DEFAULT_LLAMACPP_BASE_URL.to_string());
+                .unwrap_or_else(|| aivyx_config::DEFAULT_LLAMACPP_BASE_URL.to_string());
             llamacpp_base_url_for_kvcache = Some(base_url.clone());
             let cfg = match openai_api_key {
                 Some(k) => OpenAiConfig::new(k.value).with_base_url(base_url),
@@ -8554,6 +8528,30 @@ async fn run_async(
     // `AuditWriter` / `AuditLog` traits).
     let persistent_audit_for_query: Arc<PersistentAuditLog> = Arc::clone(&persistent_audit);
     let audit: Arc<dyn AuditHook> = persistent_audit;
+
+    // ---- 2.0 (local-only): aivyx-route's load-time pass -------------
+    // `verify_local` (honours a DNS-verified `locality = "local"`) and
+    // `validate`, `NotLocal` fatal, before anything reads an endpoint's
+    // effective locality. Blocking DNS, so off the runtime.
+    let config_routing = match config_routing {
+        Some(mut cfg) => {
+            let mut default =
+                routing::default_endpoint(provider_kind.value, routing_base_url.as_deref());
+            let cfg = tokio::task::spawn_blocking(move || {
+                routing::verify_local_issues_with(
+                    &mut cfg,
+                    &mut default,
+                    &aivyx_route::SystemResolver,
+                )
+                .map(|_| cfg)
+            })
+            .await
+            .map_err(|e| format!("routing: config check failed: {e}"))?
+            .map_err(|e| format!("routing: {e}"))?;
+            Some(cfg)
+        }
+        None => None,
+    };
 
     // ---- Model routing Part 3b: routing taint ------------------------
     // Only when cloud escalation is active (a cloud `[routing.endpoints.*]`
@@ -15988,9 +15986,34 @@ mod tests {
     // ---- --provider flag tests ----------------------------------------
 
     #[test]
-    fn provider_flag_anthropic() {
-        let parsed = parse_cli_args_from(&argv(&["--provider", "anthropic"])).expect("must parse");
-        assert_eq!(parsed.provider, Some(ProviderKind::Anthropic));
+    fn provider_flag_anthropic_was_removed() {
+        let err = parse_cli_args_from(&argv(&["--provider", "anthropic"]))
+            .expect_err("anthropic was removed in 2.0");
+        assert_eq!(
+            err,
+            format!("--provider: {}", aivyx_config::removed_provider_message("anthropic"))
+        );
+        assert!(
+            err.contains(
+                "provider \"anthropic\" was removed in 2.0 — aivyx is local-only; use llamacpp, \
+                 ollama, jan, lemonade, broker or openai (an OpenAI-compatible local server) with \
+                 a local base_url"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn provider_flag_accepts_the_aliases() {
+        for (name, kind) in [
+            ("llama-cpp", ProviderKind::LlamaCpp),
+            ("aivyx-broker", ProviderKind::Broker),
+            ("mistral_rs", ProviderKind::MistralRs),
+            ("lemonade", ProviderKind::Lemonade),
+        ] {
+            let parsed = parse_cli_args_from(&argv(&["--provider", name])).expect(name);
+            assert_eq!(parsed.provider, Some(kind), "{name}");
+        }
     }
 
     #[test]
@@ -16003,7 +16026,7 @@ mod tests {
     fn provider_flag_unknown_is_error() {
         let err = parse_cli_args_from(&argv(&["--provider", "gemini"]))
             .expect_err("unknown provider must error");
-        assert!(err.contains("unrecognized provider"), "error: {err}");
+        assert!(err.contains("unknown provider \"gemini\""), "error: {err}");
     }
 
     #[test]
@@ -17844,9 +17867,9 @@ mod tests {
     }
 
     #[test]
-    fn phase_122_banner_line_absent_for_anthropic_provider() {
+    fn phase_122_banner_line_absent_for_a_non_ollama_provider() {
         let cfg = load_phase_122_config(
-            "[agent]\nprovider = \"anthropic\"\nmodel = \"claude-haiku-4-5\"\n",
+            "[agent]\nprovider = \"llamacpp\"\nmodel = \"qwen3\"\n",
         );
         assert!(
             format_ollama_prompt_strategy_banner_line(&cfg).is_none(),

@@ -26,10 +26,15 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let config = match load_config(&config_path) {
-        Ok(c) => c,
-        Err(e) => {
+    // The local-only check resolves names (blocking), so off the runtime.
+    let config = match tokio::task::spawn_blocking(move || load_config(&config_path)).await {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
             eprintln!("aivyx-vision: {e}");
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            eprintln!("aivyx-vision: config load failed: {e}");
             return ExitCode::FAILURE;
         }
     };

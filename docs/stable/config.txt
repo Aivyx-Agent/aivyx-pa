@@ -15,7 +15,7 @@ agent.model: str?
 agent.provider = "mistral-rs" (build-time feature)
 agent.provider = "mistral_rs" (build-time feature)
 agent.provider = "mistralrs" (build-time feature)
-agent.provider: ProviderKind? (one of: anthropic | openai | ollama | llama-cpp | llama_cpp | llamacpp | jan | aivyx-broker | aivyx_broker | broker | lemonade)
+agent.provider: ProviderKind? (one of: openai | ollama | llama-cpp | llama_cpp | llamacpp | jan | aivyx-broker | aivyx_broker | broker | lemonade)
 agent.role: str?
 agent.system_prompt: str?
 agent.turn_timeout_secs: u64?
@@ -305,7 +305,7 @@ routing.classifier.timeout_ms: u64
 routing.discover: bool
 routing.enabled: bool
 routing.endpoints.*.base_url: str?
-routing.endpoints.*.kind: EndpointKind (one of: ollama | llama_router | openai_compat | lemonade | anthropic | openai)
+routing.endpoints.*.kind: EndpointKind (one of: ollama | llama_router | openai_compat | lemonade)
 routing.endpoints.*.locality: Locality? (one of: local | cloud)
 routing.escalation.mode: EscalationMode (one of: never | ask | auto)
 routing.escalation.no_local_candidate: bool

@@ -35,19 +35,14 @@ pub fn build_provider(config: &VisionConfig) -> Result<Arc<dyn LlmProvider>, Bui
             })?;
             Ok(Arc::new(provider))
         }
-        ProviderChoice::Anthropic { api_key } => {
-            let anthropic_config = aivyx_llm::anthropic::AnthropicConfig::new(api_key.clone());
-            let provider =
-                aivyx_llm::anthropic::AnthropicProvider::new(anthropic_config).map_err(|e| {
-                    BuildProviderError::Provider {
-                        provider: "anthropic".to_string(),
-                        source: e,
-                    }
-                })?;
-            Ok(Arc::new(provider))
-        }
-        ProviderChoice::Openai { api_key } => {
-            let openai_config = aivyx_llm::openai::OpenAiConfig::new(api_key.clone());
+        // 2.0 (local-only): an OpenAI-compatible local server (the URL was
+        // checked at config load).
+        ProviderChoice::Openai { base_url, api_key } => {
+            let openai_config = match api_key {
+                Some(key) => aivyx_llm::openai::OpenAiConfig::new(key.clone()),
+                None => aivyx_llm::openai::OpenAiConfig::without_api_key(),
+            }
+            .with_base_url(base_url.clone());
             let provider = aivyx_llm::openai::OpenAiProvider::new(openai_config).map_err(|e| {
                 BuildProviderError::Provider {
                     provider: "openai".to_string(),

@@ -250,10 +250,33 @@ impl Clone for SourcedSecret {
 // Hard-coded defaults
 // --------------------------------------------------------------------
 
-/// Default Anthropic model. Matches the Phase 3 `DEFAULT_MODEL` that
-/// the binary previously owned. Moved here so tests can reference it
-/// without reaching into the binary crate.
-pub const DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
+/// Default model id, used when no source names one. 2.0 (local-only): the
+/// default provider is llama.cpp's `llama-server`, which serves the one
+/// model it was started with and ignores the name, so this is a neutral
+/// placeholder rather than any real model's id. (Before 2.0 it was a cloud
+/// model id, which a `llamacpp` run with no model also sent.)
+pub const DEFAULT_MODEL: &str = "local-model";
+
+/// The load error for `provider = "openai"` without a base URL.
+pub const OPENAI_NEEDS_BASE_URL: &str = "provider \"openai\" means an OpenAI-compatible local \
+     server and has no default address — set [openai] base_url (for example \
+     http://127.0.0.1:8080) to a server on this machine or your own network";
+
+/// The load error for a money-denominated budget cap (2.0 removed cloud
+/// prices, so a dollar cap can never be priced).
+pub const MONEY_CAP_REMOVED: &str =
+    "a money cap needs cloud prices, which were removed in 2.0 — use a token or run cap";
+
+/// The load error for an `[embedding]` section without a `base_url`
+/// (2.0: no built-in cloud embeddings endpoint).
+pub const EMBEDDING_NEEDS_BASE_URL: &str = "`base_url` is required — aivyx is local-only; \
+     point it at an embeddings server on this machine or your own network";
+
+/// Where the default provider ([`ProviderKind::LlamaCpp`]) connects when
+/// `[openai] base_url` is unset: `llama-server`'s own default bind (the
+/// same address `init` probes and `scripts/dev-run.sh --provider llamacpp`
+/// uses).
+pub const DEFAULT_LLAMACPP_BASE_URL: &str = "http://127.0.0.1:8080";
 
 /// Default system prompt — the operating *charter* (Chapter Keel).
 ///
@@ -442,7 +465,8 @@ pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx PA";
 /// - `Ollama` — `base_url = http://localhost:11434`; API key not
 ///   required; `stream_options` omitted (older Ollama versions
 ///   may reject unknown fields).
-/// - `LlamaCpp` (Phase 133) — `base_url = http://localhost:8080`;
+/// - `LlamaCpp` (Phase 133; the default provider since 2.0) —
+///   `base_url = http://127.0.0.1:8080`;
 ///   raw `llama-server` OpenAI-compat endpoint; no model
 ///   management UX (operator downloads GGUF manually). No
 ///   `ollama.list/show/pull` tools registered.
@@ -459,15 +483,24 @@ pub const DEFAULT_ASSISTANT_NAME: &str = "Aivyx PA";
 ///   Server's default); OpenAI-compatible under that `/api` prefix, one
 ///   LLM loaded at a time. Model management via Lemonade's own UI/CLI.
 ///   No `ollama.list/show/pull` tools registered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
+///
+/// 2.0 (local-only): the `Anthropic` provider was removed; naming it in
+/// config, env or on the command line fails with
+/// [`removed_provider_message`]. `OpenAi` now means an OpenAI-compatible
+/// server on this machine or the operator's own network and needs an
+/// explicit `[openai] base_url`. Parsed through [`ProviderKind::parse`]
+/// (`FromStr`) everywhere, so TOML, env and the CLI accept the same names
+/// and give the same errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProviderKind {
-    Anthropic,
-    #[serde(alias = "openai")]
+    /// An OpenAI-compatible **local** server (vLLM, LM Studio, a remote
+    /// llama-server on the LAN, …). No default address: `[openai]
+    /// base_url` is required.
     OpenAi,
     Ollama,
-    /// Phase 133 — raw llama.cpp `llama-server` over OpenAI-compat.
-    #[serde(alias = "llama-cpp", alias = "llama_cpp", alias = "llamacpp")]
+    /// Phase 133 — raw llama.cpp `llama-server` over OpenAI-compat. The
+    /// default provider (2.0), at [`DEFAULT_LLAMACPP_BASE_URL`].
+    #[default]
     LlamaCpp,
     /// Phase 133 — Jan's local API server over OpenAI-compat.
     Jan,
@@ -478,7 +511,6 @@ pub enum ProviderKind {
     /// and `chat_stream` invokes the engine directly. The
     /// [`mistralrs`] config section carries the GGUF model path
     /// and tuning parameters.
-    #[serde(alias = "mistralrs", alias = "mistral-rs", alias = "mistral_rs")]
     MistralRs,
     /// GPU-slot broker coordination — `aivyx-broker`, a standalone local daemon that
     /// coordinates GPU-slot access across multiple local processes
@@ -492,7 +524,6 @@ pub enum ProviderKind {
     /// itself: the broker owns the full checkout/restore/warm/save
     /// lifecycle server-side. See `[broker] base_url` /
     /// `broker_base_url`.
-    #[serde(alias = "broker", alias = "aivyx-broker", alias = "aivyx_broker")]
     Broker,
     /// Lemonade Server — a local OpenAI-compatible server (llama.cpp,
     /// ONNX/NPU and other backends) that holds one LLM at a time. Its
@@ -501,7 +532,132 @@ pub enum ProviderKind {
     Lemonade,
 }
 
+/// The local provider kinds, as the removed-kind error lists them (the
+/// in-process `mistralrs` has no `base_url` and is not listed there).
+pub const LOCAL_PROVIDER_KINDS: &str =
+    "llamacpp, ollama, jan, lemonade, broker or openai (an OpenAI-compatible local server)";
+
+/// Every provider name [`ProviderKind::parse`] accepts, for the
+/// unknown-name error.
+const SUPPORTED_PROVIDER_NAMES: &str =
+    "llamacpp, ollama, jan, lemonade, broker, mistralrs, openai";
+
+/// Provider kinds that existed before 2.0 and were removed (local-only).
+const REMOVED_PROVIDER_KINDS: &[&str] = &["anthropic"];
+
+/// The error for a provider kind removed in 2.0: names the fix.
+pub fn removed_provider_message(kind: &str) -> String {
+    format!(
+        "provider \"{kind}\" was removed in 2.0 — aivyx is local-only; use \
+         {LOCAL_PROVIDER_KINDS} with a local base_url"
+    )
+}
+
+impl std::str::FromStr for ProviderKind {
+    type Err = String;
+
+    /// The one parser for `[agent] provider`, `AIVYX_PA_PROVIDER` and
+    /// `--provider` (with the historical aliases). A removed kind gives
+    /// [`removed_provider_message`].
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(match s {
+            "openai" => ProviderKind::OpenAi,
+            "ollama" => ProviderKind::Ollama,
+            "llamacpp" | "llama-cpp" | "llama_cpp" => ProviderKind::LlamaCpp,
+            "jan" => ProviderKind::Jan,
+            "mistralrs" | "mistral-rs" | "mistral_rs" => ProviderKind::MistralRs,
+            "broker" | "aivyx-broker" | "aivyx_broker" => ProviderKind::Broker,
+            "lemonade" => ProviderKind::Lemonade,
+            other if REMOVED_PROVIDER_KINDS.contains(&other.to_ascii_lowercase().as_str()) => {
+                return Err(removed_provider_message(other));
+            }
+            other => {
+                return Err(format!(
+                    "unknown provider {other:?}; supported: {SUPPORTED_PROVIDER_NAMES}"
+                ));
+            }
+        })
+    }
+}
+
+/// Every accepted name, aliases included, in declaration order: serde's
+/// enum variant list, so the stable-surface snapshot lists them (as the
+/// derived `Deserialize` with `#[serde(alias)]` did before 2.0).
+const PROVIDER_VARIANTS: &[&str] = &[
+    "openai",
+    "ollama",
+    "llama-cpp",
+    "llama_cpp",
+    "llamacpp",
+    "jan",
+    "mistral-rs",
+    "mistral_rs",
+    "mistralrs",
+    "aivyx-broker",
+    "aivyx_broker",
+    "broker",
+    "lemonade",
+];
+
+/// Deserialized as an enum (so the stable-surface reflection sees its
+/// variants) whose variant name goes through [`ProviderKind::parse`]: the
+/// aliases are accepted and a removed kind gets [`removed_provider_message`]
+/// rather than serde's "unknown variant".
+impl<'de> Deserialize<'de> for ProviderKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{self, EnumAccess, VariantAccess, Visitor};
+
+        /// A variant name, or its index (serde-reflection and other
+        /// non-self-describing formats send the index).
+        struct Name(String);
+        impl<'de> Deserialize<'de> for Name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                struct V;
+                impl Visitor<'_> for V {
+                    type Value = Name;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str("a provider name")
+                    }
+                    fn visit_str<E: de::Error>(self, v: &str) -> Result<Name, E> {
+                        Ok(Name(v.to_owned()))
+                    }
+                    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Name, E> {
+                        usize::try_from(v)
+                            .ok()
+                            .and_then(|i| PROVIDER_VARIANTS.get(i))
+                            .map(|n| Name((*n).to_owned()))
+                            .ok_or_else(|| E::custom(format!("no provider variant {v}")))
+                    }
+                }
+                d.deserialize_identifier(V)
+            }
+        }
+
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = ProviderKind;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a provider name")
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<ProviderKind, E> {
+                v.parse().map_err(E::custom)
+            }
+            fn visit_enum<A: EnumAccess<'de>>(self, data: A) -> Result<ProviderKind, A::Error> {
+                let (Name(name), variant) = data.variant::<Name>()?;
+                variant.unit_variant()?;
+                name.parse().map_err(de::Error::custom)
+            }
+        }
+        d.deserialize_enum("ProviderKind", PROVIDER_VARIANTS, V)
+    }
+}
+
 impl ProviderKind {
+    /// [`FromStr`](std::str::FromStr) under a name: the shared parser.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        s.parse()
+    }
+
     /// Returns `true` if this provider uses the OpenAI-compatible
     /// API. Cloud OpenAI plus every local-LLM runtime Aivyx ships
     /// with — Ollama, llama-server, Jan — speak OpenAI-compat
@@ -541,7 +697,6 @@ impl ProviderKind {
     /// when to drop old history messages.
     pub fn default_context_window(&self) -> usize {
         match self {
-            ProviderKind::Anthropic => 200_000,
             ProviderKind::OpenAi => 128_000,
             // Local-LLM defaults vary widely with the loaded
             // model; 8k is a conservative default that works for
@@ -568,7 +723,6 @@ impl ProviderKind {
 impl std::fmt::Display for ProviderKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProviderKind::Anthropic => f.write_str("anthropic"),
             ProviderKind::OpenAi => f.write_str("openai"),
             ProviderKind::Ollama => f.write_str("ollama"),
             ProviderKind::LlamaCpp => f.write_str("llamacpp"),
@@ -686,6 +840,12 @@ pub enum ConfigError {
         reason: String,
     },
 
+    /// 2.0 (local-only) — a model URL is not on this machine or the
+    /// operator's own network. `key` names the config key (for example
+    /// `[openai] base_url`); `reason` is aivyx-route's `NotLocal` text.
+    #[error("{key}: {reason}")]
+    NotLocal { key: String, reason: String },
+
     /// The TOML file at `path` could not be parsed as TOML.
     #[error("TOML parse failed at {path:?}: {reason}")]
     TomlParse { path: PathBuf, reason: String },
@@ -784,8 +944,7 @@ impl From<ConfigError> for String {
 /// Caller-supplied constraints on the load.
 ///
 /// The loader itself never decides what's "required" — the binary does,
-/// based on its CLI args. A `--verify-only` run does not need
-/// `anthropic_api_key`; a `--channel telegram` run does need
+/// based on its CLI args. A `--channel telegram` run needs
 /// `telegram.token`. Encoding those decisions here keeps the loader
 /// pure: given the same `LoadOptions` and the same environment, it
 /// produces the same result and the same errors.
@@ -797,9 +956,9 @@ pub struct LoadOptions {
     /// but its existence-plus-parse-failure is." The binary defaults
     /// this to `Some(PathBuf::from("./aivyx-pa.toml"))`.
     pub toml_path: Option<PathBuf>,
-    /// If `true`, [`AivyxConfig::validate`] errors out when
-    /// `anthropic_api_key` is still `None`. Set to `false` by
-    /// `--verify-only`.
+    /// Before 2.0, made [`AivyxConfig::validate`] require the cloud
+    /// provider's API key. **No effect since 2.0** (local-only: no
+    /// provider needs a key); kept so callers keep compiling.
     pub require_api_key: bool,
     /// If `true`, [`AivyxConfig::validate`] errors out when
     /// `telegram.token` is still `None`. Set to `true` by
@@ -875,16 +1034,23 @@ impl LoadOptions {
 /// value.
 #[derive(Debug, Clone)]
 pub struct AivyxConfig {
-    /// Anthropic API key. `Option` because `--verify-only` runs do not
-    /// need it. `SourcedSecret` so a stray `{:?}` never leaks the key.
+    /// **Deprecated and unused (2.0, local-only).** The Anthropic
+    /// provider was removed; this is still read (`[anthropic] api_key`,
+    /// env, the store) so 1.x configs parse and a stored key is never
+    /// lost or deleted, but nothing requires or sends it.
+    /// `SourcedSecret` so a stray `{:?}` never leaks the key.
     pub anthropic_api_key: Option<SourcedSecret>,
-    /// OpenAI API key. `Option` because only needed when
-    /// `provider == ProviderKind::OpenAi`.
+    /// Optional key for an OpenAI-compatible **local** server that wants
+    /// one (most ignore it). Never required. Kept under its 1.x name so
+    /// old configs parse and a stored key is never deleted.
     pub openai_api_key: Option<SourcedSecret>,
-    /// OpenAI-compatible base URL override. For `ProviderKind::OpenAi`,
-    /// `None` means `https://api.openai.com`. For `ProviderKind::Ollama`,
-    /// `None` means `http://localhost:11434`. Explicit values override
-    /// both defaults.
+    /// The `[agent]` backend's base URL (`[openai] base_url`,
+    /// `AIVYX_PA_OPENAI_BASE_URL`), for every HTTP provider but the broker.
+    /// Required for `ProviderKind::OpenAi` (2.0: an OpenAI-compatible local
+    /// server, no built-in address); `None` otherwise means the provider's
+    /// own local default (`http://localhost:11434` for Ollama,
+    /// [`DEFAULT_LLAMACPP_BASE_URL`] for llama.cpp, …). Must be local
+    /// (checked at load, see [`AivyxConfig::model_urls`]).
     pub openai_base_url: Option<Sourced<String>>,
     /// Overrides where the kvcache store directory lives. `None`
     /// (default) preserves the historical per-app `ProjectDirs`-derived
@@ -908,7 +1074,7 @@ pub struct AivyxConfig {
     /// grammar-constrained tool-calling. `false` (default) → the
     /// unchanged passthrough. Ignored for cloud OpenAI.
     pub openai_constrain_tool_calls: bool,
-    /// Which LLM provider backend to use. Default: `Anthropic`.
+    /// Which LLM provider backend to use. Default (2.0): `LlamaCpp`.
     pub provider: Sourced<ProviderKind>,
     /// Model id. Always populated — falls through to [`DEFAULT_MODEL`]
     /// if no source supplied one (tagged [`FieldSource::Default`]).
@@ -2732,9 +2898,10 @@ pub const DEFAULT_RECALL_WIKI_WEIGHT: f32 = 0.0;
 /// Chapter Lattice (LT.6) — typed-graph ranker weight default: off.
 pub const DEFAULT_RECALL_GRAPH_TYPED_WEIGHT: f32 = 0.0;
 
-/// Default embeddings endpoint — the OpenAI public API. An
-/// operator who wants on-device embedding overrides this with
-/// a local OpenAI-compatible server URL.
+/// The pre-2.0 embeddings default (the OpenAI public API). **Not used by
+/// the loader since 2.0** — `[embedding] base_url` is required and must be
+/// local; only `init`'s cloud OpenAI path still names it, until that path
+/// goes too.
 pub const DEFAULT_EMBEDDING_BASE_URL: &str = "https://api.openai.com";
 /// Default embedding model. `text-embedding-3-small` is the
 /// cheap, widely-supported OpenAI default; local servers
@@ -6717,7 +6884,71 @@ impl AivyxConfig {
     /// secret-bearing fields). Missing TOML files are *not* an error;
     /// missing required fields become errors only at
     /// [`AivyxConfig::validate`] time.
+    ///
+    /// 2.0 (local-only): every model URL ([`AivyxConfig::model_urls`])
+    /// must pass aivyx-route's `require_local`, or the load fails with
+    /// [`ConfigError::NotLocal`] naming the key. That check resolves
+    /// domain names through the system resolver (blocking; IP literals
+    /// and local-by-spelling names such as `localhost` need no lookup).
     pub fn load_from_env_and_toml(opts: &LoadOptions) -> Result<Self, ConfigError> {
+        Self::load_from_env_and_toml_with(opts, &aivyx_route::SystemResolver)
+    }
+
+    /// [`AivyxConfig::load_from_env_and_toml`] with an explicit resolver for
+    /// the local-only check (a seam for tests).
+    pub fn load_from_env_and_toml_with(
+        opts: &LoadOptions,
+        resolver: &dyn aivyx_route::Resolve,
+    ) -> Result<Self, ConfigError> {
+        let config = Self::load_unchecked(opts)?;
+        config.check_local_with(resolver)?;
+        Ok(config)
+    }
+
+    /// Every model URL this config points at, with the config key that
+    /// set it: the `[agent]` backend (`[openai] base_url` or its env var),
+    /// `[broker] base_url`, `[embedding] base_url`, and each
+    /// `[routing.endpoints.<name>] base_url`. Unset URLs (a provider's
+    /// built-in local default) are not listed.
+    pub fn model_urls(&self) -> Vec<(String, String)> {
+        let mut urls = Vec::new();
+        if let Some(url) = &self.openai_base_url {
+            let key = match url.source {
+                FieldSource::Env => ENV_OPENAI_BASE_URL.to_string(),
+                _ => "[openai] base_url".to_string(),
+            };
+            urls.push((key, url.value.clone()));
+        }
+        if let Some(url) = &self.broker_base_url {
+            urls.push(("[broker] base_url".to_string(), url.clone()));
+        }
+        if let Some(embedding) = &self.embedding {
+            urls.push(("[embedding] base_url".to_string(), embedding.base_url.clone()));
+        }
+        if let Some(routing) = &self.routing {
+            for (name, endpoint) in &routing.endpoints {
+                if let Some(url) = endpoint.base_url() {
+                    urls.push((format!("[routing.endpoints.{name}] base_url"), url.to_string()));
+                }
+            }
+        }
+        urls
+    }
+
+    /// The local-only check: `Err(ConfigError::NotLocal)` for the first
+    /// [`model_urls`](Self::model_urls) entry that fails `require_local`.
+    pub fn check_local_with(&self, resolver: &dyn aivyx_route::Resolve) -> Result<(), ConfigError> {
+        for (key, url) in self.model_urls() {
+            aivyx_route::require_local_with(&url, resolver).map_err(|e| ConfigError::NotLocal {
+                key,
+                reason: e.to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
+    /// The env + TOML load without the local-only check.
+    fn load_unchecked(opts: &LoadOptions) -> Result<Self, ConfigError> {
         let (toml, unknown, deprecated) = load_toml(opts.toml_path.as_deref())?;
 
         // --- anthropic_api_key --------------------------------------
@@ -6769,39 +7000,28 @@ impl AivyxConfig {
         // --- provider -----------------------------------------------
         let provider = match env_string(ENV_PROVIDER) {
             Some(v) => {
-                let kind = match v.as_str() {
-                    "anthropic" => ProviderKind::Anthropic,
-                    "openai" => ProviderKind::OpenAi,
-                    "ollama" => ProviderKind::Ollama,
-                    // Phase 133 — accept the same aliases as the
-                    // serde alias attribute on `ProviderKind` so
-                    // env + TOML + CLI all parse the same set.
-                    "llamacpp" | "llama-cpp" | "llama_cpp" => ProviderKind::LlamaCpp,
-                    "jan" => ProviderKind::Jan,
-                    // Phase 134 — same alias set as the serde
-                    // attribute on the enum.
-                    "mistralrs" | "mistral-rs" | "mistral_rs" => ProviderKind::MistralRs,
-                    // GPU-slot broker coordination — same alias set as
-                    // the serde attribute on the enum.
-                    "broker" | "aivyx-broker" | "aivyx_broker" => ProviderKind::Broker,
-                    "lemonade" => ProviderKind::Lemonade,
-                    other => {
-                        return Err(ConfigError::Invalid {
-                            field: "provider",
-                            reason: format!(
-                                "{ENV_PROVIDER}={other:?} is not valid. \
-                                 Supported: anthropic, openai, ollama, llamacpp, jan, mistralrs, broker, lemonade"
-                            ),
-                        });
-                    }
-                };
+                // The same parser as TOML and `--provider` (aliases, the
+                // removed-kind error).
+                let kind = ProviderKind::parse(&v).map_err(|reason| ConfigError::Invalid {
+                    field: "provider",
+                    reason: format!("{ENV_PROVIDER}: {reason}"),
+                })?;
                 Sourced::new(kind, FieldSource::Env)
             }
             None => match toml.agent.provider {
                 Some(kind) => Sourced::new(kind, FieldSource::Toml),
-                None => Sourced::new(ProviderKind::Anthropic, FieldSource::Default),
+                None => Sourced::new(ProviderKind::default(), FieldSource::Default),
             },
         };
+
+        // 2.0 (local-only) — `provider = "openai"` is an OpenAI-compatible
+        // local server, so it has no built-in address to fall back to.
+        if provider.value == ProviderKind::OpenAi && openai_base_url.is_none() {
+            return Err(ConfigError::Invalid {
+                field: "openai.base_url",
+                reason: OPENAI_NEEDS_BASE_URL.to_string(),
+            });
+        }
 
         // --- model --------------------------------------------------
         // Always populated — falls through to DEFAULT_MODEL.
@@ -7952,21 +8172,23 @@ impl AivyxConfig {
             }
         }
 
-        // Chapter K (K.4.2) — [budget] dollar caps. Reject negative caps and
-        // an out-of-range alert fraction at load; a negative cap or an
-        // alert_at outside [0.0, 1.0] is nonsensical and would corrupt the
-        // gate's reservation math. Uncapped (`None`) is the default and fine.
+        // Chapter K (K.4.2) — [budget]. Reject an out-of-range alert
+        // fraction at load (an alert_at outside [0.0, 1.0] is nonsensical
+        // and would corrupt the gate's reservation math).
         let budget = toml.budget.clone();
-        for (field_name, cap) in
-            [("per_run_usd", budget.per_run_usd), ("per_day_usd", budget.per_day_usd)]
-        {
-            if let Some(c) = cap {
-                if c < 0.0 {
-                    return Err(ConfigError::Invalid {
-                        field: "budget",
-                        reason: format!("{field_name} must be non-negative"),
-                    });
-                }
+        // 2.0 (local-only): money caps are refused — cloud prices are gone,
+        // so a dollar cap could never be priced. Token and run caps stay.
+        for (field, cap) in [
+            ("budget.per_run_usd", budget.per_run_usd),
+            ("budget.per_day_usd", budget.per_day_usd),
+            ("budget.per_mission_usd", budget.per_mission_usd),
+            ("loop.max_run_usd", toml.loop_section.max_run_usd),
+        ] {
+            if cap.is_some() {
+                return Err(ConfigError::Invalid {
+                    field,
+                    reason: MONEY_CAP_REMOVED.to_string(),
+                });
             }
         }
         if let Some(frac) = budget.alert_at {
@@ -9499,40 +9721,12 @@ impl AivyxConfig {
     /// is populated. Returns [`ConfigError::Missing`] for the first
     /// missing required field.
     pub fn validate(&self, opts: &LoadOptions) -> Result<(), ConfigError> {
-        if opts.require_api_key {
-            match self.provider.value {
-                ProviderKind::Anthropic => {
-                    if self.anthropic_api_key.is_none() {
-                        return Err(ConfigError::Missing {
-                            field: "anthropic_api_key",
-                        });
-                    }
-                }
-                ProviderKind::OpenAi => {
-                    if self.openai_api_key.is_none() {
-                        return Err(ConfigError::Missing {
-                            field: "openai_api_key",
-                        });
-                    }
-                }
-                ProviderKind::Ollama
-                | ProviderKind::LlamaCpp
-                | ProviderKind::Jan
-                | ProviderKind::MistralRs
-                | ProviderKind::Broker
-                | ProviderKind::Lemonade => {
-                    // Local-LLM providers do not require an API key —
-                    // they run locally and ignore the Authorization
-                    // header. Phase 133 added LlamaCpp + Jan; Phase
-                    // 134 adds MistralRs (in-process, no wire
-                    // protocol at all, so the question doesn't
-                    // arise). GPU-slot broker coordination adds Broker
-                    // -- `aivyx-broker` is loopback-only with no auth,
-                    // same trust model as `llama-server` itself.
-                    // Lemonade Server is loopback-local with no key.
-                }
-            }
-        }
+        // 2.0 (local-only): no provider needs an API key. Every provider
+        // is a server on this machine or the operator's own network (or
+        // in-process), and those ignore the Authorization header or take an
+        // optional key — so `require_api_key` no longer makes any key
+        // required. The removed Anthropic provider's key is never needed.
+        let _ = opts.require_api_key;
         // Phase 134 — when the operator selects MistralRs, the
         // `[mistralrs] model_path` field is required. We validate
         // here (not at deserialize time) so the error is operator-
@@ -10205,10 +10399,12 @@ fn build_embedding_config(
         return Ok(None);
     }
 
-    let base_url = raw
-        .base_url
-        .clone()
-        .unwrap_or_else(|| DEFAULT_EMBEDDING_BASE_URL.to_string());
+    // 2.0 (local-only): no built-in endpoint — the old default was the
+    // OpenAI public API. Locality is checked with every model URL at load.
+    let base_url = raw.base_url.clone().ok_or(ConfigError::Invalid {
+        field: "embedding.base_url",
+        reason: EMBEDDING_NEEDS_BASE_URL.into(),
+    })?;
     if base_url.trim().is_empty() {
         return Err(ConfigError::Invalid {
             field: "embedding.base_url",

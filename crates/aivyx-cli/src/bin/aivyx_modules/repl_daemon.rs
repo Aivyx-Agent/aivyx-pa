@@ -428,10 +428,18 @@ mod tests {
         assert!(!without.contains("Studio"), "{without}");
     }
 
+    /// `cloud` is an endpoint the operator marked `locality = "cloud"` (2.0:
+    /// the cloud kinds are gone).
     fn routing_with(kinds: &[(&str, &str)]) -> aivyx_route::RoutingConfig {
         let mut toml = String::from("enabled = true\n");
         for (name, kind) in kinds {
-            toml.push_str(&format!("[endpoints.{name}]\nkind = \"{kind}\"\n"));
+            match *kind {
+                "cloud" => toml.push_str(&format!(
+                    "[endpoints.{name}]\nkind = \"openai_compat\"\n\
+                     base_url = \"http://10.0.0.7:8000\"\nlocality = \"cloud\"\n"
+                )),
+                kind => toml.push_str(&format!("[endpoints.{name}]\nkind = \"{kind}\"\n")),
+            }
         }
         toml::from_str(&toml).expect("routing snippet parses")
     }
@@ -442,16 +450,12 @@ mod tests {
         assert_eq!(in_process_cloud_warning(Some(&routing_with(&[("box", "ollama")]))), None);
         let w = in_process_cloud_warning(Some(&routing_with(&[
             ("box", "ollama"),
-            ("claude", "anthropic"),
+            ("claude", "cloud"),
         ])))
-        .expect("an anthropic endpoint warns");
+        .expect("a cloud-marked endpoint warns");
         assert!(w.contains("claude"), "names the endpoint: {w}");
         assert!(w.contains("needs the daemon"), "{w}");
-        assert!(
-            in_process_cloud_warning(Some(&routing_with(&[("gpt", "openai")]))).is_some(),
-            "openai is cloud too"
-        );
-        let mut off = routing_with(&[("claude", "anthropic")]);
+        let mut off = routing_with(&[("claude", "cloud")]);
         off.enabled = false;
         assert_eq!(in_process_cloud_warning(Some(&off)), None, "routing off: nothing to warn about");
     }

@@ -12,15 +12,20 @@
 //! ```toml
 //! # ~/.aivyx-pa/tool-processes/vision/config.toml
 //!
-//! provider = "ollama"   # "ollama" | "anthropic" | "openai"
+//! provider = "ollama"   # "ollama" | "openai" (an OpenAI-compatible local server)
 //! model = "qwen3:8b"
 //!
-//! # Only read when provider = "ollama"; omit for the default localhost.
+//! # provider = "ollama": optional, defaults to localhost.
+//! # provider = "openai": required.
 //! # base_url = "http://127.0.0.1:11434"
 //!
-//! # Only read when provider = "anthropic" or "openai"; required for those.
+//! # Optional; only for an OpenAI-compatible server that wants one.
 //! # api_key = "sk-..."
 //! ```
+//!
+//! 2.0 (local-only): every model URL here (`base_url`, `[mold]`
+//! `broker_url` and `mold_url`) must pass aivyx-route's `require_local` at
+//! load, and `provider = "anthropic"` was removed.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -43,21 +48,25 @@ pub enum ConfigFileError {
     Parse { path: PathBuf, reason: String },
     #[error("$HOME is unset; cannot resolve default config path")]
     NoHome,
-    #[error("provider {provider:?} requires an api_key, but none was set")]
-    MissingApiKey { provider: String },
+    #[error("config file at {path:?}: {reason}")]
+    Provider { path: PathBuf, reason: String },
+    /// 2.0 (local-only): a model URL that is not on this machine or the
+    /// operator's own network. `reason` is aivyx-route's `NotLocal` text.
+    #[error("{key}: {reason}")]
+    NotLocal { key: String, reason: String },
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum RawProvider {
-    Ollama,
-    Anthropic,
-    Openai,
+/// The removed-kind error for this tool process's own `provider` field.
+pub fn removed_provider_message(kind: &str) -> String {
+    format!(
+        "provider \"{kind}\" was removed in 2.0 — aivyx is local-only; use ollama or openai \
+         (an OpenAI-compatible local server) with a local base_url"
+    )
 }
 
 #[derive(Deserialize)]
 struct RawVisionConfig {
-    provider: RawProvider,
+    provider: String,
     model: String,
     base_url: Option<String>,
     api_key: Option<String>,
@@ -108,8 +117,9 @@ impl std::fmt::Debug for RawMoldConfig {
 #[derive(Debug, Clone)]
 pub enum ProviderChoice {
     Ollama { base_url: Option<String> },
-    Anthropic { api_key: SecretString },
-    Openai { api_key: SecretString },
+    /// An OpenAI-compatible local server: `base_url` is required, the key
+    /// optional.
+    Openai { base_url: String, api_key: Option<SecretString> },
 }
 
 /// Image-generation backend config -- present only when the operator has
@@ -176,7 +186,17 @@ pub fn default_output_dir() -> Result<PathBuf, ConfigFileError> {
         .ok_or(ConfigFileError::NoHome)
 }
 
+/// Loads and checks the config: every model URL must be local (system
+/// resolver; blocking DNS for names that aren't local by spelling).
 pub fn load_config(path: &Path) -> Result<VisionConfig, ConfigFileError> {
+    load_config_with(path, &aivyx_route::SystemResolver)
+}
+
+/// [`load_config`] with an explicit resolver for the local-only check.
+pub fn load_config_with(
+    path: &Path,
+    resolver: &dyn aivyx_route::Resolve,
+) -> Result<VisionConfig, ConfigFileError> {
     let raw_text = std::fs::read_to_string(path).map_err(|source| {
         if source.kind() == io::ErrorKind::NotFound {
             ConfigFileError::NotFound {
@@ -194,25 +214,46 @@ pub fn load_config(path: &Path) -> Result<VisionConfig, ConfigFileError> {
         reason: e.to_string(),
     })?;
 
-    let provider = match raw.provider {
-        RawProvider::Ollama => ProviderChoice::Ollama {
+    let provider_error = |reason: String| ConfigFileError::Provider {
+        path: path.to_path_buf(),
+        reason,
+    };
+    let provider = match raw.provider.as_str() {
+        "ollama" => ProviderChoice::Ollama {
             base_url: raw.base_url,
         },
-        RawProvider::Anthropic => ProviderChoice::Anthropic {
-            api_key: raw.api_key.map(SecretString::from).ok_or_else(|| {
-                ConfigFileError::MissingApiKey {
-                    provider: "anthropic".to_string(),
-                }
+        "openai" => ProviderChoice::Openai {
+            base_url: raw.base_url.ok_or_else(|| {
+                provider_error(
+                    "provider \"openai\" means an OpenAI-compatible local server and needs \
+                     base_url — set it to a server on this machine or your own network"
+                        .to_string(),
+                )
             })?,
+            api_key: raw.api_key.map(SecretString::from),
         },
-        RawProvider::Openai => ProviderChoice::Openai {
-            api_key: raw.api_key.map(SecretString::from).ok_or_else(|| {
-                ConfigFileError::MissingApiKey {
-                    provider: "openai".to_string(),
-                }
-            })?,
-        },
+        "anthropic" => return Err(provider_error(removed_provider_message("anthropic"))),
+        other => {
+            return Err(provider_error(format!(
+                "unknown provider {other:?}; supported: ollama, openai"
+            )));
+        }
     };
+    let check = |key: &str, url: &str| {
+        aivyx_route::require_local_with(url, resolver).map_err(|e| ConfigFileError::NotLocal {
+            key: key.to_string(),
+            reason: e.to_string(),
+        })
+    };
+    match &provider {
+        ProviderChoice::Ollama { base_url: Some(url) }
+        | ProviderChoice::Openai { base_url: url, .. } => check("base_url", url)?,
+        ProviderChoice::Ollama { base_url: None } => {}
+    }
+    if let Some(m) = &raw.mold {
+        check("[mold] broker_url", &m.broker_url)?;
+        check("[mold] mold_url", &m.mold_url)?;
+    }
 
     let mold = raw
         .mold
@@ -288,39 +329,116 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_without_api_key_is_a_clear_error() {
+    fn anthropic_was_removed_and_names_the_fix() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
-            "provider = \"anthropic\"\nmodel = \"claude-3-5-sonnet-20241022\"\n",
+            "provider = \"anthropic\"\nmodel = \"claude-3-5-sonnet-20241022\"\napi_key = \"k\"\n",
         )
         .unwrap();
         let err = load_config(&path).unwrap_err();
-        assert!(matches!(err, ConfigFileError::MissingApiKey { .. }));
+        assert!(matches!(err, ConfigFileError::Provider { .. }), "{err:?}");
+        assert!(
+            err.to_string().ends_with(
+                "provider \"anthropic\" was removed in 2.0 — aivyx is local-only; use ollama or \
+                 openai (an OpenAI-compatible local server) with a local base_url"
+            ),
+            "{err}"
+        );
     }
 
     #[test]
-    fn loads_a_valid_openai_config() {
+    fn loads_a_local_openai_compatible_config() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
-            "provider = \"openai\"\nmodel = \"gpt-4o\"\napi_key = \"sk-test\"\n",
+            "provider = \"openai\"\nmodel = \"qwen3\"\nbase_url = \"http://192.168.1.5:8000\"\n",
         )
         .unwrap();
         let config = load_config(&path).unwrap();
-        assert_eq!(config.model, "gpt-4o");
-        assert!(matches!(config.provider, ProviderChoice::Openai { .. }));
+        assert_eq!(config.model, "qwen3");
+        assert!(matches!(
+            config.provider,
+            ProviderChoice::Openai { ref base_url, api_key: None } if base_url == "http://192.168.1.5:8000"
+        ));
     }
 
     #[test]
-    fn openai_without_api_key_is_a_clear_error() {
+    fn openai_without_base_url_is_a_clear_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "provider = \"openai\"\nmodel = \"gpt-4o\"\n").unwrap();
+        std::fs::write(&path, "provider = \"openai\"\nmodel = \"gpt-4o\"\napi_key = \"sk\"\n")
+            .unwrap();
         let err = load_config(&path).unwrap_err();
-        assert!(matches!(err, ConfigFileError::MissingApiKey { .. }));
+        assert!(matches!(err, ConfigFileError::Provider { .. }), "{err:?}");
+        assert!(err.to_string().contains("needs base_url"), "{err}");
+    }
+
+    /// Fixed DNS answers (no network in tests).
+    struct Stub;
+    impl aivyx_route::Resolve for Stub {
+        fn resolve(&self, host: &str, _port: u16) -> std::io::Result<Vec<std::net::IpAddr>> {
+            match host {
+                "gpu.home.example" => Ok(vec!["10.0.0.4".parse().unwrap()]),
+                "pub.example.com" => Ok(vec!["93.184.216.34".parse().unwrap()]),
+                _ => Err(io::Error::other("no such host")),
+            }
+        }
+    }
+
+    #[test]
+    fn every_model_url_must_be_local() {
+        const TAIL: &str = " — aivyx is local-only; point it at a model server on this \
+                            machine or your own network";
+        let mold = |broker: &str, mold: &str| {
+            format!(
+                "provider = \"ollama\"\nmodel = \"m\"\n[mold]\nbroker_url = \"{broker}\"\n\
+                 mold_url = \"{mold}\"\n"
+            )
+        };
+        for (body, expected) in [
+            (
+                "provider = \"openai\"\nmodel = \"m\"\nbase_url = \"https://api.openai.com\"\n"
+                    .to_string(),
+                format!("base_url: https://api.openai.com/ is not local (cloud host){TAIL}"),
+            ),
+            (
+                "provider = \"ollama\"\nmodel = \"m\"\nbase_url = \"http://pub.example.com:11434\"\n"
+                    .to_string(),
+                format!(
+                    "base_url: http://pub.example.com:11434/ is not local (resolves to a public \
+                     address 93.184.216.34){TAIL}"
+                ),
+            ),
+            (
+                mold("http://8.8.8.8:8899", "http://127.0.0.1:7680"),
+                format!(
+                    "[mold] broker_url: http://8.8.8.8:8899/ is not local (resolves to a public \
+                     address 8.8.8.8){TAIL}"
+                ),
+            ),
+            (
+                mold("http://127.0.0.1:8899", "http://nowhere.example:7680"),
+                format!(
+                    "[mold] mold_url: http://nowhere.example:7680/ is not local (doesn't \
+                     resolve){TAIL}"
+                ),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, &body).unwrap();
+            let err = load_config_with(&path, &Stub).unwrap_err();
+            assert!(matches!(err, ConfigFileError::NotLocal { .. }), "{err:?}");
+            assert_eq!(err.to_string(), expected, "{body}");
+        }
+        // A LAN name that resolves local loads.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, mold("http://gpu.home.example:8899", "http://[::1]:7680")).unwrap();
+        assert!(load_config_with(&path, &Stub).unwrap().mold.is_some());
     }
 
     #[test]

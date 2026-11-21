@@ -1378,23 +1378,16 @@ fn missing_toml_file_is_not_an_error() {
 // ------------------------------------------------------------------
 
 #[test]
-fn validate_errors_when_required_api_key_missing() {
+fn validate_requires_no_api_key_even_when_asked() {
+    // 2.0 (local-only): `require_api_key` has no effect; the default
+    // provider (llama.cpp) is keyless.
     let env = EnvScope::new();
     let cfg = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).unwrap();
     let opts = LoadOptions {
-        toml_path: None,
         require_api_key: true,
-        require_telegram_token: false,
-        require_discord_token: false,
-        require_slack_tokens: false,
-        role_override: None,
+        ..LoadOptions::test_env_only()
     };
-    let err = cfg.validate(&opts).expect_err("should require api key");
-    match err {
-        ConfigError::Missing { field } => assert_eq!(field, "anthropic_api_key"),
-        other => panic!("expected Missing, got {other:?}"),
-    }
-
+    cfg.validate(&opts).expect("no key is required");
     drop(env);
 }
 
@@ -3741,19 +3734,108 @@ transport = "stdio"
 // ------------------------------------------------------------------
 
 #[test]
-fn provider_defaults_to_anthropic() {
+fn provider_defaults_to_llamacpp_with_the_neutral_model() {
     let env = EnvScope::new();
     let opts = LoadOptions::test_env_only();
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
-    assert_eq!(cfg.provider.value, ProviderKind::Anthropic);
+    assert_eq!(cfg.provider.value, ProviderKind::LlamaCpp);
     assert_eq!(cfg.provider.source, FieldSource::Default);
+    assert_eq!(cfg.model.value, "local-model");
+    assert_eq!(cfg.model.value, crate::DEFAULT_MODEL);
+    assert_eq!(cfg.model.source, FieldSource::Default);
+    assert!(cfg.openai_base_url.is_none(), "the provider's own local default applies");
+    assert_eq!(crate::DEFAULT_LLAMACPP_BASE_URL, "http://127.0.0.1:8080");
+    assert_eq!(ProviderKind::default(), ProviderKind::LlamaCpp);
     drop(env);
+}
+
+const REMOVED_ANTHROPIC: &str = "provider \"anthropic\" was removed in 2.0 — aivyx is local-only; \
+     use llamacpp, ollama, jan, lemonade, broker or openai (an OpenAI-compatible local server) \
+     with a local base_url";
+
+#[test]
+fn removed_anthropic_kind_names_the_fix_everywhere() {
+    // The one parser (the CLI's `--provider` uses it too).
+    assert_eq!(ProviderKind::parse("anthropic").unwrap_err(), REMOVED_ANTHROPIC);
+    assert_eq!("anthropic".parse::<ProviderKind>().unwrap_err(), REMOVED_ANTHROPIC);
+    assert_eq!(crate::removed_provider_message("anthropic"), REMOVED_ANTHROPIC);
+
+    // Env.
+    let env = EnvScope::new();
+    env.set("AIVYX_PA_PROVIDER", "anthropic");
+    let err = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).unwrap_err();
+    match &err {
+        ConfigError::Invalid { field: "provider", reason } => {
+            assert_eq!(reason, &format!("AIVYX_PA_PROVIDER: {REMOVED_ANTHROPIC}"));
+        }
+        other => panic!("{other:?}"),
+    }
+    drop(env);
+
+    // TOML.
+    let env = EnvScope::new();
+    let tmp = TempDir::new("removed-anthropic");
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    std::fs::write(&toml_path, "[agent]\nprovider = \"anthropic\"\nmodel = \"claude-x\"\n")
+        .unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        ..LoadOptions::test_env_only()
+    };
+    let err = AivyxConfig::load_from_env_and_toml(&opts).unwrap_err();
+    assert!(matches!(err, ConfigError::TomlParse { .. }), "{err:?}");
+    assert!(err.to_string().contains(REMOVED_ANTHROPIC), "{err}");
+    drop(env);
+}
+
+#[test]
+fn unknown_provider_lists_the_supported_names() {
+    let err = ProviderKind::parse("gemini").unwrap_err();
+    assert_eq!(
+        err,
+        "unknown provider \"gemini\"; supported: llamacpp, ollama, jan, lemonade, broker, \
+         mistralrs, openai"
+    );
+    let env = EnvScope::new();
+    env.set("AIVYX_PA_PROVIDER", "gemini");
+    let err = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).unwrap_err();
+    assert!(err.to_string().contains("unknown provider \"gemini\""), "{err}");
+    drop(env);
+}
+
+#[test]
+fn provider_parse_accepts_every_local_name_and_alias() {
+    for (name, kind) in [
+        ("openai", ProviderKind::OpenAi),
+        ("ollama", ProviderKind::Ollama),
+        ("llamacpp", ProviderKind::LlamaCpp),
+        ("llama-cpp", ProviderKind::LlamaCpp),
+        ("llama_cpp", ProviderKind::LlamaCpp),
+        ("jan", ProviderKind::Jan),
+        ("mistralrs", ProviderKind::MistralRs),
+        ("mistral-rs", ProviderKind::MistralRs),
+        ("mistral_rs", ProviderKind::MistralRs),
+        ("broker", ProviderKind::Broker),
+        ("aivyx-broker", ProviderKind::Broker),
+        ("aivyx_broker", ProviderKind::Broker),
+        ("lemonade", ProviderKind::Lemonade),
+    ] {
+        assert_eq!(ProviderKind::parse(name), Ok(kind), "{name}");
+        // TOML takes the same names.
+        #[derive(serde::Deserialize)]
+        struct T {
+            provider: ProviderKind,
+        }
+        let t: T = toml::from_str(&format!("provider = \"{name}\"")).unwrap();
+        assert_eq!(t.provider, kind, "{name}");
+    }
 }
 
 #[test]
 fn provider_from_env_var() {
     let env = EnvScope::new();
     env.set("AIVYX_PA_PROVIDER", "openai");
+    env.set("AIVYX_PA_OPENAI_BASE_URL", "http://192.168.1.5:8000/v1");
     let opts = LoadOptions::test_env_only();
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
     assert_eq!(cfg.provider.value, ProviderKind::OpenAi);
@@ -3762,176 +3844,44 @@ fn provider_from_env_var() {
 }
 
 #[test]
-fn provider_invalid_env_var_is_error() {
-    let env = EnvScope::new();
-    env.set("AIVYX_PA_PROVIDER", "gemini");
-    let opts = LoadOptions::test_env_only();
-    let err = AivyxConfig::load_from_env_and_toml(&opts).unwrap_err();
-    assert!(matches!(err, ConfigError::Invalid { field: "provider", .. }));
-    drop(env);
-}
-
-#[test]
-fn provider_from_toml() {
-    let env = EnvScope::new();
-    let tmp = TempDir::new("provider-toml");
-    let toml_path = tmp.path().join("aivyx-pa.toml");
-    std::fs::write(
-        &toml_path,
-        r#"
-[agent]
-provider = "openai"
-
-[openai]
-api_key = "sk-openai-test"
-base_url = "http://localhost:11434/v1"
-"#,
-    )
-    .unwrap();
-
-    let opts = LoadOptions {
-        toml_path: Some(toml_path),
-        require_api_key: false,
-        require_telegram_token: false,
-        require_discord_token: false,
-        require_slack_tokens: false,
-        role_override: None,
-    };
-    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
-    assert_eq!(cfg.provider.value, ProviderKind::OpenAi);
-    assert_eq!(cfg.provider.source, FieldSource::Toml);
-    assert!(cfg.openai_api_key.is_some());
-    assert_eq!(cfg.openai_api_key.as_ref().unwrap().source, FieldSource::Toml);
-    let base_url = cfg.openai_base_url.as_ref().expect("base_url set");
-    assert_eq!(base_url.value, "http://localhost:11434/v1");
-    assert_eq!(base_url.source, FieldSource::Toml);
-    drop(env);
-}
-
-#[test]
-fn openai_constrain_tool_calls_round_trips_and_defaults_off() {
-    // Chapter Emboss (EB.2) — `[openai] constrain_tool_calls` is the
-    // opt-in for grammar-constrained tool-calling on llama.cpp-family
-    // servers. Omitted → false (byte-identical passthrough); set → true.
-    let env = EnvScope::new();
-
-    // Omitted → false.
-    let tmp = TempDir::new("emboss-constrain-default");
-    let toml_path = tmp.path().join("aivyx-pa.toml");
-    std::fs::write(
-        &toml_path,
-        r#"
-[agent]
-provider = "llamacpp"
-
-[openai]
-base_url = "http://localhost:8080"
-"#,
-    )
-    .unwrap();
-    let opts = LoadOptions {
-        toml_path: Some(toml_path),
-        require_api_key: false,
-        require_telegram_token: false,
-        require_discord_token: false,
-        require_slack_tokens: false,
-        role_override: None,
-    };
-    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
-    assert!(
-        !cfg.openai_constrain_tool_calls,
-        "omitted constrain_tool_calls must default to false"
-    );
-
-    // Set → true.
-    let tmp2 = TempDir::new("emboss-constrain-on");
-    let toml_path2 = tmp2.path().join("aivyx-pa.toml");
-    std::fs::write(
-        &toml_path2,
-        r#"
-[agent]
-provider = "llamacpp"
-
-[openai]
-base_url = "http://localhost:8080"
-constrain_tool_calls = true
-"#,
-    )
-    .unwrap();
-    let opts2 = LoadOptions {
-        toml_path: Some(toml_path2),
-        require_api_key: false,
-        require_telegram_token: false,
-        require_discord_token: false,
-        require_slack_tokens: false,
-        role_override: None,
-    };
-    let cfg2 = AivyxConfig::load_from_env_and_toml(&opts2).expect("load");
-    assert!(cfg2.openai_constrain_tool_calls);
-    drop(env);
-}
-
-#[test]
-fn openai_api_key_from_env_overrides_toml() {
-    let env = EnvScope::new();
-    env.set("AIVYX_PA_OPENAI_API_KEY", "sk-env-wins");
-    let tmp = TempDir::new("openai-env-over-toml");
-    let toml_path = tmp.path().join("aivyx-pa.toml");
-    std::fs::write(
-        &toml_path,
-        r#"
-[openai]
-api_key = "sk-toml-loses"
-"#,
-    )
-    .unwrap();
-
-    let opts = LoadOptions {
-        toml_path: Some(toml_path),
-        require_api_key: false,
-        require_telegram_token: false,
-        require_discord_token: false,
-        require_slack_tokens: false,
-        role_override: None,
-    };
-    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
-    assert_eq!(cfg.openai_api_key.as_ref().unwrap().source, FieldSource::Env);
-    drop(env);
-}
-
-#[test]
-fn validate_requires_openai_key_when_provider_is_openai() {
-    let env = EnvScope::new();
-    env.set("AIVYX_PA_PROVIDER", "openai");
-    let opts = LoadOptions {
-        toml_path: None,
-        require_api_key: true,
-        require_telegram_token: false,
-        require_discord_token: false,
-        require_slack_tokens: false,
-        role_override: None,
-    };
-    let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
-    let err = cfg.validate(&opts).unwrap_err();
-    assert!(matches!(err, ConfigError::Missing { field: "openai_api_key" }));
-    drop(env);
-}
-
-#[test]
-fn validate_does_not_require_anthropic_key_when_provider_is_openai() {
+fn openai_provider_needs_a_base_url() {
     let env = EnvScope::new();
     env.set("AIVYX_PA_PROVIDER", "openai");
     env.set("AIVYX_PA_OPENAI_API_KEY", "sk-test");
+    let err = AivyxConfig::load_from_env_and_toml(&LoadOptions::test_env_only()).unwrap_err();
+    match &err {
+        ConfigError::Invalid { field: "openai.base_url", reason } => assert_eq!(
+            reason,
+            "provider \"openai\" means an OpenAI-compatible local server and has no default \
+             address — set [openai] base_url (for example http://127.0.0.1:8080) to a server on \
+             this machine or your own network"
+        ),
+        other => panic!("{other:?}"),
+    }
+    drop(env);
+}
+
+#[test]
+fn validate_requires_no_api_key_for_any_provider() {
+    // 2.0 (local-only): `require_api_key` no longer makes any key required;
+    // a local OpenAI-compatible server is keyless.
     let opts = LoadOptions {
-        toml_path: None,
         require_api_key: true,
-        require_telegram_token: false,
-        require_discord_token: false,
-        require_slack_tokens: false,
-        role_override: None,
+        ..LoadOptions::test_env_only()
     };
+    for provider in ["openai", "llamacpp", "ollama", "jan", "broker", "lemonade"] {
+        let env = EnvScope::new();
+        env.set("AIVYX_PA_PROVIDER", provider);
+        env.set("AIVYX_PA_OPENAI_BASE_URL", "http://127.0.0.1:8080");
+        let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
+        cfg.validate(&opts).expect(provider);
+        drop(env);
+    }
+    // The default provider, with no keys at all.
+    let env = EnvScope::new();
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
-    cfg.validate(&opts).expect("should pass — openai key present");
+    assert!(cfg.anthropic_api_key.is_none());
+    cfg.validate(&opts).expect("default provider needs no key");
     drop(env);
 }
 
@@ -4023,7 +3973,6 @@ fn ollama_accepts_optional_api_key() {
 
 #[test]
 fn provider_kind_is_openai_compatible() {
-    assert!(!ProviderKind::Anthropic.is_openai_compatible());
     assert!(ProviderKind::OpenAi.is_openai_compatible());
     assert!(ProviderKind::Ollama.is_openai_compatible());
     // Phase 133 — llama-server and Jan are both OpenAI-compat
@@ -4035,7 +3984,6 @@ fn provider_kind_is_openai_compatible() {
 
 #[test]
 fn provider_kind_display() {
-    assert_eq!(ProviderKind::Anthropic.to_string(), "anthropic");
     assert_eq!(ProviderKind::OpenAi.to_string(), "openai");
     assert_eq!(ProviderKind::Ollama.to_string(), "ollama");
     // Phase 133 — lowercase, hyphen-free for parity with the
@@ -4054,10 +4002,7 @@ fn provider_kind_default_context_window_groups_local_llm_providers() {
     assert_eq!(ProviderKind::Ollama.default_context_window(), 8_000);
     assert_eq!(ProviderKind::LlamaCpp.default_context_window(), 8_000);
     assert_eq!(ProviderKind::Jan.default_context_window(), 8_000);
-    // Cloud providers keep their existing defaults — regression
-    // guard against accidentally folding them into the local-LLM
-    // group.
-    assert_eq!(ProviderKind::Anthropic.default_context_window(), 200_000);
+    // A local OpenAI-compatible server keeps its 1.x default.
     assert_eq!(ProviderKind::OpenAi.default_context_window(), 128_000);
 }
 
@@ -4462,7 +4407,6 @@ fn provider_kind_mistralrs_is_in_process_and_not_openai_compat() {
     assert!(!ProviderKind::Ollama.is_in_process());
     assert!(!ProviderKind::LlamaCpp.is_in_process());
     assert!(!ProviderKind::Jan.is_in_process());
-    assert!(!ProviderKind::Anthropic.is_in_process());
     assert!(!ProviderKind::OpenAi.is_in_process());
 }
 
@@ -5240,8 +5184,8 @@ fn profile_section_absent_synthesizes_default_with_assistant_name() {
         &toml_path,
         r#"
 [agent]
-provider = "anthropic"
-model = "claude-haiku-4-5-20251001"
+provider = "ollama"
+model = "qwen3:8b"
 "#,
     )
     .unwrap();
@@ -8030,6 +7974,7 @@ fn embedding_partial_section_applies_defaults() {
         &toml_path,
         r#"
 [embedding]
+base_url = "http://127.0.0.1:11434"
 api_key = "sk-emb-toml"
 "#,
     )
@@ -8045,7 +7990,7 @@ api_key = "sk-emb-toml"
     };
     let cfg = AivyxConfig::load_from_env_and_toml(&opts).expect("load");
     let emb = cfg.embedding.expect("section present");
-    assert_eq!(emb.base_url, crate::DEFAULT_EMBEDDING_BASE_URL);
+    assert_eq!(emb.base_url, "http://127.0.0.1:11434");
     assert_eq!(emb.model, crate::DEFAULT_EMBEDDING_MODEL);
     assert_eq!(emb.dimensions, crate::DEFAULT_EMBEDDING_DIMENSIONS);
     // Phase 76 — RAG knobs default when unspecified.
@@ -8116,6 +8061,7 @@ fn embedding_env_key_beats_toml_key() {
         &toml_path,
         r#"
 [embedding]
+base_url = "http://127.0.0.1:11434"
 api_key = "sk-emb-toml-loses"
 "#,
     )
@@ -8180,6 +8126,7 @@ fn embedding_zero_dimensions_is_invalid() {
         &toml_path,
         r#"
 [embedding]
+base_url = "http://127.0.0.1:11434"
 dimensions = 0
 "#,
     )
@@ -8245,6 +8192,7 @@ fn embedding_rag_top_k_zero_is_invalid() {
         &toml_path,
         r#"
 [embedding]
+base_url = "http://127.0.0.1:11434"
 rag_top_k = 0
 "#,
     )
@@ -8279,6 +8227,7 @@ fn embedding_rag_min_similarity_out_of_range_is_invalid() {
         &toml_path,
         r#"
 [embedding]
+base_url = "http://127.0.0.1:11434"
 rag_min_similarity = 1.5
 "#,
     )
@@ -8314,6 +8263,7 @@ fn embedding_recall_window_turns_explicit_wins() {
         &toml_path,
         r#"
 [embedding]
+base_url = "http://127.0.0.1:11434"
 recall_window_turns = 5
 "#,
     )
@@ -8346,6 +8296,7 @@ fn embedding_recall_window_turns_zero_is_invalid() {
         &toml_path,
         r#"
 [embedding]
+base_url = "http://127.0.0.1:11434"
 recall_window_turns = 0
 "#,
     )
@@ -8378,7 +8329,7 @@ recall_window_turns = 0
 fn embedding_recall_gate_min_chars_default_is_zero() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nmodel = \"any\"\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"any\"\n",
         "embed-gate-default",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8395,7 +8346,7 @@ fn embedding_recall_gate_min_chars_default_is_zero() {
 fn embedding_recall_gate_min_chars_explicit_wins() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nrecall_gate_min_chars = 6\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_gate_min_chars = 6\n",
         "embed-gate-explicit",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8411,7 +8362,7 @@ fn embedding_recall_gate_min_chars_explicit_wins() {
 fn embedding_recall_gate_min_chars_explicit_zero_honored() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nrecall_gate_min_chars = 0\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_gate_min_chars = 0\n",
         "embed-gate-explicit-zero",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8427,7 +8378,7 @@ fn embedding_recall_gate_min_chars_explicit_zero_honored() {
 fn embedding_ann_index_defaults() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nmodel = \"text-embedding-3-small\"\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"text-embedding-3-small\"\n",
         "embed-ann-defaults",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8446,7 +8397,7 @@ fn embedding_ann_index_defaults() {
 fn embedding_ann_index_explicit_values_win() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nann_index = true\n\
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nann_index = true\n\
          ann_rebuild_threshold = 50\n",
         "embed-ann-explicit",
     );
@@ -8464,7 +8415,7 @@ fn embedding_ann_index_explicit_values_win() {
 fn embedding_ann_index_staged_threshold_unvalidated() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nann_rebuild_threshold = 25\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nann_rebuild_threshold = 25\n",
         "embed-ann-staged",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8480,7 +8431,7 @@ fn embedding_ann_index_staged_threshold_unvalidated() {
 fn embedding_recall_token_budget_default_is_zero() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nmodel = \"text-embedding-3-small\"\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"text-embedding-3-small\"\n",
         "embed-budget-default",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8494,7 +8445,7 @@ fn embedding_recall_token_budget_default_is_zero() {
 fn embedding_recall_token_budget_explicit_wins() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nrecall_token_budget = 2000\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_token_budget = 2000\n",
         "embed-budget-explicit",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8510,7 +8461,7 @@ fn embedding_recall_token_budget_explicit_wins() {
 fn embedding_recall_token_budget_explicit_zero_honored() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nrecall_token_budget = 0\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_token_budget = 0\n",
         "embed-budget-zero",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8525,7 +8476,7 @@ fn embedding_recall_token_budget_explicit_zero_honored() {
 fn embedding_recall_hybrid_default_is_false() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nmodel = \"text-embedding-3-small\"\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"text-embedding-3-small\"\n",
         "embed-hybrid-default",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8538,7 +8489,7 @@ fn embedding_recall_hybrid_default_is_false() {
 fn embedding_recall_hybrid_explicit_true_wins() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nrecall_hybrid = true\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_hybrid = true\n",
         "embed-hybrid-true",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8552,7 +8503,7 @@ fn embedding_recall_hybrid_explicit_true_wins() {
 fn embedding_recall_hybrid_explicit_false_honored() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[embedding]\nrecall_hybrid = false\n",
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nrecall_hybrid = false\n",
         "embed-hybrid-false",
     );
     let emb = cfg.embedding.expect("section present");
@@ -8570,7 +8521,7 @@ fn embedding_ann_index_zero_threshold_when_armed_is_invalid() {
     let toml_path = tmp.path().join("aivyx-pa.toml");
     std::fs::write(
         &toml_path,
-        "\n[embedding]\nann_index = true\n\
+        "\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nann_index = true\n\
          ann_rebuild_threshold = 0\n",
     )
     .unwrap();
@@ -8625,6 +8576,7 @@ async fn embedding_key_hydrates_from_store() {
         &toml_path,
         r#"
 [embedding]
+base_url = "http://127.0.0.1:11434"
 model = "text-embedding-3-small"
 "#,
     )
@@ -9418,7 +9370,8 @@ fn routing_shared_keys_are_undisturbed_by_the_escalation_subtables() {
     let _env = EnvScope::new();
     let shared = "\n[routing]\nenabled = true\ndiscover = false\n\
          [routing.endpoints.gpu]\nkind = \"ollama\"\nbase_url = \"http://127.0.0.1:11434\"\n\
-         [routing.endpoints.claude]\nkind = \"anthropic\"\n\
+         [routing.endpoints.lan]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\n\
+         locality = \"cloud\"\n\
          [routing.tasks.plan]\ntier = \"large\"\n\
          [[routing.models]]\nid = \"qwen3:32b\"\nendpoint = \"gpu\"\ntier = \"large\"\n\
          priority = -2\ncapabilities = [\"completion\", \"tools\"]\ncontext_window = 32768\n";
@@ -9544,7 +9497,7 @@ fn skill_refinement_section_parses_and_defaults() {
 fn memory_profile_off_is_byte_identical() {
     let _env = EnvScope::new();
     // No [memory] + a present [embedding] → profile Off, nothing armed.
-    let cfg = load_with_toml("\n[embedding]\nmodel = \"m\"\n", "mp-off");
+    let cfg = load_with_toml("\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\n", "mp-off");
     assert_eq!(cfg.memory_profile, crate::MemoryProfile::Off);
     let e = cfg.embedding.expect("embedding present");
     assert!(!e.recall_hybrid);
@@ -9560,7 +9513,7 @@ fn memory_profile_off_is_byte_identical() {
 fn memory_profile_lite_arms_cheap_fusion_only() {
     let _env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[memory]\nprofile = \"lite\"\n[embedding]\nmodel = \"m\"\n",
+        "\n[memory]\nprofile = \"lite\"\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\n",
         "mp-lite",
     );
     assert_eq!(cfg.memory_profile, crate::MemoryProfile::Lite);
@@ -9580,7 +9533,7 @@ fn memory_profile_lite_arms_cheap_fusion_only() {
 fn memory_profile_smart_arms_the_bundle() {
     let _env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[memory]\nprofile = \"smart\"\n[embedding]\nmodel = \"m\"\n",
+        "\n[memory]\nprofile = \"smart\"\n[embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\n",
         "mp-smart",
     );
     assert_eq!(cfg.memory_profile, crate::MemoryProfile::Smart);
@@ -9601,7 +9554,7 @@ fn memory_profile_smart_explicit_knobs_win() {
     // smart, but the operator explicitly disables hybrid + the wiki sweep.
     let cfg = load_with_toml(
         "\n[memory]\nprofile = \"smart\"\n\
-         [embedding]\nmodel = \"m\"\nrecall_hybrid = false\n\
+         [embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"m\"\nrecall_hybrid = false\n\
          [wiki]\nenabled = false\n",
         "mp-override",
     );
@@ -12133,12 +12086,11 @@ fn chapter_k_loader_defaults_budget_uncapped() {
 fn chapter_k_loader_parses_budget_section() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[budget]\nper_run_usd = 5.0\nper_day_usd = 25.0\n\
-         on_exceeded = \"alert\"\nalert_at = 0.5\n",
+        "\n[budget]\non_exceeded = \"alert\"\nalert_at = 0.5\n",
         "chapter-k-budget",
     );
-    assert_eq!(cfg.budget.per_run_usd, Some(5.0));
-    assert_eq!(cfg.budget.per_day_usd, Some(25.0));
+    assert!(cfg.budget.per_run_usd.is_none());
+    assert!(cfg.budget.per_day_usd.is_none());
     assert_eq!(cfg.budget.on_exceeded, aivyx_cost::BudgetAction::Alert);
     assert_eq!(cfg.budget.alert_at, Some(0.5));
     drop(env);
@@ -12146,21 +12098,52 @@ fn chapter_k_loader_parses_budget_section() {
 
 #[test]
 fn ballast_loader_parses_per_mission_caps() {
-    // Chapter Ballast — the per-mission caps load from `[budget]` and default
-    // to None (unbounded) when absent.
+    // Chapter Ballast — the per-mission token cap loads from `[budget]` and
+    // defaults to None (unbounded) when absent.
     let env = EnvScope::new();
     let cfg = load_with_toml(
-        "\n[budget]\nper_mission_tokens = 200000\nper_mission_usd = 1.0\n",
+        "\n[budget]\nper_mission_tokens = 200000\n",
         "ballast-mission-caps",
     );
     assert_eq!(cfg.budget.per_mission_tokens, Some(200_000));
-    assert_eq!(cfg.budget.per_mission_usd, Some(1.0));
-    // The run/day caps stay independent (unset here).
+    assert!(cfg.budget.per_mission_usd.is_none());
     assert!(cfg.budget.per_run_usd.is_none());
 
-    let bare = load_with_toml("\n[budget]\nper_run_usd = 2.0\n", "ballast-default");
+    let bare = load_with_toml("\n[budget]\non_exceeded = \"deny\"\n", "ballast-default");
     assert!(bare.budget.per_mission_tokens.is_none());
-    assert!(bare.budget.per_mission_usd.is_none());
+    drop(env);
+}
+
+/// 2.0 (local-only): every money-denominated cap is refused at load with
+/// the exact text, naming the key; token and run caps still load.
+#[test]
+fn money_caps_are_refused_at_load() {
+    let env = EnvScope::new();
+    for (body, field) in [
+        ("\n[budget]\nper_run_usd = 5.0\n", "budget.per_run_usd"),
+        ("\n[budget]\nper_day_usd = 0.0\n", "budget.per_day_usd"),
+        ("\n[budget]\nper_mission_usd = 1.0\n", "budget.per_mission_usd"),
+        ("\n[loop]\nmax_run_usd = 2.5\n", "loop.max_run_usd"),
+    ] {
+        let err = load_with_toml_result(body, "money-cap").unwrap_err();
+        match &err {
+            ConfigError::Invalid { field: f, reason } => {
+                assert_eq!(*f, field);
+                assert_eq!(
+                    reason,
+                    "a money cap needs cloud prices, which were removed in 2.0 — use a token \
+                     or run cap"
+                );
+            }
+            other => panic!("{field}: {other:?}"),
+        }
+    }
+    let cfg = load_with_toml(
+        "\n[budget]\nper_mission_tokens = 1000\n[loop]\nmax_run_tokens = 5000\n",
+        "token-caps",
+    );
+    assert_eq!(cfg.budget.per_mission_tokens, Some(1000));
+    assert_eq!(cfg.loop_config.as_ref().and_then(|l| l.max_run_tokens), Some(5000));
     drop(env);
 }
 
@@ -12969,7 +12952,7 @@ fn smart_profile_with_embedding_does_not_warn() {
     let env = EnvScope::new();
     let cfg = load_with_toml(
         "\n[memory]\nprofile = \"smart\"\n\
-         [embedding]\nmodel = \"nomic-embed-text\"\ndimensions = 768\n",
+         [embedding]\nbase_url = \"http://127.0.0.1:11434\"\nmodel = \"nomic-embed-text\"\ndimensions = 768\n",
         "smart-with-embedding",
     );
     assert!(
@@ -13203,6 +13186,7 @@ app_token = "SECRET-SLACK-APP"
 [email]
 password = "SECRET-EMAIL"
 [embedding]
+base_url = "http://127.0.0.1:11434"
 api_key = "SECRET-EMBEDDING"
 "#;
     let raw: super::RawToml = toml::from_str(text).expect("parses");
@@ -14441,5 +14425,198 @@ fn listen_any_allows_a_wildcard() {
     let body = "[federation]\nid = \"desktop\"\nlisten = \"0.0.0.0:7650\"\nlisten_any = true\n";
     let f = load_with_toml(body, "fed-any").federation.unwrap();
     assert!(f.listen.unwrap().ip().is_unspecified());
+    drop(env);
+}
+
+// ------------------------------------------------------------------
+// 2.0 (local-only) — every model URL is checked at load
+// ------------------------------------------------------------------
+
+/// A resolver with fixed answers (no network in tests): `gpu.lan` and
+/// `box.home.arpa` are local, `pub.example.com` is public, anything else
+/// doesn't resolve.
+struct StubResolver;
+
+impl aivyx_route::Resolve for StubResolver {
+    fn resolve(&self, host: &str, _port: u16) -> std::io::Result<Vec<std::net::IpAddr>> {
+        match host {
+            "gpu.lan" => Ok(vec!["192.168.1.20".parse().unwrap()]),
+            "box.home.arpa" => Ok(vec!["10.0.0.5".parse().unwrap(), "fd00::5".parse().unwrap()]),
+            "pub.example.com" => Ok(vec!["93.184.216.34".parse().unwrap()]),
+            "mixed.example.net" => Ok(vec!["192.168.1.9".parse().unwrap(), "8.8.4.4".parse().unwrap()]),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such host")),
+        }
+    }
+}
+
+fn load_local(body: &str, tag: &str) -> Result<AivyxConfig, ConfigError> {
+    assert_env_guarded();
+    let tmp = TempDir::new(tag);
+    let toml_path = tmp.path().join("aivyx-pa.toml");
+    std::fs::write(&toml_path, body).unwrap();
+    let opts = LoadOptions {
+        toml_path: Some(toml_path),
+        ..LoadOptions::test_env_only()
+    };
+    AivyxConfig::load_from_env_and_toml_with(&opts, &StubResolver)
+}
+
+const LOCAL_ONLY_TAIL: &str =
+    " — aivyx is local-only; point it at a model server on this machine or your own network";
+
+fn not_local(err: ConfigError) -> (String, String) {
+    match err {
+        ConfigError::NotLocal { key, reason } => (key, reason),
+        other => panic!("expected NotLocal, got {other:?}"),
+    }
+}
+
+#[test]
+fn every_model_url_is_checked_at_load_with_the_exact_text() {
+    let env = EnvScope::new();
+    let cases = [
+        (
+            "[openai]\nbase_url = \"https://api.openai.com\"\n",
+            "[openai] base_url",
+            "https://api.openai.com/ is not local (cloud host)",
+        ),
+        (
+            "[agent]\nprovider = \"ollama\"\n[openai]\nbase_url = \"http://pub.example.com:11434\"\n",
+            "[openai] base_url",
+            "http://pub.example.com:11434/ is not local (resolves to a public address 93.184.216.34)",
+        ),
+        (
+            "[agent]\nprovider = \"broker\"\n[broker]\nbase_url = \"http://8.8.8.8:8899\"\n",
+            "[broker] base_url",
+            "http://8.8.8.8:8899/ is not local (resolves to a public address 8.8.8.8)",
+        ),
+        (
+            "[embedding]\nbase_url = \"https://api.openai.com\"\n",
+            "[embedding] base_url",
+            "https://api.openai.com/ is not local (cloud host)",
+        ),
+        (
+            "[routing]\n[routing.endpoints.box]\nkind = \"openai_compat\"\n\
+             base_url = \"http://nowhere.example:8000\"\n",
+            "[routing.endpoints.box] base_url",
+            "http://nowhere.example:8000/ is not local (doesn't resolve)",
+        ),
+        (
+            "[routing]\n[routing.endpoints.mix]\nkind = \"ollama\"\n\
+             base_url = \"http://mixed.example.net:11434\"\nlocality = \"local\"\n",
+            "[routing.endpoints.mix] base_url",
+            "http://mixed.example.net:11434/ is not local (resolves to a public address 8.8.4.4)",
+        ),
+        (
+            "[openai]\nbase_url = \"ftp://127.0.0.1/\"\n",
+            "[openai] base_url",
+            "ftp://127.0.0.1/ is not local (not an http(s) URL)",
+        ),
+        (
+            // Credentials never reach the error.
+            "[openai]\nbase_url = \"https://user:hunter2@api.anthropic.com\"\n",
+            "[openai] base_url",
+            "https://api.anthropic.com/ is not local (cloud host)",
+        ),
+    ];
+    for (body, key, reason) in cases {
+        let err = load_local(body, "not-local").unwrap_err();
+        let shown = err.to_string();
+        assert_eq!(shown, format!("{key}: {reason}{LOCAL_ONLY_TAIL}"), "{body}");
+        assert!(!shown.contains("hunter2"));
+        let (k, r) = not_local(err);
+        assert_eq!(k, key);
+        assert_eq!(r, format!("{reason}{LOCAL_ONLY_TAIL}"));
+    }
+    drop(env);
+}
+
+#[test]
+fn the_env_base_url_is_named_by_its_variable() {
+    let env = EnvScope::new();
+    env.set("AIVYX_PA_OPENAI_BASE_URL", "http://1.2.3.4:8080");
+    let err = AivyxConfig::load_from_env_and_toml_with(&LoadOptions::test_env_only(), &StubResolver)
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "AIVYX_PA_OPENAI_BASE_URL: http://1.2.3.4:8080/ is not local (resolves to a public \
+             address 1.2.3.4){LOCAL_ONLY_TAIL}"
+        )
+    );
+    drop(env);
+}
+
+#[test]
+fn local_model_urls_load() {
+    let env = EnvScope::new();
+    let cfg = load_local(
+        "[agent]\nprovider = \"openai\"\nmodel = \"qwen3\"\n\
+         [openai]\nbase_url = \"http://gpu.lan:8000/v1\"\n\
+         [broker]\nbase_url = \"http://127.0.0.1:8899\"\n\
+         [embedding]\nbase_url = \"http://[::1]:11434\"\n\
+         [routing]\n[routing.endpoints.box]\nkind = \"ollama\"\n\
+         base_url = \"http://box.home.arpa:11434\"\n\
+         [routing.endpoints.tail]\nkind = \"openai_compat\"\nbase_url = \"http://100.64.0.9:8080\"\n",
+        "local-urls",
+    )
+    .expect("all local");
+    assert_eq!(
+        cfg.model_urls(),
+        vec![
+            ("[openai] base_url".to_string(), "http://gpu.lan:8000/v1".to_string()),
+            ("[broker] base_url".to_string(), "http://127.0.0.1:8899".to_string()),
+            ("[embedding] base_url".to_string(), "http://[::1]:11434".to_string()),
+            ("[routing.endpoints.box] base_url".to_string(), "http://box.home.arpa:11434".to_string()),
+            ("[routing.endpoints.tail] base_url".to_string(), "http://100.64.0.9:8080".to_string()),
+        ]
+    );
+    drop(env);
+}
+
+#[test]
+fn embedding_section_needs_a_base_url() {
+    let env = EnvScope::new();
+    let err = load_local("[embedding]\nmodel = \"nomic-embed-text\"\n", "emb-no-url").unwrap_err();
+    match &err {
+        ConfigError::Invalid { field: "embedding.base_url", reason } => assert_eq!(
+            reason,
+            "`base_url` is required — aivyx is local-only; point it at an embeddings server on \
+             this machine or your own network"
+        ),
+        other => panic!("{other:?}"),
+    }
+    drop(env);
+}
+
+/// A 1.x config that names only local providers loads unchanged, keeping
+/// its (now unused) cloud key fields: stored keys are never dropped.
+#[test]
+fn old_local_configs_still_load_unchanged() {
+    let env = EnvScope::new();
+    let cfg = load_local(
+        "[agent]\nprovider = \"llama-cpp\"\nmodel = \"qwen3.8-27b\"\n\
+         [anthropic]\napi_key = \"sk-ant-old\"\n\
+         [openai]\napi_key = \"sk-old\"\nbase_url = \"http://localhost:8080\"\n\
+         [budget]\non_exceeded = \"alert\"\nper_mission_tokens = 9000\n\
+         [routing]\nenabled = true\n[routing.endpoints.gpu]\nkind = \"ollama\"\n\
+         base_url = \"http://127.0.0.1:11434\"\n",
+        "old-local",
+    )
+    .expect("an old local config loads");
+    assert_eq!(cfg.provider.value, ProviderKind::LlamaCpp);
+    assert_eq!(cfg.model.value, "qwen3.8-27b");
+    assert_eq!(cfg.anthropic_api_key.as_ref().unwrap().value.expose_secret(), "sk-ant-old");
+    assert_eq!(cfg.openai_api_key.as_ref().unwrap().value.expose_secret(), "sk-old");
+    assert_eq!(cfg.openai_base_url.as_ref().unwrap().value, "http://localhost:8080");
+    assert_eq!(cfg.budget.per_mission_tokens, Some(9000));
+
+    for provider in ["ollama", "jan", "lemonade", "broker"] {
+        load_local(
+            &format!("[agent]\nprovider = \"{provider}\"\nmodel = \"m\"\n"),
+            "old-local-kind",
+        )
+        .unwrap_or_else(|e| panic!("{provider}: {e}"));
+    }
     drop(env);
 }

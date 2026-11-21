@@ -210,20 +210,15 @@ pub fn write_autonomy_section(path: &Path, level: AutonomyLevel) -> Result<(), C
 ///
 /// `None` caps clear their key (uncapped is the default). `on_exceeded` and
 /// `alert_at` are always written. Validation mirrors the loader
-/// (`AivyxConfig::load`): negative caps and an out-of-range `alert_at` are
-/// refused here so a bad write can never reach the gate's reservation math.
+/// (`AivyxConfig::load`): since 2.0 any money cap (`per_run_usd`,
+/// `per_day_usd`) is refused with [`crate::MONEY_CAP_REMOVED`], and an
+/// out-of-range `alert_at` is refused too.
 pub fn write_budget_section(path: &Path, budget: &BudgetConfig) -> Result<(), ConfigWriteError> {
-    for (name, cap) in [
-        ("per_run_usd", budget.per_run_usd),
-        ("per_day_usd", budget.per_day_usd),
-    ] {
-        if let Some(c) = cap {
-            if c < 0.0 {
-                return Err(ConfigWriteError::InvalidBudget {
-                    reason: format!("{name} must be non-negative"),
-                });
-            }
-        }
+    // 2.0 (local-only): the loader refuses any money cap, so never write one.
+    if budget.per_run_usd.is_some() || budget.per_day_usd.is_some() {
+        return Err(ConfigWriteError::InvalidBudget {
+            reason: crate::MONEY_CAP_REMOVED.to_string(),
+        });
     }
     if let Some(frac) = budget.alert_at {
         if !(0.0..=1.0).contains(&frac) {
@@ -2101,22 +2096,52 @@ mod tests {
     }
 
     #[test]
-    fn budget_writes_caps_action_and_alert() {
+    fn budget_writes_action_and_alert() {
         let path = temp_toml("budget");
         let b = BudgetConfig {
-            per_run_usd: Some(5.0),
-            per_day_usd: Some(20.0),
             on_exceeded: BudgetAction::Deny,
             alert_at: Some(0.8),
+            per_mission_tokens: Some(50_000),
             ..Default::default()
         };
         write_budget_section(&path, &b).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
-        assert!(out.contains("per_run_usd = 5.0"), "{out}");
-        assert!(out.contains("per_day_usd = 20.0"), "{out}");
+        assert!(!out.contains("_usd"), "{out}");
         assert!(out.contains("on_exceeded = \"deny\""), "{out}");
         assert!(out.contains("alert_at = 0.8"), "{out}");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// 2.0 (local-only): a money cap is refused with the loader's text, and
+    /// nothing is written.
+    #[test]
+    fn budget_refuses_money_caps() {
+        for b in [
+            BudgetConfig {
+                per_run_usd: Some(5.0),
+                ..Default::default()
+            },
+            BudgetConfig {
+                per_day_usd: Some(0.0),
+                ..Default::default()
+            },
+            BudgetConfig {
+                per_run_usd: Some(-1.0),
+                ..Default::default()
+            },
+        ] {
+            let path = temp_toml("budget-money");
+            let err = write_budget_section(&path, &b).unwrap_err();
+            match &err {
+                ConfigWriteError::InvalidBudget { reason } => assert_eq!(
+                    reason,
+                    "a money cap needs cloud prices, which were removed in 2.0 — use a token \
+                     or run cap"
+                ),
+                other => panic!("{other:?}"),
+            }
+            assert!(!path.exists(), "no file should be written on a validation error");
+        }
     }
 
     #[test]
@@ -2136,11 +2161,12 @@ mod tests {
 
     #[test]
     fn budget_clears_none_caps() {
+        // A 1.x file's money caps are cleared by any write.
         let path = temp_toml("budget-clear");
         std::fs::write(&path, "[budget]\nper_run_usd = 9.0\nper_day_usd = 9.0\n").unwrap();
         let b = BudgetConfig {
             per_run_usd: None,
-            per_day_usd: Some(15.0),
+            per_day_usd: None,
             on_exceeded: BudgetAction::Alert,
             alert_at: None,
             ..Default::default()
@@ -2148,22 +2174,10 @@ mod tests {
         write_budget_section(&path, &b).unwrap();
         let out = std::fs::read_to_string(&path).unwrap();
         assert!(!out.contains("per_run_usd"), "None cap must be cleared: {out}");
-        assert!(out.contains("per_day_usd = 15.0"), "{out}");
+        assert!(!out.contains("per_day_usd"), "None cap must be cleared: {out}");
         assert!(out.contains("on_exceeded = \"alert\""), "{out}");
         assert!(!out.contains("alert_at"), "None alert_at must be cleared: {out}");
         std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn budget_rejects_negative_cap() {
-        let path = temp_toml("budget-neg");
-        let b = BudgetConfig {
-            per_run_usd: Some(-1.0),
-            ..Default::default()
-        };
-        let err = write_budget_section(&path, &b).unwrap_err();
-        assert!(matches!(err, ConfigWriteError::InvalidBudget { .. }), "{err:?}");
-        assert!(!path.exists(), "no file should be written on a validation error");
     }
 
     #[test]

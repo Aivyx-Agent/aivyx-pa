@@ -19,6 +19,8 @@ path = "src/main.rs"
 
 [dependencies]
 aivyx-instance = { path = "../aivyx-instance" }
+# 2.0 (local-only): `require_local` on every model URL at config load.
+aivyx-route = { workspace = true }
 # Tool process SDK — same shape as aivyx-toolkit/aivyx-gmail. Not workspace
 # dependencies: aivyx-core/aivyx-tool/aivyx-llm are internal path deps with
 # no [workspace.dependencies] entry, consistent with every other consumer

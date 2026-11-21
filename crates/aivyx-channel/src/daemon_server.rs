@@ -7907,7 +7907,6 @@ fn slack_config_view(s: &aivyx_config::config_write::SlackEntryWrite) -> aivyx_i
 fn provider_label(p: aivyx_config::ProviderKind) -> &'static str {
     use aivyx_config::ProviderKind::*;
     match p {
-        Anthropic => "anthropic",
         OpenAi => "openai",
         Ollama => "ollama",
         LlamaCpp => "llamacpp",
@@ -10673,7 +10672,7 @@ system_prompt = "You are a custom role."
             "settings-snapshot",
             "[agent]\nprovider = \"ollama\"\nmodel = \"qwen3:8b\"\n\
              [access]\nlevel = \"home\"\n\
-             [budget]\nper_run_usd = 5.0\non_exceeded = \"deny\"\nalert_at = 0.8\n\
+             [budget]\non_exceeded = \"deny\"\nalert_at = 0.8\n\
              [ollama]\nnum_ctx = 16384\n",
         );
         let cfg = load_settings_config(&path, None).expect("load");
@@ -10683,7 +10682,8 @@ system_prompt = "You are a custom role."
         assert_eq!(snap.model, "qwen3:8b");
         assert_eq!(snap.num_ctx, Some(16384));
         assert!(snap.confirm_destructive, "assisted (the default) asks before deletes");
-        assert_eq!(snap.budget.per_run_usd, Some(5.0));
+        // 2.0: money caps are refused at load, so none is ever set.
+        assert_eq!(snap.budget.per_run_usd, None);
         assert_eq!(snap.budget.on_exceeded, "deny");
         assert!(snap.embeddings_available);
     }
@@ -10792,7 +10792,7 @@ system_prompt = "You are a custom role."
     #[test]
     fn provider_and_budget_labels_match_the_wire_repr() {
         use aivyx_config::ProviderKind;
-        assert_eq!(provider_label(ProviderKind::Anthropic), "anthropic");
+        assert_eq!(provider_label(ProviderKind::OpenAi), "openai");
         assert_eq!(provider_label(ProviderKind::Ollama), "ollama");
         assert_eq!(provider_label(ProviderKind::MistralRs), "mistralrs");
         assert_eq!(provider_label(ProviderKind::Broker), "broker");

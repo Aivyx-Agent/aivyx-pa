@@ -1115,7 +1115,6 @@ fn check_mistralrs(cfg: &AivyxConfig) -> bool {
 fn check_cloud(provider: ProviderKind, cfg: &AivyxConfig) -> bool {
     println!("Provider: {provider} (model `{}`)\n", cfg.model.value);
     let has_key = match provider {
-        ProviderKind::Anthropic => cfg.anthropic_api_key.is_some(),
         ProviderKind::OpenAi => cfg.openai_api_key.is_some(),
         _ => true,
     };
