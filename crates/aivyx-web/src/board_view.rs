@@ -2,7 +2,7 @@
 
 use aivyx_ipc::board::{
     Agent, Author, BoardSnapshot, EntryKind, NewAgent, NewTask, Owner, RunOutcome, Task,
-    TaskState, WorksAs,
+    TaskState, WorksAs, Workspace,
 };
 use aivyx_ipc::protocol::{FrontendMessage, QueryPayload};
 use dioxus::prelude::*;
@@ -57,14 +57,88 @@ pub fn review_count(snap: &BoardSnapshot) -> usize {
         .count()
 }
 
-pub fn owner_label(o: Option<&Owner>, agents: &[Agent]) -> String {
+pub fn owner_label(o: Option<&Owner>, agents: &[Agent], workspaces: &[Workspace]) -> String {
     match o {
         None => "unassigned".into(),
         Some(Owner::Role { name }) => format!("role {name}"),
         Some(Owner::Team) => "team".into(),
-        Some(Owner::Coder { workspace }) => format!("coder:{workspace}"),
+        Some(Owner::Coder { workspace }) => coder_label(workspaces, workspace),
         Some(Owner::Agent { id }) => format!("agent {}", agent_name(agents, id)),
     }
+}
+
+/// A workspace's name by id; a removed workspace shows as its id.
+pub fn workspace_name(workspaces: &[Workspace], id: &str) -> String {
+    workspaces
+        .iter()
+        .find(|w| w.id == id)
+        .map_or_else(|| id.to_string(), |w| w.name.clone())
+}
+
+/// The workspace id a `coder:<id>` choice names when no such workspace is
+/// listed any more, so the picker can still show (and keep) it.
+pub fn gone_workspace<'a>(choice: &'a str, workspaces: &[Workspace]) -> Option<&'a str> {
+    choice
+        .strip_prefix("coder:")
+        .filter(|id| !id.is_empty() && !workspaces.iter().any(|w| w.id == *id))
+}
+
+/// "busy" or "idle".
+pub fn busy_label(busy: bool) -> &'static str {
+    if busy { "busy" } else { "idle" }
+}
+
+/// One row of the read-only Workspaces list.
+#[derive(Debug, PartialEq)]
+pub struct WorkspaceRow {
+    pub name: String,
+    pub path: String,
+    pub busy: bool,
+    pub open: usize,
+}
+
+/// The Workspaces list, in name order. Mirrors the CLI's `render_workspaces`:
+/// busy means a running task is owned by the workspace; `open` counts the
+/// open tasks owned by it, directly or through an agent that works as it.
+pub fn workspace_rows(
+    workspaces: &[Workspace],
+    tasks: &[Task],
+    agents: &[Agent],
+) -> Vec<WorkspaceRow> {
+    let mut sorted: Vec<&Workspace> = workspaces.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let owned_by = |t: &Task, ws: &Workspace| match &t.owner {
+        Some(Owner::Coder { workspace }) => *workspace == ws.id,
+        Some(Owner::Agent { id }) => agents.iter().any(|a| {
+            a.id == *id
+                && matches!(&a.works_as, WorksAs::Coder { workspace } if *workspace == ws.id)
+        }),
+        _ => false,
+    };
+    sorted
+        .into_iter()
+        .map(|ws| {
+            let mine = || tasks.iter().filter(|t| owned_by(t, ws));
+            WorkspaceRow {
+                name: ws.name.clone(),
+                path: ws.path.clone(),
+                busy: mine().any(|t| t.state == TaskState::Running),
+                open: mine()
+                    .filter(|t| {
+                        matches!(
+                            t.state,
+                            TaskState::Todo | TaskState::Running | TaskState::Review
+                        )
+                    })
+                    .count(),
+            }
+        })
+        .collect()
+}
+
+/// "coder <name>", the way owners and works-as show a workspace.
+pub fn coder_label(workspaces: &[Workspace], id: &str) -> String {
+    format!("coder {}", workspace_name(workspaces, id))
 }
 
 /// An agent's name by id; an unknown id shows as itself.
@@ -147,11 +221,37 @@ pub fn heartbeat_label(a: &Agent) -> String {
 }
 
 /// "role coder" or "team".
-pub fn works_as_label(w: &WorksAs) -> String {
+pub fn works_as_label(w: &WorksAs, workspaces: &[Workspace]) -> String {
     match w {
         WorksAs::Role { name } => format!("role {name}"),
         WorksAs::Team => "team".into(),
+        WorksAs::Coder { workspace } => coder_label(workspaces, workspace),
+    }
+}
+
+/// The agent form's works-as choice for a `WorksAs`: `"team"`, `"role"` or
+/// `"coder:<workspace id>"`.
+pub fn works_choice(w: &WorksAs) -> String {
+    match w {
+        WorksAs::Team => "team".into(),
+        WorksAs::Role { .. } => "role".into(),
         WorksAs::Coder { workspace } => format!("coder:{workspace}"),
+    }
+}
+
+/// Builds a `WorksAs` from the form's choice and the typed role name; an
+/// unknown choice (or a coder with no workspace) is team.
+pub fn works_from_choice(choice: &str, role_name: &str) -> WorksAs {
+    match choice {
+        "role" => WorksAs::Role {
+            name: role_name.trim().into(),
+        },
+        other => match other.strip_prefix("coder:").filter(|id| !id.is_empty()) {
+            Some(id) => WorksAs::Coder {
+                workspace: id.into(),
+            },
+            None => WorksAs::Team,
+        },
     }
 }
 
@@ -168,13 +268,7 @@ pub fn agent_payload(
     wake_on_assign: bool,
     editing: bool,
 ) -> NewAgent {
-    let works_as = if works == "role" {
-        WorksAs::Role {
-            name: role_name.trim().into(),
-        }
-    } else {
-        WorksAs::Team
-    };
+    let works_as = works_from_choice(works, role_name);
     let heartbeat = heartbeat.trim();
     NewAgent {
         name: Some(name.trim().into()),
@@ -256,16 +350,13 @@ pub fn owner_from_choice(choice: &str, role_name: &str) -> Option<Owner> {
             let name = role_name.trim();
             (!name.is_empty()).then(|| Owner::Role { name: name.into() })
         }
-        other if other.starts_with("coder:") => other
-            .strip_prefix("coder:")
-            .filter(|id| !id.is_empty())
-            .map(|id| Owner::Coder {
+        other => match other.split_once(':') {
+            Some(("coder", id)) if !id.is_empty() => Some(Owner::Coder {
                 workspace: id.into(),
             }),
-        other => other
-            .strip_prefix("agent:")
-            .filter(|id| !id.is_empty())
-            .map(|id| Owner::Agent { id: id.into() }),
+            Some(("agent", id)) if !id.is_empty() => Some(Owner::Agent { id: id.into() }),
+            _ => None,
+        },
     }
 }
 
@@ -465,7 +556,7 @@ fn TasksTab() -> Element {
                                         {
                                             let id = t.id.clone();
                                             let is_sel = s.selected.as_deref() == Some(t.id.as_str());
-                                            let owner = owner_label(t.owner.as_ref(), &s.snapshot.agents);
+                                            let owner = owner_label(t.owner.as_ref(), &s.snapshot.agents, &s.snapshot.workspaces);
                                             rsx! {
                                                 button {
                                                     key: "{t.id}",
@@ -504,6 +595,7 @@ fn TaskPanel(task: Task) -> Element {
     let mut ui = use_context::<Signal<BoardUi>>();
     let mut choice = use_signal(|| owner_choice(task.owner.as_ref()));
     let agents = ui().snapshot.agents;
+    let workspaces = ui().snapshot.workspaces;
     let mut role_name = use_signal(|| match &task.owner {
         Some(Owner::Role { name }) => name.clone(),
         _ => String::new(),
@@ -528,7 +620,7 @@ fn TaskPanel(task: Task) -> Element {
         div { class: "glass-card", style: "margin-top:16px;",
             div { class: "panel-head",
                 h4 { "{task.title}" }
-                span { class: "label-tech", "{column_title(task.state)} · {owner_label(task.owner.as_ref(), &agents)}" }
+                span { class: "label-tech", "{column_title(task.state)} · {owner_label(task.owner.as_ref(), &agents, &workspaces)}" }
                 button { class: "btn-ghost", onclick: move |_| ui.write().selected = None, "Close" }
             }
             if !task.description.is_empty() {
@@ -545,6 +637,12 @@ fn TaskPanel(task: Task) -> Element {
                         option { value: "role", selected: c == "role", "role…" }
                         for a in agents.iter() {
                             option { key: "{a.id}", value: "agent:{a.id}", selected: c == format!("agent:{}", a.id), "agent {a.name}" }
+                        }
+                        for w in workspaces.iter() {
+                            option { key: "{w.id}", value: "coder:{w.id}", selected: c == format!("coder:{}", w.id), "coder {w.name}" }
+                        }
+                        if let Some(gone) = gone_workspace(&c, &workspaces) {
+                            option { value: "coder:{gone}", selected: true, "coder {gone}" }
                         }
                     }
                     if c == "role" {
@@ -644,6 +742,7 @@ fn NewTaskForm() -> Element {
     let mut review = use_signal(|| true);
     let projects = ui().snapshot.projects;
     let agents = ui().snapshot.agents;
+    let workspaces = ui().snapshot.workspaces;
     // Default to the filtered project, else the first one.
     let chosen = if project().is_empty() {
         ui().project
@@ -682,6 +781,12 @@ fn NewTaskForm() -> Element {
                 for a in agents.iter() {
                     option { key: "{a.id}", value: "agent:{a.id}", selected: c == format!("agent:{}", a.id), "agent {a.name}" }
                 }
+                    for w in workspaces.iter() {
+                        option { key: "{w.id}", value: "coder:{w.id}", selected: c == format!("coder:{}", w.id), "coder {w.name}" }
+                    }
+                    if let Some(gone) = gone_workspace(&c, &workspaces) {
+                        option { value: "coder:{gone}", selected: true, "coder {gone}" }
+                    }
             }
             if c == "role" {
                 input { class: "input", placeholder: "role name", value: "{role_name}", oninput: move |e| role_name.set(e.value()) }
@@ -800,6 +905,7 @@ fn AgentsTab() -> Element {
     let s = ui();
     let now = js_sys::Date::now() as i64 / 1000;
     let rows = agent_tree(&s.snapshot.agents);
+    let ws_rows = workspace_rows(&s.snapshot.workspaces, &s.snapshot.tasks, &s.snapshot.agents);
     let edit_target = editing()
         .and_then(|n| s.snapshot.agents.iter().find(|a| a.name == n))
         .cloned();
@@ -841,7 +947,7 @@ fn AgentsTab() -> Element {
                                     }
                                 }
                                 div { class: "help",
-                                    "works as {works_as_label(&a.works_as)} · heartbeat {heartbeat_label(a)} · last wake {last} · {open} open"
+                                    "works as {works_as_label(&a.works_as, &s.snapshot.workspaces)} · heartbeat {heartbeat_label(a)} · last wake {last} · {open} open"
                                 }
                                 div { style: "display:flex; gap:8px; margin-top:4px;",
                                     button {
@@ -874,6 +980,21 @@ fn AgentsTab() -> Element {
                 }
             }
         }
+        if s.loaded {
+            div { class: "glass-card", style: "margin-top:16px;",
+                h4 { "Workspaces" }
+                if ws_rows.is_empty() {
+                    p { class: "help", "No workspaces yet." }
+                }
+                for r in ws_rows.iter() {
+                    div { key: "{r.name}", style: "padding:6px 0;",
+                        strong { "{r.name}" }
+                        span { class: "help", " {r.path} · {busy_label(r.busy)} · {r.open} open" }
+                    }
+                }
+                p { class: "help", "Add or remove workspaces with `aivyx-pa board workspace`." }
+            }
+        }
         {
             let key = edit_target.as_ref().map_or_else(|| "new".to_string(), |a| a.id.clone());
             rsx! {
@@ -895,9 +1016,10 @@ fn AgentForm(agent: Option<Agent>, editing_name: Signal<Option<String>>) -> Elem
     let mut editing_name = editing_name;
     let mut name = use_signal(|| agent.as_ref().map(|a| a.name.clone()).unwrap_or_default());
     let mut title = use_signal(|| agent.as_ref().map(|a| a.title.clone()).unwrap_or_default());
-    let mut works = use_signal(|| match agent.as_ref().map(|a| &a.works_as) {
-        Some(WorksAs::Role { .. }) => "role".to_string(),
-        _ => "team".to_string(),
+    let mut works = use_signal(|| {
+        agent
+            .as_ref()
+            .map_or_else(|| "team".to_string(), |a| works_choice(&a.works_as))
     });
     let mut role_name = use_signal(|| match agent.as_ref().map(|a| &a.works_as) {
         Some(WorksAs::Role { name }) => name.clone(),
@@ -916,6 +1038,7 @@ fn AgentForm(agent: Option<Agent>, editing_name: Signal<Option<String>>) -> Elem
             .unwrap_or_default()
     });
     let mut wake = use_signal(|| agent.as_ref().is_some_and(|a| a.wake_on_assign));
+    let workspaces = ui().snapshot.workspaces;
     let agents = ui().snapshot.agents;
     let old_name = agent.as_ref().map(|a| a.name.clone());
     let own_id = agent.as_ref().map(|a| a.id.clone());
@@ -937,6 +1060,12 @@ fn AgentForm(agent: Option<Agent>, editing_name: Signal<Option<String>>) -> Elem
                     onchange: move |e| works.set(e.value()),
                     option { value: "team", selected: w == "team", "team" }
                     option { value: "role", selected: w == "role", "role…" }
+                    for ws_row in workspaces.iter() {
+                        option { key: "{ws_row.id}", value: "coder:{ws_row.id}", selected: w == format!("coder:{}", ws_row.id), "coder {ws_row.name}" }
+                    }
+                    if let Some(gone) = gone_workspace(&w, &workspaces) {
+                        option { value: "coder:{gone}", selected: true, "coder {gone}" }
+                    }
                 }
                 if w == "role" {
                     input { class: "input", placeholder: "role name", value: "{role_name}", oninput: move |e| role_name.set(e.value()) }
@@ -1085,21 +1214,22 @@ mod tests {
 
     #[test]
     fn labels_owners() {
-        assert_eq!(owner_label(None, &[]), "unassigned");
-        assert_eq!(owner_label(Some(&Owner::Team), &[]), "team");
+        assert_eq!(owner_label(None, &[], &[]), "unassigned");
+        assert_eq!(owner_label(Some(&Owner::Team), &[], &[]), "team");
         assert_eq!(
             owner_label(
                 Some(&Owner::Role {
                     name: "coder".into()
                 }),
+                &[],
                 &[]
             ),
             "role coder"
         );
         let agents = [agent("a-1", "ana", None)];
         let owned = Owner::Agent { id: "a-1".into() };
-        assert_eq!(owner_label(Some(&owned), &agents), "agent ana");
-        assert_eq!(owner_label(Some(&owned), &[]), "agent a-1");
+        assert_eq!(owner_label(Some(&owned), &agents, &[]), "agent ana");
+        assert_eq!(owner_label(Some(&owned), &[], &[]), "agent a-1");
     }
 
     #[test]
@@ -1151,6 +1281,77 @@ mod tests {
             .collect()
     }
 
+
+    fn ws(id: &str, name: &str) -> Workspace {
+        Workspace {
+            id: id.into(),
+            name: name.into(),
+            path: format!("/w/{name}"),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn coder_owners_label_and_survive_the_picker() {
+        let list = [ws("w-1", "site")];
+        let owner = Owner::Coder {
+            workspace: "w-1".into(),
+        };
+        assert_eq!(owner_label(Some(&owner), &[], &list), "coder site");
+        assert_eq!(owner_label(Some(&owner), &[], &[]), "coder w-1");
+        let choice = owner_choice(Some(&owner));
+        assert_eq!(choice, "coder:w-1");
+        assert_eq!(owner_from_choice(&choice, ""), Some(owner));
+        assert_eq!(owner_from_choice("coder:", ""), None);
+        assert_eq!(gone_workspace("coder:w-1", &list), None);
+        assert_eq!(gone_workspace("coder:w-9", &list), Some("w-9"));
+        assert_eq!(gone_workspace("team", &list), None);
+    }
+
+    #[test]
+    fn a_coder_agent_passes_through_the_form_unchanged() {
+        let works = WorksAs::Coder {
+            workspace: "w-1".into(),
+        };
+        let choice = works_choice(&works);
+        assert_eq!(choice, "coder:w-1");
+        let p = agent_payload("ana", "", &choice, "", "", "", false, true);
+        assert_eq!(p.works_as, Some(works));
+        assert_eq!(works_choice(&WorksAs::Team), "team");
+        assert_eq!(
+            works_from_choice(&works_choice(&WorksAs::Role { name: "dev".into() }), "dev"),
+            WorksAs::Role { name: "dev".into() }
+        );
+        assert_eq!(works_from_choice("coder:", ""), WorksAs::Team);
+        assert_eq!(
+            works_as_label(&WorksAs::Coder { workspace: "w-1".into() }, &[ws("w-1", "site")]),
+            "coder site"
+        );
+    }
+
+    #[test]
+    fn workspace_rows_count_direct_and_agent_tasks() {
+        let list = [ws("w-2", "zed"), ws("w-1", "site")];
+        let mut worker = agent("a-1", "ana", None);
+        worker.works_as = WorksAs::Coder {
+            workspace: "w-1".into(),
+        };
+        let mut t1 = task("t1", "p", TaskState::Running, 1);
+        t1.owner = Some(Owner::Coder {
+            workspace: "w-1".into(),
+        });
+        let mut t2 = task("t2", "p", TaskState::Todo, 1);
+        t2.owner = Some(Owner::Agent { id: "a-1".into() });
+        let mut t3 = task("t3", "p", TaskState::Done, 1);
+        t3.owner = Some(Owner::Coder {
+            workspace: "w-1".into(),
+        });
+        let rows = workspace_rows(&list, &[t1, t2, t3], &[worker]);
+        assert_eq!(rows[0].name, "site");
+        assert_eq!((rows[0].busy, rows[0].open), (true, 2));
+        assert_eq!(rows[1].name, "zed");
+        assert_eq!((rows[1].busy, rows[1].open), (false, 0));
+    }
     #[test]
     fn the_tree_nests_and_sorts_by_name() {
         let agents = [
