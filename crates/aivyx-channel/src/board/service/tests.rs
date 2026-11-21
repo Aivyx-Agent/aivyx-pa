@@ -175,11 +175,18 @@ async fn fixture_on(
         notify: setup.notify,
         protected_paths: vec![dir.path().join("pa-data")],
         home: Some(dir.path().to_path_buf()),
+        // A coder test writes its fake here (`write_coder`).
+        coder_bin: Some(dir.path().join("fake-coder")),
     };
     Fx {
         _dir: dir,
         storage,
-        board: BoardService::with_team_poll(deps, Duration::from_millis(20)),
+        board: BoardService::with_timings(
+            deps,
+            Duration::from_millis(20),
+            Duration::from_secs(20),
+            Duration::from_millis(500),
+        ),
         audit,
         missions,
     }
@@ -2170,4 +2177,340 @@ async fn a_coder_agent_resolves_to_a_coder_owner() {
             .unwrap(),
         Owner::Coder { workspace: ws }
     );
+}
+
+#[tokio::test]
+async fn a_folder_already_registered_is_refused() {
+    let fx = plain_fx().await;
+    let path = make_dir(&fx, "proj");
+    fx.board.add_workspace("proj", &path).await.unwrap();
+    let same = BoardError::NotAllowed("another workspace already uses that folder");
+    assert_eq!(fx.board.add_workspace("again", &path).await, Err(same.clone()));
+    // Another spelling of the same folder canonicalizes to it.
+    let dotted = format!("{path}/../proj/.");
+    assert_eq!(fx.board.add_workspace("dots", &dotted).await, Err(same.clone()));
+    #[cfg(unix)]
+    {
+        let link = fx._dir.path().join("link");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert_eq!(
+            fx.board
+                .add_workspace("link", link.to_str().unwrap())
+                .await,
+            Err(same)
+        );
+    }
+    assert_eq!(fx.board.workspaces().await.unwrap().len(), 1);
+}
+
+// ---- A22 — coder runs (unix: the fake coder is a shell script) ----
+
+#[cfg(unix)]
+mod coder {
+    use super::*;
+    use crate::board::coder_run::tests::{TRAPS_TERM, fake_coder};
+
+    const REPORT: &str = r#"{"outcome":"goal_achieved","notice":"Added parse() and its test.","prompt_tokens":100,"completion_tokens":20,"checkpoints":3,"changed_files":[{"path":"a.rs"},{"path":"b.rs"}]}"#;
+
+    /// Write the fixture's fake coder (`BoardDeps.coder_bin`).
+    fn write_coder(fx: &Fx, body: &str) {
+        fake_coder(fx._dir.path(), "fake-coder", body);
+    }
+
+    /// A workspace `proj` and a task owned by it.
+    async fn coder_task(fx: &Fx) -> (String, String) {
+        let ws = fx
+            .board
+            .add_workspace("proj", &make_dir(fx, "proj"))
+            .await
+            .unwrap();
+        let t = seed(
+            fx,
+            Some(Owner::Coder {
+                workspace: ws.clone(),
+            }),
+        )
+        .await;
+        (ws, t)
+    }
+
+    async fn wait_idle(fx: &Fx, ws: &str) {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while fx.board.workspace_busy(ws) {
+            assert!(tokio::time::Instant::now() < deadline, "workspace still busy");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_coder_run_reaches_review_with_the_notice() {
+        use crate::team_mission_driver::tests::RecordingNotifyBackend;
+        let backend = RecordingNotifyBackend::new();
+        let mut dispatcher = NotifyDispatcher::new();
+        dispatcher.register("ops", backend.clone());
+        let agent = Arc::new(ScriptedAgent::new(Reply::Done("done".into())));
+        let seen = Arc::clone(&agent.seen);
+        let fx = fixture_with(Setup {
+            agent,
+            team: None,
+            notify: Some(Arc::new(dispatcher)),
+        })
+        .await;
+        write_coder(
+            &fx,
+            &format!(
+                "printf '%s\\n' \"$@\" > args.txt\necho '{REPORT}' > \"$REPORT\"\nexit 0"
+            ),
+        );
+        let (ws, t) = coder_task(&fx).await;
+        fx.board.comment(&t, "keep it small").await.unwrap();
+        // Coder runs don't take the turn lock: hold it throughout.
+        let lock = fx.board.turn_lock();
+        let _held = lock.lock().await;
+        let mid = fx.board.start(&t).await.unwrap();
+        assert!(mid.starts_with("b-"), "{mid}");
+        assert!(fx.board.workspace_busy(&ws));
+        let task = wait_not_running(&fx, &t).await;
+        assert_eq!(task.state, TaskState::Review);
+        let (run_mid, outcome, answer, tokens) = last_run(&task);
+        assert_eq!(run_mid, mid);
+        assert_eq!(outcome, RunOutcome::Succeeded);
+        assert!(answer.contains("Added parse() and its test."), "{answer}");
+        assert!(answer.contains("2 changed files"), "{answer}");
+        assert!(answer.contains("3 checkpoints — undo with /undo"), "{answer}");
+        assert_eq!(tokens, 120);
+        assert_eq!(task.active_run, None);
+        // The mission record.
+        let record = mission::get_mission(&fx.missions, &mid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.role_name, "coder:proj");
+        assert_eq!(record.state, mission::MissionState::Completed);
+        // What coder was given: the board brief, without the board tools.
+        let args = std::fs::read_to_string(fx._dir.path().join("proj/args.txt")).unwrap();
+        let args: Vec<&str> = args.lines().collect();
+        assert_eq!(args[0], "--auto");
+        assert!(args.contains(&"Task: Draft"), "{args:?}");
+        assert!(args.contains(&"- keep it small"), "{args:?}");
+        assert!(!args.iter().any(|a| a.contains("board.comment")), "{args:?}");
+        assert!(args.contains(&"--headless") && args.contains(&"--report"));
+        // No pa turn ran.
+        assert!(seen.lock().unwrap().is_empty());
+        wait_idle(&fx, &ws).await;
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while backend.calls.lock().unwrap().is_empty() {
+            assert!(tokio::time::Instant::now() < deadline, "no notice");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let tail: Vec<_> = ops(&fx.audit)
+            .into_iter()
+            .skip_while(|(op, _)| op != "started")
+            .collect();
+        assert_eq!(
+            tail,
+            [
+                ("started".to_string(), "operator".to_string()),
+                ("finished".to_string(), "agent".to_string())
+            ]
+        );
+        assert_chain_verifies(&fx).await;
+    }
+
+    #[tokio::test]
+    async fn exit_2_goes_back_to_todo_with_budget_ran_out() {
+        let fx = plain_fx().await;
+        write_coder(&fx, &format!("echo '{REPORT}' > \"$REPORT\"\nexit 2"));
+        let (ws, t) = coder_task(&fx).await;
+        let mid = fx.board.start(&t).await.unwrap();
+        let task = wait_not_running(&fx, &t).await;
+        assert_eq!(task.state, TaskState::Todo);
+        let (_, outcome, answer, tokens) = last_run(&task);
+        assert_eq!(
+            outcome,
+            RunOutcome::Failed {
+                reason: "coder's budget ran out".into()
+            }
+        );
+        assert!(answer.contains("3 checkpoints"), "{answer}");
+        assert_eq!(tokens, 120);
+        assert_eq!(
+            mission_state(&fx, &mid).await,
+            mission::MissionState::Cancelled
+        );
+        wait_idle(&fx, &ws).await;
+    }
+
+    #[tokio::test]
+    async fn exit_130_from_coder_ends_cancelled() {
+        let fx = plain_fx().await;
+        write_coder(&fx, "exit 130");
+        let (ws, t) = coder_task(&fx).await;
+        fx.board.start(&t).await.unwrap();
+        let task = wait_not_running(&fx, &t).await;
+        assert_eq!(task.state, TaskState::Cancelled);
+        assert_eq!(last_run(&task).1, RunOutcome::Cancelled);
+        wait_idle(&fx, &ws).await;
+    }
+
+    #[tokio::test]
+    async fn a_missing_binary_goes_back_to_todo_with_the_error() {
+        // The fixture's `coder_bin` is never written.
+        let fx = plain_fx().await;
+        let (ws, t) = coder_task(&fx).await;
+        fx.board.start(&t).await.unwrap();
+        let task = wait_not_running(&fx, &t).await;
+        assert_eq!(task.state, TaskState::Todo);
+        match last_run(&task).1 {
+            RunOutcome::Failed { reason } => {
+                assert!(reason.contains("couldn't start aivyx-coder"), "{reason}")
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        wait_idle(&fx, &ws).await;
+    }
+
+    #[tokio::test]
+    async fn a_busy_workspace_refuses_a_second_start_and_cancel_frees_it() {
+        let fx = plain_fx().await;
+        write_coder(&fx, TRAPS_TERM);
+        let (ws, t1) = coder_task(&fx).await;
+        let t2 = seed(
+            &fx,
+            Some(Owner::Coder {
+                workspace: ws.clone(),
+            }),
+        )
+        .await;
+        let mid = fx.board.start(&t1).await.unwrap();
+        assert_eq!(
+            fx.board.start(&t2).await,
+            Err(BoardError::NotAllowed("the workspace is busy"))
+        );
+        assert_eq!(fx.board.task(&t2).await.unwrap().state, TaskState::Todo);
+        // Let the fake set its trap.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        fx.board.cancel(&t1).await.unwrap();
+        assert_eq!(
+            fx.board.task(&t1).await.unwrap().state,
+            TaskState::Cancelled
+        );
+        wait_idle(&fx, &ws).await;
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while !matches!(
+            mission::get_mission(&fx.missions, &mid).await.unwrap().map(|r| r.state),
+            Some(mission::MissionState::Cancelled)
+        ) {
+            assert!(tokio::time::Instant::now() < deadline, "mission not closed");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // The cancelled task stays Cancelled; its run left no Run entry.
+        let task = fx.board.task(&t1).await.unwrap();
+        assert_eq!(task.state, TaskState::Cancelled);
+        assert!(fx.board.inner.cancels.lock().unwrap().is_empty());
+        // The workspace takes the next run.
+        write_coder(&fx, "exit 0");
+        fx.board.start(&t2).await.unwrap();
+        assert_eq!(
+            wait_not_running(&fx, &t2).await.state,
+            TaskState::Review
+        );
+        wait_idle(&fx, &ws).await;
+    }
+
+    #[tokio::test]
+    async fn start_checks_the_workspace_again() {
+        let fx = plain_fx().await;
+        write_coder(&fx, "exit 0");
+        let (ws, t) = coder_task(&fx).await;
+        // The folder swapped for a symlink to pa's own data.
+        let proj = fx._dir.path().join("proj");
+        std::fs::rename(&proj, fx._dir.path().join("moved")).unwrap();
+        make_dir(&fx, "pa-data");
+        std::os::unix::fs::symlink(fx._dir.path().join("pa-data"), &proj).unwrap();
+        assert_eq!(
+            fx.board.start(&t).await,
+            Err(BoardError::NotAllowed(
+                "a workspace can't contain or sit inside aivyx-pa's own folders"
+            ))
+        );
+        assert_eq!(fx.board.task(&t).await.unwrap().state, TaskState::Todo);
+        assert!(!fx.board.workspace_busy(&ws));
+        // The workspace record gone (an edit race).
+        store::delete_workspace(&fx.board.inner.deps.store, &ws)
+            .await
+            .unwrap();
+        assert_eq!(
+            fx.board.start(&t).await,
+            Err(BoardError::NotFound("workspace"))
+        );
+        assert_eq!(fx.board.task(&t).await.unwrap().state, TaskState::Todo);
+    }
+
+    #[tokio::test]
+    async fn a_coder_agent_starts_its_task_on_a_wake() {
+        let fx = plain_fx().await;
+        write_coder(&fx, &format!("echo '{REPORT}' > \"$REPORT\"\nexit 0"));
+        let ws = fx
+            .board
+            .add_workspace("proj", &make_dir(&fx, "proj"))
+            .await
+            .unwrap();
+        let id = fx
+            .board
+            .create_agent(new_agent(
+                "cody",
+                WorksAs::Coder {
+                    workspace: ws.clone(),
+                },
+            ))
+            .await
+            .unwrap();
+        let ts = seed_agent_tasks(&fx, &id, 1).await;
+        let hb = BoardHeartbeat::with_durations(fx.board.clone(), fast());
+        assert_eq!(hb.wake_now(&id).await, Ok(1));
+        let task = fx.board.task(&ts[0]).await.unwrap();
+        assert_eq!(task.state, TaskState::Review);
+        assert_eq!(task.owner, Some(Owner::Agent { id }));
+        assert!(last_run(&task).2.contains("Added parse()"));
+        let started = ops(&fx.audit)
+            .into_iter()
+            .find(|(op, _)| op == "started")
+            .unwrap();
+        assert_eq!(started.1, "agent");
+        wait_idle(&fx, &ws).await;
+    }
+
+    #[tokio::test]
+    async fn the_restart_sweep_covers_a_running_coder_task() {
+        let fx = plain_fx().await;
+        let (_, t) = coder_task(&fx).await;
+        let mut task = fx.board.task(&t).await.unwrap();
+        model::start(
+            &mut task,
+            RunRef {
+                mission_id: "b-dead0002".into(),
+                kind: RunKind::Coder,
+            },
+            now_ms(),
+        )
+        .unwrap();
+        store::put_task(&fx.board.inner.deps.store, &task)
+            .await
+            .unwrap();
+        let mut record =
+            mission::MissionRecord::new("b-dead0002".into(), "coder:proj".into(), "Draft".into());
+        mission::transition_to_running(&mut record).unwrap();
+        mission::create_mission(&fx.missions, &record)
+            .await
+            .unwrap();
+        assert_eq!(fx.board.reconcile_at_startup().await.unwrap(), 1);
+        let task = fx.board.task(&t).await.unwrap();
+        assert_eq!(task.state, TaskState::Todo);
+        assert_eq!(last_run(&task).1, RunOutcome::Interrupted);
+        assert_eq!(
+            mission_state(&fx, "b-dead0002").await,
+            mission::MissionState::Cancelled
+        );
+    }
 }

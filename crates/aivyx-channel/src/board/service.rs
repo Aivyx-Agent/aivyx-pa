@@ -2,7 +2,7 @@
 //! tasks, cancel, the restart sweep, the session registry the agent tools
 //! check, and the review notice. Every change appends one `BoardChanged`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,9 +17,10 @@ use aivyx_ipc::team_mission::{TeamMissionPhase, TeamMissionRecord};
 use aivyx_storage::{DomainHandle, StorageError};
 
 use super::agents;
+use super::coder_run;
 use super::workspaces;
 use super::model::{self, Actor, BoardError, new_id, now_ms};
-use super::runner::{BoardRunContext, brief, role_ceiling, turn_result};
+use super::runner::{BoardRunContext, brief, coder_brief, role_ceiling, turn_result};
 use super::store;
 use crate::mission;
 use crate::notify_dispatcher::NotifyDispatcher;
@@ -70,6 +71,9 @@ pub struct BoardDeps {
     pub protected_paths: Vec<std::path::PathBuf>,
     /// The operator's home folder, which can't itself be a workspace.
     pub home: Option<std::path::PathBuf>,
+    /// The aivyx-coder binary; `None` finds it (`AIVYX_CODER`, then `PATH`)
+    /// at each coder Start. Tests set a fake.
+    pub coder_bin: Option<std::path::PathBuf>,
 }
 
 struct Inner {
@@ -80,7 +84,13 @@ struct Inner {
     runs: std::sync::Mutex<HashMap<SessionId, (String, String)>>,
     /// A running task → the token that stops its run.
     cancels: std::sync::Mutex<HashMap<String, CancellationToken>>,
+    /// The workspaces a coder run is working in (one run each).
+    busy_workspaces: std::sync::Mutex<HashSet<String>>,
     team_poll: Duration,
+    /// A coder run's ceiling and SIGTERM grace ([`coder_run::CEILING`],
+    /// [`coder_run::GRACE`]; tests shorten them).
+    coder_ceiling: Duration,
+    coder_grace: Duration,
     /// Called with an agent's id after a task is assigned to it, when the
     /// agent has `wake_on_assign`. The heartbeat installs it.
     assign_hook: AssignHook,
@@ -110,13 +120,25 @@ impl BoardService {
     }
 
     fn with_team_poll(deps: BoardDeps, team_poll: Duration) -> Self {
+        Self::with_timings(deps, team_poll, coder_run::CEILING, coder_run::GRACE)
+    }
+
+    fn with_timings(
+        deps: BoardDeps,
+        team_poll: Duration,
+        coder_ceiling: Duration,
+        coder_grace: Duration,
+    ) -> Self {
         BoardService {
             inner: Arc::new(Inner {
                 deps,
                 write_lock: tokio::sync::Mutex::new(()),
                 runs: std::sync::Mutex::new(HashMap::new()),
                 cancels: std::sync::Mutex::new(HashMap::new()),
+                busy_workspaces: std::sync::Mutex::new(HashSet::new()),
                 team_poll,
+                coder_ceiling,
+                coder_grace,
                 assign_hook: std::sync::RwLock::new(None),
                 pause_hook: std::sync::RwLock::new(None),
             }),
@@ -394,6 +416,11 @@ impl BoardService {
             .ok_or(BoardError::NotFound("workspace"))
     }
 
+    /// Whether a coder run is working in workspace `id`.
+    pub fn workspace_busy(&self, id: &str) -> bool {
+        self.inner.busy_workspaces.lock().unwrap().contains(id)
+    }
+
     /// The operator registers a folder; the stored path is canonical.
     pub async fn add_workspace(&self, name: &str, path: &str) -> Result<String, BoardError> {
         workspaces::validate_name(name)?;
@@ -410,10 +437,20 @@ impl BoardService {
         {
             return Err(BoardError::NotAllowed("a workspace with that name exists"));
         }
+        let canon_str = canon.to_string_lossy().into_owned();
+        if store::list_workspaces(&self.deps().store)
+            .await?
+            .iter()
+            .any(|w| w.path == canon_str)
+        {
+            return Err(BoardError::NotAllowed(
+                "another workspace already uses that folder",
+            ));
+        }
         let ws = Workspace {
             id: new_id('w'),
             name: name.into(),
-            path: canon.to_string_lossy().into_owned(),
+            path: canon_str,
             created_at: now_ms(),
         };
         store::put_workspace(&self.deps().store, &ws).await?;
@@ -700,6 +737,11 @@ impl BoardService {
 
     /// The brief for `task`: its project's and goal's titles plus its notes.
     async fn brief_for(&self, task: &Task) -> Result<String, BoardError> {
+        let (project, goal) = self.project_and_goal(task).await?;
+        Ok(brief(task, &project, &goal))
+    }
+
+    async fn project_and_goal(&self, task: &Task) -> Result<(Project, Goal), BoardError> {
         let h = &self.deps().store;
         let project = store::get_project(h, &task.project_id)
             .await?
@@ -707,7 +749,7 @@ impl BoardService {
         let goal = store::get_goal(h, &project.goal_id)
             .await?
             .ok_or(BoardError::NotFound("goal"))?;
-        Ok(brief(task, &project, &goal))
+        Ok((project, goal))
     }
 
     /// Start a task's run; returns the run's mission id. The run itself is
@@ -724,10 +766,9 @@ impl BoardService {
             Some(stored) => match self.resolve_owner(&stored).await? {
                 Owner::Role { name } => self.start_role(task_id, &name, &stored, actor).await,
                 Owner::Team => self.start_team(task_id, &stored, actor).await,
-                // Until the coder run lands (A22, a later task).
-                Owner::Coder { .. } => Err(BoardError::NotAllowed(
-                    "coder runs land in a later task",
-                )),
+                Owner::Coder { workspace } => {
+                    self.start_coder(task_id, &stored, &workspace, actor).await
+                }
                 // resolve_owner never returns an agent.
                 Owner::Agent { .. } => {
                     Err(BoardError::NotAllowed("an agent can't work as an agent"))
@@ -898,6 +939,115 @@ impl BoardService {
         }
         self.finish(&task_id, run_outcome, answer, tokens, None)
             .await;
+    }
+
+    /// A22 — start a coder run in workspace `workspace_id`. It doesn't take
+    /// the turn lock.
+    async fn start_coder(
+        &self,
+        task_id: &str,
+        expected: &Owner,
+        workspace_id: &str,
+        actor: &'static str,
+    ) -> Result<String, BoardError> {
+        let bin = self
+            .deps()
+            .coder_bin
+            .clone()
+            .or_else(coder_run::find_coder)
+            .ok_or(BoardError::NotAllowed(
+                "aivyx-coder isn't installed (set AIVYX_CODER or put it on PATH)",
+            ))?;
+        let mission_id = new_id('b');
+        let cancel = CancellationToken::new();
+
+        let (registration, spec) = {
+            let _w = self.inner.write_lock.lock().await;
+            let mut task = self.load_task(task_id).await?;
+            self.check_owner_unchanged(
+                &task,
+                expected,
+                Owner::Coder {
+                    workspace: workspace_id.into(),
+                },
+            )
+            .await?;
+            // The workspace may have gone, or its folder been swapped (for a
+            // symlink, say), since the owner was set: check it again.
+            let ws = store::get_workspace(&self.deps().store, workspace_id)
+                .await?
+                .ok_or(BoardError::NotFound("workspace"))?;
+            let canon = workspaces::validate_path(
+                std::path::Path::new(&ws.path),
+                self.deps().home.as_deref(),
+                &self.deps().protected_paths,
+            )?;
+            if self.workspace_busy(&ws.id) {
+                return Err(BoardError::NotAllowed("the workspace is busy"));
+            }
+            let (project, goal) = self.project_and_goal(&task).await?;
+            let text = coder_brief(&task, &project, &goal);
+            model::start_by(
+                &mut task,
+                RunRef {
+                    mission_id: mission_id.clone(),
+                    kind: RunKind::Coder,
+                },
+                now_ms(),
+                actor == "agent",
+            )?;
+            let mut record = mission::MissionRecord::new(
+                mission_id.clone(),
+                format!("coder:{}", ws.name),
+                task.title.clone(),
+            );
+            mission::transition_to_running(&mut record).map_err(storage_err)?;
+            mission::create_mission(&self.deps().missions, &record).await?;
+            store::put_task(&self.deps().store, &task).await?;
+            self.record("started", task_id, actor);
+            // Register before the write lock drops (see `start_role`).
+            self.inner
+                .cancels
+                .lock()
+                .unwrap()
+                .insert(task.id.clone(), cancel.clone());
+            self.inner
+                .busy_workspaces
+                .lock()
+                .unwrap()
+                .insert(ws.id.clone());
+            let registration = CoderRegistration {
+                inner: Arc::clone(&self.inner),
+                task_id: task.id.clone(),
+                workspace_id: ws.id,
+            };
+            let spec = coder_run::CoderRunSpec {
+                bin,
+                workspace: canon,
+                brief: text,
+                ceiling: self.inner.coder_ceiling,
+                grace: self.inner.coder_grace,
+            };
+            (registration, spec)
+        };
+
+        let this = self.clone();
+        let mid = mission_id.clone();
+        tokio::spawn(async move {
+            let outcome = coder_run::run(spec, cancel).await;
+            let (run_outcome, answer, tokens) = coder_run::to_run_result(&outcome);
+            let task_id = registration.task_id.clone();
+            drop(registration);
+            if let Err(e) = this
+                .close_mission(&mid, run_outcome == RunOutcome::Succeeded)
+                .await
+            {
+                eprintln!("aivyx-pa board: mission {mid}: {e}");
+            }
+            this.finish(&task_id, run_outcome, answer, tokens, None)
+                .await;
+        });
+        Ok(mission_id)
     }
 
     async fn close_mission(&self, mission_id: &str, succeeded: bool) -> Result<(), BoardError> {
@@ -1221,6 +1371,25 @@ impl Drop for RunRegistration {
         }
         if let Ok(mut cancels) = self.inner.cancels.lock() {
             cancels.remove(&self.task_id);
+        }
+    }
+}
+
+/// Removes a coder run's cancel token and frees its workspace however its
+/// task exits, a panic included.
+struct CoderRegistration {
+    inner: Arc<Inner>,
+    task_id: String,
+    workspace_id: String,
+}
+
+impl Drop for CoderRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut cancels) = self.inner.cancels.lock() {
+            cancels.remove(&self.task_id);
+        }
+        if let Ok(mut busy) = self.inner.busy_workspaces.lock() {
+            busy.remove(&self.workspace_id);
         }
     }
 }

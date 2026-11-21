@@ -11720,7 +11720,9 @@ async fn run_async(
                         [p.data_dir(), p.config_dir(), p.packs_dir()]
                             .into_iter()
                             .flatten()
-                            .filter(|d| d.exists())
+                            // No `exists()` filter: `validate_path` skips a
+                            // folder that doesn't canonicalize, and one made
+                            // later is then still protected.
                             .collect()
                     })
                     .unwrap_or_default();
@@ -11739,6 +11741,8 @@ async fn run_async(
                 home: std::env::var_os("HOME")
                     .filter(|h| !h.is_empty())
                     .map(std::path::PathBuf::from),
+                // Found at each coder Start (`AIVYX_CODER`, then `PATH`).
+                coder_bin: None,
             }));
             // Set outside the assert: `debug_assert!` doesn't evaluate its
             // argument in a release build.

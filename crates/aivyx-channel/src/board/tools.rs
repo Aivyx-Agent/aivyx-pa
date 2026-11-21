@@ -260,6 +260,7 @@ mod tests {
             notify_target: None,
             protected_paths: vec![],
             home: None,
+            coder_bin: None,
         }));
         Fx {
             _dir: dir,

@@ -12,6 +12,21 @@ use async_trait::async_trait;
 
 /// The prompt a run gets.
 pub fn brief(task: &Task, project: &Project, goal: &Goal) -> String {
+    let mut out = brief_body(task, project, goal);
+    out.push_str(
+        "\nUse `board.comment` for anything the operator should read, and `board.subtask` \
+         for work that should be its own task. End with your result.",
+    );
+    out
+}
+
+/// A22 — the goal a coder run gets: the same task, goal, project and notes,
+/// without the board tools (aivyx-coder has none).
+pub fn coder_brief(task: &Task, project: &Project, goal: &Goal) -> String {
+    brief_body(task, project, goal)
+}
+
+fn brief_body(task: &Task, project: &Project, goal: &Goal) -> String {
     let mut out = format!(
         "Work this task from the operator's board.\n\nGoal: {}\nProject: {}\nTask: {}\n",
         goal.title, project.title, task.title
@@ -33,10 +48,6 @@ pub fn brief(task: &Task, project: &Project, goal: &Goal) -> String {
             out.push_str(&format!("- {n}\n"));
         }
     }
-    out.push_str(
-        "\nUse `board.comment` for anything the operator should read, and `board.subtask` \
-         for work that should be its own task. End with your result.",
-    );
     out
 }
 

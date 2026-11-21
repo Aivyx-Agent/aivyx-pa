@@ -187,7 +187,9 @@ aivyx-slack = { path = "../aivyx-slack" }
 aivyx-memory = { path = "../aivyx-memory" }
 # Phase 16 Task 3 — added "net" and "io-util" for daemon_server.rs and
 # daemon_client.rs (UnixListener, UnixStream, AsyncReadExt, AsyncWriteExt).
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "signal", "net", "io-util", "sync"] }
+# A22 — "process" for the coder run's child (already in Cargo.lock's tokio
+# through other crates).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "signal", "net", "io-util", "sync", "process"] }
 secrecy = { workspace = true }
 # Phase 45 — base64 decoding for IPC image attachments.
 base64 = { workspace = true }
@@ -237,6 +239,12 @@ futures-util = { workspace = true }
 aivyx-card-helper = { workspace = true }
 x25519-dalek = { workspace = true }
 toml = "0.8"
+
+# A22 — SIGTERM to a coder run's child on cancel and at the ceiling. The
+# workspace's `libc` (aivyx-core already uses it for shell.exec); no new
+# Cargo.lock entry.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 aivyx-card-helper = { workspace = true, features = ["test-util"] }

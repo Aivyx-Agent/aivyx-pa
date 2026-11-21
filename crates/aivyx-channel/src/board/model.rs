@@ -105,8 +105,10 @@ pub fn start_by(
     Ok(())
 }
 
-/// A run ended. `Succeeded` → Review (or Done with review off); anything
-/// else → Todo.
+/// A run ended. `Succeeded` → Review (or Done with review off);
+/// `Cancelled` → Cancelled (a coder run that stopped on a signal, exit 130;
+/// a cancel from the operator has already moved the task); anything else →
+/// Todo.
 pub fn finish(
     task: &mut Task,
     outcome: RunOutcome,
@@ -131,6 +133,7 @@ pub fn finish(
     let to = match outcome {
         RunOutcome::Succeeded if task.review_required => TaskState::Review,
         RunOutcome::Succeeded => TaskState::Done,
+        RunOutcome::Cancelled => TaskState::Cancelled,
         _ => TaskState::Todo,
     };
     push(
@@ -429,6 +432,15 @@ mod tests {
             other => panic!("expected Run, got {other:?}"),
         }
         assert_eq!(last_change(&t), (TaskState::Running, TaskState::Todo));
+    }
+
+    #[test]
+    fn finish_cancelled_ends_cancelled() {
+        let mut t = running_task();
+        finish(&mut t, RunOutcome::Cancelled, String::new(), 0, None, 3).unwrap();
+        assert_eq!(t.state, TaskState::Cancelled);
+        assert!(t.active_run.is_none());
+        assert_eq!(last_change(&t), (TaskState::Running, TaskState::Cancelled));
     }
 
     #[test]

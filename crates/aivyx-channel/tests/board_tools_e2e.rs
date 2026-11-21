@@ -246,6 +246,7 @@ async fn fixture_opts(floor_has_board_write: bool, role_has_team_run: bool) -> F
         notify_target: None,
         protected_paths: vec![],
         home: None,
+        coder_bin: None,
     }));
     comment.set_service(Arc::clone(&board)).ok().unwrap();
     subtask.set_service(Arc::clone(&board)).ok().unwrap();
