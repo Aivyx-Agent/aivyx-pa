@@ -3,6 +3,13 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [2.0.1] - 2026-11-23
+
+### Security
+
+- `url` 2.5.9 ([RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592): a stack overflow in `Url::origin()` on nested `blob:` URLs).
+- Accepted for now: [RUSTSEC-2026-0588](https://rustsec.org/advisories/RUSTSEC-2026-0588) and [RUSTSEC-2026-0589](https://rustsec.org/advisories/RUSTSEC-2026-0589), panics when validating a Matrix content URI or key ID. The fix needs a matrix-sdk release that doesn't exist yet (0.19.1 is the latest). Only the Matrix channel, an opt-in preview, is affected.
+
 ## [2.0.0] - 2026-11-22
 
 ### Breaking

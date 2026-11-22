@@ -148,6 +148,17 @@ ignore = [
     # master, when matrix-sdk-sqlite accepts rusqlite 0.41.
     { id = "RUSTSEC-2026-0459", reason = "bundled SQLite -wal memory exposure; fix blocked by matrix-sdk-sqlite 0.19.1 (rusqlite ^0.40.2); pa opens only its own DB files in its data dir; revisit on the next matrix-sdk release" },
 
+    # ruma-identifiers-validation — RUSTSEC-2026-0588 / RUSTSEC-2026-0589
+    # (accepted 2026-11-23): validating a Matrix content URI or key ID can
+    # panic; fixed in 0.13 / 0.14. matrix-sdk 0.19.1 (the latest release)
+    # pins ruma 0.17 -> ruma-common/ruma-macros 0.20 -> 0.12.1, so the fix
+    # is unreachable without a fork. Reachable only through the Matrix
+    # channel (aivyx-matrix), an opt-in preview that is off unless the
+    # operator configures it. Remove when matrix-sdk moves to ruma with
+    # ruma-identifiers-validation >= 0.14.
+    { id = "RUSTSEC-2026-0588", reason = "Matrix content-URI validation panic; fix blocked by matrix-sdk 0.19.1 (ruma 0.17); Matrix channel is opt-in preview; revisit on the next matrix-sdk release" },
+    { id = "RUSTSEC-2026-0589", reason = "Matrix key-ID validation panic; fix blocked by matrix-sdk 0.19.1 (ruma 0.17); Matrix channel is opt-in preview; revisit on the next matrix-sdk release" },
+
     # chrono — RUSTSEC-2026-0543 (accepted 2026-11-18): the crate is
     # unmaintained (chronotope/chrono#1768); every version is affected and
     # there is no replacement release. An unmaintained notice, not a
