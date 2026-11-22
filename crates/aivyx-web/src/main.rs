@@ -951,7 +951,7 @@ mod chat_line_tests {
             ConsentInfo {
                 model: "claude-sonnet-5".into(),
                 endpoint: "claude".into(),
-                why: "this kind of request is set to use the cloud".into(),
+                why: "this kind of request is set to use a less-trusted endpoint".into(),
                 estimated_tokens: 12578,
                 can_allow_here: true,
             },
@@ -6288,7 +6288,7 @@ fn ModelsPanel() -> Element {
                 div { class: "kv-grid",
                     div { span { class: "label-tech", "Default model" } div { "{default_model}" } }
                     div { span { class: "label-tech", "VRAM" } div { "{vram}" } }
-                    div { span { class: "label-tech", "Cloud escalation" } div { "{escalation}" } }
+                    div { span { class: "label-tech", "Escalation to a less-trusted endpoint" } div { "{escalation}" } }
                     div { span { class: "label-tech", "Task classifier" } div { "{classifier}" } }
                 }
             }
@@ -11754,7 +11754,7 @@ async fn read_task(
                     ..
                 } => {
                     routing.write().consent = ConsentState::Failed(
-                        "Cloud escalation isn't configured on this daemon.".to_string(),
+                        "Escalation to a less-trusted endpoint isn't configured on this daemon.".to_string(),
                     );
                 }
                 DaemonEnvelope::QueryResponse {

@@ -3769,7 +3769,7 @@ async fn allow_cloud_over<C: ChannelContext + Send + Sync + 'static>(
 async fn allow_cloud_records_consent_without_running_a_turn() {
     let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
     let (outcome, turns, consented) = allow_cloud_over(channel).await;
-    assert!(outcome.contains("Cloud escalation allowed"), "{outcome}");
+    assert!(outcome.contains("Escalation to a less-trusted endpoint allowed"), "{outcome}");
     assert_eq!(turns, 0);
     assert!(consented);
 }
@@ -3809,7 +3809,10 @@ impl ChannelContext for UntrustedChannel {
 async fn allow_cloud_from_an_untrusted_channel_grants_nothing() {
     let channel = Arc::new(UntrustedChannel(aivyx_core::SessionId::new()));
     let (outcome, turns, consented) = allow_cloud_over(channel).await;
-    assert!(outcome.contains("only be allowed by the operator"), "{outcome}");
+    assert!(
+        outcome.contains("Only the operator can allow a less-trusted endpoint — from a trusted frontend"),
+        "{outcome}"
+    );
     assert_eq!(turns, 0, "the command still never reaches the agent");
     assert!(!consented);
 }
@@ -4337,7 +4340,7 @@ mod routing_visibility {
             events.contains(&StreamEventPayload::CloudConsentRequested {
                 model: "claude".into(),
                 endpoint: "cloud".into(),
-                why: "this kind of request is set to use the cloud".into(),
+                why: "this kind of request is set to use a less-trusted endpoint".into(),
                 estimated_tokens: 12_578,
                 can_allow_here: true,
             }),
@@ -4359,7 +4362,7 @@ mod routing_visibility {
             events.contains(&StreamEventPayload::CloudConsentRequested {
                 model: "claude".into(),
                 endpoint: "cloud".into(),
-                why: "this kind of request is set to use the cloud".into(),
+                why: "this kind of request is set to use a less-trusted endpoint".into(),
                 estimated_tokens: 12_578,
                 can_allow_here: false,
             }),
@@ -4369,7 +4372,7 @@ mod routing_visibility {
             outcome,
             format!("completed: {}", aivyx_llm::consent_text(&request(), false))
         );
-        assert!(outcome.contains("only be allowed by the operator"), "{outcome}");
+        assert!(outcome.contains("Only the operator can allow"), "{outcome}");
         assert!(!outcome.contains("Send /allow-cloud"), "{outcome}");
         assert!(!outcome.contains("LLM error"), "{outcome}");
     }

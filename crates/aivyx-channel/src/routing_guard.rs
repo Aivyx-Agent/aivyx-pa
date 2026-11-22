@@ -234,7 +234,7 @@ pub const ALLOW_CLOUD_COMMAND: &str = "/allow-cloud";
 /// daemon) gives a whole-message `/allow-cloud` instead of sending it to the
 /// model: escalation consent lives in the daemon.
 pub const IN_PROCESS_ALLOW_CLOUD_REPLY: &str =
-    "Cloud escalation needs the daemon — start it with `aivyx-pa daemon run` (or store your \
+    "Escalation to a less-trusted endpoint needs the daemon — start it with `aivyx-pa daemon run` (or store your \
      passphrase so aivyx-pa starts it), then allow it there.";
 
 /// Is `text` exactly the `/allow-cloud` command (surrounding whitespace
@@ -256,21 +256,21 @@ pub fn allow_cloud_reply(
     match guard {
         Some(_) if !trusted => (
             false,
-            "Cloud escalation can only be allowed by the operator — from a trusted frontend, or \
+            "Only the operator can allow a less-trusted endpoint — from a trusted frontend, or \
              `aivyx-pa routing allow-cloud <session>`.",
         ),
         Some(guard) => {
             guard.allow(session);
             (
                 true,
-                "Cloud escalation allowed for this conversation (until the daemon restarts). \
-                 Resend your message.",
+                "Escalation to a less-trusted endpoint allowed for this conversation (until the \
+                 daemon restarts). Resend your message.",
             )
         }
         None => (
             false,
-            "Cloud escalation is not enabled — it needs a cloud [routing.endpoints] entry and \
-             [routing.escalation] mode \"ask\" or \"auto\".",
+            "Escalation to a less-trusted endpoint is not enabled — it needs a `[routing.endpoints]` \
+             entry labelled `locality = \"cloud\"` and `[routing.escalation]` mode \"ask\" or \"auto\".",
         ),
     }
 }

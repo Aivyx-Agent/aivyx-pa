@@ -450,7 +450,7 @@ async fn in_process_allow_cloud_gets_a_local_reply_and_never_calls_the_model() {
     let output = String::from_utf8(sink.lock().unwrap().clone()).expect("utf-8 output");
     assert!(
         output.contains(
-            "Cloud escalation needs the daemon — start it with `aivyx-pa daemon run` (or store \
+            "Escalation to a less-trusted endpoint needs the daemon — start it with `aivyx-pa daemon run` (or store \
              your passphrase so aivyx-pa starts it), then allow it there."
         ),
         "{output:?}"

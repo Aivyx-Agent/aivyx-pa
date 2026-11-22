@@ -197,10 +197,9 @@ pub(crate) fn check_routing_config(
             && escalation.mode == EscalationMode::Never
         {
             return Err(format!(
-                "[routing.endpoints.{name}] is a cloud endpoint{why}, but [routing.escalation] \
+                "[routing.endpoints.{name}] is a less-trusted endpoint{why}, but [routing.escalation] \
                  mode is \"never\" — set it to \"ask\" or \"auto\" to allow escalating to it, \
-                 or remove the endpoint (routing may already pick other models on a cloud \
-                 [agent] provider via [[routing.models]])",
+                 or remove the endpoint",
                 why = why_cloud(endpoint),
             ));
         }
@@ -986,7 +985,7 @@ fn routed_entry(entry: &SignedEntry) -> Option<RoutedEntry> {
             Some(session_id.clone()),
             "-".to_string(),
             "consent".to_string(),
-            format!("cloud escalation allowed via {via}"),
+            format!("less-trusted endpoint allowed via {via}"),
         ),
         AuditEvent::ConversationTainted { session_id, reason } => (
             Some(session_id.clone()),
@@ -1033,7 +1032,7 @@ pub(crate) fn render_escalation(esc: &EscalationConfig, cloud: &[ModelProfile]) 
     };
     let on_failure = if esc.on_failure { "on" } else { "off" };
     let mut out = format!(
-        "\nCloud escalation: mode {mode}; on_failure: {on_failure}; triggers: {}{}\n",
+        "\nEscalation to a less-trusted endpoint: mode {mode}; on_failure: {on_failure}; triggers: {}{}\n",
         if esc.no_local_candidate {
             "no_local_candidate"
         } else {
@@ -1066,16 +1065,16 @@ pub(crate) fn render_escalation(esc: &EscalationConfig, cloud: &[ModelProfile]) 
 pub(crate) async fn run_allow_cloud(session: &str) -> Result<(), String> {
     let socket_path = aivyx_channel::daemon_ipc::default_socket_path()?;
     if !aivyx_channel::daemon_client::daemon_is_running(&socket_path).await {
-        return Err("the daemon isn't running — start it, then allow cloud escalation for the \
+        return Err("the daemon isn't running — start it, then allow a less-trusted endpoint for the \
                     conversation (or send /allow-cloud in it)"
             .to_string());
     }
     match aivyx_channel::daemon_client::allow_cloud_escalation(&socket_path, session).await {
         Ok(true) => {
-            println!("Cloud escalation allowed for conversation {session} (until the daemon restarts).");
+            println!("Escalation to a less-trusted endpoint allowed for conversation {session} (until the daemon restarts).");
             Ok(())
         }
-        Ok(false) => Err("cloud escalation is not enabled on the running daemon".to_string()),
+        Ok(false) => Err("escalation to a less-trusted endpoint is not enabled on the running daemon".to_string()),
         Err(e) => Err(format!("failed to reach the daemon: {e}")),
     }
 }

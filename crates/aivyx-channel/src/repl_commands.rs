@@ -69,7 +69,7 @@ pub fn help_text(studio_line: &str) -> String {
            /quit, /exit    leave (Ctrl-D also works)\n  \
            /models         list the models routing can choose from\n  \
            /model <name>   pin this conversation to a model (/model auto to unpin)\n  \
-           /allow-cloud    allow a cloud model for this conversation, then resend\n  \
+           /allow-cloud    allow a less-trusted endpoint for this conversation, then resend\n  \
            /image <path> [caption]   send a picture\n\
          Keys: Ctrl-C cancels the running turn (twice to leave).\n\
          When a tool needs your approval: [y] allow  [n] deny (default; Enter denies)  [a] show all\n\

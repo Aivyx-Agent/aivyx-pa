@@ -19,7 +19,7 @@
 /// The shared half of the in-process notices: what running without the
 /// daemon costs.
 const WITHOUT_THE_DAEMON: &str = "Running without the daemon — the Studio, scheduled routines \
-                                  and cloud escalation need it.";
+                                  and escalation to a less-trusted endpoint need it.";
 
 /// Why the REPL runs in-process instead of over the daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,7 +140,7 @@ pub fn in_process_cloud_warning(routing: Option<&aivyx_route::RoutingConfig>) ->
         return None;
     }
     Some(format!(
-        "aivyx-pa: [routing.endpoints] has a cloud endpoint ({}), but cloud escalation \
+        "aivyx-pa: [routing.endpoints] has an endpoint labelled `locality = \"cloud\"` ({}), but escalation to it \
          needs the daemon — this in-process session won't use it.",
         cloud.join(", ")
     ))
@@ -303,7 +303,7 @@ mod tests {
     use std::path::Path;
 
     const NOTICE: &str = "Running without the daemon — the Studio, scheduled routines and \
-                          cloud escalation need it. Store your passphrase with `aivyx-pa \
+                          escalation to a less-trusted endpoint need it. Store your passphrase with `aivyx-pa \
                           keyring set` (it uses a file only you can read where there's no \
                           keyring) and aivyx-pa will start it for you.";
 
@@ -402,8 +402,8 @@ mod tests {
         );
         assert!(
             n.contains(
-                "Running without the daemon — the Studio, scheduled routines and cloud \
-                 escalation need it."
+                "Running without the daemon — the Studio, scheduled routines and \
+                 escalation to a less-trusted endpoint need it."
             ),
             "{n}"
         );

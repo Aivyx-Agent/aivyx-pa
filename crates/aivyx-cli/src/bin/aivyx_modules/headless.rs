@@ -251,11 +251,11 @@ mod tests {
         let events = vec![StreamEventPayload::CloudConsentRequested {
             model: "claude-sonnet-5".into(),
             endpoint: "claude".into(),
-            why: "this kind of request is set to use the cloud".into(),
+            why: "this kind of request is set to use a less-trusted endpoint".into(),
             estimated_tokens: 12_578,
             can_allow_here: true,
         }];
-        assert_eq!(turn_exit_code("completed: This needs a cloud model: …", &events), 3);
+        assert_eq!(turn_exit_code("completed: This needs a less-trusted endpoint: …", &events), 3);
         assert_eq!(turn_exit_code("completed: 4", &[]), 0);
         assert_eq!(turn_exit_code("failed: provider error", &[]), 1);
     }
