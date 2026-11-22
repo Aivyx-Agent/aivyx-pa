@@ -2063,13 +2063,8 @@ fn print_config_banner(config: &AivyxConfig) {
         config.provider.value,
         source_label(config.provider.source),
     );
-    eprintln!(
-        "  anthropic_api_key = {}",
-        match &config.anthropic_api_key {
-            Some(s) => format!("<redacted> ({})", source_label(s.source)),
-            None => "<unset>".to_string(),
-        }
-    );
+    // No anthropic_api_key line: unused since 2.0 (local-only); `doctor`
+    // notes a stored one.
     if config.provider.value == aivyx_config::ProviderKind::Broker {
         // GPU-slot broker coordination — Broker is openai-compatible
         // (`is_openai_compatible()` returns true for it, same as
