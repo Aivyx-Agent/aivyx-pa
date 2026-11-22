@@ -139,7 +139,7 @@ Per-call model routing: send each task to the best-suited model you have, escala
 |---|---|---|---|
 | `kind` | `ollama` \| `llama_router` \| `openai_compat` \| `lemonade` |  | What kind of server this is. |
 | `base_url` | string |  | The server's URL. Unset uses the kind's usual local address. |
-| `locality` | `local` \| `cloud` |  | Operator override of the locality the address implies: `local` marks a non-cloud kind local even when its host looks public (a LAN box with a public DNS name); `cloud` marks it cloud. Never makes a cloud kind local. |
+| `locality` | `local` \| `cloud` |  | `cloud` labels a local endpoint less trusted: a conversation only escalates to it with your consent (`/allow-cloud`), and never when it is sensitive. `local` lets a LAN box with a DNS name that isn't local by spelling count as local, and only once a lookup at load confirms every address it resolves to is local. Neither makes a non-local URL usable: aivyx is local-only. |
 
 #### `[[routing.models]]`
 

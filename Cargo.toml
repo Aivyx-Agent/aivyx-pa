@@ -323,7 +323,7 @@ aivyx-checkpoint = { git = "https://github.com/Aivyx-Agent/aivyx-checkpoint", re
 # 2026-08-27 — previously duplicated verbatim across aivyx-core, aivyx-team,
 # aivyx-cli, and aivyx-channel's own Cargo.toml files.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "dd6adc85bf94bdefabdb79f4d60e54c61a190d30" }
+aivyx-kvcache = { git = "https://github.com/Aivyx-Agent/aivyx-kvcache", rev = "b1f0dc75a53ddfba54dec2bdcf14e2ec739783ee" }
 
 # Hardware-backed Ed25519 signing via a YubiKey's OpenPGP card applet
 # (Chapter Passport's optional hardware-identity backend, aivyx-federation's
@@ -354,7 +354,7 @@ aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "ffa
 # shared by `aivyx-pa` and `aivyx-coder`. Not on crates.io — pinned by
 # commit SHA, same pattern as aivyx-checkpoint/aivyx-confine/aivyx-kvcache/
 # aivyx-injection-guard/aivyx-skills above.
-aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "d1089d024a735a888e7ffa0669bddada03532542" }
+aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "fd56957a2c3b061d1045673b67b0dd36380a4044" }
 
 # The signed pack-bundle format (Chapter Freight), shared with aivyx-coder.
 # Extracted from crates/aivyx-pack into its own repo 2026-10-07. Not on
@@ -377,9 +377,9 @@ aivyx-stencil = { git = "https://github.com/Aivyx-Agent/aivyx-toolbench", rev = 
 # out of lockstep with each other. No platform-specific backend, so no
 # target-gating needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "37e35f355954f89237871f8be1704beac6b2c7d0" }
-aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "37e35f355954f89237871f8be1704beac6b2c7d0" }
-aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "37e35f355954f89237871f8be1704beac6b2c7d0" }
+aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "5525de62c76f2ecc9b2847061c49a87425be2eeb" }
+aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "5525de62c76f2ecc9b2847061c49a87425be2eeb" }
+aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "5525de62c76f2ecc9b2847061c49a87425be2eeb" }
 
 # The profile that 'dist' will build with
 [profile.dist]

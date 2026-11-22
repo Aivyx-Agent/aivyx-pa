@@ -242,6 +242,7 @@ MEANINGS = {
     "*.notify_when": "When to send it: `always` (default), `on_failed`, or `on_completed_non_empty`.",
     "routing.endpoints.kind": "What kind of server this is.",
     "routing.endpoints.base_url": "The server's URL. Unset uses the kind's usual local address.",
+    "routing.endpoints.locality": "`cloud` labels a local endpoint less trusted: a conversation only escalates to it with your consent (`/allow-cloud`), and never when it is sensitive. `local` lets a LAN box with a DNS name that isn't local by spelling count as local, and only once a lookup at load confirms every address it resolves to is local. Neither makes a non-local URL usable: aivyx is local-only.",
     "routing.tasks.tier": "The tier this task prefers. Keyed by task name (`chat`, `code_edit`, `plan`, `judge`, `summarize`, `compact`, `classify`, `embed`).",
     "routing.tasks.strengths": "Strengths this task prefers in a model.",
     "sandbox.allow_unix_sockets": "Let confined commands reach local daemons (Unix sockets). Any daemon that runs commands (D-Bus, docker) is then a way out of the sandbox.",
