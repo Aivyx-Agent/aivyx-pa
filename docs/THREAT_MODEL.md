@@ -549,7 +549,7 @@ rather than treated as cloud. The gate is
   sensitive. A tainted conversation never escalates, in any mode;
   consent does not override it. An unreadable taint record is treated
   as tainted (fail safe).
-- **Consent.** In `ask` mode a turn that needs the cloud stops and names
+- **Consent.** In `ask` mode a turn that needs a less-trusted endpoint stops and names
   the model; only the operator's `/allow-cloud` (the whole message, in
   that conversation, on a Trusted-tier channel) or the
   `AllowCloudEscalation` IPC query over the `0600` socket grants it —

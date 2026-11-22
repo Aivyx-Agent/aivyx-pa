@@ -39,7 +39,7 @@ mod testutil;
 pub use assembly::TeamAssembly;
 pub use attenuation::{attenuate_for_member, effective_trust};
 pub use config::{
-    load_team, team_from_toml, DialogueConfig, TeamConfig, TeamError, TeamMember, MAX_SPECIALISTS,
+    check_team_local, load_team, team_from_toml, DialogueConfig, TeamConfig, TeamError, TeamMember, MAX_SPECIALISTS,
 };
 pub use factory::{filter_tools, SpecialistBackend, SpecialistFactory};
 pub use message_bus::{Drained, MessageBus, Recipient, Subscription, TeamMessage};

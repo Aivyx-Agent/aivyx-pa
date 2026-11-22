@@ -33,7 +33,7 @@ use aivyx_channel::daemon_ipc::{
 /// Shown after a one-shot run stops for cloud consent: the stop's own text
 /// says to send /allow-cloud and resend, which a one-shot run (a fresh
 /// conversation each time) can't do.
-const ONE_SHOT_CONSENT_HINT: &str = "aivyx-pa --headless: a one-shot run can't give cloud consent \
+const ONE_SHOT_CONSENT_HINT: &str = "aivyx-pa --headless: a one-shot run can't give consent for a less-trusted endpoint \
      (each run is a new conversation). Allow it in `aivyx-pa` chat or the Studio, or pipe both \
      lines into one conversation: printf '/allow-cloud\\n<task>\\n' | aivyx-pa --headless";
 

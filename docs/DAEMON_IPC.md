@@ -368,10 +368,10 @@ conversation's first routed call.
 **`CloudConsentRequested { model, endpoint, why, estimated_tokens,
 can_allow_here }`** — the turn stopped to ask for consent to use an endpoint labelled
 `locality = "cloud"` (A15 `ask` mode; since 2.0 that is a local URL the
-operator marked less trusted, never a hosted provider; the wording below
-still says "cloud"). `model` is the model id, `endpoint` the
+operator marked less trusted, never a hosted provider; the wording
+below says "less trusted", while the command and message names keep "cloud"). `model` is the model id, `endpoint` the
 `[routing.endpoints.*]` name, `why` plain words (`no local model can
-handle this request`, `this kind of request is set to use the cloud`,
+handle this request`, `this kind of request is set to use a less-trusted endpoint`,
 `the local model got stuck`), `estimated_tokens` what would be sent.
 `can_allow_here` is `true` when the session's channel is Trusted or
 Kernel — the channels `/allow-cloud` accepts consent from.
@@ -386,14 +386,14 @@ When the event is sent, the `TurnComplete` outcome text is replaced by
 the same request worded for the channel (no `LLM error:` framing), so a
 front end that ignores the event still shows it:
 
-- `can_allow_here`: "This needs a cloud model: `<model>` (your
-  `<endpoint>` endpoint), because `<why>`. About `<N>` tokens — this
-  conversation plus the assistant's instructions — would be sent. Send
-  /allow-cloud to allow it for this conversation, then resend your
-  message."
-- otherwise: the same first two sentences, then "Cloud use can only be
-  allowed by the operator — from the terminal (`/allow-cloud`) or the
-  Studio."
+- `can_allow_here`: "This would use `<model>` on the `<endpoint>` endpoint, which you
+  marked less trusted (`locality = "cloud"`), because `<why>`. About
+  `<N>` tokens — this conversation plus the assistant's instructions —
+  would be sent there. Send /allow-cloud to allow it for this
+  conversation, then resend your message."
+- otherwise: the same first two sentences, then "Only the operator can
+  allow a less-trusted endpoint — from the terminal (`/allow-cloud`) or
+  the Studio."
 
 A consent request never outlives its turn: the daemon drops any request
 left for the conversation before the turn runs, and takes it after. It

@@ -60,7 +60,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
    Run `aivyx-pa init` again to pick one, or edit `[agent] provider`.
 3. If it says `provider = "openai"`, set `[openai] base_url` to your local
    server (it has no default now) and drop any hosted-service key from use.
-4. Give `[embedding]` a local `base_url`, or remove the section (recall is then
+4. Give `[embedding]` a local `base_url`, a `model` and its `dimensions` (for
+   example `nomic-embed-text`, 768), or remove the section (recall is then
    keyword-only).
 5. Remove `kind = "anthropic"` and `kind = "openai"` endpoints from
    `[routing.endpoints.*]`; point the endpoint at a local server with a local

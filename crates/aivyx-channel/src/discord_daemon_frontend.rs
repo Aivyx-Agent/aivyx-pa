@@ -669,7 +669,7 @@ pub(crate) fn render_events_for_discord(events: &[StreamEventPayload]) -> String
 /// turn (the model never answered), but its outcome *is* the whole
 /// reply — the daemon worded it for this channel. Showing the generic
 /// "(no reply)" filler ahead of it would read as "(no reply)\nThis
-/// needs a cloud model: …", so this turn shows only the outcome. Other
+/// would use a less-trusted endpoint: …", so this turn shows only the outcome. Other
 /// text-less turns (a genuine empty reply, an unrelated non-completed
 /// outcome) are untouched.
 fn build_discord_reply(events: &[StreamEventPayload], outcome: &str) -> String {
@@ -1285,11 +1285,11 @@ mod tests {
 
     #[test]
     fn discord_shows_the_consent_outcome_and_ignores_routing_events() {
-        let outcome = "completed: This needs a cloud model: `m` (your `e` endpoint), because \
-                       no local model can handle this request. About 1,234 tokens — this \
-                       conversation plus the assistant's instructions — would be sent. Cloud use \
-                       can only be allowed by the operator — from the terminal (`/allow-cloud`) \
-                       or the Studio.";
+        let outcome = "completed: This would use `m` on the `e` endpoint, which you marked less \
+                       trusted (`locality = \"cloud\"`), because no local model can handle this \
+                       request. About 1,234 tokens — this conversation plus the assistant's \
+                       instructions — would be sent there. Only the operator can allow a \
+                       less-trusted endpoint — from the terminal (`/allow-cloud`) or the Studio.";
         let events = vec![
             crate::daemon_ipc::StreamEventPayload::CloudConsentRequested {
                 model: "m".into(),

@@ -905,9 +905,10 @@ mod tests {
         };
         // The event alone adds no line: the outcome carries the text.
         assert!(lines_from_event(&consent).is_empty());
-        let text = "This needs a cloud model: `claude-sonnet-4-5` (your `anthropic` endpoint), \
-                    because no local model can handle this request. About 12,578 tokens — \
-                    this conversation plus the assistant's instructions — would be sent. \
+        let text = "This would use `claude-sonnet-4-5` on the `anthropic` endpoint, which you marked less \
+                    trusted (`locality = \"cloud\"`), because no local model can handle this \
+                    request. About 12,578 tokens — this conversation plus the assistant's \
+                    instructions — would be sent there. \
                     Send /allow-cloud to allow it for this conversation, then resend your message.";
         let s = update(
             AppState::new(),
@@ -920,7 +921,7 @@ mod tests {
         assert_eq!(consent_lines.len(), 1, "{:?}", s.history);
         assert_eq!(consent_lines[0].text, text);
         assert!(
-            !s.history.iter().any(|l| l.kind == LineKind::System && l.text.contains("cloud model")),
+            !s.history.iter().any(|l| l.kind == LineKind::System && l.text.contains("less trusted")),
             "no unhighlighted duplicate: {:?}",
             s.history
         );

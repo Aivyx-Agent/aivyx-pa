@@ -857,15 +857,14 @@ mod tests {
         let mut state = AppState::new();
         state.history.push(ChatLine {
             kind: LineKind::Consent,
-            text: "cloud consent needed — `claude-sonnet-4-5` (your `anthropic` \
-                   endpoint)"
+            text: "consent needed — `claude-sonnet-4-5` on the `anthropic` endpoint (less trusted)"
                 .into(),
         });
 
         terminal.draw(|f| render(f, &state)).unwrap();
         let text = buffer_text(&terminal);
 
-        assert!(text.contains("cloud consent needed"), "got: {text}");
+        assert!(text.contains("consent needed"), "got: {text}");
         assert!(text.contains("☁"), "got: {text}");
     }
 

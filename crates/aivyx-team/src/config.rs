@@ -23,6 +23,12 @@ pub fn load_team(path: impl AsRef<Path>) -> Result<TeamConfig, TeamError> {
     TeamConfig::load_checked(path, &member_url_is_local)
 }
 
+/// The `load_team` member-URL check on an in-memory roster, for writers that
+/// must refuse before persisting. May do blocking DNS for a domain name.
+pub fn check_team_local(team: &TeamConfig) -> Result<(), TeamError> {
+    team.check_base_urls(&member_url_is_local)
+}
+
 /// [`load_team`] for TOML text.
 pub fn team_from_toml(s: &str) -> Result<TeamConfig, TeamError> {
     TeamConfig::from_toml_checked(s, &member_url_is_local)

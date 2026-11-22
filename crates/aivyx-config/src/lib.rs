@@ -1078,7 +1078,7 @@ pub struct AivyxConfig {
     /// `true` *and* the provider is a llama.cpp-family OpenAI-compat
     /// server (`llamacpp` / `jan`), the binary builds the provider with
     /// grammar-constrained tool-calling. `false` (default) → the
-    /// unchanged passthrough. Ignored for cloud OpenAI.
+    /// unchanged passthrough. Ignored by other local servers.
     pub openai_constrain_tool_calls: bool,
     /// Which LLM provider backend to use. Default (2.0): `LlamaCpp`.
     pub provider: Sourced<ProviderKind>,
@@ -5274,7 +5274,7 @@ struct RawOpenAi {
     base_url: Option<String>,
     /// Chapter Emboss (EB.2) — grammar-constrained tool-calling for the
     /// llama.cpp-family OpenAI-compat servers (`provider = "llamacpp"` /
-    /// `"jan"`). Unset → off. Ignored for cloud OpenAI.
+    /// `"jan"`). Unset → off. Ignored by other local servers.
     #[serde(default)]
     constrain_tool_calls: Option<bool>,
 }
@@ -5776,8 +5776,8 @@ struct RawEmail {
 /// fields optional; an absent section deserializes via
 /// `Default` into the all-`None` shape, which the loader maps
 /// to `embedding: None` (semantic search disabled). When any
-/// field is set the loader fills omitted fields from the
-/// `DEFAULT_EMBEDDING_*` constants and validates the result.
+/// field is set the loader requires `base_url`, `model` and `dimensions`
+/// (2.0: there are no built-in defaults) and validates the result.
 #[derive(Debug, Default, Deserialize)]
 struct RawEmbedding {
     #[serde(default)]

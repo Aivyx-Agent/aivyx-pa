@@ -7272,7 +7272,18 @@ async fn handle_query(
             };
             // validate → to_toml → 0600. Validation runs first, so an invalid
             // roster is rejected with the validator's message and never written.
-            match crate::team_config_write::write_team_config(path, &roster) {
+            // The member `base_url` check may resolve DNS: keep it off the runtime.
+            let (wpath, wroster) = (path.to_path_buf(), roster.clone());
+            let written = tokio::task::spawn_blocking(move || {
+                crate::team_config_write::write_team_config(&wpath, &wroster)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                Err(crate::team_config_write::TeamConfigWriteError::Write(format!(
+                    "team write task failed: {e}"
+                )))
+            });
+            match written {
                 Ok(()) => {
                     audit_config_change(audit_log, "team", &team_roster_summary(&roster));
                     team_roster_applied(path).await
@@ -7418,8 +7429,7 @@ fn money_cap_refusal(
     }
     Some(QueryResponsePayload::QueryError {
         code: "invalid_budget".into(),
-        message: "money caps were removed in 2.0 — aivyx is local-only; use a token or run cap"
-            .into(),
+        message: aivyx_config::MONEY_CAP_REMOVED.to_string(),
     })
 }
 
@@ -10851,7 +10861,7 @@ system_prompt = "You are a custom role."
             match money_cap_refusal(r, d) {
                 Some(QueryResponsePayload::QueryError { code, message }) => {
                     assert_eq!(code, "invalid_budget");
-                    assert!(message.contains("local-only"));
+                    assert_eq!(message, aivyx_config::MONEY_CAP_REMOVED);
                 }
                 other => panic!("expected QueryError, got {other:?}"),
             }

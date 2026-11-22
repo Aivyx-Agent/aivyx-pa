@@ -148,9 +148,9 @@ pub fn plain_reason(reason: &str) -> String {
 /// The escalation mode in plain words.
 pub fn escalation_label(mode: &str) -> String {
     match mode {
-        "off" => "off — no cloud endpoint is configured".to_string(),
-        "ask" => "ask — cloud use needs your consent per conversation".to_string(),
-        "auto" => "auto — cloud use without asking".to_string(),
+        "off" => "off — no less-trusted endpoint is configured".to_string(),
+        "ask" => "ask — a less-trusted endpoint needs your consent per conversation".to_string(),
+        "auto" => "auto — a less-trusted endpoint without asking".to_string(),
         other => other.to_string(),
     }
 }
@@ -199,13 +199,13 @@ pub enum ConsentPart {
 /// stays the one source both read from.
 pub fn consent_parts(model: &str, endpoint: &str, why: &str, estimated_tokens: u32) -> Vec<ConsentPart> {
     vec![
-        ConsentPart::Text("This needs a cloud model: ".to_string()),
+        ConsentPart::Text("This would use ".to_string()),
         ConsentPart::Code(model.to_string()),
-        ConsentPart::Text(" (your ".to_string()),
+        ConsentPart::Text(" on the ".to_string()),
         ConsentPart::Code(endpoint.to_string()),
         ConsentPart::Text(format!(
-            " endpoint), because {why}. About {} tokens — this conversation plus the assistant's \
-             instructions — would be sent.",
+            " endpoint, which you marked less trusted (`locality = \"cloud\"`), because {why}. About {} \
+             tokens — this conversation plus the assistant's instructions — would be sent there.",
             with_thousands(u64::from(estimated_tokens))
         )),
     ]
@@ -445,9 +445,9 @@ mod tests {
 
     #[test]
     fn escalation_modes_read_plainly() {
-        assert_eq!(escalation_label("off"), "off — no cloud endpoint is configured");
-        assert_eq!(escalation_label("ask"), "ask — cloud use needs your consent per conversation");
-        assert_eq!(escalation_label("auto"), "auto — cloud use without asking");
+        assert_eq!(escalation_label("off"), "off — no less-trusted endpoint is configured");
+        assert_eq!(escalation_label("ask"), "ask — a less-trusted endpoint needs your consent per conversation");
+        assert_eq!(escalation_label("auto"), "auto — a less-trusted endpoint without asking");
         assert_eq!(escalation_label("never"), "never");
     }
 
@@ -488,27 +488,28 @@ mod tests {
     #[test]
     fn the_consent_lead_matches_the_daemons_wording() {
         assert_eq!(
-            consent_lead("claude-sonnet-5", "claude", "this kind of request is set to use the cloud", 12578),
-            "This needs a cloud model: `claude-sonnet-5` (your `claude` endpoint), because this \
-             kind of request is set to use the cloud. About 12,578 tokens — this conversation \
-             plus the assistant's instructions — would be sent."
+            consent_lead("claude-sonnet-5", "claude", "this kind of request is set to use a less-trusted endpoint", 12578),
+            "This would use `claude-sonnet-5` on the `claude` endpoint, which you marked less trusted \
+             (`locality = \"cloud\"`), because this kind of request is set to use a less-trusted \
+             endpoint. About 12,578 tokens — this conversation plus the assistant's instructions — \
+             would be sent there."
         );
     }
 
     #[test]
     fn consent_parts_is_the_one_source_consent_lead_flattens() {
-        let parts = consent_parts("claude-sonnet-5", "claude", "this kind of request is set to use the cloud", 12578);
+        let parts = consent_parts("claude-sonnet-5", "claude", "this kind of request is set to use a less-trusted endpoint", 12578);
         assert_eq!(
             parts,
             vec![
-                ConsentPart::Text("This needs a cloud model: ".to_string()),
+                ConsentPart::Text("This would use ".to_string()),
                 ConsentPart::Code("claude-sonnet-5".to_string()),
-                ConsentPart::Text(" (your ".to_string()),
+                ConsentPart::Text(" on the ".to_string()),
                 ConsentPart::Code("claude".to_string()),
                 ConsentPart::Text(
-                    " endpoint), because this kind of request is set to use the cloud. About \
-                     12,578 tokens — this conversation plus the assistant's instructions — would \
-                     be sent."
+                    " endpoint, which you marked less trusted (`locality = \"cloud\"`), because this kind \
+                     of request is set to use a less-trusted endpoint. About 12,578 tokens — this \
+                     conversation plus the assistant's instructions — would be sent there."
                         .to_string()
                 ),
             ]
@@ -524,13 +525,13 @@ mod tests {
             .collect();
         assert_eq!(
             flattened,
-            consent_lead("claude-sonnet-5", "claude", "this kind of request is set to use the cloud", 12578)
+            consent_lead("claude-sonnet-5", "claude", "this kind of request is set to use a less-trusted endpoint", 12578)
         );
     }
 
     #[test]
     fn the_outcome_line_is_suppressed_when_a_consent_card_was_shown() {
-        let outcome = "completed: This needs a cloud model: … Send /allow-cloud to allow it.";
+        let outcome = "completed: This would use a less-trusted endpoint: … Send /allow-cloud to allow it.";
         assert_eq!(outcome_note("", outcome, true), None);
         assert!(outcome_note("", outcome, false).is_some());
         // A normal turn is untouched either way.

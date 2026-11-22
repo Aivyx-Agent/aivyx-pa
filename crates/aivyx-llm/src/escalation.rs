@@ -73,9 +73,9 @@ pub struct ConsentRequest {
 pub fn plain_why(trigger: &str) -> &'static str {
     match trigger {
         "no_local_candidate" => "no local model can handle this request",
-        "tier" | "tiers" => "this kind of request is set to use the cloud",
+        "tier" | "tiers" => "this kind of request is set to use a less-trusted endpoint",
         "on_failure" => "the local model got stuck",
-        _ => "this request is set to use the cloud",
+        _ => "this request is set to use a less-trusted endpoint",
     }
 }
 
@@ -96,8 +96,9 @@ pub fn with_thousands(n: u32) -> String {
 /// go where, and why. `RoutedProvider`'s own error text.
 pub fn consent_lead(req: &ConsentRequest) -> String {
     format!(
-        "This needs a cloud model: `{}` (your `{}` endpoint), because {}. About {} tokens — \
-         this conversation plus the assistant's instructions — would be sent.",
+        "This would use `{}` on the `{}` endpoint, which you marked less trusted \
+         (`locality = \"cloud\"`), because {}. About {} tokens — this conversation plus the \
+         assistant's instructions — would be sent there.",
         req.model,
         req.endpoint,
         plain_why(&req.trigger),
@@ -106,7 +107,7 @@ pub fn consent_lead(req: &ConsentRequest) -> String {
 }
 
 /// What only the operator can do, for a channel that can't grant consent.
-const OPERATOR_ONLY: &str = "Cloud use can only be allowed by the operator — from the terminal \
+const OPERATOR_ONLY: &str = "Only the operator can allow a less-trusted endpoint — from the terminal \
                              (`/allow-cloud`) or the Studio.";
 
 /// The full consent-stop message for a channel: [`consent_lead`], then
@@ -124,13 +125,15 @@ pub fn consent_text(req: &ConsentRequest, can_allow_here: bool) -> String {
 }
 
 /// The `ask`-mode `on_failure` hint appended to a turn the local model got
-/// stuck on, naming the cloud model (`model`, an id) a resend would retry
+/// stuck on, naming the less-trusted model (`model`, an id) a resend would retry
 /// on — per channel, like [`consent_text`].
 pub fn stuck_hint(model: &str, can_allow_here: bool) -> String {
     if can_allow_here {
-        format!("The local model got stuck; send /allow-cloud and resend to retry on `{model}`.")
+        format!(
+            "The local model got stuck; send /allow-cloud and resend to retry on `{model}` (an endpoint you marked less trusted)."
+        )
     } else {
-        format!("The local model got stuck; it could retry on `{model}`. {OPERATOR_ONLY}")
+        format!("The local model got stuck; it could retry on `{model}` (an endpoint you marked less trusted). {OPERATOR_ONLY}")
     }
 }
 
@@ -320,8 +323,8 @@ mod tests {
             plain_why(Trigger::NoLocalCandidate.name()),
             "no local model can handle this request"
         );
-        assert_eq!(plain_why(Trigger::Tier.name()), "this kind of request is set to use the cloud");
-        assert_eq!(plain_why("tiers"), "this kind of request is set to use the cloud");
+        assert_eq!(plain_why(Trigger::Tier.name()), "this kind of request is set to use a less-trusted endpoint");
+        assert_eq!(plain_why("tiers"), "this kind of request is set to use a less-trusted endpoint");
         assert_eq!(plain_why(Trigger::OnFailure.name()), "the local model got stuck");
     }
 
@@ -329,9 +332,10 @@ mod tests {
     fn consent_lead_is_the_neutral_two_sentences() {
         assert_eq!(
             consent_lead(&tier_request(12578)),
-            "This needs a cloud model: `claude-sonnet-5` (your `claude` endpoint), because this \
-             kind of request is set to use the cloud. About 12,578 tokens — this conversation \
-             plus the assistant's instructions — would be sent."
+            "This would use `claude-sonnet-5` on the `claude` endpoint, which you marked less trusted \
+             (`locality = \"cloud\"`), because this kind of request is set to use a less-trusted \
+             endpoint. About 12,578 tokens — this conversation plus the assistant's instructions — \
+             would be sent there."
         );
     }
 
@@ -339,9 +343,10 @@ mod tests {
     fn consent_text_where_consent_can_be_given() {
         assert_eq!(
             consent_text(&tier_request(12578), true),
-            "This needs a cloud model: `claude-sonnet-5` (your `claude` endpoint), because this \
-             kind of request is set to use the cloud. About 12,578 tokens — this conversation \
-             plus the assistant's instructions — would be sent. Send /allow-cloud to allow it \
+            "This would use `claude-sonnet-5` on the `claude` endpoint, which you marked less trusted \
+             (`locality = \"cloud\"`), because this kind of request is set to use a less-trusted \
+             endpoint. About 12,578 tokens — this conversation plus the assistant's instructions — \
+             would be sent there. Send /allow-cloud to allow it \
              for this conversation, then resend your message."
         );
     }
@@ -351,10 +356,11 @@ mod tests {
         let text = consent_text(&tier_request(1_234_567), false);
         assert_eq!(
             text,
-            "This needs a cloud model: `claude-sonnet-5` (your `claude` endpoint), because this \
-             kind of request is set to use the cloud. About 1,234,567 tokens — this conversation \
-             plus the assistant's instructions — would be sent. Cloud use can only be allowed by \
-             the operator — from the terminal (`/allow-cloud`) or the Studio."
+            "This would use `claude-sonnet-5` on the `claude` endpoint, which you marked less trusted \
+             (`locality = \"cloud\"`), because this kind of request is set to use a less-trusted \
+             endpoint. About 1,234,567 tokens — this conversation plus the assistant's instructions — \
+             would be sent there. Only the operator can allow a less-trusted endpoint — from the terminal \
+             (`/allow-cloud`) or the Studio."
         );
     }
 
@@ -371,12 +377,12 @@ mod tests {
     fn the_stuck_hint_is_per_channel() {
         assert_eq!(
             stuck_hint("claude-sonnet-5", true),
-            "The local model got stuck; send /allow-cloud and resend to retry on `claude-sonnet-5`."
+            "The local model got stuck; send /allow-cloud and resend to retry on `claude-sonnet-5` (an endpoint you marked less trusted)."
         );
         assert_eq!(
             stuck_hint("claude-sonnet-5", false),
-            "The local model got stuck; it could retry on `claude-sonnet-5`. Cloud use can only \
-             be allowed by the operator — from the terminal (`/allow-cloud`) or the Studio."
+            "The local model got stuck; it could retry on `claude-sonnet-5` (an endpoint you marked less trusted). Only the operator can \
+             allow a less-trusted endpoint — from the terminal (`/allow-cloud`) or the Studio."
         );
     }
 

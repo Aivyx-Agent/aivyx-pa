@@ -386,7 +386,7 @@ struct RoutingUi {
     consent_this_turn: bool,
 }
 
-/// The live consent card's "Allow cloud for this conversation" state.
+/// The live consent card's "Allow for this conversation" state.
 #[derive(Clone, Default, PartialEq)]
 enum ConsentState {
     #[default]
@@ -2617,9 +2617,9 @@ fn audit_event_label(event_type: &str) -> &str {
         "LlmCost" => "Model usage",
         "ModelRouted" => "Model chosen",
         "ConversationTainted" => "Kept local (sensitive data)",
-        "CloudEscalation" => "Cloud model decision",
-        "CloudConsentGranted" => "Cloud use allowed",
-        "EscalationArmed" => "Cloud fallback armed",
+        "CloudEscalation" => "Less-trusted endpoint decision",
+        "CloudConsentGranted" => "Less-trusted endpoint allowed",
+        "EscalationArmed" => "Less-trusted fallback armed",
         "MemoryAccess" => "Memory used",
         "SkillInvocation" => "Skill used",
         "AutoNotifyDispatched" => "Notification sent",
@@ -4513,7 +4513,7 @@ fn ChatPanel() -> Element {
 }
 
 /// Routing visibility B4 — a cloud-consent request in the Chat transcript:
-/// the model, why, and the token estimate, with "Allow cloud for this
+/// the model, why, and the token estimate, with "Allow for this
 /// conversation" (`AllowCloudEscalation`) and, once allowed, "Resend" (the
 /// last message again). Only the latest card (`live`) has buttons; an
 /// older one stays as a record.
@@ -4536,7 +4536,7 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
     let parts = routing::consent_parts(&info.model, &info.endpoint, &info.why, info.estimated_tokens);
     rsx! {
         div { class: "glass-card consent-card", role: "status",
-            span { class: "gate-label", "☁ cloud consent needed" }
+            span { class: "gate-label", "☁ less-trusted endpoint: consent needed" }
             p { class: "consent-text",
                 for part in parts {
                     match part {
@@ -4547,7 +4547,7 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
             }
             if !info.can_allow_here {
                 p { class: "help",
-                    "Cloud use can only be allowed by the operator — from the terminal \
+                    "Only the operator can allow a less-trusted endpoint — from the terminal \
                      (/allow-cloud) or the Studio."
                 }
             } else if live {
@@ -4555,7 +4555,7 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
                     match state {
                         ConsentState::Asking => rsx! {
                             button { class: "btn btn-primary btn-xs", onclick: allow,
-                                "Allow cloud for this conversation"
+                                "Allow for this conversation"
                             }
                         },
                         ConsentState::Allowing => rsx! {
@@ -4581,7 +4581,7 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
                         ConsentState::Failed(msg) => rsx! {
                             span { class: "notice err", "{msg}" }
                             button { class: "btn btn-primary btn-xs", onclick: allow,
-                                "Allow cloud for this conversation"
+                                "Allow for this conversation"
                             }
                         },
                     }
@@ -6363,10 +6363,10 @@ fn ModelsPanel() -> Element {
                     p { span { class: "label-tech", "Why · " } {routing::plain_reason(&reason)} }
                 }
                 if let Some(taint) = conv.as_ref().and_then(|c| c.tainted.clone()) {
-                    p { class: "help sub", "Never escalates to the cloud: {taint}" }
+                    p { class: "help sub", "Never escalates to a less-trusted endpoint: {taint}" }
                 } else if conv.as_ref().is_some_and(|c| c.cloud_allowed) {
                     p { class: "help sub",
-                        "Cloud use allowed for this conversation until the page reloads or the daemon restarts."
+                        "Less-trusted endpoint allowed for this conversation until the page reloads or the daemon restarts."
                     }
                 }
                 div { class: "field-row",
@@ -8920,7 +8920,7 @@ fn set_routing_pin_query(session_id: String, model: Option<String>) -> FrontendM
     }
 }
 
-/// Routing visibility B4 — the consent card's "Allow cloud for this
+/// Routing visibility B4 — the consent card's "Allow for this
 /// conversation".
 fn allow_cloud_query(session_id: String) -> FrontendMessage {
     FrontendMessage::Query {
@@ -11742,7 +11742,7 @@ async fn read_task(
                     r.pin_notice = Some((false, message));
                     r.pin_key += 1;
                 }
-                // The consent card's "Allow cloud for this conversation".
+                // The consent card's "Allow for this conversation".
                 DaemonEnvelope::QueryResponse {
                     payload: QueryResponsePayload::CloudEscalationAllowed { .. },
                     ..

@@ -32,6 +32,10 @@ pub fn write_team_config(path: &Path, roster: &TeamConfig) -> Result<(), TeamCon
     roster
         .validate()
         .map_err(|e| TeamConfigWriteError::Invalid(e.to_string()))?;
+    // 2.0 (local-only): `load_team` refuses a non-local member `base_url`, so
+    // never persist one. May do a blocking DNS lookup; the daemon calls this
+    // off the async runtime.
+    aivyx_team::check_team_local(roster).map_err(|e| TeamConfigWriteError::Invalid(e.to_string()))?;
     let toml = roster
         .to_toml()
         .map_err(|e| TeamConfigWriteError::Write(e.to_string()))?;
@@ -102,6 +106,26 @@ mod tests {
         let roster = team("nested-team", "lead", vec![member("lead"), member("m")]);
         write_team_config(&path, &roster).unwrap();
         assert!(path.exists());
+    }
+
+    #[test]
+    fn a_non_local_member_base_url_is_refused_and_nothing_is_written() {
+        let path = scratch("nonlocal").join("team.toml");
+        let mut m = member("helper");
+        m.base_url = Some("http://203.0.113.9:11434".into());
+        let roster = team("t", "boss", vec![member("boss"), m]);
+        let err = write_team_config(&path, &roster).unwrap_err();
+        match err {
+            TeamConfigWriteError::Invalid(msg) => {
+                assert!(msg.contains("is not local") && msg.contains("helper"), "{msg}")
+            }
+            other => panic!("got {other:?}"),
+        }
+        assert!(!path.exists(), "a non-local roster must not touch disk");
+        // A LAN member is fine.
+        let mut lan = member("helper");
+        lan.base_url = Some("http://192.168.1.50:11434".into());
+        write_team_config(&path, &team("t", "boss", vec![member("boss"), lan])).unwrap();
     }
 
     #[test]

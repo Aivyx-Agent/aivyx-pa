@@ -66,10 +66,10 @@ conversation that has touched your private data (mail, files, memory and the
 like). When that happens, the assistant stops and tells you which model, why,
 and roughly how much would be sent.
 
-The buttons and messages still say "cloud"; here that means a server you
+The command (`/allow-cloud`) and the audit and message names still say "cloud"; here that means a server you
 labelled less trusted, never a hosted service.
 
-- **In the Studio** you get a card with an **Allow cloud for this
+- **In the Studio** you get a card with an **Allow for this
   conversation** button. Allow it, then press **Resend**.
 - **In the terminal or terminal UI**, send `/allow-cloud`, then send your
   message again.

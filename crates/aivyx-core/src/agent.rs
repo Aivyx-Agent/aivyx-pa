@@ -8493,7 +8493,7 @@ mod tests {
     }
 
     const HINT: &str =
-        "The local model got stuck; send /allow-cloud and resend to retry on `cloud-m`.";
+        "The local model got stuck; send /allow-cloud and resend to retry on `cloud-m` (an endpoint you marked less trusted).";
 
     fn arm_entries(log: &ArmLog) -> Vec<String> {
         log.lock()

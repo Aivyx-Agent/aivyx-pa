@@ -116,6 +116,41 @@ pub struct MistralRsProvider {
     constrain_tool_calls: bool,
 }
 
+/// Refuse a model path (or chat template) that is not on disk. mistralrs treats a
+/// path it cannot find as a Hugging Face repo id and downloads it from
+/// huggingface.co, which a local-only product must never do.
+fn check_local_paths(config: &MistralRsConfig) -> Result<(), LlmError> {
+    let missing = |what: &str, p: &std::path::Path| {
+        LlmError::Config(format!(
+            "mistralrs: {what} {} doesn't exist — aivyx is local-only and never downloads \
+             models; point it at a local model file or directory",
+            p.display()
+        ))
+    };
+    match &config.model_file {
+        Some(f) => {
+            if !config.model_path.is_dir() {
+                return Err(missing("model_path", &config.model_path));
+            }
+            let file = config.model_path.join(f);
+            if !file.is_file() {
+                return Err(missing("model_file", &file));
+            }
+        }
+        None => {
+            if !config.model_path.is_file() {
+                return Err(missing("model_path", &config.model_path));
+            }
+        }
+    }
+    if let Some(t) = &config.chat_template_path {
+        if !t.exists() {
+            return Err(missing("chat_template_path", t));
+        }
+    }
+    Ok(())
+}
+
 impl MistralRsProvider {
     /// Build a provider by loading the configured GGUF
     /// model. Async because mistralrs's builder runs
@@ -123,6 +158,7 @@ impl MistralRsProvider {
     /// template parse) on a worker; this is the only
     /// `chat_stream`-blocking work.
     pub async fn new(config: MistralRsConfig) -> Result<Self, LlmError> {
+        check_local_paths(&config)?;
         let constrain_tool_calls = config.constrain_tool_calls;
         let (dir, files) = match &config.model_file {
             Some(f) => (
@@ -347,6 +383,18 @@ impl LlmStream for SingleShotStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_model_path_is_refused_not_downloaded() {
+        let err = check_local_paths(&MistralRsConfig::new("/nonexistent/qwen3.gguf")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("doesn't exist") && msg.contains("never downloads"), "{msg}");
+        let err = check_local_paths(&MistralRsConfig::new("/nonexistent/dir").with_model_file("m.gguf")).unwrap_err();
+        assert!(err.to_string().contains("model_path"), "{err}");
+        let dir = std::env::temp_dir();
+        let err = check_local_paths(&MistralRsConfig::new(&dir).with_model_file("no-such-file.gguf")).unwrap_err();
+        assert!(err.to_string().contains("model_file"), "{err}");
+    }
 
     #[test]
     fn mistralrs_config_builder_chain() {

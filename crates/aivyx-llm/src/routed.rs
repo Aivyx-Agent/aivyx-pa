@@ -1763,9 +1763,10 @@ mod tests {
         let msg = err.to_string();
         assert_eq!(
             msg,
-            "This needs a cloud model: `claude` (your `cloud` endpoint), because no local model \
-             can handle this request. About 12,578 tokens — this conversation plus the \
-             assistant's instructions — would be sent."
+            "This would use `claude` on the `cloud` endpoint, which you marked less trusted \
+             (`locality = \"cloud\"`), because no local model can handle this request. About \
+             12,578 tokens — this conversation plus the assistant's instructions — would be \
+             sent there."
         );
         assert!(!msg.contains("claude@cloud"), "{msg}");
         assert!(!msg.contains("no_local_candidate"), "{msg}");
@@ -1796,7 +1797,7 @@ mod tests {
         else {
             panic!("expected a consent request");
         };
-        assert!(msg.contains("because this kind of request is set to use the cloud"), "{msg}");
+        assert!(msg.contains("because this kind of request is set to use a less-trusted endpoint"), "{msg}");
         assert!(!msg.contains("(tier)"), "{msg}");
         assert_eq!(
             guard.consent_requests(),

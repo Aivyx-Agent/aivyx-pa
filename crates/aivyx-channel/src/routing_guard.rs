@@ -728,7 +728,7 @@ mod tests {
         let (_, hint) = guard.arm("clean", "looping", true).await;
         assert_eq!(
             hint.as_deref(),
-            Some("The local model got stuck; send /allow-cloud and resend to retry on `cloud-m`.")
+            Some("The local model got stuck; send /allow-cloud and resend to retry on `cloud-m` (an endpoint you marked less trusted).")
         );
 
         guard.mark("tainted", "gmail.search output").await;
@@ -748,8 +748,8 @@ mod tests {
         assert_eq!(
             hint.as_deref(),
             Some(
-                "The local model got stuck; it could retry on `cloud-m`. Cloud use can only be \
-                 allowed by the operator — from the terminal (`/allow-cloud`) or the Studio."
+                "The local model got stuck; it could retry on `cloud-m` (an endpoint you marked less trusted). Only the operator can \
+                 allow a less-trusted endpoint — from the terminal (`/allow-cloud`) or the Studio."
             )
         );
 
