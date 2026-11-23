@@ -5,6 +5,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ## [2.1.0] - 2026-11-23
 
+### Security
+
+- `cookie` 0.18.3 (RUSTSEC-2026-0594). Only `aivyx-desktop` uses it (through wry), and it never forks, so it wasn't affected.
+
 ### Changed
 
 - **The "shared" tier.** The tier for a less-trusted server on your network is now called `shared`, not `cloud` (nothing in 2.x reaches a hosted service). Write `locality = "shared"`; `locality = "cloud"` is read as an alias until 3.0, and `aivyx-pa doctor` and the config warning say so (``locality = "cloud" is now "shared"; the old name works until 3.0``). The consent command is `/allow-shared`; `/allow-cloud` still works until 3.0 and its reply starts with `/allow-cloud is now /allow-shared.`. `aivyx-pa routing allow-shared` replaces `allow-cloud` the same way. Uses aivyx-route 0.3.0.
