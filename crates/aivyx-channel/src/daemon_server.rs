@@ -11979,7 +11979,7 @@ mod gallery_local_only_tests {
     async fn gallery_refuses_a_non_local_comfyui_without_a_request() {
         // A public IP literal: refused by the URL check before any connect.
         assert!(is_empty_available(&fetch_gallery("http://8.8.8.8:8188").await));
-        assert!(is_empty_available(&fetch_gallery("https://example.com").await));
+        assert!(is_empty_available(&fetch_gallery("http://203.0.113.9:8188").await));
     }
 
     #[tokio::test]

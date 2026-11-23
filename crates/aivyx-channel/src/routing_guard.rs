@@ -954,9 +954,9 @@ mod tests {
 
     #[test]
     fn the_replies_name_the_shared_tier_and_the_new_command() {
-        let untrusted = allow_shared_reply(None, "s", true).1;
-        assert!(untrusted.contains("locality = \"shared\""), "{untrusted}");
-        assert!(!untrusted.contains("cloud"), "{untrusted}");
+        let not_enabled = allow_shared_reply(None, "s", true).1;
+        assert!(not_enabled.contains("locality = \"shared\""), "{not_enabled}");
+        assert!(!not_enabled.contains("cloud"), "{not_enabled}");
     }
 
     #[tokio::test]

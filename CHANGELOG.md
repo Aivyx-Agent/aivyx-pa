@@ -22,8 +22,8 @@ All notable changes to Aivyx are recorded here. This project adheres to
 
 ### Fixed
 
-- The blocking local-only checks no longer run on the async runtime. A provider that fails to build now cools every model on that endpoint for the router's cooldown instead of being retried per call.
-- ComfyUI gallery and asset fetches go through the local-only HTTP client.
+- The blocking local-only checks no longer run on the async runtime. A provider that fails to build now cools every model on that endpoint (not just the one that failed) for the router's cooldown (60 s). With `[routing.escalation]` mode `auto` and `no_local_candidate`, a call only that endpoint could serve may escalate to a shared endpoint during that window.
+- ComfyUI gallery and asset fetches go through the local-only HTTP client: they no longer use `HTTP(S)_PROXY` or follow redirects, and a ComfyUI URL that isn't local gives an empty gallery or a 502, with a log line.
 - A team member that isn't local fails with a typed `TeamError::NotLocal { member, reason }`.
 - The `grammar_output_is_frozen` test in `aivyx-llm` compared serialised text, so it failed whenever `--features provider-mistral-rs` was on (it turns on serde_json `preserve_order`, which changes key order). It already failed on 2.0.1; it now compares JSON values.
 - `aivyx-pa doctor` prints one fix line, not two, for the old `locality` spelling.

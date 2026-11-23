@@ -593,7 +593,7 @@ tool_prefixes` entry, or private data the operator types directly) does
 not taint. Operators who escalate should list such tools' prefixes, or
 keep `mode = "never"`. A channel the operator has marked Trusted but
 that accepts messages from other people (e.g. an allowlisted but shared
-Discord server) lets them send `/allow-shared` too — keep such channels'
+Discord server) lets them send `/allow-shared` (or its alias `/allow-cloud`, until 3.0) too — keep such channels'
 allowlists to the operator, list them in `[routing.sensitive] channels`
 (which taints their conversations, so they never escalate), or keep
 `mode = "never"`. An escalated request carries the whole system prompt,
