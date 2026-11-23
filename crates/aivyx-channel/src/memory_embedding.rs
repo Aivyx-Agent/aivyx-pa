@@ -29,6 +29,9 @@ pub const BACKFILL_BATCH: usize = 64;
 /// `[embedding]` config. Returns `Err` only on transport
 /// construction failure (e.g. TLS backend init) — a bad
 /// base_url surfaces later as a per-call error, not here.
+///
+/// Blocking DNS: never call from async code: the provider's constructor checks
+/// its URL with `require_local` (daemon startup calls this).
 pub fn build_embedding_provider(
     cfg: &aivyx_config::EmbeddingConfig,
 ) -> Result<Arc<dyn EmbeddingProvider>, String> {

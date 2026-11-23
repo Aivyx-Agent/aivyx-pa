@@ -6879,6 +6879,7 @@ impl AivyxConfig {
     /// [`ConfigError::NotLocal`] naming the key. That check resolves
     /// domain names through the system resolver (blocking; IP literals
     /// and local-by-spelling names such as `localhost` need no lookup).
+    /// Blocking DNS: never call from async code.
     pub fn load_from_env_and_toml(opts: &LoadOptions) -> Result<Self, ConfigError> {
         Self::load_from_env_and_toml_with(opts, &aivyx_route::SystemResolver)
     }
@@ -6936,6 +6937,8 @@ impl AivyxConfig {
 
     /// The local-only check: `Err(ConfigError::NotLocal)` for the first
     /// [`model_urls`](Self::model_urls) entry that fails `require_local`.
+    /// Blocking DNS: never call from async code (the daemon's Settings load runs it
+    /// in `spawn_blocking`).
     pub fn check_local_with(&self, resolver: &dyn aivyx_route::Resolve) -> Result<(), ConfigError> {
         for (key, url) in self.model_urls() {
             aivyx_route::require_local_with(&url, resolver).map_err(|e| ConfigError::NotLocal {

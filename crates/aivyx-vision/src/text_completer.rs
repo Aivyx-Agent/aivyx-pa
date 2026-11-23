@@ -22,6 +22,9 @@ pub enum BuildProviderError {
 /// Construct the real `LlmProvider` this config selects. 2.0 (local-only):
 /// the provider's URL must be local — checked here, by the provider's own
 /// constructor, and again before every request.
+///
+/// Blocking DNS: never call from async code (the binary calls it once at startup,
+/// before it serves any tool call).
 pub fn build_provider(config: &VisionConfig) -> Result<Arc<dyn LlmProvider>, BuildProviderError> {
     let (name, url) = match &config.provider {
         ProviderChoice::Ollama { base_url } => (

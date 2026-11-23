@@ -1791,7 +1791,20 @@ impl std::fmt::Debug for EmbeddingEntryWrite {
 /// empty string, which the loader's own defaulting treats differently
 /// from "key absent") rather than silently accepted. A `base_url` that is
 /// not local (`aivyx_route::require_local`) is refused with the NotLocal text.
+///
+/// Blocking DNS: never call from async code (the daemon runs it in
+/// `spawn_blocking`).
 pub fn write_embedding_section(path: &Path, entry: &EmbeddingEntryWrite) -> Result<(), ConfigWriteError> {
+    write_embedding_section_with(path, entry, &aivyx_route::SystemResolver)
+}
+
+/// [`write_embedding_section`] with an explicit resolver for the
+/// local-only check (a test seam). Blocking DNS: never call from async code.
+pub fn write_embedding_section_with(
+    path: &Path,
+    entry: &EmbeddingEntryWrite,
+    resolver: &dyn aivyx_route::Resolve,
+) -> Result<(), ConfigWriteError> {
     if let Some(v) = &entry.base_url {
         if v.trim().is_empty() {
             return Err(ConfigWriteError::InvalidEmbeddingConfig {
@@ -1801,7 +1814,7 @@ pub fn write_embedding_section(path: &Path, entry: &EmbeddingEntryWrite) -> Resu
         // 2.0 (local-only): the loader refuses a non-local `[embedding]
         // base_url`, so never write one. The reason is the NotLocal text.
         // (May do a blocking DNS lookup for a domain name.)
-        if let Err(e) = aivyx_route::require_local(v.trim()) {
+        if let Err(e) = aivyx_route::require_local_with(v.trim(), resolver) {
             return Err(ConfigWriteError::InvalidEmbeddingConfig {
                 reason: format!("base_url: {e}"),
             });

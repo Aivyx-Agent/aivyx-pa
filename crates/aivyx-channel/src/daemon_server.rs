@@ -6796,7 +6796,8 @@ async fn handle_query(
                 None => return no_config_file_error(),
             };
             let entry = aivyx_config::config_write::EmbeddingEntryWrite { base_url, model, api_key: api_key.map(aivyx_ipc::protocol::SecretString::into_inner) };
-            match aivyx_config::config_write::write_embedding_section(path, &entry) {
+            let resolver: Arc<dyn aivyx_route::Resolve> = Arc::new(aivyx_route::SystemResolver);
+            match write_embedding_section_async(path, entry, resolver).await {
                 Ok(()) => {
                     audit_config_change(audit_log, "embedding", "updated");
                     match aivyx_config::config_write::read_embedding_section(path) {
@@ -7476,6 +7477,26 @@ async fn load_settings_config_async(
     tokio::task::spawn_blocking(move || load_settings_config(&p, r.as_deref()))
         .await
         .unwrap_or_else(|e| Err(format!("config load task failed: {e}")))
+}
+
+/// `write_embedding_section` off the async worker: its local-only check on
+/// `base_url` can do a blocking DNS lookup, which must not stall the IPC
+/// handler. A write task that doesn't finish is an I/O error.
+async fn write_embedding_section_async(
+    path: &Path,
+    entry: aivyx_config::config_write::EmbeddingEntryWrite,
+    resolver: Arc<dyn aivyx_route::Resolve>,
+) -> Result<(), aivyx_config::ConfigWriteError> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        aivyx_config::config_write::write_embedding_section_with(&path, &entry, &*resolver)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(aivyx_config::ConfigWriteError::Io {
+            reason: format!("config write task failed: {e}"),
+        })
+    })
 }
 
 /// Chapter U — re-read the config from disk and return a `SettingsApplied`
@@ -11299,6 +11320,49 @@ system_prompt = "You are a custom role."
         assert!(!json.contains("sk-super-secret-value"), "the real key must never reach the wire");
         assert!(view.api_key.configured);
         assert_eq!(view.api_key.source, "toml");
+    }
+
+    /// The blocking-DNS detector for the Studio embedding save: its
+    /// `base_url` check runs over a resolver that sleeps 300 ms; the runtime
+    /// thread must keep ticking while the section is written.
+    #[tokio::test(flavor = "current_thread")]
+    async fn saving_the_embedding_section_does_not_block_the_runtime() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct Sleepy;
+        impl aivyx_route::Resolve for Sleepy {
+            fn resolve(&self, _host: &str, _port: u16) -> std::io::Result<Vec<std::net::IpAddr>> {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                Ok(vec!["192.168.1.5".parse().unwrap()])
+            }
+        }
+
+        let path = secret_leak_temp_toml("embedding-off-runtime");
+        std::fs::write(&path, "[embedding]\ndimensions = 768\n").unwrap();
+        let entry = aivyx_config::config_write::EmbeddingEntryWrite {
+            base_url: Some("http://gpu.example.com:8090/v1".to_string()),
+            model: Some("nomic-embed-text".to_string()),
+            api_key: None,
+        };
+        let ticks = Arc::new(AtomicU32::new(0));
+        let ticker = {
+            let ticks = Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    ticks.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+        };
+        tokio::task::yield_now().await;
+        let written = write_embedding_section_async(&path, entry, Arc::new(Sleepy)).await;
+        ticker.abort();
+        let contents = std::fs::read_to_string(&path).unwrap_or_default();
+        std::fs::remove_file(&path).ok();
+        written.expect("written");
+        assert!(contents.contains("gpu.example.com"), "{contents}");
+        let ticks = ticks.load(Ordering::SeqCst);
+        assert!(ticks >= 5, "the runtime thread was blocked: {ticks} ticks");
     }
 
     #[test]

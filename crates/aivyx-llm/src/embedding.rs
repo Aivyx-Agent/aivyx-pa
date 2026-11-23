@@ -81,6 +81,8 @@ impl OpenAiEmbeddingProvider {
     /// `base_url` and `model` are required (2.0: no cloud default) and must be local
     /// (`require_local`; blocking DNS for a name that isn't local by
     /// spelling).
+    ///
+    /// Blocking DNS: never call from async code (daemon startup builds it).
     pub fn new(
         base_url: Option<String>,
         model: String,

@@ -249,6 +249,10 @@ impl OllamaProvider {
     /// DNS for a name that isn't local by spelling). Every request
     /// re-checks it. This is also the backstop for a team member's Ollama
     /// URL read through an unchecked `TeamConfig::load`.
+    ///
+    /// Blocking DNS: never call from async code: callers are startup, the
+    /// one-shot CLI commands (`doctor`, `init`) and `spawn_blocking`
+    /// (routing's provider factory, a team member's endpoint).
     pub fn new(config: OllamaConfig) -> Result<Self, LlmError> {
         crate::local_only::check_url(
             config.base_url.as_deref().unwrap_or(DEFAULT_OLLAMA_BASE_URL),

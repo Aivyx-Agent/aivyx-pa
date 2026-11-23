@@ -123,6 +123,10 @@ impl OpenAiProvider {
     /// Builds the provider for `config.base_url`, which is required and
     /// must be local (`require_local`; blocking DNS for a name that isn't
     /// local by spelling). Every request re-checks it.
+    ///
+    /// Blocking DNS: never call from async code: callers are startup, the
+    /// one-shot CLI commands (`doctor`, `init`) and `spawn_blocking`
+    /// (routing's provider factory).
     pub fn new(config: OpenAiConfig) -> Result<Self, LlmError> {
         let base = config
             .base_url

@@ -25,8 +25,15 @@ use crate::{
 
 /// Builds the provider for one endpoint. One provider serves every model
 /// on its endpoint; the model travels in `LlmRequest.model`.
+/// `RoutedProvider` calls it in `spawn_blocking`, so it may block (a
+/// provider constructor's `require_local` is blocking DNS).
 pub type ProviderFactory =
     Box<dyn Fn(&EndpointRef) -> Result<Arc<dyn LlmProvider>, String> + Send + Sync>;
+
+/// The [`ProviderFactory`], shared so a build can move into
+/// `spawn_blocking`.
+type SharedFactory =
+    Arc<dyn Fn(&EndpointRef) -> Result<Arc<dyn LlmProvider>, String> + Send + Sync>;
 
 /// Called after every successful routed dispatch (the daemon audits
 /// through it).
@@ -84,7 +91,7 @@ pub struct RoutedProvider {
     default_key: ModelKey,
     default_provider: Arc<dyn LlmProvider>,
     router: Router,
-    factory: ProviderFactory,
+    factory: SharedFactory,
     pool: Mutex<HashMap<EndpointRef, Arc<dyn LlmProvider>>>,
     refresher: Option<Arc<dyn ProfileRefresher>>,
     observer: Option<RouteObserver>,
@@ -119,7 +126,7 @@ impl RoutedProvider {
             default_key,
             default_provider,
             router,
-            factory,
+            factory: Arc::from(factory),
             pool: Mutex::new(HashMap::new()),
             refresher: None,
             observer: None,
@@ -281,15 +288,33 @@ impl RoutedProvider {
     ) -> Result<(Box<dyn LlmStream>, RouteRecord), LlmError> {
         let session = request.route.as_ref().and_then(|h| h.session.as_deref());
         let mut failures: Vec<String> = Vec::new();
+        let mut unbuildable: HashMap<EndpointRef, String> = HashMap::new();
         for key in &plan.chain {
             if cancellation.is_cancelled() {
                 return Err(LlmError::Cancelled);
             }
-            let provider = match self.provider_for(&key.endpoint) {
+            // An endpoint whose provider failed to build is skipped for
+            // the rest of this call: building again would repeat its
+            // (blocking) URL check for nothing.
+            if let Some(why) = unbuildable.get(&key.endpoint) {
+                failures.push(format!("`{key}` ({why})"));
+                continue;
+            }
+            let provider = match self.provider_for(&key.endpoint).await {
                 Ok(provider) => provider,
                 Err(why) => {
-                    router.failed(key, Instant::now());
+                    // A build failure is the endpoint's, not the model's:
+                    // cool every model on it, so a call inside the
+                    // cooldown doesn't build (and look it up) again.
+                    let now = Instant::now();
+                    for profile in router.profiles() {
+                        if profile.endpoint == key.endpoint {
+                            router.failed(&profile.key(), now);
+                        }
+                    }
+                    router.failed(key, now);
                     failures.push(format!("`{key}` ({why})"));
+                    unbuildable.insert(key.endpoint.clone(), why);
                     continue;
                 }
             };
@@ -503,7 +528,12 @@ impl RoutedProvider {
 
     /// The default endpoint is served by the configured provider; every
     /// other endpoint's provider is built once, on first use.
-    fn provider_for(&self, endpoint: &EndpointRef) -> Result<Arc<dyn LlmProvider>, String> {
+    ///
+    /// The factory runs in `spawn_blocking`: a provider constructor checks
+    /// its URL with `require_local`, which is blocking DNS for a host name
+    /// that isn't local by spelling. A build that doesn't finish (a panic)
+    /// is a factory error.
+    async fn provider_for(&self, endpoint: &EndpointRef) -> Result<Arc<dyn LlmProvider>, String> {
         if *endpoint == self.default_key.endpoint {
             return Ok(Arc::clone(&self.default_provider));
         }
@@ -512,7 +542,11 @@ impl RoutedProvider {
         }
         // Build outside the lock (a factory may do real work); if another
         // call inserted first, use theirs.
-        let built = (self.factory)(endpoint)?;
+        let factory = Arc::clone(&self.factory);
+        let target = endpoint.clone();
+        let built = tokio::task::spawn_blocking(move || factory(&target))
+            .await
+            .map_err(|e| format!("building its provider did not finish: {e}"))??;
         let mut pool = self.pool.lock().unwrap();
         Ok(Arc::clone(pool.entry(endpoint.clone()).or_insert(built)))
     }
@@ -805,7 +839,7 @@ impl LlmProvider for RoutedProvider {
             .map(|p| p.endpoint)
             .min_by_key(|e| *e != self.default_key.endpoint)
             .unwrap_or_else(|| self.default_key.endpoint.clone());
-        match self.provider_for(&endpoint) {
+        match self.provider_for(&endpoint).await {
             Ok(provider) => provider.tool_call_family_hint(model).await,
             Err(_) => None,
         }
@@ -2550,5 +2584,148 @@ mod tests {
 
         call(&f.routed, request(&messages, &[], Some(hint))).await.unwrap();
         assert!(f.routed.take_side_usage("s").is_empty(), "tier reused, not reclassified");
+    }
+
+    /// The blocking-DNS detector: answers `192.168.1.5` after 300 ms of
+    /// `std::thread::sleep`, counting lookups.
+    struct SleepyResolver(Arc<AtomicUsize>);
+
+    impl aivyx_route::Resolve for SleepyResolver {
+        fn resolve(&self, _host: &str, _port: u16) -> std::io::Result<Vec<std::net::IpAddr>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(vec!["192.168.1.5".parse().unwrap()])
+        }
+    }
+
+    const GPU_URL: &str = "http://gpu.example.com:8090/v1";
+
+    /// A fixture whose `gpu` factory runs the constructors' URL check
+    /// (`require_local_with` on [`GPU_URL`], what `check_url_with` wraps)
+    /// over a [`SleepyResolver`], then hands back `gpu` (or fails when it
+    /// is `None`). Returns the lookup count.
+    fn sleepy_fixture(gpu: Option<Arc<Scripted>>, models: &[&str]) -> (Fixture, Arc<AtomicUsize>) {
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let resolver = SleepyResolver(Arc::clone(&lookups));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&builds);
+        let factory: ProviderFactory = Box::new(move |_endpoint: &EndpointRef| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            aivyx_route::require_local_with(GPU_URL, &resolver).map_err(|e| e.to_string())?;
+            gpu.as_ref()
+                .map(|p| Arc::clone(p) as Arc<dyn LlmProvider>)
+                .ok_or_else(|| "the gpu server refused".to_string())
+        });
+        let mut profiles = vec![default_profile()];
+        profiles.extend(models.iter().map(|id| profile("gpu", id, Tier::Large, &[])));
+        let default = Scripted::ok();
+        let routed = RoutedProvider::new(
+            key("default", "default"),
+            Arc::clone(&default) as Arc<dyn LlmProvider>,
+            Router::new(profiles, TaskOverrides::default()),
+            factory,
+        );
+        let fixture = Fixture {
+            routed,
+            default,
+            builds,
+        };
+        (fixture, lookups)
+    }
+
+    /// Ticks every 20 ms on the (single) runtime thread while `fut` runs;
+    /// returns how many ticks it saw.
+    async fn ticks_during<F: std::future::Future>(fut: F) -> (F::Output, u32) {
+        use std::sync::atomic::AtomicU32;
+        let ticks = Arc::new(AtomicU32::new(0));
+        let ticker = {
+            let ticks = Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    ticks.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+        };
+        // Let the ticker start before the path under test runs.
+        tokio::task::yield_now().await;
+        let out = fut.await;
+        ticker.abort();
+        (out, ticks.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn building_a_non_default_endpoint_provider_does_not_block_the_runtime() {
+        let gpu = Scripted::ok();
+        let (f, lookups) = sleepy_fixture(Some(Arc::clone(&gpu)), &["big"]);
+        let (messages, hint) = routed(TaskKind::CodeEdit, None);
+        let dispatch = call(&f.routed, request(&messages, &[], Some(hint)));
+        let (result, ticks) = ticks_during(dispatch).await;
+        result.unwrap();
+        assert_eq!(gpu.seen().len(), 1, "dispatched to gpu");
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+        assert!(ticks >= 5, "the runtime thread was blocked: {ticks} ticks");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_tool_call_family_hint_does_not_block_the_runtime() {
+        let gpu = Scripted::ok();
+        let (f, lookups) = sleepy_fixture(Some(gpu), &["big"]);
+        let (_, ticks) = ticks_during(f.routed.tool_call_family_hint("big")).await;
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+        assert!(ticks >= 5, "the runtime thread was blocked: {ticks} ticks");
+    }
+
+    /// Failing endpoint DNS: a factory error cools the model, so a second
+    /// dispatch inside the cooldown doesn't look the endpoint up again.
+    #[tokio::test]
+    async fn a_failing_endpoint_is_looked_up_once_within_the_cooldown() {
+        let (f, lookups) = sleepy_fixture(None, &["big"]);
+        for _ in 0..2 {
+            let (messages, hint) = routed(TaskKind::CodeEdit, None);
+            call(&f.routed, request(&messages, &[], Some(hint)))
+                .await
+                .unwrap();
+        }
+        assert_eq!(f.default.seen().len(), 2);
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+    }
+
+    /// The same with two models on the failing endpoint: the first one's
+    /// factory error must not cost a second lookup for the other.
+    #[tokio::test]
+    async fn a_failing_endpoint_with_two_models_is_looked_up_once_within_the_cooldown() {
+        let (f, lookups) = sleepy_fixture(None, &["big", "tiny"]);
+        for task in [TaskKind::CodeEdit, TaskKind::Summarize] {
+            let (messages, hint) = routed(task, None);
+            call(&f.routed, request(&messages, &[], Some(hint)))
+                .await
+                .unwrap();
+        }
+        assert_eq!(f.default.seen().len(), 2);
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+    }
+
+    /// A build that panics (a `JoinError` from `spawn_blocking`) fails
+    /// closed: a factory error, so the call falls back and the model cools.
+    #[tokio::test]
+    async fn a_panicking_factory_falls_back_and_cools() {
+        let factory: ProviderFactory =
+            Box::new(|_endpoint: &EndpointRef| panic!("the factory blew up"));
+        let default = Scripted::ok();
+        let provider = RoutedProvider::new(
+            key("default", "default"),
+            Arc::clone(&default) as Arc<dyn LlmProvider>,
+            Router::new(
+                vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+                TaskOverrides::default(),
+            ),
+            factory,
+        );
+        assert_eq!(first_choice(&provider), key("gpu", "big"));
+        let (messages, hint) = routed(TaskKind::CodeEdit, None);
+        call(&provider, request(&messages, &[], Some(hint))).await.unwrap();
+        assert_eq!(default.seen().len(), 1);
+        assert_eq!(first_choice(&provider), key("default", "default"));
     }
 }

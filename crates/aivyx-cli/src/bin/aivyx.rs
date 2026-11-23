@@ -276,7 +276,8 @@ fn cli_args() -> Vec<String> {
 /// Chapter Ensemble — a team member's own Ollama provider at its roster
 /// `base_url`. 2.0 (local-only): `OllamaProvider::new` refuses a URL that
 /// isn't local, which is the backstop for a roster read through the
-/// unchecked `TeamConfig::load`.
+/// unchecked `TeamConfig::load`. Blocking DNS: never call from async code: the
+/// team mission driver assembles a team in `spawn_blocking`.
 fn ollama_member_provider(url: &str) -> Result<Arc<dyn aivyx_llm::LlmProvider>, String> {
     let cfg = aivyx_llm::ollama::OllamaConfig::default_local().with_base_url(url.to_string());
     aivyx_llm::ollama::OllamaProvider::new(cfg)

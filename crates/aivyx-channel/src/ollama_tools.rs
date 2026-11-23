@@ -48,6 +48,7 @@ pub struct OllamaListTool {
 }
 
 impl OllamaListTool {
+    /// Blocking DNS: never call from async code (daemon startup builds it).
     pub fn new(base_url: &str) -> Result<Self, AivyxError> {
         // 2.0 (local-only): refuse a non-local Ollama URL when built.
         aivyx_llm::local_only::check_url(base_url)
@@ -173,6 +174,7 @@ pub struct OllamaShowTool {
 }
 
 impl OllamaShowTool {
+    /// Blocking DNS: never call from async code (daemon startup builds it).
     pub fn new(base_url: &str) -> Result<Self, AivyxError> {
         // 2.0 (local-only): refuse a non-local Ollama URL when built.
         aivyx_llm::local_only::check_url(base_url)
@@ -320,6 +322,7 @@ pub struct OllamaPullTool {
 }
 
 impl OllamaPullTool {
+    /// Blocking DNS: never call from async code (daemon startup builds it).
     pub fn new(base_url: &str) -> Result<Self, AivyxError> {
         // 2.0 (local-only): refuse a non-local Ollama URL when built.
         aivyx_llm::local_only::check_url(base_url)

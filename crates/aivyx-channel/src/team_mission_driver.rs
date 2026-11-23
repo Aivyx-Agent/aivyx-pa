@@ -719,7 +719,7 @@ pub async fn drive_registered(
             record_snapshot.as_ref().and_then(|r| r.triggered_by.as_deref()),
         );
         let (runtime, meter) =
-            assemble_runtime(deps, config, message_origin, seed_tokens, seed_usd)?;
+            assemble_runtime_async(deps, config, message_origin, seed_tokens, seed_usd).await?;
         let budget_guard = meter.map(|m| (m, deps.mission_budget.clone()));
         let phase = drive(
             shared,
@@ -1681,6 +1681,25 @@ pub fn bind_lead_scopes(config: &mut TeamConfig, lead_scopes: &[String]) {
         caps.dedup();
         m.capability_scopes = caps;
     }
+}
+
+/// [`assemble_runtime`] off the async runtime, in `spawn_blocking`: a
+/// member's own endpoint is built by `member_provider_builder`, whose
+/// provider constructor checks the URL with `require_local` (blocking DNS
+/// for a host name that isn't local by spelling).
+async fn assemble_runtime_async(
+    deps: &TeamRunDeps,
+    config: TeamConfig,
+    message_origin: aivyx_core::MessageOrigin,
+    seed_tokens: u64,
+    seed_usd: f64,
+) -> Result<(Arc<TeamRuntime>, Option<crate::mission_meter::MissionMeter>), MissionDriverError> {
+    let deps = deps.clone();
+    tokio::task::spawn_blocking(move || {
+        assemble_runtime(&deps, config, message_origin, seed_tokens, seed_usd)
+    })
+    .await
+    .map_err(|e| MissionDriverError::Join(e.to_string()))?
 }
 
 fn assemble_runtime(
@@ -4046,6 +4065,54 @@ pub(crate) mod tests {
         // base_url-only → built provider (builder called once), default model.
         assert_eq!(map["b"].model, "default-model");
         assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    /// The blocking-DNS detector for a member's own endpoint: the builder
+    /// runs `require_local_with` over a resolver that sleeps 300 ms; the
+    /// runtime thread must keep ticking while the team is assembled.
+    #[tokio::test(flavor = "current_thread")]
+    async fn assembling_a_team_with_a_member_endpoint_does_not_block_the_runtime() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct Sleepy;
+        impl aivyx_route::Resolve for Sleepy {
+            fn resolve(&self, _host: &str, _port: u16) -> std::io::Result<Vec<std::net::IpAddr>> {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                Ok(vec!["192.168.1.5".parse().unwrap()])
+            }
+        }
+
+        let mut config = default_nonagon();
+        config.members[0].base_url = Some("http://gpu.example.com:8090/v1".into());
+        let mut deps = deps("x");
+        deps.member_provider_builder = Some(Arc::new(|url: &str| {
+            aivyx_route::require_local_with(url, &Sleepy).map_err(|e| e.to_string())?;
+            Ok(fake_provider())
+        }));
+
+        let ticks = Arc::new(AtomicU32::new(0));
+        let ticker = {
+            let ticks = Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    ticks.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+        };
+        tokio::task::yield_now().await;
+        let assembled = assemble_runtime_async(
+            &deps,
+            config,
+            aivyx_core::MessageOrigin::Operator,
+            0,
+            0.0,
+        )
+        .await;
+        ticker.abort();
+        assert!(assembled.is_ok(), "assembled");
+        let ticks = ticks.load(Ordering::SeqCst);
+        assert!(ticks >= 5, "the runtime thread was blocked: {ticks} ticks");
     }
 
     #[test]
