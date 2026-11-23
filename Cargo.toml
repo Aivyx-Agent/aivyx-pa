@@ -354,7 +354,7 @@ aivyx-skills = { git = "https://github.com/Aivyx-Agent/aivyx-skills", rev = "ffa
 # shared by `aivyx-pa` and `aivyx-coder`. Not on crates.io — pinned by
 # commit SHA, same pattern as aivyx-checkpoint/aivyx-confine/aivyx-kvcache/
 # aivyx-injection-guard/aivyx-skills above.
-aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "decf3b8fe803757b75170376c17281c3f5cb60f3" }
+aivyx-route = { git = "https://github.com/Aivyx-Agent/aivyx-route", rev = "8f806d8d7618235a17236da35e3b5aaf7b9ff52e" }
 
 # The signed pack-bundle format (Chapter Freight), shared with aivyx-coder.
 # Extracted from crates/aivyx-pack into its own repo 2026-10-07. Not on
@@ -377,9 +377,9 @@ aivyx-stencil = { git = "https://github.com/Aivyx-Agent/aivyx-toolbench", rev = 
 # out of lockstep with each other. No platform-specific backend, so no
 # target-gating needed.
 # MUST stay a public repo — see the aivyx-confine entry above for why.
-aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "e827314ab040f0be1b9c46f1372951e1ee4b034d" }
-aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "e827314ab040f0be1b9c46f1372951e1ee4b034d" }
-aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "e827314ab040f0be1b9c46f1372951e1ee4b034d" }
+aivyx-vision-svg = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "426b7d9532efa989fa2ad2d3c88fab14912d9915" }
+aivyx-vision-core = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "426b7d9532efa989fa2ad2d3c88fab14912d9915" }
+aivyx-vision-mold = { git = "https://github.com/Aivyx-Agent/aivyx-vision", rev = "426b7d9532efa989fa2ad2d3c88fab14912d9915" }
 
 # The profile that 'dist' will build with
 [profile.dist]
