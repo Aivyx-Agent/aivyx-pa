@@ -642,7 +642,7 @@ pub enum QueryPayload {
     /// same effect as sending `/allow-shared` in that conversation. Never
     /// overrides a routing taint. Responds with
     /// [`QueryResponsePayload::SharedEscalationAllowed`], or
-    /// [`QueryResponsePayload::SharedEscalationNotEnabled`] when no cloud
+    /// [`QueryResponsePayload::SharedEscalationNotEnabled`] when no shared
     /// escalation is configured.
     // 3.0: switch the wire name to AllowSharedEscalation
     #[serde(rename = "AllowCloudEscalation", alias = "AllowSharedEscalation")]
@@ -3248,7 +3248,7 @@ pub struct RoutingSessionView {
     pub last_model: Option<String>,
     #[serde(default)]
     pub last_reason: Option<String>,
-    /// Why this conversation can never escalate to the cloud, when it is
+    /// Why this conversation can never escalate to a shared endpoint, when it is
     /// tainted (only tracked while shared escalation is configured).
     #[serde(default)]
     pub tainted: Option<String>,

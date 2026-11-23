@@ -359,6 +359,12 @@ fn config_warnings_section(warnings: &[String], still_runs: bool) -> String {
             ));
         }
     }
+    // The old-spelling note already printed its own fix line; one arrow per
+    // row is enough when it is the only warning.
+    if warnings.iter().all(|w| w == aivyx_config::OLD_LOCALITY_NOTE) {
+        out.push('\n');
+        return out;
+    }
     out.push_str(&format!(
         "     \u{2192} edit {} to clear {}{}\n",
         config_path().display(),

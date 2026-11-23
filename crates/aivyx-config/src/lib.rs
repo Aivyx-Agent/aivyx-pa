@@ -3307,7 +3307,7 @@ pub struct SkillDefaultsConfig {
 }
 
 /// Model routing Part 3b — `[routing.escalation] mode`: whether a
-/// conversation may escalate to a `[routing.endpoints.*]` cloud
+/// conversation may escalate to a `[routing.endpoints.*]` shared
 /// endpoint. `Never` forbids shared endpoints outright; `Ask` (the
 /// default) stops the turn for the operator's per-conversation consent;
 /// `Auto` escalates without asking. No mode bypasses the sensitivity
@@ -4293,7 +4293,7 @@ impl OllamaFamilyStrategy {
 /// - `gemma4:31b` → `Some("gemma4")`.
 /// - `llama3.1:latest` → `Some("llama3")`.
 /// - `claude-haiku-4-5` → `None` (not an Ollama-family
-///   model; shared model names don't follow Ollama's
+///   model; cloud model names don't follow Ollama's
 ///   convention).
 ///
 /// Returns `None` for names that don't match any documented
@@ -4385,7 +4385,7 @@ pub fn detect_model_family(model: &str) -> Option<String> {
 /// 2. **Per-family default** from
 ///    [`OllamaFamilyStrategy::default_for_family`].
 /// 3. **`None`** when [`detect_model_family`] returns `None`
-///    (shared model name, bare family without digits, empty
+///    (cloud model name, bare family without digits, empty
 ///    input). Unknown families always resolve to `None` so a
 ///    new model release doesn't silently pick up substrate
 ///    it wasn't tested against.

@@ -467,7 +467,7 @@ mod tests {
              base_url = \"https://api.groq.com/openai/v1\"\n",
         )
         .expect("routing snippet parses");
-        let w = in_process_shared_warning(Some(&hosted)).expect("a hosted endpoint is cloud");
+        let w = in_process_shared_warning(Some(&hosted)).expect("a hosted endpoint is shared");
         assert!(w.contains("groq"), "{w}");
         let lan: aivyx_route::RoutingConfig = toml::from_str(
             "enabled = true\n[endpoints.box]\nkind = \"openai_compat\"\n\
