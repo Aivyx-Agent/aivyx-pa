@@ -3,12 +3,16 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
-## [2.1.1] - Unreleased
+## [2.1.1] - 2026-11-24
 
 ### Fixed
 
 - The tool-call family hint cools an endpoint whose provider fails to build, as dispatch does, so a second hint inside the cooldown doesn't build it again.
 - The release can't be published without `dist-manifest.json`, which 2.1.0 lacked until it was attached by hand.
+
+### Changed
+
+- aivyx-route 0.3.1 (a mapped multicast address gets the right refusal reason) and aivyx-vision 426b7d9.
 
 ## [2.1.0] - 2026-11-23
 
