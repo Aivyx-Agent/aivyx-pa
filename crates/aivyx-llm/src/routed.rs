@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use aivyx_route::{
-    EndpointRef, ModelKey, ModelProfile, RoutePlan, RouteQuery, RouteRecord, Router, SessionMap,
-    TaskKind, Tier,
+    DEFAULT_COOLDOWN, EndpointRef, ModelKey, ModelProfile, RoutePlan, RouteQuery, RouteRecord,
+    Router, SessionMap, TaskKind, Tier,
 };
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
@@ -93,6 +93,10 @@ pub struct RoutedProvider {
     router: Router,
     factory: SharedFactory,
     pool: Mutex<HashMap<EndpointRef, Arc<dyn LlmProvider>>>,
+    /// Endpoints whose provider failed to build, until when. The router's
+    /// cooldown steers planning; this stops a call that doesn't plan
+    /// (the family hint) from building again inside it.
+    unbuildable: Mutex<HashMap<EndpointRef, Instant>>,
     refresher: Option<Arc<dyn ProfileRefresher>>,
     observer: Option<RouteObserver>,
     escalation: Option<EscalationSetup>,
@@ -128,6 +132,7 @@ impl RoutedProvider {
             router,
             factory: Arc::from(factory),
             pool: Mutex::new(HashMap::new()),
+            unbuildable: Mutex::new(HashMap::new()),
             refresher: None,
             observer: None,
             escalation: None,
@@ -306,13 +311,7 @@ impl RoutedProvider {
                     // A build failure is the endpoint's, not the model's:
                     // cool every model on it, so a call inside the
                     // cooldown doesn't build (and look it up) again.
-                    let now = Instant::now();
-                    for profile in router.profiles() {
-                        if profile.endpoint == key.endpoint {
-                            router.failed(&profile.key(), now);
-                        }
-                    }
-                    router.failed(key, now);
+                    self.cool_endpoint(router, &key.endpoint, Instant::now());
                     failures.push(format!("`{key}` ({why})"));
                     unbuildable.insert(key.endpoint.clone(), why);
                     continue;
@@ -524,6 +523,22 @@ impl RoutedProvider {
             }
         };
         tokio::time::timeout(timeout, call).await.map_err(|_| ())?
+    }
+
+    /// A provider for `endpoint` failed to build: cool every model on it,
+    /// in `router`, so a call inside the cooldown doesn't build (and look
+    /// it up) again. The default endpoint is never passed here (its
+    /// provider always exists).
+    fn cool_endpoint(&self, router: &Router, endpoint: &EndpointRef, now: Instant) {
+        for profile in router.profiles() {
+            if &profile.endpoint == endpoint {
+                router.failed(&profile.key(), now);
+            }
+        }
+        self.unbuildable
+            .lock()
+            .unwrap()
+            .insert(endpoint.clone(), now + DEFAULT_COOLDOWN);
     }
 
     /// The default endpoint is served by the configured provider; every
@@ -825,7 +840,7 @@ impl LlmProvider for RoutedProvider {
     async fn tool_call_family_hint(&self, model: &str) -> Option<String> {
         // Local candidates first, then (Part 3b) shared escalation models,
         // so a hint for an escalated model reaches its own provider.
-        let cloud = self
+        let shared = self
             .escalation
             .as_ref()
             .map(|esc| esc.router.profiles())
@@ -834,14 +849,31 @@ impl LlmProvider for RoutedProvider {
             .router
             .profiles()
             .into_iter()
-            .chain(cloud)
+            .chain(shared)
             .filter(|p| p.id == model)
             .map(|p| p.endpoint)
             .min_by_key(|e| *e != self.default_key.endpoint)
             .unwrap_or_else(|| self.default_key.endpoint.clone());
+        let now = Instant::now();
+        let cooling = self
+            .unbuildable
+            .lock()
+            .unwrap()
+            .get(&endpoint)
+            .is_some_and(|until| *until > now);
+        if cooling {
+            return None;
+        }
         match self.provider_for(&endpoint).await {
             Ok(provider) => provider.tool_call_family_hint(model).await,
-            Err(_) => None,
+            Err(_) => {
+                // The endpoint may belong to either router.
+                self.cool_endpoint(&self.router, &endpoint, now);
+                if let Some(esc) = &self.escalation {
+                    self.cool_endpoint(&esc.router, &endpoint, now);
+                }
+                None
+            }
         }
     }
 }
@@ -1508,6 +1540,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(f.default.seen().len(), 1);
+        assert_eq!(f.builds.load(Ordering::SeqCst), 1);
+        assert_eq!(first_choice(&f.routed), key("default", "default"));
+    }
+
+    #[tokio::test]
+    async fn a_family_hint_for_an_unbuildable_endpoint_cools_it() {
+        // `gpu` has no provider: the hint is `None`, and a second hint
+        // inside the cooldown doesn't build (and look it up) again.
+        let f = fixture(
+            vec![default_profile(), profile("gpu", "big", Tier::Large, &[])],
+            Vec::new(),
+        );
+        assert_eq!(f.routed.tool_call_family_hint("big").await, None);
+        assert_eq!(f.routed.tool_call_family_hint("big").await, None);
+
         assert_eq!(f.builds.load(Ordering::SeqCst), 1);
         assert_eq!(first_choice(&f.routed), key("default", "default"));
     }

@@ -3,6 +3,13 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [2.1.1] - Unreleased
+
+### Fixed
+
+- The tool-call family hint cools an endpoint whose provider fails to build, as dispatch does, so a second hint inside the cooldown doesn't build it again.
+- The release can't be published without `dist-manifest.json`, which 2.1.0 lacked until it was attached by hand.
+
 ## [2.1.0] - 2026-11-23
 
 ### Security

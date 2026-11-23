@@ -217,6 +217,10 @@ jobs:
             ${{ env.BUILD_MANIFEST_NAME }}
   # Determines if we should publish/announce
   host:
+    # HAND-EDITED: `gh run download` reads this run's artifacts.
+    permissions:
+      "contents": "write"
+      "actions": "read"
     needs:
       - plan
       - custom-quality-gate
@@ -287,6 +291,21 @@ jobs:
           pattern: artifacts-*
           path: artifacts
           merge-multiple: true
+      # HAND-EDITED: GitHub's artifact listing can lag the upload just
+      # above (pa v2.1.0 shipped without dist-manifest.json: the listing ran
+      # 0.4 s after the upload finalized). Re-fetch it by name, then fail
+      # rather than release without it.
+      - name: Ensure dist-manifest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in 1 2 3 4 5; do
+            [ -f artifacts/dist-manifest.json ] && exit 0
+            sleep 5
+            gh run download "${{ github.run_id }}" -R "${{ github.repository }}" \
+              -n artifacts-dist-manifest -D artifacts || true
+          done
+          [ -f artifacts/dist-manifest.json ] || { echo "dist-manifest.json missing"; exit 1; }
       - name: Cleanup
         run: |
           # Remove the granular manifests
