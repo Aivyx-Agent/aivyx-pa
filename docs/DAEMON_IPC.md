@@ -432,7 +432,7 @@ Errors (`QueryError`):
 
 Trust: the same as the other Studio settings queries — the socket's
 `0600` mode is the auth boundary. A pin changes which local model a
-conversation uses; it never grants cloud escalation (A15 unchanged).
+conversation uses; it never grants escalation to a shared endpoint (A15 unchanged).
 
 ## Chat approvals addendum — pause, ask, continue
 

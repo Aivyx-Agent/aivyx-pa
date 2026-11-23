@@ -12,6 +12,10 @@ All notable changes to Aivyx are recorded here. This project adheres to
 - **Wire names are unchanged.** The IPC and stream names (`AllowCloudEscalation`, `CloudEscalationAllowed`, `CloudEscalationNotEnabled`, `CloudConsentRequested`, `cloud_allowed`) stay as in 2.0 so 2.0 clients keep working; a 2.1 daemon also accepts the `Shared...` spellings. 3.0 switches them. The audit event names (`CloudEscalation`, `CloudConsentGranted`) are persisted in the HMAC chain and also stay.
 - aivyx-kvcache 0.1.2.
 
+### Removed
+
+- `aivyx_llm::verify` (`verify_model_listed`): it had no callers.
+
 ### Added
 
 - Studio: an embedding `dimensions` field for the embedding provider.
