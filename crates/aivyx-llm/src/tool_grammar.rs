@@ -240,11 +240,14 @@ mod tests {
 
     /// Frozen output of the shared grammar; changes only deliberately - last
     /// changed when aivyx-stencil switched to a `parameters` key so the tool
-    /// name comes first.
+    /// name comes first. Compared as JSON values, not strings: the
+    /// `provider-mistral-rs` feature turns on serde_json's `preserve_order`,
+    /// which changes key order in the serialised text but not the grammar.
     #[test]
     fn grammar_output_is_frozen() {
-        let got = serde_json::to_string(&tool_call_grammar(&sample_tools())).unwrap();
+        let got = tool_call_grammar(&sample_tools());
         let want = r#"{"oneOf":[{"additionalProperties":false,"properties":{"name":{"const":"fs.read"},"parameters":{"additionalProperties":false,"properties":{"path":{"type":"string"}},"required":["path"],"type":"object"}},"required":["name","parameters"],"type":"object"},{"additionalProperties":false,"properties":{"name":{"const":"web.fetch"},"parameters":{"additionalProperties":false,"properties":{"url":{"type":"string"}},"required":["url"],"type":"object"}},"required":["name","parameters"],"type":"object"},{"additionalProperties":false,"properties":{"name":{"const":"respond"},"parameters":{"additionalProperties":false,"properties":{"text":{"type":"string"}},"required":["text"],"type":"object"}},"required":["name","parameters"],"type":"object"}]}"#;
+        let want: Value = serde_json::from_str(want).unwrap();
         assert_eq!(got, want);
     }
 }
