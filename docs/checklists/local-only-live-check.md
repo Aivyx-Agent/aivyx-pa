@@ -76,3 +76,32 @@ can't reach the toolchain and coder discards the edit (1.x behaves the same).
 - The daemon's startup config banner still printed an
   `anthropic_api_key = <unset>` line. Removed; `doctor` still notes a
   stored, unused key.
+
+## 2.1 (2026-11-23)
+
+- **Build:** debug `aivyx-pa` 2.1.0 from branch `local-only-2-1`
+  (pins aivyx-route 0.3.0 `decf3b8`, aivyx-kvcache `5e0f2a8`,
+  aivyx-vision `e827314`); release `aivyx-coder` 2.1.0. Same model,
+  isolation and ports as above.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | `doctor` with the 9B config | ✅ `✓ local-only`, `✓ the model answers: "OK"` |
+| 2 | `[routing.endpoints.lanbox]` with `locality = "cloud"` | ✅ `doctor`: `⚠ locality = "cloud" is now "shared"; the old name works until 3.0` with one fix line |
+| 3 | `/allow-shared` and `/allow-cloud` (escalation `mode = "ask"`) | ✅ both: "Escalation to a less-trusted endpoint allowed for this conversation …"; `/allow-cloud`'s reply starts with `/allow-cloud is now /allow-shared.` |
+| 4 | A chat turn (`--headless`) | ✅ `PONG` |
+| 5 | Gallery with a `comfyui` server at `COMFYUI_URL = "http://8.8.8.8:8188"` | ✅ `/studio-asset` → `502 comfyui did not return the asset` in <1 ms, no request; log: `comfyui url http://8.8.8.8:8188 refused: … is not local (resolves to a public address 8.8.8.8)` |
+| 6 | A board task owned by `coder:proj`, run by aivyx-coder 2.1 | ✅ "Add abs_diff": Review, `verification: test passed`, 1 changed file (the first try, "Add negate", correctly changed nothing: it already existed) |
+| 7 | Docker appliance (`docker-compose.yml --profile ollama`, own project name and port 17843) | ✅ daemon 2.1.0 boots, Studio serves (401 without token), `doctor` in the container: `✓ local-only`, Ollama running, `qwen3:8b` available, test reply "OK" |
+
+The Studio embedding `dimensions` save is covered by the daemon and
+writer tests (`write_embedding_section_async` with and without
+dimensions), not clicked through in a browser.
+
+### aivyx-coder 2.1 (debug, throwaway HOME)
+
+| # | Step | Result |
+|---|---|---|
+| 1 | `[routing] enabled = true` + endpoint `locality = "cloud"` | ✅ startup note, then refused: `… is marked \`locality = "shared"\`, but aivyx-coder only uses your own models — remove it` |
+| 2 | The same with `locality = "shared"` | ✅ refused with the same text, no note |
+| 3 | `--headless --auto` on a scratch crate | ✅ goal achieved, `detected-tests` passed, +1 −1 |
