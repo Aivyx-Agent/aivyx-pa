@@ -641,6 +641,22 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// The one HTTP client for ComfyUI fetches (gallery history and `/view`):
+/// no proxy, no redirects, local-only DNS, 10 s timeout. `None` if it could
+/// not be built.
+pub(crate) fn comfy_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            aivyx_llm::local_only::model_client_builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .map_err(|e| eprintln!("aivyx-pa: comfyui client could not be built: {e}"))
+                .ok()
+        })
+        .as_ref()
+}
+
 /// Studio Gallery — proxy `GET {COMFYUI_URL}/view?filename=&subfolder=&type=`
 /// to the browser. Rejects a `filename`/`subfolder` containing `/` or `..`
 /// before building the upstream request (defense in depth — ComfyUI's own
@@ -693,8 +709,19 @@ async fn serve_comfy_asset(
         percent_encode(&folder_type),
     );
 
-    let resp = match reqwest::get(&url).await {
-        Ok(r) if r.status().is_success() => r,
+    let fetched = match (
+        comfy_client(),
+        aivyx_llm::local_only::require_local_async(base_url).await,
+    ) {
+        (Some(client), Ok(())) => client.get(&url).send().await.ok(),
+        (_, Err(e)) => {
+            eprintln!("aivyx-pa: comfyui url {base_url} refused: {e}");
+            None
+        }
+        _ => None,
+    };
+    let resp = match fetched {
+        Some(r) if r.status().is_success() => r,
         _ => {
             return serve_bytes(
                 stream,

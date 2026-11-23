@@ -50,11 +50,16 @@ mod local_tests {
     fn public_member_url_is_refused() {
         let e = team_from_toml(&toml(Some("http://203.0.113.9:11434"))).unwrap_err();
         let m = e.to_string();
-        assert!(m.contains("team member lead base_url: http://203.0.113.9:11434"), "{m}");
+        assert!(m.starts_with("team member `lead`: "), "{m}");
+        assert!(m.contains("http://203.0.113.9:11434"), "{m}");
         assert!(m.contains("is not local (resolves to a public address 203.0.113.9)"), "{m}");
         assert!(m.contains("aivyx is local-only"), "{m}");
         let e = team_from_toml(&toml(Some("https://api.openai.com/v1"))).unwrap_err();
         assert!(e.to_string().contains("cloud host"), "{e}");
+        assert!(
+            matches!(&e, TeamError::NotLocal { member, .. } if member == "lead"),
+            "{e:?}"
+        );
     }
 
     #[test]

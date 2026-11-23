@@ -110,15 +110,6 @@ pub use kvcache_probe::fetch_llama_slots_info;
 ))]
 pub mod embedding;
 
-/// Phase 104 — model verification against a local server's
-/// `GET /v1/models` (2.0: local servers only; the cloud key checks are
-/// gone). See [`verify::verify_model_listed`].
-#[cfg(any(
-    feature = "provider-openai",
-    feature = "provider-ollama"
-))]
-pub mod verify;
-
 /// Model routing Part 3a — an `LlmProvider` that picks a model per
 /// tagged request with `aivyx-route`'s shared `Router`. Ungated: it
 /// dispatches through providers the caller builds.

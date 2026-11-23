@@ -3387,6 +3387,7 @@ fn EmbeddingConfigCard(config: EmbeddingConfigView) -> Element {
     let mut base_url = use_signal(|| config.base_url.clone().unwrap_or_default());
     let mut model = use_signal(|| config.model.clone().unwrap_or_default());
     let mut api_key = use_signal(String::new);
+    let mut dimensions = use_signal(|| config.dimensions.map(|d| d.to_string()).unwrap_or_default());
 
     rsx! {
         div { class: "glass-card settings-section",
@@ -3404,6 +3405,11 @@ fn EmbeddingConfigCard(config: EmbeddingConfigView) -> Element {
                 label { "Model" }
                 input { class: "input", placeholder: "nomic-embed-text", value: "{model}", oninput: move |e| model.set(e.value()) }
             }
+            div { class: "field-row",
+                label { "Dimensions" }
+                input { class: "input", r#type: "number", min: "1", placeholder: "768", value: "{dimensions}", oninput: move |e| dimensions.set(e.value()) }
+            }
+            p { class: "help", "the model's vector size (e.g. 768 for nomic-embed-text)" }
             p { class: "help",
                 {if config.api_key.configured { "API key: configured" } else { "API key: not set" }}
             }
@@ -3420,6 +3426,7 @@ fn EmbeddingConfigCard(config: EmbeddingConfigView) -> Element {
                         if b.trim().is_empty() { None } else { Some(b.trim().to_string()) },
                         if m.trim().is_empty() { None } else { Some(m.trim().to_string()) },
                         if k.trim().is_empty() { None } else { Some(k.trim().to_string()) },
+                        dimensions().trim().parse::<u32>().ok(),
                     ));
                     api_key.set(String::new());
                 },
@@ -7413,10 +7420,15 @@ fn set_memory_profile_query(profile: String) -> FrontendMessage {
 fn embedding_config_query() -> FrontendMessage {
     FrontendMessage::Query { id: "mc-settings-embedding".to_string(), payload: QueryPayload::GetEmbeddingConfig }
 }
-fn set_embedding_config_query(base_url: Option<String>, model: Option<String>, api_key: Option<String>) -> FrontendMessage {
+fn set_embedding_config_query(
+    base_url: Option<String>,
+    model: Option<String>,
+    api_key: Option<String>,
+    dimensions: Option<u32>,
+) -> FrontendMessage {
     FrontendMessage::Query {
         id: "mc-settings-embedding".to_string(),
-        payload: QueryPayload::SetEmbeddingConfig { base_url, model, api_key: api_key.map(Into::into) },
+        payload: QueryPayload::SetEmbeddingConfig { base_url, model, api_key: api_key.map(Into::into), dimensions },
     }
 }
 fn proactive_config_query() -> FrontendMessage {

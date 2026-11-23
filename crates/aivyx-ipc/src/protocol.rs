@@ -913,6 +913,9 @@ pub enum QueryPayload {
         model: Option<String>,
         #[serde(default)]
         api_key: Option<SecretString>,
+        /// The model's vector size; `None` leaves it as written.
+        #[serde(default)]
+        dimensions: Option<u32>,
     },
     /// Response: [`QueryResponsePayload::GetProactiveConfig`].
     GetProactiveConfig,
@@ -2064,7 +2067,7 @@ pub struct MemoryProfileConfigView {
 
 /// The **editable configuration** of the `[embedding]` section's
 /// primary fields. `api_key` never carries the real value (see
-/// [`RedactedSecret`]). `dimensions`/`rag_top_k`/`rag_min_similarity`/
+/// [`RedactedSecret`]). `rag_top_k`/`rag_min_similarity`/
 /// `recall_window_turns`/`recall_gate_min_chars` and the Chapter Loom
 /// recall-fusion tuning fields stay TOML-only — not represented here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2072,6 +2075,9 @@ pub struct EmbeddingConfigView {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub api_key: RedactedSecret,
+    /// The model's vector size (a 2.0 client's JSON has no such field).
+    #[serde(default)]
+    pub dimensions: Option<u32>,
 }
 
 /// The **editable configuration** of the `[proactive]` section's
@@ -6577,6 +6583,7 @@ mod tests {
             base_url: None,
             model: None,
             api_key: Some(SecretString::new("sk-live-secret")),
+            dimensions: None,
         };
         let shown = format!("{q:?}");
         assert!(!shown.contains("sk-live-secret") && shown.contains("<redacted>"), "{shown}");
@@ -6584,6 +6591,26 @@ mod tests {
         assert!(json.contains("\"api_key\":\"sk-live-secret\""), "{json}");
         let back: QueryPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, q);
+    }
+
+    #[test]
+    fn embedding_dimensions_round_trip_and_old_json_still_parses() {
+        let v = EmbeddingConfigView {
+            base_url: Some("http://127.0.0.1:8081".into()),
+            model: Some("nomic-embed-text".into()),
+            api_key: RedactedSecret { configured: false, source: "none".into() },
+            dimensions: Some(768),
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(json.contains("\"dimensions\":768"), "{json}");
+        assert_eq!(serde_json::from_str::<EmbeddingConfigView>(&json).unwrap(), v);
+        // A 2.0 daemon's view has no `dimensions`.
+        let old = r#"{"base_url":null,"model":"m","api_key":{"configured":false,"source":"none"}}"#;
+        assert_eq!(serde_json::from_str::<EmbeddingConfigView>(old).unwrap().dimensions, None);
+        // A 2.0 client's save has no `dimensions` either.
+        let q: QueryPayload =
+            serde_json::from_str(r#"{"kind":"SetEmbeddingConfig","model":"m"}"#).unwrap();
+        assert!(matches!(q, QueryPayload::SetEmbeddingConfig { dimensions: None, .. }), "{q:?}");
     }
 
     #[test]

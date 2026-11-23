@@ -6790,12 +6790,12 @@ async fn handle_query(
                 Err(err) => map_config_write_error(err),
             }
         }
-        QueryPayload::SetEmbeddingConfig { base_url, model, api_key } => {
+        QueryPayload::SetEmbeddingConfig { base_url, model, api_key, dimensions } => {
             let path = match config_toml_path {
                 Some(p) => p,
                 None => return no_config_file_error(),
             };
-            let entry = aivyx_config::config_write::EmbeddingEntryWrite { base_url, model, api_key: api_key.map(aivyx_ipc::protocol::SecretString::into_inner) };
+            let entry = aivyx_config::config_write::EmbeddingEntryWrite { base_url, model, api_key: api_key.map(aivyx_ipc::protocol::SecretString::into_inner), dimensions };
             let resolver: Arc<dyn aivyx_route::Resolve> = Arc::new(aivyx_route::SystemResolver);
             match write_embedding_section_async(path, entry, resolver).await {
                 Ok(()) => {
@@ -7328,7 +7328,14 @@ async fn fetch_gallery(base_url: &str) -> QueryResponsePayload {
     };
 
     let url = format!("{}/history", base_url.trim_end_matches('/'));
-    let Ok(resp) = reqwest::get(&url).await else {
+    if let Err(e) = aivyx_llm::local_only::require_local_async(base_url).await {
+        eprintln!("aivyx-pa: comfyui url {base_url} refused: {e}");
+        return empty();
+    }
+    let Some(client) = crate::web_ui::comfy_client() else {
+        return empty();
+    };
+    let Ok(resp) = client.get(&url).send().await else {
         return empty();
     };
     let Ok(body) = resp.text().await else {
@@ -7933,6 +7940,7 @@ fn embedding_config_view(e: &aivyx_config::config_write::EmbeddingEntryWrite) ->
         base_url: e.base_url.clone(),
         model: e.model.clone(),
         api_key: redact(e.api_key.as_deref()),
+        dimensions: e.dimensions,
     }
 }
 
@@ -11314,6 +11322,7 @@ system_prompt = "You are a custom role."
             base_url: Some("http://127.0.0.1:11434".to_string()),
             model: Some("nomic-embed-text".to_string()),
             api_key: Some("sk-super-secret-value".to_string()),
+            dimensions: None,
         };
         let view = embedding_config_view(&entry);
         let json = serde_json::to_string(&view).unwrap();
@@ -11343,6 +11352,7 @@ system_prompt = "You are a custom role."
             base_url: Some("http://gpu.example.com:8090/v1".to_string()),
             model: Some("nomic-embed-text".to_string()),
             api_key: None,
+            dimensions: None,
         };
         let ticks = Arc::new(AtomicU32::new(0));
         let ticker = {
@@ -11365,6 +11375,34 @@ system_prompt = "You are a custom role."
         assert!(ticks >= 5, "the runtime thread was blocked: {ticks} ticks");
     }
 
+    /// The Studio save with `dimensions` writes it; without, the writer's
+    /// "needs base_url, model and dimensions" error is what the card shows.
+    #[tokio::test]
+    async fn studio_embedding_save_writes_dimensions_or_returns_the_writers_error() {
+        struct Lan;
+        impl aivyx_route::Resolve for Lan {
+            fn resolve(&self, _h: &str, _p: u16) -> std::io::Result<Vec<std::net::IpAddr>> {
+                Ok(vec!["192.168.1.5".parse().unwrap()])
+            }
+        }
+        let entry = |dimensions| aivyx_config::config_write::EmbeddingEntryWrite {
+            base_url: Some("http://127.0.0.1:8081".to_string()),
+            model: Some("nomic-embed-text".to_string()),
+            api_key: None,
+            dimensions,
+        };
+        let path = secret_leak_temp_toml("embedding-dims");
+        std::fs::write(&path, "").unwrap();
+        let err = write_embedding_section_async(&path, entry(None), Arc::new(Lan)).await.unwrap_err();
+        assert!(err.to_string().contains("needs base_url, model and dimensions"), "{err}");
+        write_embedding_section_async(&path, entry(Some(768)), Arc::new(Lan)).await.unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let read = aivyx_config::config_write::read_embedding_section(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert!(contents.contains("dimensions = 768"), "{contents}");
+        assert_eq!(embedding_config_view(&read).dimensions, Some(768));
+    }
+
     #[test]
     fn embedding_write_with_none_api_key_leaves_the_existing_secret_on_disk() {
         let path = secret_leak_temp_toml("embedding-rotate");
@@ -11375,6 +11413,7 @@ system_prompt = "You are a custom role."
                 base_url: Some("http://127.0.0.1:8081".to_string()),
                 model: Some("nomic-embed-text".to_string()),
                 api_key: Some("sk-original-secret".to_string()),
+                dimensions: None,
             },
         )
         .unwrap();
@@ -11385,6 +11424,7 @@ system_prompt = "You are a custom role."
                 base_url: None,
                 model: Some("mxbai-embed-large".to_string()),
                 api_key: None,
+                dimensions: None,
             },
         )
         .unwrap();
@@ -11922,5 +11962,58 @@ system_prompt = "You are a custom role."
         shutdown.cancel();
         let _ = handle.await;
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod gallery_local_only_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn is_empty_available(p: &QueryResponsePayload) -> bool {
+        matches!(p, QueryResponsePayload::Gallery { available: true, images } if images.is_empty())
+    }
+
+    #[tokio::test]
+    async fn gallery_refuses_a_non_local_comfyui_without_a_request() {
+        // A public IP literal: refused by the URL check before any connect.
+        assert!(is_empty_available(&fetch_gallery("http://8.8.8.8:8188").await));
+        assert!(is_empty_available(&fetch_gallery("https://example.com").await));
+    }
+
+    #[tokio::test]
+    async fn gallery_does_not_follow_a_redirect() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_port = target.local_addr().unwrap().port();
+        let h = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = target.accept().await {
+                h.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf).await;
+                let _ = s
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                    .await;
+            }
+        });
+        let redirector = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let red_port = redirector.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = redirector.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/history\r\n\
+                     Content-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = s.write_all(resp.as_bytes()).await;
+            }
+        });
+        let out = fetch_gallery(&format!("http://127.0.0.1:{red_port}")).await;
+        assert!(is_empty_available(&out));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "the redirect was followed");
     }
 }

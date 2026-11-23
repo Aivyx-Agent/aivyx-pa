@@ -1761,7 +1761,7 @@ pub fn read_memory_profile(path: &Path) -> Result<Option<String>, ConfigWriteErr
 /// same partial-update convention every singleton section in this file
 /// uses, applied uniformly here even though only `api_key` is a secret
 /// (plan 2's hardened precedent, not `write_profile_section`'s older
-/// clear-on-`None` convention). `dimensions`/`rag_top_k`/
+/// clear-on-`None` convention). `rag_top_k`/
 /// `rag_min_similarity`/`recall_window_turns`/`recall_gate_min_chars`
 /// and the Chapter Loom recall-fusion tuning fields stay TOML-only —
 /// not represented here at all.
@@ -1770,6 +1770,8 @@ pub struct EmbeddingEntryWrite {
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub api_key: Option<String>,
+    /// The model's vector size (768 for nomic-embed-text).
+    pub dimensions: Option<u32>,
 }
 
 // Hand-written so a stray `{:?}` never prints the key (audit P14).
@@ -1779,6 +1781,7 @@ impl std::fmt::Debug for EmbeddingEntryWrite {
             .field("base_url", &self.base_url)
             .field("model", &self.model)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("dimensions", &self.dimensions)
             .finish()
     }
 }
@@ -1838,6 +1841,14 @@ pub fn write_embedding_section_with(
     if let Some(v) = &entry.api_key {
         doc["embedding"]["api_key"] = value(v.as_str());
     }
+    if let Some(d) = entry.dimensions {
+        if d == 0 {
+            return Err(ConfigWriteError::InvalidEmbeddingConfig {
+                reason: "dimensions must be a positive number".to_string(),
+            });
+        }
+        doc["embedding"]["dimensions"] = value(i64::from(d));
+    }
     let present = |key: &str| {
         doc.get("embedding")
             .and_then(toml_edit::Item::as_table_like)
@@ -1848,7 +1859,7 @@ pub fn write_embedding_section_with(
         return Err(ConfigWriteError::InvalidEmbeddingConfig {
             reason: "[embedding] needs base_url, model and dimensions for your local embedding model \
                      (for example model = \"nomic-embed-text\", dimensions = 768); \
-                     set `dimensions` in config.toml"
+                     set the vector size (`dimensions`)"
                 .to_string(),
         });
     }
@@ -1867,6 +1878,10 @@ pub fn read_embedding_section(path: &Path) -> Result<EmbeddingEntryWrite, Config
         base_url: table.get("base_url").and_then(|v| v.as_str()).map(str::to_string),
         model: table.get("model").and_then(|v| v.as_str()).map(str::to_string),
         api_key: table.get("api_key").and_then(|v| v.as_str()).map(str::to_string),
+        dimensions: table
+            .get("dimensions")
+            .and_then(|v| v.as_integer())
+            .and_then(|n| u32::try_from(n).ok()),
     })
 }
 
@@ -3371,7 +3386,7 @@ mod tests {
         std::fs::write(&path, "[embedding]\nbase_url = \"http://127.0.0.1:1\"\nmodel = \"old-model\"\ndimensions = 768\napi_key = \"sk-existing\"\n").unwrap();
         write_embedding_section(
             &path,
-            &EmbeddingEntryWrite { base_url: None, model: Some("new-model".to_string()), api_key: None },
+            &EmbeddingEntryWrite { base_url: None, model: Some("new-model".to_string()), api_key: None, dimensions: None },
         )
         .unwrap();
         let contents = std::fs::read_to_string(&path).unwrap();
@@ -3387,7 +3402,7 @@ mod tests {
             std::fs::write(&path, "[embedding]\nmodel = \"m\"\ndimensions = 768\n").unwrap();
             let err = write_embedding_section(
                 &path,
-                &EmbeddingEntryWrite { base_url: Some(url.to_string()), model: None, api_key: None },
+                &EmbeddingEntryWrite { base_url: Some(url.to_string()), model: None, api_key: None, dimensions: None },
             )
             .unwrap_err();
             let msg = err.to_string();
@@ -3403,7 +3418,7 @@ mod tests {
         std::fs::write(&path, "[embedding]\nmodel = \"m\"\ndimensions = 768\n").unwrap();
         write_embedding_section(
             &path,
-            &EmbeddingEntryWrite { base_url: Some("http://192.168.1.9:8081".to_string()), model: None, api_key: None },
+            &EmbeddingEntryWrite { base_url: Some("http://192.168.1.9:8081".to_string()), model: None, api_key: None, dimensions: None },
         )
         .unwrap();
     }
@@ -3415,7 +3430,7 @@ mod tests {
         std::fs::write(&path, "").unwrap();
         let err = write_embedding_section(
             &path,
-            &EmbeddingEntryWrite { base_url: Some("http://127.0.0.1:8081".to_string()), model: None, api_key: None },
+            &EmbeddingEntryWrite { base_url: Some("http://127.0.0.1:8081".to_string()), model: None, api_key: None, dimensions: None },
         )
         .unwrap_err();
         assert!(matches!(err, ConfigWriteError::InvalidEmbeddingConfig { .. }));
@@ -3429,6 +3444,7 @@ mod tests {
                 base_url: Some("http://127.0.0.1:8081".to_string()),
                 model: Some("nomic-embed-text".to_string()),
                 api_key: None,
+                dimensions: None,
             },
         )
         .unwrap_err();
@@ -3441,6 +3457,7 @@ mod tests {
                 base_url: Some("http://127.0.0.1:8081".to_string()),
                 model: Some("nomic-embed-text".to_string()),
                 api_key: None,
+                dimensions: None,
             },
         )
         .unwrap();
@@ -3452,7 +3469,7 @@ mod tests {
         std::fs::write(&path, "").unwrap();
         let err = write_embedding_section(
             &path,
-            &EmbeddingEntryWrite { base_url: Some("  ".to_string()), model: None, api_key: None },
+            &EmbeddingEntryWrite { base_url: Some("  ".to_string()), model: None, api_key: None, dimensions: None },
         )
         .unwrap_err();
         assert!(matches!(err, ConfigWriteError::InvalidEmbeddingConfig { .. }));
@@ -3468,6 +3485,7 @@ mod tests {
                 base_url: Some("http://127.0.0.1:8081".to_string()),
                 model: Some("nomic-embed-text".to_string()),
                 api_key: Some("sk-real-secret".to_string()),
+                dimensions: None,
             },
         )
         .unwrap();
