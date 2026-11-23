@@ -139,7 +139,7 @@ Per-call model routing: send each task to the best-suited model you have, escala
 |---|---|---|---|
 | `kind` | `ollama` \| `llama_router` \| `openai_compat` \| `lemonade` |  | What kind of server this is. |
 | `base_url` | string |  | The server's URL. Unset uses the kind's usual local address. |
-| `locality` | `local` \| `cloud` |  | `cloud` labels a local endpoint less trusted: a conversation only escalates to it with your consent (`/allow-cloud`), and never when it is sensitive. `local` lets a LAN box with a DNS name that isn't local by spelling count as local, and only once a lookup at load confirms every address it resolves to is local. Neither makes a non-local URL usable: aivyx is local-only. |
+| `locality` | `local` \| `shared` |  | `shared` labels a server less trusted (say, a box other people use on your network): a conversation only escalates to it with your consent (`/allow-shared`), and never when it is sensitive. `"cloud"` is the old name for `shared` and still works until 3.0. `local` lets a LAN box with a DNS name that isn't local by spelling count as local, and only once a lookup at load confirms every address it resolves to is local. Neither makes a non-local URL usable: aivyx is local-only. |
 
 #### `[[routing.models]]`
 
@@ -147,7 +147,7 @@ Per-call model routing: send each task to the best-suited model you have, escala
 |---|---|---|---|
 | `id` | string | `"qwen3:8b"` | The model id, as its endpoint names it. |
 | `endpoint` | string | `"gpu-box"` | Which `[routing.endpoints.<name>]` serves it. Unset means the main provider. |
-| `locality` | `local` \| `cloud` |  | `cloud` marks this model cloud even on a local endpoint. `local` never makes a model on a cloud endpoint local (it is ignored, and `RoutingConfig::validate` reports it). |
+| `locality` | `local` \| `shared` |  | `shared` marks this model shared even on a local endpoint. `local` never makes a model on a shared endpoint local (it is ignored, and `RoutingConfig::validate` reports it). |
 | `tier` | `small` \| `medium` \| `large` | `"medium"` | Its size class, for matching tasks to models. |
 | `strengths` | list of `code` \| `reasoning` \| `chat` \| `summarize` | `["chat"]` | What it is good at. |
 | `priority` | integer | `10` | Operator tie-break; higher wins. Unset = 0 (or an earlier entry's). |
@@ -166,9 +166,9 @@ Per-call model routing: send each task to the best-suited model you have, escala
 
 | Key | Type | Example | Meaning |
 |---|---|---|---|
-| `mode` | `never` \| `ask` \| `auto` | `"ask"` | Whether a call may escalate to a server you labelled `locality = "cloud"` (less trusted): `never`, `ask` (default) or `auto`. |
+| `mode` | `never` \| `ask` \| `auto` | `"ask"` | Whether a call may escalate to a server you labelled `locality = "shared"` (less trusted): `never`, `ask` (default) or `auto`. |
 | `no_local_candidate` | bool | `true` | Escalate when no local candidate can serve the call. |
-| `tiers` | list of string | `[]` | `TaskKind` names (`[routing.tasks]` keys, e.g. `"plan"`) that always prefer a cloud endpoint. |
+| `tiers` | list of string | `[]` | `TaskKind` names (`[routing.tasks]` keys, e.g. `"plan"`) that always prefer a shared endpoint. |
 | `on_failure` | bool |  | After a local failure, escalate the next turn (through the same `mode` gate; sensitive conversations never escalate). |
 
 #### `[routing.sensitive]`

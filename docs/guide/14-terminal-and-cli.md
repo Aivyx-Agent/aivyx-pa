@@ -65,7 +65,7 @@ These work in plain chat, the terminal UI, the Studio and the chat apps:
 | `/models` | Which models routing can choose from |
 | `/models why` | Why it chose the model it did |
 | `/model <name>` / `/model auto` | Pin this conversation to a model, or let routing choose again |
-| `/allow-cloud` | Let this conversation use a server you labelled less trusted (see [Models and routing](12-models-and-routing.md)) |
+| `/allow-shared` | Let this conversation use a server you labelled less trusted (see [Models and routing](12-models-and-routing.md)) |
 
 ## The commands you'll use most
 

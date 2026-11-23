@@ -154,7 +154,7 @@ What changes without breaking: the default provider is now `llamacpp` at
 `http://127.0.0.1:8080` with model `local-model`; stored Anthropic keys are
 kept, unused (`aivyx-pa doctor` notes them); `/allow-cloud` and the routing
 consent keep working for endpoints labelled `locality = "cloud"` (local URLs
-treated as less trusted). Nothing in the encrypted store, the audit chain or
+treated as less trusted; 2.1 renames these to `/allow-shared` and `"shared"`, with the old names read until 3.0). Nothing in the encrypted store, the audit chain or
 the instance layout changes. To migrate, see the 2.0.0 section of the
 [CHANGELOG](../CHANGELOG.md).
 

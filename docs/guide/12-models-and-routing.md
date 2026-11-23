@@ -59,19 +59,19 @@ section) walks through every option. Restart the daemon after changing it.
 
 Aivyx PA is local-only: models run on your machine or your own network, and a
 model URL that isn't local is refused. Within that, you can label a server you
-run — say a shared box that other people use — with `locality = "cloud"` in its
+run — say a shared box that other people use — with `locality = "shared"` in its
 routing endpoint to mark it **less trusted**. Some requests can go to such a
 server for **escalation**, but only with your consent, and never for a
 conversation that has touched your private data (mail, files, memory and the
 like). When that happens, the assistant stops and tells you which model, why,
 and roughly how much would be sent.
 
-The command (`/allow-cloud`) and the audit and message names still say "cloud"; here that means a server you
-labelled less trusted, never a hosted service.
+The command is `/allow-shared`. The old `/allow-cloud` and `locality = "cloud"` still work until 3.0, and the audit
+record names still say "cloud"; none of them means a hosted service.
 
 - **In the Studio** you get a card with an **Allow for this
   conversation** button. Allow it, then press **Resend**.
-- **In the terminal or terminal UI**, send `/allow-cloud`, then send your
+- **In the terminal or terminal UI**, send `/allow-shared`, then send your
   message again.
 - **In a chat app** (Telegram, Discord, Slack), this can't be allowed from
   the chat itself. Allow it from your terminal or the Studio.

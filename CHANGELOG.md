@@ -3,6 +3,27 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [2.1.0] - Unreleased
+
+### Changed
+
+- **The "shared" tier.** The tier for a less-trusted server on your network is now called `shared`, not `cloud` (nothing in 2.x reaches a hosted service). Write `locality = "shared"`; `locality = "cloud"` is read as an alias until 3.0, and `aivyx-pa doctor` and the config warning say so (``locality = "cloud" is now "shared"; the old name works until 3.0``). The consent command is `/allow-shared`; `/allow-cloud` still works until 3.0 and its reply starts with `/allow-cloud is now /allow-shared.`. `aivyx-pa routing allow-shared` replaces `allow-cloud` the same way. Uses aivyx-route 0.3.0.
+- **Downgrade note.** A 2.0 binary can't read a config that 2.1 wrote with `locality = "shared"`; the stable-surface snapshots now show `shared`. Edit it back to `"cloud"` before going back to 2.0.
+- **Wire names are unchanged.** The IPC and stream names (`AllowCloudEscalation`, `CloudEscalationAllowed`, `CloudEscalationNotEnabled`, `CloudConsentRequested`, `cloud_allowed`) stay as in 2.0 so 2.0 clients keep working; a 2.1 daemon also accepts the `Shared...` spellings. 3.0 switches them. The audit event names (`CloudEscalation`, `CloudConsentGranted`) are persisted in the HMAC chain and also stay.
+- aivyx-kvcache 0.1.2.
+
+### Added
+
+- Studio: an embedding `dimensions` field for the embedding provider.
+
+### Fixed
+
+- The blocking local-only checks no longer run on the async runtime. A provider that fails to build now cools every model on that endpoint for the router's cooldown instead of being retried per call.
+- ComfyUI gallery and asset fetches go through the local-only HTTP client.
+- A team member that isn't local fails with a typed `TeamError::NotLocal { member, reason }`.
+- The `grammar_output_is_frozen` test in `aivyx-llm` compared serialised text, so it failed whenever `--features provider-mistral-rs` was on (it turns on serde_json `preserve_order`, which changes key order). It already failed on 2.0.1; it now compares JSON values.
+- `aivyx-pa doctor` prints one fix line, not two, for the old `locality` spelling.
+
 ## [2.0.1] - 2026-11-23
 
 ### Security

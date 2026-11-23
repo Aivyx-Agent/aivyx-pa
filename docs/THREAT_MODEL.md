@@ -523,7 +523,7 @@ model URL must be local (loopback, private LAN, Tailscale/CGNAT, link-local,
 ULA, `.local`/`.lan`/`.internal`/`.home.arpa`, single-label names, or a DNS
 name whose every resolved address is local), and anything else is refused at
 load, at request time and at connect. The escalation gate below remains for
-endpoints the operator labelled `locality = "cloud"` — local URLs treated as
+endpoints the operator labelled `locality = "shared"` — local URLs treated as
 less trusted, such as a shared server other people use. "Cloud" in the
 text below means that label; `locality = "local"` can only be set through the
 DNS-verified path and can't bless a public address.
@@ -534,7 +534,7 @@ a less-trusted endpoint — silently, or by a model or a remote sender steering
 it there.
 
 **Mitigation:** escalation is off unless the operator labels a
-`[routing.endpoints.*]` entry `locality = "cloud"`, and then passes a gate. The
+`[routing.endpoints.*]` entry `locality = "shared"`, and then passes a gate. The
 label is aivyx-route's effective locality; the hosted kinds
 (`anthropic`/`openai`) no longer exist, and a non-local `base_url` is refused
 rather than treated as cloud. The gate is
@@ -550,18 +550,18 @@ rather than treated as cloud. The gate is
   consent does not override it. An unreadable taint record is treated
   as tainted (fail safe).
 - **Consent.** In `ask` mode a turn that needs a less-trusted endpoint stops and names
-  the model; only the operator's `/allow-cloud` (the whole message, in
+  the model; only the operator's `/allow-shared` (the whole message, in
   that conversation, on a Trusted-tier channel) or the
   `AllowCloudEscalation` IPC query over the `0600` socket grants it —
   per conversation, in memory, re-asked after a restart. Nothing the
-  model emits can grant consent: `/allow-cloud` is read only from
+  model emits can grant consent: `/allow-shared` is read only from
   submitted operator input, before any turn runs, and is refused from an
   Untrusted or SemiTrusted sender (e.g. a bot channel with no
   allowlist).
 - **No session, no escalation.** Calls outside a conversation (judges,
   mission planning) never escalate, because their taint can't be known.
 - **Only the operator's endpoints.** Endpoints labelled
-  `locality = "cloud"` are reachable only through this gate — never
+  `locality = "shared"` are reachable only through this gate — never
   as ordinary routing candidates — and no API key is sent to them.
 - **Audited without content.** Every decision (allowed — including a
   call that failed after it may have been sent — consent requested, no
@@ -575,12 +575,12 @@ rather than treated as cloud. The gate is
   conversation's **next** turn; nothing is replayed and no turn changes
   model mid-way. That next turn goes through the gate above unchanged:
   taint still blocks it in every mode, `ask` still needs
-  `/allow-cloud`, a call without a session never escalates, and the
+  `/allow-shared`, a call without a session never escalates, and the
   cloud model serving an armed turn never becomes the conversation's
   sticky model. Arming is audited once per new mark (`EscalationArmed`)
   and each decision as a `CloudEscalation` with trigger `on_failure`;
   marks are in memory only. In `ask`, a turn that stops for consent
-  leaves only a pending offer: `/allow-cloud` arms it for the resend,
+  leaves only a pending offer: `/allow-shared` arms it for the resend,
   which escalates once, and the next turn sent without it declines the
   offer and runs locally, so an ignored offer never keeps asking. Only
   the operator's own turns arm; a trigger, cron, webhook or file-watch
@@ -593,7 +593,7 @@ tool_prefixes` entry, or private data the operator types directly) does
 not taint. Operators who escalate should list such tools' prefixes, or
 keep `mode = "never"`. A channel the operator has marked Trusted but
 that accepts messages from other people (e.g. an allowlisted but shared
-Discord server) lets them send `/allow-cloud` too — keep such channels'
+Discord server) lets them send `/allow-shared` too — keep such channels'
 allowlists to the operator, list them in `[routing.sensitive] channels`
 (which taints their conversations, so they never escalate), or keep
 `mode = "never"`. An escalated request carries the whole system prompt,

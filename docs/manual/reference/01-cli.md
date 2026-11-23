@@ -737,12 +737,12 @@ Model routing: which model handled what, and why.
 ```
 aivyx-pa routing status
 aivyx-pa routing explain [--limit <N>]
-aivyx-pa routing allow-cloud <session-id>
+aivyx-pa routing allow-shared <session-id>
 ```
 
-`allow-cloud` gives consent for one conversation to escalate to an endpoint
-you labelled `locality = "cloud"` — a local URL you marked less trusted, such
-as a shared server. It is not a way to reach a cloud provider: aivyx is
+`allow-shared` (old name `allow-cloud`, still accepted until 3.0) gives consent for one conversation to escalate to an endpoint
+you labelled `locality = "shared"` — a server you marked less trusted, such
+as one other people use. It is not a way to reach a cloud provider: aivyx is
 local-only, and a model URL that isn't local is refused. See [Models and routing](../../guide/12-models-and-routing.md).
 
 ### `aivyx-pa identity`
