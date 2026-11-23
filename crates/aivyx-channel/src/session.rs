@@ -629,15 +629,18 @@ where
         }
 
         // First-run coherence A1 (F14) — in-process there is no daemon to
-        // hold escalation consent, so a whole-message `/allow-cloud` gets a
+        // hold escalation consent, so a whole-message `/allow-shared` gets a
         // local reply and is never sent to the model (nor counted as a turn).
-        if crate::routing_guard::is_allow_cloud_command(input) {
+        if crate::routing_guard::is_allow_shared_command(input) {
             let writer = channel.writer_handle();
             if let Ok(mut guard) = writer.lock() {
                 let _ = writeln!(
                     &mut *guard,
                     "{}",
-                    crate::routing_guard::IN_PROCESS_ALLOW_CLOUD_REPLY
+                    crate::routing_guard::with_alias_note(
+                        input,
+                        crate::routing_guard::IN_PROCESS_ALLOW_SHARED_REPLY
+                    )
                 );
                 let _ = guard.flush();
             }

@@ -114,7 +114,7 @@ pub struct RoutingStatus {
     pub vram: Option<RoutingVram>,
     /// Endpoints residency counts as fully loaded.
     pub resident_endpoints: Vec<String>,
-    /// `None` when no cloud escalation is configured.
+    /// `None` when no shared escalation is configured.
     pub escalation: Option<RoutingEscalation>,
     pub classifier_enabled: bool,
     /// The asked-about conversation, when one was given.
@@ -144,7 +144,7 @@ pub struct RoutingVram {
     pub available_bytes: u64,
 }
 
-/// The cloud escalation settings.
+/// The shared escalation settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutingEscalation {
     /// `ask`, `auto` or `never`.
@@ -152,7 +152,7 @@ pub struct RoutingEscalation {
     pub no_local_candidate: bool,
     pub tiers: Vec<String>,
     pub on_failure: bool,
-    pub cloud_candidates: Vec<RoutingCandidate>,
+    pub shared_candidates: Vec<RoutingCandidate>,
 }
 
 /// One conversation's routing state.
@@ -166,7 +166,7 @@ pub struct RoutingConversation {
     pub last_decision: Option<(String, String, String)>,
     /// The taint reason (only tracked while escalation is configured).
     pub tainted: Option<String>,
-    pub cloud_allowed: bool,
+    pub shared_allowed: bool,
     /// A16 — the *next* turn will escalate (the ARMED set).
     pub armed: bool,
 }
@@ -192,7 +192,7 @@ pub async fn routing_status(routed: &RoutedProvider, session: Option<&str>) -> R
             no_local_candidate,
             tiers: tiers.iter().map(|t| t.name().to_string()).collect(),
             on_failure: routed.escalation_on_failure().unwrap_or(false),
-            cloud_candidates: routed
+            shared_candidates: routed
                 .escalation_candidates()
                 .iter()
                 .map(|p| candidate(p, None))
@@ -203,7 +203,7 @@ pub async fn routing_status(routed: &RoutedProvider, session: Option<&str>) -> R
         Some(session) => {
             // Model routing Part 3b — taint / consent are tracked only while
             // escalation is configured.
-            let (tainted, cloud_allowed) = if escalation.is_some() {
+            let (tainted, shared_allowed) = if escalation.is_some() {
                 routed
                     .escalation_state(session)
                     .await
@@ -219,7 +219,7 @@ pub async fn routing_status(routed: &RoutedProvider, session: Option<&str>) -> R
                     (r.model.to_string(), r.task.name().to_string(), r.reason)
                 }),
                 tainted,
-                cloud_allowed,
+                shared_allowed,
                 // A16 — "armed" here means the *next* turn will escalate
                 // (the ARMED set), not that a call is escalating mid-turn
                 // right now (the ACTIVE set `EscalationGuard::armed` reads).
@@ -284,14 +284,14 @@ fn status_tool_json(status: &RoutingStatus) -> Value {
                 "no_local_candidate": esc.no_local_candidate,
                 "tiers": esc.tiers,
                 "on_failure": esc.on_failure,
-                "cloud_candidates": esc
-                    .cloud_candidates
+                "shared_candidates": esc
+                    .shared_candidates
                     .iter()
                     .map(candidate_json)
                     .collect::<Vec<_>>(),
                 "this_conversation": {
                     "tainted": this.and_then(|c| c.tainted.clone()),
-                    "cloud_allowed": this.is_some_and(|c| c.cloud_allowed),
+                    "shared_allowed": this.is_some_and(|c| c.shared_allowed),
                     "armed": this.is_some_and(|c| c.armed),
                 },
             })
@@ -765,10 +765,10 @@ mod routing_tool_tests {
         let mut claude = ModelProfile::new("claude", EndpointRef::new("cloud"));
         claude.tier = Tier::Large;
         claude.capabilities.insert(Capability::Completion);
-        claude.locality = aivyx_route::Locality::Cloud;
+        claude.locality = aivyx_route::Locality::Shared;
         let base = Arc::try_unwrap(routed()).ok().expect("sole owner");
         let routed = Arc::new(base.with_escalation(aivyx_llm::EscalationSetup {
-            router: Router::new(vec![claude], TaskOverrides::default()).with_allow_cloud(true),
+            router: Router::new(vec![claude], TaskOverrides::default()).with_allow_shared(true),
             mode: aivyx_llm::EscalationMode::Ask,
             no_local_candidate: true,
             tiers: vec![TaskKind::Plan],
@@ -788,15 +788,15 @@ mod routing_tool_tests {
         assert_eq!(esc["no_local_candidate"], true);
         assert_eq!(esc["tiers"], json!(["plan"]));
         assert_eq!(esc["on_failure"], true);
-        assert_eq!(esc["cloud_candidates"][0]["model"], "claude@cloud");
+        assert_eq!(esc["shared_candidates"][0]["model"], "claude@cloud");
         assert_eq!(esc["this_conversation"]["tainted"], "gmail.search output");
-        assert_eq!(esc["this_conversation"]["cloud_allowed"], false);
+        assert_eq!(esc["this_conversation"]["shared_allowed"], false);
         assert_eq!(esc["this_conversation"]["armed"], false);
 
         let output = completed(run_execute(&tool, allowed, json!({})).await);
         let this = &output["escalation"]["this_conversation"];
         assert_eq!(this["tainted"], Value::Null);
-        assert_eq!(this["cloud_allowed"], true);
+        assert_eq!(this["shared_allowed"], true);
         assert_eq!(this["armed"], false);
 
         let output = completed(run_execute(&tool, armed, json!({})).await);
@@ -808,10 +808,10 @@ mod routing_tool_tests {
     async fn status_reports_on_failure_false_when_configured_off() {
         let session = SessionId::new();
         let mut claude = ModelProfile::new("claude", EndpointRef::new("cloud"));
-        claude.locality = aivyx_route::Locality::Cloud;
+        claude.locality = aivyx_route::Locality::Shared;
         let base = Arc::try_unwrap(routed()).ok().expect("sole owner");
         let routed = Arc::new(base.with_escalation(aivyx_llm::EscalationSetup {
-            router: Router::new(vec![claude], TaskOverrides::default()).with_allow_cloud(true),
+            router: Router::new(vec![claude], TaskOverrides::default()).with_allow_shared(true),
             mode: aivyx_llm::EscalationMode::Auto,
             no_local_candidate: false,
             tiers: vec![],
@@ -899,7 +899,7 @@ mod routing_tool_tests {
         assert_eq!(task, "plan");
         assert!(!reason.is_empty());
         assert_eq!(conv.tainted, None);
-        assert!(!conv.cloud_allowed);
+        assert!(!conv.shared_allowed);
 
         routed.router().pin(
             "sess-1",

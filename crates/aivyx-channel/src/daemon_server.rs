@@ -565,7 +565,7 @@ pub struct DaemonConfig {
     /// (the `ChannelState` domain). `None` ⇒ kept in memory for this run.
     pub activity_store: Option<DomainHandle>,
     /// Model routing Part 3b — the process's ONE routing guard, when cloud
-    /// escalation is active: `/allow-cloud` and the `AllowCloudEscalation`
+    /// escalation is active: `/allow-shared` and the `AllowSharedEscalation`
     /// query record consent on it. `None` ⇒ escalation isn't configured and
     /// both answer "not enabled".
     pub routing_guard: Option<Arc<crate::routing_guard::RoutingGuard>>,
@@ -2538,12 +2538,12 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 .parse::<uuid::Uuid>()
                                 .map(aivyx_core::SessionId)
                                 .unwrap_or_else(|_| aivyx_core::SessionId::new());
-                            // Model routing Part 3b (A15) — `/allow-cloud`
+                            // Model routing Part 3b (A15) — `/allow-shared`
                             // is a command, not a turn: record consent for
                             // this conversation (when escalation is
                             // configured), audit it, and answer without
                             // touching the agent, the history or the model.
-                            if crate::routing_guard::is_allow_cloud_command(&text) {
+                            if crate::routing_guard::is_allow_shared_command(&text) {
                                 // The same key the turn's router checks:
                                 // the bridge's session, which falls back
                                 // to the inner channel's (not a fresh id)
@@ -2558,7 +2558,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                     aivyx_capability::TrustTier::Trusted
                                         | aivyx_capability::TrustTier::Kernel
                                 );
-                                let (granted, reply) = crate::routing_guard::allow_cloud_reply(
+                                let (granted, reply) = crate::routing_guard::allow_shared_reply(
                                     routing_guard.as_deref(),
                                     &key,
                                     trusted,
@@ -2566,6 +2566,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                                 if granted {
                                     audit_consent(audit_log.as_deref(), &key, "chat");
                                 }
+                                let reply = crate::routing_guard::with_alias_note(&text, reply);
                                 let resp = DaemonMessage::TurnComplete {
                                     session_id: sid,
                                     outcome: format!("completed: {reply}"),
@@ -2579,7 +2580,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             // the agent, the history, or the model, and
                             // never count as a turn. Available from any
                             // channel (reading and pinning aren't
-                            // escalation) — unlike `/allow-cloud`, no
+                            // escalation) — unlike `/allow-shared`, no
                             // trust-tier check. The session always exists
                             // in `daemon_state` by the time `SubmitInput`
                             // runs (pushed at `StartSession` above), so
@@ -2602,7 +2603,7 @@ async fn handle_connection(ctx: ConnectionContext) -> Result<(), DaemonError> {
                             }
                             // Routing visibility B1 — the conversation's
                             // routing key and whether this channel may give
-                            // cloud consent (Trusted/Kernel, as `/allow-cloud`
+                            // shared consent (Trusted/Kernel, as `/allow-shared`
                             // checks), for the events sent after the turn;
                             // and drop any consent request left over from an
                             // earlier turn, so it can't answer for this one.
@@ -4259,7 +4260,7 @@ pub async fn run_poc_daemon<C: ChannelContext + Send + Sync + 'static>(
 }
 
 /// [`run_poc_daemon`] with a model-routing guard attached, so a test can
-/// drive `/allow-cloud` end to end (Part 3b).
+/// drive `/allow-shared` end to end (Part 3b).
 pub async fn run_poc_daemon_with_routing_guard<C: ChannelContext + Send + Sync + 'static>(
     socket_path: &Path,
     agent: Arc<dyn Agent>,
@@ -4270,8 +4271,8 @@ pub async fn run_poc_daemon_with_routing_guard<C: ChannelContext + Send + Sync +
 }
 
 /// [`run_poc_daemon`] with the model-routing pieces attached — the guard
-/// (cloud consent) and the routed provider — so a test can drive
-/// `ModelRouted`, `CloudConsentRequested` and the routing queries end to
+/// (shared consent) and the routed provider — so a test can drive
+/// `ModelRouted`, `SharedConsentRequested` and the routing queries end to
 /// end (Routing visibility B1).
 pub async fn run_poc_daemon_with_routing<C: ChannelContext + Send + Sync + 'static>(
     socket_path: &Path,
@@ -4588,15 +4589,15 @@ fn discard_stale_consent_request(
 
 /// Routing visibility B1 — after a turn: the events to send before
 /// `TurnComplete`, rewriting `outcome` when the turn stopped to ask for
-/// cloud consent.
+/// shared consent.
 ///
 /// - The request is always taken (so it never outlives its turn), but only
 ///   shown when the turn actually stopped on it — its outcome carries the
 ///   request's channel-neutral lead. A routed side call that stopped while
 ///   the turn still answered never replaces the answer.
-/// - Shown, it becomes `CloudConsentRequested` plus an outcome worded for
+/// - Shown, it becomes `SharedConsentRequested` plus an outcome worded for
 ///   the channel (`can_allow_here`: Trusted/Kernel, the same test
-///   `/allow-cloud` applies), without the planner's `LLM error:` framing.
+///   `/allow-shared` applies), without the planner's `LLM error:` framing.
 /// - `ModelRouted` (last, just before `TurnComplete`) carries the router's
 ///   latest decision for the conversation; nothing when routing is off or
 ///   the conversation has no routed call.
@@ -4613,7 +4614,7 @@ fn routing_turn_events(
     {
         let kind = outcome.split_once(": ").map_or("completed", |(kind, _)| kind);
         *outcome = format!("{kind}: {}", aivyx_llm::consent_text(&req, can_allow_here));
-        events.push(StreamEventPayload::CloudConsentRequested {
+        events.push(StreamEventPayload::SharedConsentRequested {
             why: aivyx_llm::plain_why(&req.trigger).to_string(),
             model: req.model,
             endpoint: req.endpoint,
@@ -4674,7 +4675,7 @@ fn routing_status_view(status: aivyx_core::RoutingStatus) -> RoutingStatusView {
                 last_model,
                 last_reason,
                 tainted: c.tainted,
-                cloud_allowed: c.cloud_allowed,
+                shared_allowed: c.shared_allowed,
             }
         }),
     }
@@ -4895,7 +4896,7 @@ fn detect_crash_recovery(state_path: &Path) -> Option<DaemonState> {
 // Phase 47 — query dispatch
 // ---------------------------------------------------------------------------
 
-/// Model routing Part 3b — audit a cloud-escalation consent grant
+/// Model routing Part 3b — audit a shared-escalation consent grant
 /// (`via` = `"chat"` or `"ipc"`). A failed append is logged, not fatal.
 fn audit_consent(audit: Option<&PersistentAuditLog>, session: &str, via: &str) {
     if let Some(log) = audit
@@ -4904,7 +4905,7 @@ fn audit_consent(audit: Option<&PersistentAuditLog>, session: &str, via: &str) {
             via: via.to_string(),
         })
     {
-        eprintln!("aivyx-pa daemon: failed to audit cloud consent for {session}: {e}");
+        eprintln!("aivyx-pa daemon: failed to audit shared-endpoint consent for {session}: {e}");
     }
 }
 
@@ -5197,7 +5198,7 @@ async fn handle_query(
             code: "board_unavailable".into(),
             message: "the board is answered by the connection loop".into(),
         },
-        QueryPayload::AllowCloudEscalation { session_id } => {
+        QueryPayload::AllowSharedEscalation { session_id } => {
             let Ok(uuid) = session_id.parse::<uuid::Uuid>() else {
                 return QueryResponsePayload::QueryError {
                     code: "invalid_session".into(),
@@ -5206,12 +5207,12 @@ async fn handle_query(
             };
             let session = aivyx_core::SessionId(uuid).to_string();
             // The local socket is the operator (its 0600 mode is the auth).
-            match crate::routing_guard::allow_cloud_reply(routing_guard, &session, true).0 {
+            match crate::routing_guard::allow_shared_reply(routing_guard, &session, true).0 {
                 true => {
                     audit_consent(consent_audit, &session, "ipc");
-                    QueryResponsePayload::CloudEscalationAllowed { session_id: session }
+                    QueryResponsePayload::SharedEscalationAllowed { session_id: session }
                 }
-                false => QueryResponsePayload::CloudEscalationNotEnabled,
+                false => QueryResponsePayload::SharedEscalationNotEnabled,
             }
         }
         QueryPayload::GetRoutingStatus { session_id } => {

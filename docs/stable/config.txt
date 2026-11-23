@@ -306,7 +306,7 @@ routing.discover: bool
 routing.enabled: bool
 routing.endpoints.*.base_url: str?
 routing.endpoints.*.kind: EndpointKind (one of: ollama | llama_router | openai_compat | lemonade)
-routing.endpoints.*.locality: Locality? (one of: local | cloud)
+routing.endpoints.*.locality: Locality? (one of: local | cloud | shared)
 routing.escalation.mode: EscalationMode (one of: never | ask | auto)
 routing.escalation.no_local_candidate: bool
 routing.escalation.on_failure: bool
@@ -316,7 +316,7 @@ routing.models[].capabilities_deny: [Capability] (one of: completion | tools | v
 routing.models[].context_window: u32?
 routing.models[].endpoint: str?
 routing.models[].id: str
-routing.models[].locality: Locality? (one of: local | cloud)
+routing.models[].locality: Locality? (one of: local | cloud | shared)
 routing.models[].priority: i32?
 routing.models[].strengths: [Strength]? (one of: code | reasoning | chat | summarize)
 routing.models[].tier: Tier? (one of: small | medium | large)

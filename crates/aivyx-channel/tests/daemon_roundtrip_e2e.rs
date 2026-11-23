@@ -3685,7 +3685,7 @@ async fn audit_queries_without_log_return_query_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Model routing Part 3b (A15) — `/allow-cloud` is a command, not a turn.
+// Model routing Part 3b (A15) — `/allow-shared` is a command, not a turn.
 // ---------------------------------------------------------------------------
 
 /// Counts its turns; answers like `FakeStreamingAgent` otherwise.
@@ -3715,11 +3715,13 @@ impl Agent for CountingAgent {
     }
 }
 
-/// Sends `/allow-cloud` over a real daemon socket whose session channel is
-/// `channel`; returns the reply, how many agent turns ran, and whether
-/// consent was recorded for the conversation.
-async fn allow_cloud_over<C: ChannelContext + Send + Sync + 'static>(
+/// Sends `command` (`/allow-shared` or its alias `/allow-cloud`) over a
+/// real daemon socket whose session channel is `channel`; returns the
+/// reply, how many agent turns ran, and whether consent was recorded for
+/// the conversation.
+async fn allow_shared_over<C: ChannelContext + Send + Sync + 'static>(
     channel: Arc<C>,
+    command: &str,
 ) -> (String, usize, bool) {
     let scratch = ScratchDir::new();
     let socket_path = scratch.socket_path();
@@ -3751,7 +3753,7 @@ async fn allow_cloud_over<C: ChannelContext + Send + Sync + 'static>(
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let result = run_poc_client(&socket_path, None, "/allow-cloud".to_string())
+    let result = run_poc_client(&socket_path, None, command.to_string())
         .await
         .expect("client must complete successfully");
     daemon_handle.await.expect("daemon task");
@@ -3766,10 +3768,25 @@ async fn allow_cloud_over<C: ChannelContext + Send + Sync + 'static>(
 }
 
 #[tokio::test]
-async fn allow_cloud_records_consent_without_running_a_turn() {
+async fn allow_shared_records_consent_without_running_a_turn() {
     let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
-    let (outcome, turns, consented) = allow_cloud_over(channel).await;
+    let (outcome, turns, consented) = allow_shared_over(channel, "/allow-shared").await;
     assert!(outcome.contains("Escalation to a less-trusted endpoint allowed"), "{outcome}");
+    assert!(!outcome.contains("/allow-cloud"), "{outcome}");
+    assert_eq!(turns, 0);
+    assert!(consented);
+}
+
+/// 2.1 — the 2.0 spelling still grants consent, and its reply starts with
+/// the rename note on its own line.
+#[tokio::test]
+async fn allow_cloud_alias_grants_consent_and_names_the_new_command() {
+    let channel = Arc::new(LocalChannel::new("daemon-test", Vec::<u8>::new()));
+    let (outcome, turns, consented) = allow_shared_over(channel, "/allow-cloud").await;
+    assert!(
+        outcome.starts_with("completed: /allow-cloud is now /allow-shared.\nEscalation to a less-trusted endpoint allowed"),
+        "{outcome}"
+    );
     assert_eq!(turns, 0);
     assert!(consented);
 }
@@ -3806,9 +3823,9 @@ impl ChannelContext for UntrustedChannel {
 }
 
 #[tokio::test]
-async fn allow_cloud_from_an_untrusted_channel_grants_nothing() {
+async fn allow_shared_from_an_untrusted_channel_grants_nothing() {
     let channel = Arc::new(UntrustedChannel(aivyx_core::SessionId::new()));
-    let (outcome, turns, consented) = allow_cloud_over(channel).await;
+    let (outcome, turns, consented) = allow_shared_over(channel, "/allow-shared").await;
     assert!(
         outcome.contains("Only the operator can allow a less-trusted endpoint — from a trusted frontend"),
         "{outcome}"
@@ -3818,7 +3835,7 @@ async fn allow_cloud_from_an_untrusted_channel_grants_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// Routing visibility B1 — `ModelRouted`, `CloudConsentRequested`, and the
+// Routing visibility B1 — `ModelRouted`, `SharedConsentRequested`, and the
 // `GetRoutingStatus` / `SetRoutingPin` queries.
 // ---------------------------------------------------------------------------
 
@@ -3903,9 +3920,9 @@ mod routing_visibility {
         let mut claude = ModelProfile::new("claude", EndpointRef::new("cloud"));
         claude.tier = Tier::Large;
         claude.capabilities.insert(Capability::Completion);
-        claude.locality = Locality::Cloud;
+        claude.locality = Locality::Shared;
         routed_provider(false).with_escalation(aivyx_llm::EscalationSetup {
-            router: Router::new(vec![claude], TaskOverrides::default()).with_allow_cloud(true),
+            router: Router::new(vec![claude], TaskOverrides::default()).with_allow_shared(true),
             mode: aivyx_llm::EscalationMode::Ask,
             no_local_candidate: false,
             tiers: vec![TaskKind::Chat],
@@ -4334,10 +4351,10 @@ mod routing_visibility {
     }
 
     #[tokio::test]
-    async fn a_consent_stop_on_a_trusted_channel_offers_allow_cloud() {
+    async fn a_consent_stop_on_a_trusted_channel_offers_allow_shared() {
         let (events, outcome) = consent_turn(aivyx_capability::TrustTier::Trusted).await;
         assert!(
-            events.contains(&StreamEventPayload::CloudConsentRequested {
+            events.contains(&StreamEventPayload::SharedConsentRequested {
                 model: "claude".into(),
                 endpoint: "cloud".into(),
                 why: "this kind of request is set to use a less-trusted endpoint".into(),
@@ -4350,7 +4367,7 @@ mod routing_visibility {
             outcome,
             format!("completed: {}", aivyx_llm::consent_text(&request(), true))
         );
-        assert!(outcome.contains("Send /allow-cloud"), "{outcome}");
+        assert!(outcome.contains("Send /allow-shared"), "{outcome}");
         assert!(outcome.contains("12,578"), "{outcome}");
         assert!(!outcome.contains("LLM error"), "{outcome}");
     }
@@ -4359,7 +4376,7 @@ mod routing_visibility {
     async fn a_consent_stop_on_a_semi_trusted_channel_names_the_operator() {
         let (events, outcome) = consent_turn(aivyx_capability::TrustTier::SemiTrusted).await;
         assert!(
-            events.contains(&StreamEventPayload::CloudConsentRequested {
+            events.contains(&StreamEventPayload::SharedConsentRequested {
                 model: "claude".into(),
                 endpoint: "cloud".into(),
                 why: "this kind of request is set to use a less-trusted endpoint".into(),
@@ -4373,7 +4390,7 @@ mod routing_visibility {
             format!("completed: {}", aivyx_llm::consent_text(&request(), false))
         );
         assert!(outcome.contains("Only the operator can allow"), "{outcome}");
-        assert!(!outcome.contains("Send /allow-cloud"), "{outcome}");
+        assert!(!outcome.contains("Send /allow-shared"), "{outcome}");
         assert!(!outcome.contains("LLM error"), "{outcome}");
     }
 
@@ -4420,7 +4437,7 @@ mod routing_visibility {
         assert!(
             !events
                 .iter()
-                .any(|e| matches!(e, StreamEventPayload::CloudConsentRequested { .. })),
+                .any(|e| matches!(e, StreamEventPayload::SharedConsentRequested { .. })),
             "{events:?}"
         );
         assert_eq!(guard.take_consent_request(&conn.sid), None, "still taken");
@@ -4469,7 +4486,7 @@ mod routing_visibility {
         assert!(
             !events
                 .iter()
-                .any(|e| matches!(e, StreamEventPayload::CloudConsentRequested { .. })),
+                .any(|e| matches!(e, StreamEventPayload::SharedConsentRequested { .. })),
             "{events:?}"
         );
         assert!(outcome.starts_with("completed: LLM error:"), "{outcome}");
@@ -4549,7 +4566,7 @@ mod routing_visibility {
         assert_eq!(session.current_model.as_deref(), Some("big@gpu"));
         assert_eq!(session.last_model, None);
         assert_eq!(session.tainted, None);
-        assert!(session.cloud_allowed);
+        assert!(session.shared_allowed);
 
         // Without a session: no conversation block.
         let QueryResponsePayload::RoutingStatus(view) = conn
@@ -4740,7 +4757,7 @@ mod routing_visibility {
 
     // ---------------------------------------------------------------------
     // Routing visibility B2 — the `/models`/`/model` chat commands,
-    // intercepted like `/allow-cloud`: a whole message never reaches the
+    // intercepted like `/allow-shared`: a whole message never reaches the
     // agent, the history, or the model, and never counts as a turn.
     // ---------------------------------------------------------------------
 

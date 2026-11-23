@@ -637,18 +637,20 @@ pub enum QueryPayload {
     /// small-cycle breaker. Takes effect on the next daemon start. Responds with
     /// [`QueryResponsePayload::SettingsApplied`] (or `QueryError`).
     SetCycleDetection { enabled: bool },
-    /// Model routing Part 3b (A15) — allow cloud escalation for one
+    /// Model routing Part 3b (A15) — allow shared escalation for one
     /// conversation, in this daemon process only (a restart re-asks). The
-    /// same effect as sending `/allow-cloud` in that conversation. Never
+    /// same effect as sending `/allow-shared` in that conversation. Never
     /// overrides a routing taint. Responds with
-    /// [`QueryResponsePayload::CloudEscalationAllowed`], or
-    /// [`QueryResponsePayload::CloudEscalationNotEnabled`] when no cloud
+    /// [`QueryResponsePayload::SharedEscalationAllowed`], or
+    /// [`QueryResponsePayload::SharedEscalationNotEnabled`] when no cloud
     /// escalation is configured.
-    AllowCloudEscalation { session_id: String },
+    // 3.0: switch the wire name to AllowSharedEscalation
+    #[serde(rename = "AllowCloudEscalation", alias = "AllowSharedEscalation")]
+    AllowSharedEscalation { session_id: String },
     /// Routing visibility B1 — the model router's state: candidates,
     /// residency, escalation mode, classifier, and (when `session_id` is
     /// given) that conversation's model, pin, last decision, taint and
-    /// cloud consent. Responds with [`QueryResponsePayload::RoutingStatus`];
+    /// shared consent. Responds with [`QueryResponsePayload::RoutingStatus`];
     /// with routing off that is `enabled: false` and empty lists, never an
     /// error.
     GetRoutingStatus {
@@ -1631,12 +1633,16 @@ pub enum QueryResponsePayload {
         settings: SettingsSnapshot,
         restart_required: bool,
     },
-    /// Response to [`QueryPayload::AllowCloudEscalation`]: consent recorded
+    /// Response to [`QueryPayload::AllowSharedEscalation`]: consent recorded
     /// for `session_id` (in-memory, this daemon process only).
-    CloudEscalationAllowed { session_id: String },
-    /// Response to [`QueryPayload::AllowCloudEscalation`] when the daemon
-    /// has no cloud escalation configured (nothing was recorded).
-    CloudEscalationNotEnabled,
+    // 3.0: switch the wire name to SharedEscalationAllowed
+    #[serde(rename = "CloudEscalationAllowed", alias = "SharedEscalationAllowed")]
+    SharedEscalationAllowed { session_id: String },
+    /// Response to [`QueryPayload::AllowSharedEscalation`] when the daemon
+    /// has no shared escalation configured (nothing was recorded).
+    // 3.0: switch the wire name to SharedEscalationNotEnabled
+    #[serde(rename = "CloudEscalationNotEnabled", alias = "SharedEscalationNotEnabled")]
+    SharedEscalationNotEnabled,
     /// Response to [`QueryPayload::GetRoutingStatus`].
     RoutingStatus(RoutingStatusView),
     /// Response to [`QueryPayload::SetRoutingPin`]: the conversation's pin
@@ -3171,7 +3177,7 @@ pub struct RoutingStatusView {
     /// What a new model load could use.
     #[serde(default)]
     pub vram_available_bytes: Option<u64>,
-    /// `off` (no cloud escalation configured), `ask`, `auto` or `never`.
+    /// `off` (no shared escalation configured), `ask`, `auto` or `never`.
     pub escalation_mode: String,
     #[serde(default)]
     pub classifier_enabled: bool,
@@ -3237,12 +3243,13 @@ pub struct RoutingSessionView {
     #[serde(default)]
     pub last_reason: Option<String>,
     /// Why this conversation can never escalate to the cloud, when it is
-    /// tainted (only tracked while cloud escalation is configured).
+    /// tainted (only tracked while shared escalation is configured).
     #[serde(default)]
     pub tainted: Option<String>,
-    /// Cloud consent given for this conversation (this daemon process).
-    #[serde(default)]
-    pub cloud_allowed: bool,
+    /// Shared consent given for this conversation (this daemon process).
+    // 3.0: switch the wire name to shared_allowed
+    #[serde(default, rename = "cloud_allowed", alias = "shared_allowed")]
+    pub shared_allowed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -3300,12 +3307,14 @@ pub enum StreamEventPayload {
         reason: String,
     },
     /// Routing visibility B1 — daemon-only: the turn stopped to ask for
-    /// cloud consent. `model` is the model id, `endpoint` the endpoint
+    /// shared consent. `model` is the model id, `endpoint` the endpoint
     /// name, `why` plain words, `estimated_tokens` what would be sent.
     /// `can_allow_here` is true when this channel (Trusted/Kernel) may send
-    /// `/allow-cloud`. The turn's outcome text carries the same request,
+    /// `/allow-shared`. The turn's outcome text carries the same request,
     /// worded for the channel.
-    CloudConsentRequested {
+    // 3.0: switch the wire name to SharedConsentRequested
+    #[serde(rename = "CloudConsentRequested", alias = "SharedConsentRequested")]
+    SharedConsentRequested {
         model: String,
         endpoint: String,
         why: String,
@@ -3362,7 +3371,7 @@ impl StreamEventPayload {
             StreamEventPayload::ModelRouted { .. } => String::new(),
             // The turn's outcome text carries the request, worded for the
             // channel; rendering it here too would print it twice.
-            StreamEventPayload::CloudConsentRequested { .. } => String::new(),
+            StreamEventPayload::SharedConsentRequested { .. } => String::new(),
         }
     }
 }
@@ -5371,10 +5380,10 @@ mod tests {
     }
 
     #[test]
-    fn allow_cloud_escalation_round_trips() {
+    fn allow_shared_escalation_round_trips() {
         let msg = FrontendMessage::Query {
             id: "q".into(),
-            payload: QueryPayload::AllowCloudEscalation {
+            payload: QueryPayload::AllowSharedEscalation {
                 session_id: "0b5c7d2e-0000-4000-8000-000000000000".into(),
             },
         };
@@ -5383,15 +5392,81 @@ mod tests {
         assert_eq!(decoded, msg);
 
         for payload in [
-            QueryResponsePayload::CloudEscalationAllowed {
+            QueryResponsePayload::SharedEscalationAllowed {
                 session_id: "s".into(),
             },
-            QueryResponsePayload::CloudEscalationNotEnabled,
+            QueryResponsePayload::SharedEscalationNotEnabled,
         ] {
             let frame = encode_frame(&payload).expect("encode");
             let (back, _): (QueryResponsePayload, _) = decode_frame(&frame).expect("decode");
             assert_eq!(back, payload);
         }
+    }
+
+    /// 2.1 renamed the tier "cloud" → "shared" in Rust, but the wire keeps
+    /// the 2.0 names so 2.0 clients keep working: the old spelling parses,
+    /// the new spelling parses (alias), and serialising gives the old one.
+    #[test]
+    fn shared_tier_wire_names_stay_2_0_and_accept_new_spelling() {
+        use serde_json::json;
+        let q_old: QueryPayload =
+            serde_json::from_value(json!({"kind": "AllowCloudEscalation", "session_id": "s"}))
+                .expect("old query name");
+        let q_new: QueryPayload =
+            serde_json::from_value(json!({"kind": "AllowSharedEscalation", "session_id": "s"}))
+                .expect("new query name");
+        let q = QueryPayload::AllowSharedEscalation {
+            session_id: "s".into(),
+        };
+        assert_eq!(q_old, q);
+        assert_eq!(q_new, q);
+        assert_eq!(serde_json::to_value(&q).unwrap()["kind"], "AllowCloudEscalation");
+
+        for (old, new, value) in [
+            (
+                json!({"kind": "CloudEscalationAllowed", "session_id": "s"}),
+                json!({"kind": "SharedEscalationAllowed", "session_id": "s"}),
+                QueryResponsePayload::SharedEscalationAllowed {
+                    session_id: "s".into(),
+                },
+            ),
+            (
+                json!({"kind": "CloudEscalationNotEnabled"}),
+                json!({"kind": "SharedEscalationNotEnabled"}),
+                QueryResponsePayload::SharedEscalationNotEnabled,
+            ),
+        ] {
+            let wire_kind = old["kind"].clone();
+            assert_eq!(serde_json::from_value::<QueryResponsePayload>(old).unwrap(), value);
+            assert_eq!(serde_json::from_value::<QueryResponsePayload>(new).unwrap(), value);
+            assert_eq!(serde_json::to_value(&value).unwrap()["kind"], wire_kind);
+        }
+
+        let event = StreamEventPayload::SharedConsentRequested {
+            model: "m".into(),
+            endpoint: "e".into(),
+            why: "w".into(),
+            estimated_tokens: 7,
+            can_allow_here: true,
+        };
+        let body = json!({"model": "m", "endpoint": "e", "why": "w",
+            "estimated_tokens": 7, "can_allow_here": true});
+        for kind in ["CloudConsentRequested", "SharedConsentRequested"] {
+            let mut wire = body.clone();
+            wire["kind"] = json!(kind);
+            assert_eq!(serde_json::from_value::<StreamEventPayload>(wire).unwrap(), event);
+        }
+        assert_eq!(serde_json::to_value(&event).unwrap()["kind"], "CloudConsentRequested");
+
+        let mut session = json!({"session_id": "s", "cloud_allowed": true});
+        let view: RoutingSessionView = serde_json::from_value(session.clone()).unwrap();
+        assert!(view.shared_allowed);
+        session = json!({"session_id": "s", "shared_allowed": true});
+        let view: RoutingSessionView = serde_json::from_value(session).unwrap();
+        assert!(view.shared_allowed);
+        let out = serde_json::to_value(&view).unwrap();
+        assert_eq!(out["cloud_allowed"], true);
+        assert!(out.get("shared_allowed").is_none());
     }
 
     // ---- Routing visibility B1 ----
@@ -5404,7 +5479,7 @@ mod tests {
                 task: "chat".into(),
                 reason: "the best local fit for chat".into(),
             },
-            StreamEventPayload::CloudConsentRequested {
+            StreamEventPayload::SharedConsentRequested {
                 model: "claude-sonnet-4-5".into(),
                 endpoint: "anthropic".into(),
                 why: "no local model can handle this request".into(),
@@ -5433,7 +5508,7 @@ mod tests {
                 "kind": "ModelRouted", "model": "m@e", "task": "chat", "reason": "r"
             })
         );
-        let wire = serde_json::to_value(StreamEventPayload::CloudConsentRequested {
+        let wire = serde_json::to_value(StreamEventPayload::SharedConsentRequested {
             model: "m".into(),
             endpoint: "e".into(),
             why: "w".into(),
@@ -5474,7 +5549,7 @@ mod tests {
                 last_model: Some("big@gpu".into()),
                 last_reason: Some("r".into()),
                 tainted: None,
-                cloud_allowed: false,
+                shared_allowed: false,
             }),
         }
     }
@@ -6156,7 +6231,7 @@ mod tests {
     fn render_for_cli_consent_request_is_left_to_the_outcome() {
         // The daemon words the turn's outcome text per channel; rendering
         // the event too would print the request twice.
-        let payload = StreamEventPayload::CloudConsentRequested {
+        let payload = StreamEventPayload::SharedConsentRequested {
             model: "m".into(),
             endpoint: "e".into(),
             why: "w".into(),

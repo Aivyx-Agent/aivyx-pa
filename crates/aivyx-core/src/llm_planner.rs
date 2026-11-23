@@ -565,11 +565,11 @@ pub struct LlmPlanner {
     /// served a step (see `TurnPlanner::turn_costs`).
     turn_costs: Vec<(String, crate::TokenUsage)>,
     /// Model routing Part 3b — `None` unless `with_taint` was called (the
-    /// daemon's conversational planners, only when cloud escalation is
+    /// daemon's conversational planners, only when shared escalation is
     /// active). When set, a sensitive `ContextProvider`'s injection marks
     /// the turn's session routing-tainted.
     taint: Option<Arc<dyn crate::TaintSink>>,
-    /// `on_failure` cloud escalation — set when a `next_step` call this
+    /// `on_failure` shared escalation — set when a `next_step` call this
     /// turn spent both `invalid_input` repair rounds; reset in
     /// `begin_turn`. Read through `TurnPlanner::repair_exhausted`.
     turn_repair_exhausted: bool,
@@ -1118,7 +1118,7 @@ impl LlmPlanner {
             .as_ref()
             .filter(|_| aivyx_llm::is_routable(&self.history))
             // `last_served`, not the local router's last decision: it also
-            // sees calls escalated to a cloud model (Part 3b).
+            // sees calls escalated to a shared model (Part 3b).
             .and_then(|(r, _)| r.last_served(self.route_session.as_deref()?))
             .map(|key| key.id)
             .unwrap_or_else(|| self.config.model.clone())
@@ -1624,7 +1624,7 @@ impl TurnPlanner for LlmPlanner {
                     // as a completed turn.
                     return NextStep::Stop;
                 }
-                Err(e @ LlmError::NeedsCloudConsent(_)) => {
+                Err(e @ LlmError::NeedsSharedConsent(_)) => {
                     // Not a failure: the turn stops to ask the operator.
                     // The daemon finds the consent request's lead in this
                     // message and rewords it for the channel.
@@ -4234,7 +4234,7 @@ mod tests {
         }
     }
 
-    /// Stops every call to ask for cloud consent.
+    /// Stops every call to ask for shared consent.
     struct ConsentProvider;
 
     #[async_trait]
@@ -4244,12 +4244,12 @@ mod tests {
             _request: LlmRequest<'_>,
             _cancellation: &crate::CancellationToken,
         ) -> Result<Box<dyn LlmStream>, LlmError> {
-            Err(LlmError::NeedsCloudConsent("may I use the cloud model?".to_string()))
+            Err(LlmError::NeedsSharedConsent("may I use the cloud model?".to_string()))
         }
     }
 
     #[tokio::test]
-    async fn a_cloud_consent_stop_is_a_message_not_a_failure() {
+    async fn a_shared_consent_stop_is_a_message_not_a_failure() {
         // The turn stops to ask the operator; the daemon finds the consent
         // request's lead in this message and rewords it for the channel.
         let registry = Arc::new(ToolRegistry::new(vec![]));
@@ -6550,7 +6550,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_escalated_turn_is_billed_and_hinted_as_the_cloud_model() {
+    async fn an_escalated_turn_is_billed_and_hinted_as_the_shared_model() {
         let default = FakeLlmProvider::new(vec![]);
         let cloud = FakeLlmProvider::new(vec![final_step(30, 4)]);
         // Local: only `default`, which can't call tools. Cloud: `claude`,
@@ -6560,11 +6560,11 @@ mod tests {
             aivyx_route::TaskOverrides::default(),
         );
         let mut claude = routing_profile("cloud", "claude", &[aivyx_route::Capability::Tools]);
-        claude.locality = aivyx_route::Locality::Cloud;
-        let cloud_for_factory = Arc::clone(&cloud);
+        claude.locality = aivyx_route::Locality::Shared;
+        let shared_for_factory = Arc::clone(&cloud);
         let factory: aivyx_llm::ProviderFactory =
             Box::new(move |_endpoint: &aivyx_route::EndpointRef| {
-                Ok(Arc::clone(&cloud_for_factory) as Arc<dyn LlmProvider>)
+                Ok(Arc::clone(&shared_for_factory) as Arc<dyn LlmProvider>)
             });
         let routed = Arc::new(
             aivyx_llm::RoutedProvider::new(
@@ -6578,7 +6578,7 @@ mod tests {
             )
             .with_escalation(aivyx_llm::EscalationSetup {
                 router: aivyx_route::Router::new(vec![claude], aivyx_route::TaskOverrides::default())
-                    .with_allow_cloud(true),
+                    .with_allow_shared(true),
                 mode: aivyx_llm::EscalationMode::Auto,
                 no_local_candidate: true,
                 tiers: vec![],
@@ -6667,11 +6667,11 @@ mod tests {
             aivyx_route::TaskOverrides::default(),
         );
         let mut claude = routing_profile("cloud", "claude", &[aivyx_route::Capability::Tools]);
-        claude.locality = aivyx_route::Locality::Cloud;
-        let cloud_for_factory = Arc::clone(&cloud);
+        claude.locality = aivyx_route::Locality::Shared;
+        let shared_for_factory = Arc::clone(&cloud);
         let factory: aivyx_llm::ProviderFactory =
             Box::new(move |_endpoint: &aivyx_route::EndpointRef| {
-                Ok(Arc::clone(&cloud_for_factory) as Arc<dyn LlmProvider>)
+                Ok(Arc::clone(&shared_for_factory) as Arc<dyn LlmProvider>)
             });
         let routed = Arc::new(
             aivyx_llm::RoutedProvider::new(
@@ -6685,7 +6685,7 @@ mod tests {
             )
             .with_escalation(aivyx_llm::EscalationSetup {
                 router: aivyx_route::Router::new(vec![claude], aivyx_route::TaskOverrides::default())
-                    .with_allow_cloud(true),
+                    .with_allow_shared(true),
                 mode: aivyx_llm::EscalationMode::Auto,
                 no_local_candidate: true,
                 tiers: vec![],

@@ -61,7 +61,7 @@ struct ArmState {
     pending_offer: HashSet<String>,
 }
 
-/// Persisted routing taint + in-memory cloud consent, plus the in-memory
+/// Persisted routing taint + in-memory shared consent, plus the in-memory
 /// `on_failure` arming state (A16, [`ArmState`]). Implements
 /// [`aivyx_llm::escalation::EscalationGuard`] (read side),
 /// [`aivyx_core::TaintSink`] (write side) and
@@ -91,11 +91,11 @@ pub struct RoutingGuard {
     /// Model routing Part 3b (A16) — the armed/active/pending-offer
     /// state; see [`ArmState`].
     arm_state: Mutex<ArmState>,
-    /// Model routing Part 3b (A16) — the cloud model id the `ask`-mode
+    /// Model routing Part 3b (A16) — the shared model id the `ask`-mode
     /// hint from [`RoutingGuard::arm`] names for an untainted session.
     /// `None` when there is nothing to say.
     on_failure_model: Mutex<Option<String>>,
-    /// Routing visibility B1 — each session's latest cloud-consent stop,
+    /// Routing visibility B1 — each session's latest shared-consent stop,
     /// until [`RoutingGuard::take_consent_request`] hands it over or the
     /// session's next turn begins.
     consent_requests: Mutex<HashMap<String, ConsentRequest>>,
@@ -114,7 +114,7 @@ impl RoutingGuard {
         }
     }
 
-    /// Set (or clear) the cloud model id the `ask`-mode hint from
+    /// Set (or clear) the shared model id the `ask`-mode hint from
     /// [`RoutingGuard::arm`] names for an untainted session; the hint's
     /// wording is [`aivyx_llm::escalation::stuck_hint`], per channel. In
     /// memory only.
@@ -122,7 +122,7 @@ impl RoutingGuard {
         *lock(&self.on_failure_model) = model;
     }
 
-    /// Routing visibility B1 — hand over `session`'s latest cloud-consent
+    /// Routing visibility B1 — hand over `session`'s latest shared-consent
     /// stop, once: the daemon calls this after a turn to show the request
     /// per channel. `None` when the session's calls didn't stop for
     /// consent since its last turn began (or it was already taken).
@@ -202,7 +202,7 @@ impl RoutingGuard {
         }
     }
 
-    /// Allow cloud escalation for `session` for this process's lifetime.
+    /// Allow shared escalation for `session` for this process's lifetime.
     /// In-memory only; never overrides a taint.
     ///
     /// Also (A16) turns a pending `on_failure` offer — left by an `ask`
@@ -220,35 +220,53 @@ impl RoutingGuard {
         }
     }
 
-    /// Has the operator allowed cloud escalation for `session`?
+    /// Has the operator allowed shared escalation for `session`?
     pub fn consented(&self, session: &str) -> bool {
         lock(&self.consent).contains(session)
     }
 }
 
-/// Model routing Part 3b — the chat command that allows cloud escalation
-/// for the conversation it's sent in. Only the whole message counts.
-pub const ALLOW_CLOUD_COMMAND: &str = "/allow-cloud";
+/// Model routing Part 3b — the chat command that allows escalation to a
+/// less-trusted shared endpoint for the conversation it's sent in. Only the
+/// whole message counts.
+pub const ALLOW_SHARED_COMMAND: &str = "/allow-shared";
+
+/// The 2.0 spelling of [`ALLOW_SHARED_COMMAND`], still accepted until 3.0.
+pub const ALLOW_CLOUD_ALIAS: &str = "/allow-cloud";
+
+/// The line a reply to [`ALLOW_CLOUD_ALIAS`] starts with.
+pub const ALLOW_CLOUD_ALIAS_NOTE: &str = "/allow-cloud is now /allow-shared.";
 
 /// First-run coherence A1 (F14) — the reply an in-process session (no
-/// daemon) gives a whole-message `/allow-cloud` instead of sending it to the
-/// model: escalation consent lives in the daemon.
-pub const IN_PROCESS_ALLOW_CLOUD_REPLY: &str =
+/// daemon) gives a whole-message `/allow-shared` instead of sending it to
+/// the model: escalation consent lives in the daemon.
+pub const IN_PROCESS_ALLOW_SHARED_REPLY: &str =
     "Escalation to a less-trusted endpoint needs the daemon — start it with `aivyx-pa daemon run` (or store your \
      passphrase so aivyx-pa starts it), then allow it there.";
 
-/// Is `text` exactly the `/allow-cloud` command (surrounding whitespace
-/// aside)? Anything else is a normal turn.
-pub fn is_allow_cloud_command(text: &str) -> bool {
-    text.trim() == ALLOW_CLOUD_COMMAND
+/// Is `text` exactly `/allow-shared` (or its alias `/allow-cloud`),
+/// surrounding whitespace aside? Anything else is a normal turn.
+pub fn is_allow_shared_command(text: &str) -> bool {
+    let text = text.trim();
+    text == ALLOW_SHARED_COMMAND || text == ALLOW_CLOUD_ALIAS
 }
 
-/// Grants cloud-escalation consent for `session` when escalation is
+/// `reply` as shown for the command `text`: after [`ALLOW_CLOUD_ALIAS_NOTE`]
+/// on its own line when `text` is the old `/allow-cloud`, else unchanged.
+pub fn with_alias_note(text: &str, reply: &str) -> String {
+    if text.trim() == ALLOW_CLOUD_ALIAS {
+        format!("{ALLOW_CLOUD_ALIAS_NOTE}\n{reply}")
+    } else {
+        reply.to_string()
+    }
+}
+
+/// Grants consent to escalate to a shared endpoint for `session` when escalation is
 /// configured (`guard` is `Some`) and the request comes from the operator
 /// (`trusted`: a Trusted-tier channel, the local IPC socket or the CLI),
 /// and returns whether it was recorded and the reply. Consent is in-memory
 /// and never clears a taint.
-pub fn allow_cloud_reply(
+pub fn allow_shared_reply(
     guard: Option<&RoutingGuard>,
     session: &str,
     trusted: bool,
@@ -257,7 +275,7 @@ pub fn allow_cloud_reply(
         Some(_) if !trusted => (
             false,
             "Only the operator can allow a less-trusted endpoint — from a trusted frontend, or \
-             `aivyx-pa routing allow-cloud <session>`.",
+             `aivyx-pa routing allow-shared <session>`.",
         ),
         Some(guard) => {
             guard.allow(session);
@@ -270,7 +288,7 @@ pub fn allow_cloud_reply(
         None => (
             false,
             "Escalation to a less-trusted endpoint is not enabled — it needs a `[routing.endpoints]` \
-             entry labelled `locality = \"cloud\"` and `[routing.escalation]` mode \"ask\" or \"auto\".",
+             entry labelled `locality = \"shared\"` and `[routing.escalation]` mode \"ask\" or \"auto\".",
         ),
     }
 }
@@ -535,13 +553,25 @@ mod tests {
     }
 
     #[test]
-    fn allow_cloud_is_the_whole_message_only() {
-        assert!(is_allow_cloud_command("/allow-cloud"));
-        assert!(is_allow_cloud_command("  /allow-cloud\n"));
-        assert!(!is_allow_cloud_command("/allow-cloud please"));
-        assert!(!is_allow_cloud_command("please /allow-cloud"));
-        assert!(!is_allow_cloud_command("/ALLOW-CLOUD"));
-        assert!(!is_allow_cloud_command("allow-cloud"));
+    fn allow_shared_and_its_alias_are_the_whole_message_only() {
+        for cmd in ["/allow-shared", "/allow-cloud"] {
+            assert!(is_allow_shared_command(cmd));
+            assert!(is_allow_shared_command(&format!("  {cmd}\n")));
+            assert!(!is_allow_shared_command(&format!("{cmd} please")));
+            assert!(!is_allow_shared_command(&format!("please {cmd}")));
+            assert!(!is_allow_shared_command(&cmd.to_uppercase()));
+            assert!(!is_allow_shared_command(&cmd[1..]));
+        }
+    }
+
+    #[test]
+    fn only_the_alias_reply_starts_with_the_rename_note() {
+        assert_eq!(ALLOW_CLOUD_ALIAS_NOTE, "/allow-cloud is now /allow-shared.");
+        assert_eq!(
+            with_alias_note(" /allow-cloud\n", "Resend your message."),
+            "/allow-cloud is now /allow-shared.\nResend your message."
+        );
+        assert_eq!(with_alias_note("/allow-shared", "Resend your message."), "Resend your message.");
     }
 
     // ---- Model routing Part 3b (A16) — EscalationArming state ----
@@ -689,11 +719,11 @@ mod tests {
     #[tokio::test]
     async fn allow_through_the_reply_helper_arms_a_pending_offer() {
         // `/allow-cloud` (chat intercept and IPC) reaches the guard via
-        // `allow_cloud_reply`.
+        // `allow_shared_reply`.
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
         fail_then_consent_stop(&guard).await;
-        assert!(allow_cloud_reply(Some(&guard), "s1", true).0);
+        assert!(allow_shared_reply(Some(&guard), "s1", true).0);
         assert!(guard.armed_next("s1"));
     }
 
@@ -702,7 +732,7 @@ mod tests {
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 7).await);
         fail_then_consent_stop(&guard).await;
-        assert!(!allow_cloud_reply(Some(&guard), "s1", false).0);
+        assert!(!allow_shared_reply(Some(&guard), "s1", false).0);
         assert!(!guard.armed_next("s1"));
         assert!(!guard.consented("s1"));
     }
@@ -728,7 +758,7 @@ mod tests {
         let (_, hint) = guard.arm("clean", "looping", true).await;
         assert_eq!(
             hint.as_deref(),
-            Some("The local model got stuck; send /allow-cloud and resend to retry on `cloud-m` (an endpoint you marked less trusted).")
+            Some("The local model got stuck; send /allow-shared and resend to retry on `cloud-m` (an endpoint you marked less trusted).")
         );
 
         guard.mark("tainted", "gmail.search output").await;
@@ -749,7 +779,7 @@ mod tests {
             hint.as_deref(),
             Some(
                 "The local model got stuck; it could retry on `cloud-m` (an endpoint you marked less trusted). Only the operator can \
-                 allow a less-trusted endpoint — from the terminal (`/allow-cloud`) or the Studio."
+                 allow a less-trusted endpoint — from the terminal (`/allow-shared`) or the Studio."
             )
         );
 
@@ -909,16 +939,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn allow_cloud_reply_records_consent_only_when_enabled() {
+    async fn both_commands_grant_consent_for_a_shared_endpoint() {
+        for cmd in ["/allow-shared", "/allow-cloud"] {
+            let scratch = Scratch::new();
+            let guard = RoutingGuard::new(open_storage(&scratch, 1).await);
+            assert!(is_allow_shared_command(cmd));
+            let (granted, reply) = allow_shared_reply(Some(&guard), "s", true);
+            assert!(granted, "{cmd}");
+            assert!(guard.consented("s"), "{cmd}");
+            let shown = with_alias_note(cmd, reply);
+            assert_eq!(shown.starts_with("/allow-cloud is now /allow-shared.\n"), cmd == "/allow-cloud");
+        }
+    }
+
+    #[test]
+    fn the_replies_name_the_shared_tier_and_the_new_command() {
+        let untrusted = allow_shared_reply(None, "s", true).1;
+        assert!(untrusted.contains("locality = \"shared\""), "{untrusted}");
+        assert!(!untrusted.contains("cloud"), "{untrusted}");
+    }
+
+    #[tokio::test]
+    async fn allow_shared_reply_records_consent_only_when_enabled() {
         let scratch = Scratch::new();
         let guard = RoutingGuard::new(open_storage(&scratch, 1).await);
-        let (granted, reply) = allow_cloud_reply(Some(&guard), "s", true);
+        let (granted, reply) = allow_shared_reply(Some(&guard), "s", true);
         assert!(granted);
         assert!(guard.consented("s"));
         assert!(reply.contains("allowed"), "{reply}");
         assert!(reply.contains("Resend"), "{reply}");
 
-        let (granted, reply) = allow_cloud_reply(None, "s", true);
+        let (granted, reply) = allow_shared_reply(None, "s", true);
         assert!(!granted);
         assert!(reply.contains("not enabled"), "{reply}");
     }

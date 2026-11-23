@@ -11,11 +11,11 @@
 //! One module produces the reply for both interception points, so they
 //! can't drift:
 //! - the daemon's whole-message interception (`daemon_server.rs`, next to
-//!   `/allow-cloud`) — never reaches the agent, the conversation history,
+//!   `/allow-shared`) — never reaches the agent, the conversation history,
 //!   or the model, and is available from any channel (reading and pinning
 //!   aren't escalation);
 //! - the in-process REPL's interception (`session.rs`, next to its own
-//!   `/allow-cloud` reply) — only when `[routing] enabled = true` gave it
+//!   `/allow-shared` reply) — only when `[routing] enabled = true` gave it
 //!   a `RoutedProvider` to introspect.
 //!
 //! Model resolution reuses `aivyx_core::resolve_model` (the same resolver
@@ -117,7 +117,7 @@ pub async fn run(routed: Option<&RoutedProvider>, session: &str, input: &str) ->
 /// aside), or `name` followed by an argument after whitespace?
 /// `/modelsx` is not `/models` (no boundary), and this is exactly the
 /// "whole message only" rule the spec requires for these commands, as
-/// for `/allow-cloud`.
+/// for `/allow-shared`.
 fn parse_slash_command<'a>(input: &'a str, name: &str) -> Option<&'a str> {
     let trimmed = input.trim();
     let rest = trimmed.strip_prefix(name)?;
@@ -219,7 +219,7 @@ mod tests {
         for cmd in ["/models", "/models refresh", "/models why", "/model", "/model big", "/model auto"] {
             assert!(is_command(cmd), "{cmd}");
         }
-        for not in ["/models please", "/modelsx", "hello /models", "/allow-cloud"] {
+        for not in ["/models please", "/modelsx", "hello /models", "/allow-shared"] {
             assert!(!is_command(not), "{not}");
         }
     }

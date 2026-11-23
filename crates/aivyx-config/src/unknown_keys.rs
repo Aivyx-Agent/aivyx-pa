@@ -171,7 +171,11 @@ pub(crate) fn parse_reporting<T: serde::de::DeserializeOwned>(
 ) -> Result<(T, Vec<UnknownKey>, Vec<String>), toml::de::Error> {
     let mut table = raw.parse::<toml::Table>().ok();
     let original = table.clone();
-    let deprecated = table.as_mut().map(crate::deprecated_keys::rewrite).unwrap_or_default();
+    let mut deprecated = table.as_mut().map(crate::deprecated_keys::rewrite).unwrap_or_default();
+    // 2.1: the tier's old spelling parses as an alias; say so once per file.
+    if original.as_ref().is_some_and(crate::deprecated_keys::uses_old_locality) {
+        deprecated.push(crate::deprecated_keys::OLD_LOCALITY_NOTE.to_string());
+    }
     let mut ignored = Vec::new();
     // Usually nothing is deprecated and the file is parsed as written.
     let value: T = if table == original {

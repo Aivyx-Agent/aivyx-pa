@@ -1117,15 +1117,18 @@ fn run() -> Result<(), String> {
     // Phase 78 — `aivyx-pa learning`: read-only window into the
     // self-learning loop. IPC-backed; terminal parity with the
     // Web UI Learning pane.
-    // Model routing Part 3b — `aivyx-pa routing allow-cloud <session>`:
+    // Model routing Part 3b — `aivyx-pa routing allow-shared <session>`:
     // talks to the running daemon (no passphrase, no store).
-    if let CliMode::Routing(RoutingSubcommand::AllowCloud { session }) = &mode {
+    if let CliMode::Routing(RoutingSubcommand::AllowShared { session, via_alias }) = &mode {
+        if *via_alias {
+            eprintln!("`aivyx-pa routing allow-cloud` is now `aivyx-pa routing allow-shared`.");
+        }
         let session = session.clone();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
-        return rt.block_on(async move { routing::run_allow_cloud(&session).await });
+        return rt.block_on(async move { routing::run_allow_shared(&session).await });
     }
     if let CliMode::Learning { window_secs } = mode {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -1440,10 +1443,10 @@ fn run() -> Result<(), String> {
             .enable_all()
             .build()
             .map_err(|e| format!("failed to build tokio runtime: {e}"))?;
-        let access = routing::CloudAccess {
+        let access = routing::SharedAccess {
             escalation: config.routing_escalation.clone(),
             classifier: config.routing_classifier.clone(),
-            ..routing::CloudAccess::default()
+            ..routing::SharedAccess::default()
         };
         return rt.block_on(routing::run_routing_status(
             config.routing.as_ref(),
@@ -2802,9 +2805,11 @@ enum RoutingSubcommand {
     Status,
     /// The newest `limit` routing decisions on the audit chain.
     Explain { limit: usize },
-    /// Part 3b (A15) — allow cloud escalation for one conversation on the
-    /// running daemon (the same as `/allow-cloud` in that conversation).
-    AllowCloud { session: String },
+    /// Part 3b (A15) — allow escalation to a less-trusted shared endpoint
+    /// for one conversation on the running daemon (the same as
+    /// `/allow-shared` in that conversation). `via_alias`: spelt with the
+    /// 2.0 name `allow-cloud`, accepted until 3.0.
+    AllowShared { session: String, via_alias: bool },
 }
 
 /// A18 — `aivyx-pa card <subcommand>`.
@@ -4824,20 +4829,21 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
                 }
                 RoutingSubcommand::Explain { limit }
             }
-            Some("allow-cloud") => match &args[2..] {
-                [session] => RoutingSubcommand::AllowCloud {
+            Some(sub @ ("allow-shared" | "allow-cloud")) => match &args[2..] {
+                [session] => RoutingSubcommand::AllowShared {
                     session: session.clone(),
+                    via_alias: sub == "allow-cloud",
                 },
                 _ => {
                     return Err(
-                        "usage: `aivyx-pa routing allow-cloud <session-id>`".to_string()
+                        "usage: `aivyx-pa routing allow-shared <session-id>`".to_string()
                     );
                 }
             },
             other => {
                 return Err(format!(
                     "unknown `aivyx-pa routing` subcommand `{}` (expected: status | explain \
-                     [--limit N] | allow-cloud <session-id>)",
+                     [--limit N] | allow-shared <session-id>)",
                     other.unwrap_or("")
                 ));
             }
@@ -7580,7 +7586,7 @@ async fn run_async(
 ) -> Result<(), String> {
     // First-run coherence A1 (F14) — computed before the destructure below
     // moves `config.routing`; printed when the REPL runs in-process.
-    let in_process_cloud_warning = repl_daemon::in_process_cloud_warning(config.routing.as_ref());
+    let in_process_shared_warning = repl_daemon::in_process_shared_warning(config.routing.as_ref());
     // Destructure the config at the top so each downstream block
     // reaches for the local binding rather than the nested path
     // `config.field.value`. The `SourcedSecret` fields are already
@@ -8213,11 +8219,11 @@ async fn run_async(
     )
     .map(str::to_owned);
     // Model routing Part 3b — the escalation settings (2.0: no cloud keys).
-    let mut routing_access = routing::CloudAccess {
+    let mut routing_access = routing::SharedAccess {
         escalation: config_routing_escalation,
         classifier: config_routing_classifier,
         // Set below, once the routing guard and the audit log exist.
-        ..routing::CloudAccess::default()
+        ..routing::SharedAccess::default()
     };
     let provider: Arc<dyn LlmProvider> = match provider_kind.value {
         ProviderKind::OpenAi => {
@@ -8569,7 +8575,7 @@ async fn run_async(
     };
 
     // ---- Model routing Part 3b: routing taint ------------------------
-    // Only when cloud escalation is active (a cloud `[routing.endpoints.*]`
+    // Only when shared escalation is active (a cloud `[routing.endpoints.*]`
     // and `[routing.escalation] mode` not `never`); otherwise no taint
     // machinery runs at all (the compatibility invariant). ONE
     // `RoutingGuard` for the whole process — write-once and the
@@ -8631,16 +8637,16 @@ async fn run_async(
             None
         };
     // Part 3b (A16) — the autonomous loop arms only in `auto` mode (it runs
-    // unattended, so there is no one to send `/allow-cloud`) with
+    // unattended, so there is no one to send `/allow-shared`) with
     // `on_failure` on and an arming built above.
     let loop_escalate_on_failure = routing::loop_escalates_on_failure(
         &routing_access.escalation,
         escalation_arming.is_some(),
     );
 
-    // Part 3b (A16) — in `ask` mode, give the guard the cloud model the hint
+    // Part 3b (A16) — in `ask` mode, give the guard the shared model the hint
     // it hands back to an armed, untainted session names (`RoutingGuard::arm`,
-    // worded per channel): the first cloud candidate. Nothing to hint
+    // worded per channel): the first shared candidate. Nothing to hint
     // without one.
     if routing_access.escalation.mode == aivyx_config::EscalationMode::Ask
         && routing_access.escalation.on_failure
@@ -8649,7 +8655,7 @@ async fn run_async(
     {
         let default_endpoint =
             routing::default_endpoint(provider_kind.value, routing_base_url.as_deref());
-        if let Some(first) = routing::cloud_candidates(cfg, &default_endpoint).first() {
+        if let Some(first) = routing::shared_candidates(cfg, &default_endpoint).first() {
             guard.set_on_failure_model(Some(first.id.clone()));
         }
     }
@@ -12446,7 +12452,7 @@ async fn run_async(
                 eprintln!("aivyx-pa: no socket path available, using in-process mode.");
             }
             // First-run coherence A1 (F14) — escalation needs the daemon.
-            if let Some(warning) = &in_process_cloud_warning {
+            if let Some(warning) = &in_process_shared_warning {
                 eprintln!("{warning}");
             }
 
@@ -16866,14 +16872,17 @@ mod tests {
                 .mode,
             CliMode::Routing(RoutingSubcommand::Explain { limit: 5 })
         );
-        assert_eq!(
-            parse_cli_args_from(&argv(&["routing", "allow-cloud", "0b5c7d2e-0000-4000-8000-000000000000"]))
-                .unwrap()
-                .mode,
-            CliMode::Routing(RoutingSubcommand::AllowCloud {
-                session: "0b5c7d2e-0000-4000-8000-000000000000".into()
-            })
-        );
+        for (sub, via_alias) in [("allow-shared", false), ("allow-cloud", true)] {
+            assert_eq!(
+                parse_cli_args_from(&argv(&["routing", sub, "0b5c7d2e-0000-4000-8000-000000000000"]))
+                    .unwrap()
+                    .mode,
+                CliMode::Routing(RoutingSubcommand::AllowShared {
+                    session: "0b5c7d2e-0000-4000-8000-000000000000".into(),
+                    via_alias,
+                })
+            );
+        }
     }
 
     #[test]
@@ -16885,6 +16894,8 @@ mod tests {
             &["routing", "explain", "--limit"],
             &["routing", "explain", "--limit", "zero"],
             &["routing", "explain", "--limit", "0"],
+            &["routing", "allow-shared"],
+            &["routing", "allow-shared", "a", "b"],
             &["routing", "allow-cloud"],
             &["routing", "allow-cloud", "a", "b"],
         ] {

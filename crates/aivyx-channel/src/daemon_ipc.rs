@@ -17,7 +17,7 @@ pub use aivyx_ipc::protocol::*;
 /// events (`rendered`, which is `"(no reply)"` when nothing displayable
 /// streamed), plus the turn's authoritative outcome when it differs. A turn
 /// that streamed no text but has an outcome message — a routing or
-/// `/allow-cloud` command reply, a cloud-consent stop, a reply floor —
+/// `/allow-shared` command reply, a shared-consent stop, a reply floor —
 /// shows that message alone, never behind a "(no reply)" prefix. Shared by
 /// the Telegram, Discord and Slack daemon front ends.
 pub fn chat_reply(rendered: String, events: &[StreamEventPayload], outcome: &str) -> String {
@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn a_command_reply_is_the_note_alone() {
-        // `/models`, `/model x`, `/allow-cloud`: the daemon answers with no
+        // `/models`, `/model x`, `/allow-shared`: the daemon answers with no
         // events at all — the chat apps must not prefix "(no reply)".
         let out = chat_reply(
             "(no reply)".to_string(),

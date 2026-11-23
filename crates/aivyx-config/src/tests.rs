@@ -9387,7 +9387,7 @@ fn routing_shared_keys_are_undisturbed_by_the_escalation_subtables() {
     let shared = "\n[routing]\nenabled = true\ndiscover = false\n\
          [routing.endpoints.gpu]\nkind = \"ollama\"\nbase_url = \"http://127.0.0.1:11434\"\n\
          [routing.endpoints.lan]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\n\
-         locality = \"cloud\"\n\
+         locality = \"shared\"\n\
          [routing.tasks.plan]\ntier = \"large\"\n\
          [[routing.models]]\nid = \"qwen3:32b\"\nendpoint = \"gpu\"\ntier = \"large\"\n\
          priority = -2\ncapabilities = [\"completion\", \"tools\"]\ncontext_window = 32768\n";
@@ -14755,4 +14755,75 @@ fn the_diagnostics_load_keeps_a_non_local_url_for_doctor_to_report() {
             ("[embedding] base_url".to_string(), "http://127.0.0.1:11434".to_string()),
         ]
     );
+}
+
+/// 2.1 — the tier is "shared"; the 2.0 spelling `locality = "cloud"` still
+/// loads (as `Shared`) and adds the old-spelling note once per file, however
+/// many entries use it.
+#[test]
+fn an_old_cloud_locality_loads_as_shared_with_one_note() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[routing]\nenabled = true\n\
+         [routing.endpoints.lan]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\n\
+         locality = \"cloud\"\n\
+         [[routing.models]]\nid = \"big\"\nendpoint = \"lan\"\nlocality = \"cloud\"\n",
+        "routing-old-cloud-locality",
+    );
+    let routing = cfg.routing.as_ref().expect("routing");
+    assert_eq!(routing.endpoints["lan"].locality, Some(aivyx_route::Locality::Shared));
+    assert_eq!(routing.models[0].locality, Some(aivyx_route::Locality::Shared));
+    assert_eq!(
+        crate::OLD_LOCALITY_NOTE,
+        "locality = \"cloud\" is now \"shared\"; the old name works until 3.0"
+    );
+    let notes: Vec<_> = cfg.warnings.iter().filter(|w| *w == crate::OLD_LOCALITY_NOTE).collect();
+    assert_eq!(notes.len(), 1, "{:?}", cfg.warnings);
+}
+
+#[test]
+fn the_shared_spelling_gives_no_note() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[routing]\nenabled = true\n\
+         [routing.endpoints.lan]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\n\
+         locality = \"shared\"\n\
+         [[routing.models]]\nid = \"big\"\nendpoint = \"lan\"\nlocality = \"shared\"\n",
+        "routing-shared-locality",
+    );
+    let routing = cfg.routing.as_ref().expect("routing");
+    assert_eq!(routing.endpoints["lan"].locality, Some(aivyx_route::Locality::Shared));
+    assert!(!cfg.warnings.iter().any(|w| w.contains("cloud")), "{:?}", cfg.warnings);
+}
+
+/// A "cloud" that isn't a locality (an endpoint *named* cloud, a model id)
+/// is not the old spelling.
+#[test]
+fn cloud_elsewhere_in_routing_is_not_the_old_spelling() {
+    let _env = EnvScope::new();
+    let cfg = load_with_toml(
+        "\n[routing]\nenabled = true\n\
+         [routing.endpoints.cloud]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\n\
+         [[routing.models]]\nid = \"cloud\"\nendpoint = \"cloud\"\n",
+        "routing-cloud-names",
+    );
+    assert!(!cfg.warnings.iter().any(|w| *w == crate::OLD_LOCALITY_NOTE), "{:?}", cfg.warnings);
+}
+
+/// What pa writes back for the tier is the new spelling: a config read with
+/// "cloud" serialises as "shared".
+#[test]
+fn the_routing_writer_emits_shared() {
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct Doc {
+        routing: aivyx_route::RoutingConfig,
+    }
+    let doc: Doc = toml::from_str(
+        "[routing]\n[routing.endpoints.lan]\nkind = \"openai_compat\"\n\
+         base_url = \"http://10.0.0.7:8000\"\nlocality = \"cloud\"\n",
+    )
+    .unwrap();
+    let out = toml::to_string(&doc).unwrap();
+    assert!(out.contains("locality = \"shared\""), "{out}");
+    assert!(!out.contains("cloud"), "{out}");
 }

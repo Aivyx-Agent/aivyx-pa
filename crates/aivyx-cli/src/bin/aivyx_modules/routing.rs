@@ -4,12 +4,12 @@
 //!
 //! The default endpoint (`default`) is `[agent] provider` + `model`. Extra
 //! `[routing.endpoints.*]` may count as cloud (aivyx-route's effective
-//! locality: `locality = "cloud"`, or an address local only by DNS without a
+//! locality: `locality = "shared"`, or an address local only by DNS without a
 //! verified `locality = "local"`) only when `[routing.escalation] mode`
 //! isn't `never` (Part 3b). 2.0 (local-only): every endpoint URL must pass
 //! `require_local` (checked at config load and again here, with
 //! `verify_local`), so "cloud" now only means a server the operator trusts
-//! less. Their models are kept out of the local router: cloud candidates
+//! less. Their models are kept out of the local router: shared candidates
 //! there stay limited to the default endpoint, and only when the `[agent]`
 //! backend is itself cloud by the same rule.
 //!
@@ -47,7 +47,7 @@ pub(crate) const DEFAULT_ENDPOINT: &str = "default";
 /// mistral.rs backend (no address at all) is aivyx-route's in-process
 /// endpoint, local by construction. That locality
 /// decides every roster entry without an `endpoint`, and whether routing
-/// may choose less-trusted (`locality = "cloud"`) endpoints at all.
+/// may choose less-trusted (`locality = "shared"`) endpoints at all.
 pub(crate) fn default_endpoint(kind: ProviderKind, base_url: Option<&str>) -> DefaultEndpoint {
     let url = backend_url(kind, base_url);
     // 2.0 (local-only): `provider = "openai"` is an OpenAI-compatible local
@@ -146,7 +146,7 @@ fn word_issues(issues: Vec<ConfigIssue>, default: &DefaultEndpoint) -> Vec<Strin
             ConfigIssue::NonLocalAddress { endpoint, host } if is_default(&endpoint) => {
                 Some(format!(
                     "the [agent] backend at `{host}` is not a local address, so routing counts \
-                     its models as cloud (cloud-tagged [[routing.models]] entries on it may be \
+                     its models as shared (shared-tagged [[routing.models]] entries on it may be \
                      chosen) — expected if it is your own server with a public-looking name"
                 ))
             }
@@ -165,9 +165,9 @@ pub(crate) fn operator_backend(kind: EndpointKind, base_url: String) -> Endpoint
 
 /// `[routing.escalation]` and the escalation wiring: what a
 /// `[routing.endpoints.*]` endpoint counted as cloud needs. (2.0: no cloud
-/// API keys any more — the cloud endpoint kinds are gone.)
+/// API keys any more — the shared endpoint kinds are gone.)
 #[derive(Clone, Default)]
-pub(crate) struct CloudAccess {
+pub(crate) struct SharedAccess {
     pub escalation: EscalationConfig,
     /// The daemon's one routing guard (taint + consent), when escalation is
     /// active. Without it no escalation layer is built — the offline
@@ -180,7 +180,7 @@ pub(crate) struct CloudAccess {
     pub classifier: ClassifierConfig,
 }
 
-/// Cloud endpoints only under escalation (`mode` not `never`), and
+/// Shared endpoints only under escalation (`mode` not `never`), and
 /// `default` names `[agent]`.
 pub(crate) fn check_routing_config(
     cfg: &RoutingConfig,
@@ -193,29 +193,26 @@ pub(crate) fn check_routing_config(
                  provider and model; give this endpoint another name"
             ));
         }
-        if endpoint.effective_locality() == Locality::Cloud
+        if endpoint.effective_locality() == Locality::Shared
             && escalation.mode == EscalationMode::Never
         {
             return Err(format!(
                 "[routing.endpoints.{name}] is a less-trusted endpoint{why}, but [routing.escalation] \
                  mode is \"never\" — set it to \"ask\" or \"auto\" to allow escalating to it, \
                  or remove the endpoint",
-                why = why_cloud(endpoint),
+                why = why_shared(endpoint),
             ));
         }
     }
     Ok(())
 }
 
-/// Why a non-cloud kind counts as cloud, for the startup error: no
-/// address, or an address that isn't local. Empty for a cloud kind.
-fn why_cloud(endpoint: &EndpointConfig) -> String {
-    if endpoint.kind.locality() == Locality::Cloud {
-        return String::new();
-    }
+/// Why an endpoint counts as shared, for the startup error: marked so, no
+/// address, or an address that isn't local.
+fn why_shared(endpoint: &EndpointConfig) -> String {
     match endpoint.base_url() {
-        _ if endpoint.locality == Some(Locality::Cloud) => " (marked locality = \"cloud\")".into(),
-        None => " (it has no base_url, so it counts as cloud)".into(),
+        _ if endpoint.locality == Some(Locality::Shared) => " (marked locality = \"shared\")".into(),
+        None => " (it has no base_url, so it counts as shared)".into(),
         Some(url) => format!(
             " (`{host}` is not a local address — set locality = \"local\" on it if it is on \
              your own network)",
@@ -232,9 +229,9 @@ fn url_host(url: &str) -> &str {
     authority.rsplit_once('@').map_or(authority, |(_, host)| host)
 }
 
-/// Model routing Part 3b — cloud escalation is live: `[routing]` is
+/// Model routing Part 3b — shared escalation is live: `[routing]` is
 /// enabled, `[routing.escalation] mode` isn't `never`, and at least one
-/// `[routing.endpoints.*]` is a cloud endpoint. Only then does the daemon
+/// `[routing.endpoints.*]` is a shared endpoint. Only then does the daemon
 /// run the taint machinery; otherwise nothing is marked (the
 /// compatibility invariant — behaviour stays byte-identical to 3a).
 pub(crate) fn escalation_active(
@@ -245,13 +242,13 @@ pub(crate) fn escalation_active(
         && cfg.filter(|c| c.enabled).is_some_and(|c| {
             c.endpoints
                 .values()
-                .any(|e| e.effective_locality() == Locality::Cloud)
+                .any(|e| e.effective_locality() == Locality::Shared)
         })
 }
 
 /// Model routing Part 3b (A16) — does the autonomous loop arm its
 /// iterations for `on_failure` escalation? Only in `auto` mode (the loop
-/// runs unattended, so no one is there to send `/allow-cloud`), with
+/// runs unattended, so no one is there to send `/allow-shared`), with
 /// `on_failure` on, and with an arming actually built (`arming_present`).
 /// This is the sole enforcement of A16's "in `ask` the loop never arms".
 pub(crate) fn loop_escalates_on_failure(
@@ -369,15 +366,15 @@ impl ProfileRefresher for DiscoveryRefresher {
         };
         let mut profiles = merge(&self.config, &self.default_endpoint, &reports);
         clamp_ollama_windows(&mut profiles, &self.config);
-        without_cloud_endpoints(&mut profiles, &self.config);
+        without_shared_endpoints(&mut profiles, &self.config);
         profiles
     }
 }
 
-/// The models on `[routing.endpoints.*]` cloud endpoints — the escalation
-/// candidates. Cloud endpoints are never probed, so these are exactly the
+/// The models on `[routing.endpoints.*]` shared endpoints — the escalation
+/// candidates. Shared endpoints are never probed, so these are exactly the
 /// roster entries naming them (merged as unverified).
-pub(crate) fn cloud_candidates(
+pub(crate) fn shared_candidates(
     config: &RoutingConfig,
     default: &DefaultEndpoint,
 ) -> Vec<ModelProfile> {
@@ -387,7 +384,7 @@ pub(crate) fn cloud_candidates(
             config
                 .endpoints
                 .get(p.endpoint.as_str())
-                .is_some_and(|e| e.effective_locality() == Locality::Cloud)
+                .is_some_and(|e| e.effective_locality() == Locality::Shared)
         })
         .collect()
 }
@@ -401,19 +398,19 @@ fn llm_mode(mode: EscalationMode) -> aivyx_llm::EscalationMode {
 }
 
 /// Keeps only local-router candidates: models on the `default` endpoint
-/// or on a configured local `[routing.endpoints.*]` entry. Cloud-endpoint
+/// or on a configured local `[routing.endpoints.*]` entry. Shared-endpoint
 /// models are escalation targets, never local candidates (so the local
-/// router behaves exactly as 3a's whether or not a cloud endpoint is
+/// router behaves exactly as 3a's whether or not a shared endpoint is
 /// configured), and a model naming an endpoint that isn't configured at
 /// all is dropped too — `merge` marks it cloud (fail closed), and on a
 /// cloud `[agent]` provider the local router would otherwise allow it.
-fn without_cloud_endpoints(profiles: &mut Vec<ModelProfile>, config: &RoutingConfig) {
+fn without_shared_endpoints(profiles: &mut Vec<ModelProfile>, config: &RoutingConfig) {
     profiles.retain(|p| {
         p.endpoint.as_str() == DEFAULT_ENDPOINT
             || config
                 .endpoints
                 .get(p.endpoint.as_str())
-                .is_some_and(|e| e.effective_locality() != Locality::Cloud)
+                .is_some_and(|e| e.effective_locality() != Locality::Shared)
     });
 }
 
@@ -611,7 +608,7 @@ struct Prepared {
 /// merge once.
 async fn prepare(
     routing: &RoutingConfig,
-    access: &CloudAccess,
+    access: &SharedAccess,
     kind: ProviderKind,
     base_url: Option<&str>,
     model: &str,
@@ -656,7 +653,7 @@ async fn prepare(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn wrap_with_routing(
     routing: Option<&RoutingConfig>,
-    access: &CloudAccess,
+    access: &SharedAccess,
     kind: ProviderKind,
     base_url: Option<&str>,
     model: &str,
@@ -678,7 +675,7 @@ pub(crate) async fn wrap_with_routing(
         eprintln!("aivyx-pa: routing: {warning}");
     }
     let router = Router::new(profiles, config.tasks.clone())
-        .with_allow_cloud(default.effective_locality() == Locality::Cloud);
+        .with_allow_shared(default.effective_locality() == Locality::Shared);
     let mut routed = RoutedProvider::new(
         default_key,
         provider,
@@ -702,16 +699,16 @@ pub(crate) async fn wrap_with_routing(
     if escalation_active(Some(routing), &access.escalation)
         && let Some(guard) = &access.escalation_guard
     {
-        let cloud = cloud_candidates(&config, &default);
+        let cloud = shared_candidates(&config, &default);
         if cloud.is_empty() {
             eprintln!(
-                "aivyx-pa: routing: a cloud [routing.endpoints] entry is configured but no \
+                "aivyx-pa: routing: a shared [routing.endpoints] entry is configured but no \
                  [[routing.models]] entry names it — nothing to escalate to"
             );
         } else {
             let esc = &access.escalation;
             routed = routed.with_escalation(aivyx_llm::EscalationSetup {
-                router: Router::new(cloud, config.tasks.clone()).with_allow_cloud(true),
+                router: Router::new(cloud, config.tasks.clone()).with_allow_shared(true),
                 mode: llm_mode(esc.mode),
                 no_local_candidate: esc.no_local_candidate,
                 tiers: esc
@@ -881,7 +878,7 @@ fn fmt_age(d: Duration) -> String {
 /// and print the candidates.
 pub(crate) async fn run_routing_status(
     routing: Option<&RoutingConfig>,
-    access: &CloudAccess,
+    access: &SharedAccess,
     kind: ProviderKind,
     base_url: Option<&str>,
     model: &str,
@@ -906,7 +903,7 @@ pub(crate) async fn run_routing_status(
     );
     print!("{}", render_classifier(&access.classifier));
     if escalation_active(Some(routing), &access.escalation) {
-        let cloud = cloud_candidates(&prepared.config, &prepared.default);
+        let cloud = shared_candidates(&prepared.config, &prepared.default);
         print!("{}", render_escalation(&access.escalation, &cloud));
     }
     // Model routing Part 4 — one residency poll (no background task: this
@@ -991,7 +988,7 @@ fn routed_entry(entry: &SignedEntry) -> Option<RoutedEntry> {
             Some(session_id.clone()),
             "-".to_string(),
             "taint".to_string(),
-            format!("tainted by {reason} — never escalates to the cloud"),
+            format!("tainted by {reason} — never escalates to a shared endpoint"),
         ),
         AuditEvent::EscalationArmed { session_id, signal } => (
             Some(session_id.clone()),
@@ -1045,12 +1042,12 @@ pub(crate) fn render_escalation(esc: &EscalationConfig, cloud: &[ModelProfile]) 
         }
     );
     for p in cloud {
-        out.push_str(&format!("  {} (cloud)\n", p.key()));
+        out.push_str(&format!("  {} (shared)\n", p.key()));
     }
     if esc.mode == EscalationMode::Ask {
         out.push_str(
-            "  In `ask` mode a turn that needs the cloud stops and asks; send /allow-cloud in \
-             that conversation (or `aivyx-pa routing allow-cloud <session>`), then resend.\n",
+            "  In `ask` mode a turn that needs a shared server stops and asks; send /allow-shared in \
+             that conversation (or `aivyx-pa routing allow-shared <session>`), then resend.\n",
         );
     }
     out.push_str(
@@ -1059,17 +1056,17 @@ pub(crate) fn render_escalation(esc: &EscalationConfig, cloud: &[ModelProfile]) 
     out
 }
 
-/// `aivyx-pa routing allow-cloud <session>` — allow cloud escalation for
+/// `aivyx-pa routing allow-shared <session>` — allow shared escalation for
 /// one conversation on the running daemon (in-memory there; a daemon
 /// restart re-asks). Never overrides a routing taint.
-pub(crate) async fn run_allow_cloud(session: &str) -> Result<(), String> {
+pub(crate) async fn run_allow_shared(session: &str) -> Result<(), String> {
     let socket_path = aivyx_channel::daemon_ipc::default_socket_path()?;
     if !aivyx_channel::daemon_client::daemon_is_running(&socket_path).await {
         return Err("the daemon isn't running — start it, then allow a less-trusted endpoint for the \
-                    conversation (or send /allow-cloud in it)"
+                    conversation (or send /allow-shared in it)"
             .to_string());
     }
-    match aivyx_channel::daemon_client::allow_cloud_escalation(&socket_path, session).await {
+    match aivyx_channel::daemon_client::allow_shared_escalation(&socket_path, session).await {
         Ok(true) => {
             println!("Escalation to a less-trusted endpoint allowed for conversation {session} (until the daemon restarts).");
             Ok(())
@@ -1236,17 +1233,17 @@ mod tests {
         assert_eq!(loc(P::MistralRs, None), Locality::Local);
         assert!(default_endpoint(P::MistralRs, None).is_in_process());
         assert_eq!(loc(P::Ollama, Some("http://192.168.1.20:11434")), Locality::Local);
-        assert_eq!(loc(P::Ollama, Some("https://ollama.example.com")), Locality::Cloud);
-        assert_eq!(loc(P::LlamaCpp, Some("https://llm.example.com")), Locality::Cloud);
-        assert_eq!(loc(P::Broker, Some("https://broker.example.com")), Locality::Cloud);
+        assert_eq!(loc(P::Ollama, Some("https://ollama.example.com")), Locality::Shared);
+        assert_eq!(loc(P::LlamaCpp, Some("https://llm.example.com")), Locality::Shared);
+        assert_eq!(loc(P::Broker, Some("https://broker.example.com")), Locality::Shared);
         // `provider = "openai"` on a LAN server is local, not just on loopback.
         assert_eq!(loc(P::OpenAi, Some("http://192.168.1.5:8000/v1")), Locality::Local);
         assert_eq!(
             default_endpoint(P::OpenAi, Some("http://192.168.1.5:8000/v1")).kind,
             EndpointKind::OpenaiCompat
         );
-        assert_eq!(loc(P::OpenAi, Some("https://api.groq.com/openai/v1")), Locality::Cloud);
-        assert_eq!(loc(P::OpenAi, None), Locality::Cloud, "no address: fails closed");
+        assert_eq!(loc(P::OpenAi, Some("https://api.groq.com/openai/v1")), Locality::Shared);
+        assert_eq!(loc(P::OpenAi, None), Locality::Shared, "no address: fails closed");
     }
 
     /// Fixed DNS answers (no network in tests).
@@ -1317,7 +1314,7 @@ mod tests {
     }
 
     #[test]
-    fn a_non_cloud_kind_at_a_hosted_address_is_a_cloud_endpoint() {
+    fn a_local_kind_at_a_hosted_address_is_a_shared_endpoint() {
         let groq = parse(
             "[routing]\nenabled = true\n[routing.endpoints.groq]\nkind = \"openai_compat\"\n\
              base_url = \"https://api.groq.com/openai/v1\"\n",
@@ -1373,7 +1370,7 @@ mod tests {
         // closed here (and discovery refuses a non-local one anyway).
         let named =
             operator_backend(EndpointKind::Lemonade, "https://lemonade.example.com/api".into());
-        assert_eq!(named.effective_locality(), Locality::Cloud);
+        assert_eq!(named.effective_locality(), Locality::Shared);
     }
 
     fn escalation(mode: EscalationMode) -> EscalationConfig {
@@ -1384,17 +1381,17 @@ mod tests {
     }
 
     /// Escalation at its default (`ask`).
-    fn cloud_access() -> CloudAccess {
-        CloudAccess {
+    fn shared_access() -> SharedAccess {
+        SharedAccess {
             escalation: EscalationConfig::default(),
-            ..CloudAccess::default()
+            ..SharedAccess::default()
         }
     }
 
     #[test]
-    fn escalation_is_active_only_with_a_cloud_endpoint_and_a_non_never_mode() {
+    fn escalation_is_active_only_with_a_shared_endpoint_and_a_non_never_mode() {
         let cloud =
-            parse("[routing]\nenabled = true\n[routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"cloud\"\n");
+            parse("[routing]\nenabled = true\n[routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"shared\"\n");
         let local = parse(
             "[routing]\nenabled = true\n[routing.endpoints.box]\nkind = \"ollama\"\n\
              base_url = \"http://127.0.0.1:11434\"\n",
@@ -1425,12 +1422,12 @@ mod tests {
     }
 
     #[test]
-    fn cloud_endpoints_need_escalation_and_the_reserved_name_is_rejected() {
+    fn shared_endpoints_need_escalation_and_the_reserved_name_is_rejected() {
         let never = escalation(EscalationMode::Never);
-        // 2.0: "cloud" is an endpoint the operator marked `locality = "cloud"`.
+        // 2.0: "cloud" is an endpoint the operator marked `locality = "shared"`.
         let cfg = parse(
             "[routing.endpoints.claude]\nkind = \"openai_compat\"\n\
-             base_url = \"http://10.0.0.7:8000\"\nlocality = \"cloud\"\n",
+             base_url = \"http://10.0.0.7:8000\"\nlocality = \"shared\"\n",
         );
         let err = check_routing_config(&cfg, &never).unwrap_err();
         assert!(err.contains("claude"), "{err}");
@@ -1617,7 +1614,7 @@ mod tests {
         let provider = unused_provider();
         let (wrapped, routed) = wrap_with_routing(
             None,
-            &CloudAccess::default(),
+            &SharedAccess::default(),
             ProviderKind::Ollama,
             None,
             "qwen3:8b",
@@ -1635,7 +1632,7 @@ mod tests {
         assert!(!cfg.enabled);
         let (wrapped, routed) = wrap_with_routing(
             Some(&cfg),
-            &CloudAccess::default(),
+            &SharedAccess::default(),
             ProviderKind::Ollama,
             None,
             "qwen3:8b",
@@ -1658,7 +1655,7 @@ mod tests {
         let provider = unused_provider();
         let (wrapped, routed) = wrap_with_routing(
             Some(&cfg),
-            &CloudAccess::default(),
+            &SharedAccess::default(),
             ProviderKind::Ollama,
             None,
             "qwen3:8b",
@@ -1683,12 +1680,12 @@ mod tests {
     async fn plan_on_default(kind: ProviderKind, base_url: Option<&str>) -> Result<ModelKey, String> {
         let cfg = parse(
             "[routing]\nenabled = true\ndiscover = false\n\
-             [[routing.models]]\nid = \"claude-big\"\ntier = \"large\"\nlocality = \"cloud\"\n\
+             [[routing.models]]\nid = \"claude-big\"\ntier = \"large\"\nlocality = \"shared\"\n\
              capabilities = [\"completion\", \"tools\"]\ncontext_window = 200000\n",
         );
         let (_, routed) = wrap_with_routing(
             Some(&cfg),
-            &CloudAccess::default(),
+            &SharedAccess::default(),
             kind,
             base_url,
             "claude-small",
@@ -1706,7 +1703,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_local_provider_never_picks_a_cloud_tagged_entry() {
+    async fn a_local_provider_never_picks_a_shared_tagged_entry() {
         // 2.0: there is no cloud provider any more; on the local default a
         // cloud-tagged entry is never chosen — routing adds no cloud
         // destination the operator lacks.
@@ -1717,12 +1714,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cloud_endpoint_fails_startup_under_mode_never() {
+    async fn a_shared_endpoint_fails_startup_under_mode_never() {
         let cfg =
-            parse("[routing]\nenabled = true\n[routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"cloud\"\n");
-        let never = CloudAccess {
+            parse("[routing]\nenabled = true\n[routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"shared\"\n");
+        let never = SharedAccess {
             escalation: escalation(EscalationMode::Never),
-            ..cloud_access()
+            ..shared_access()
         };
         for (access, expected) in [(&never, "[routing.escalation] mode")] {
             let err = wrap_with_routing(
@@ -1743,7 +1740,7 @@ mod tests {
     }
 
     /// Until escalation dispatch lands (a separate escalation router), a
-    /// configured cloud endpoint's models stay out of the local router:
+    /// configured shared endpoint's models stay out of the local router:
     /// routing behaves exactly as 3a's.
     struct NoTaint;
 
@@ -1767,7 +1764,7 @@ mod tests {
         );
         let (_, routed) = wrap_with_routing(
             Some(&cfg),
-            &cloud_access(),
+            &shared_access(),
             ProviderKind::Ollama,
             None,
             "claude-small",
@@ -1788,14 +1785,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn without_a_cloud_endpoint_no_escalation_is_attached_even_with_a_guard() {
+    async fn without_a_shared_endpoint_no_escalation_is_attached_even_with_a_guard() {
         let cfg = parse(
             "[routing]\nenabled = true\ndiscover = false\n\
              [[routing.models]]\nid = \"qwen3:32b\"\ntier = \"large\"\n",
         );
-        let access = CloudAccess {
+        let access = SharedAccess {
             escalation_guard: Some(Arc::new(NoTaint)),
-            ..cloud_access()
+            ..shared_access()
         };
         let (_, routed) = wrap_with_routing(
             Some(&cfg),
@@ -1815,20 +1812,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn escalation_gets_the_cloud_endpoint_models_only_with_a_guard() {
+    async fn escalation_gets_the_shared_endpoint_models_only_with_a_guard() {
         let cfg = parse(
             "[routing]\nenabled = true\ndiscover = false\n\
-             [routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"cloud\"\n\
+             [routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"shared\"\n\
              [[routing.models]]\nid = \"claude-big\"\nendpoint = \"claude\"\ntier = \"large\"\n\
              capabilities = [\"completion\", \"tools\"]\n",
         );
-        let with_guard = CloudAccess {
+        let with_guard = SharedAccess {
             escalation_guard: Some(Arc::new(NoTaint)),
-            ..cloud_access()
+            ..shared_access()
         };
         for (access, expected) in [
             (with_guard, vec!["claude-big@claude".to_string()]),
-            (cloud_access(), vec![]),
+            (shared_access(), vec![]),
         ] {
             let (_, routed) = wrap_with_routing(
                 Some(&cfg),
@@ -1864,18 +1861,18 @@ mod tests {
     async fn escalation_on_failure_reflects_the_configured_flag() {
         let cfg = parse(
             "[routing]\nenabled = true\ndiscover = false\n\
-             [routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"cloud\"\n\
+             [routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"shared\"\n\
              [[routing.models]]\nid = \"claude-big\"\nendpoint = \"claude\"\ntier = \"large\"\n\
              capabilities = [\"completion\", \"tools\"]\n",
         );
         for (on_failure, expected) in [(true, Some(true)), (false, Some(false))] {
-            let access = CloudAccess {
+            let access = SharedAccess {
                 escalation: EscalationConfig {
                     on_failure,
                     ..EscalationConfig::default()
                 },
                 escalation_guard: Some(Arc::new(NoTaint)),
-                ..cloud_access()
+                ..shared_access()
             };
             let (_, routed) = wrap_with_routing(
                 Some(&cfg),
@@ -1899,11 +1896,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cloud_endpoint_models_are_kept_out_of_the_local_router() {
+    async fn shared_endpoint_models_are_kept_out_of_the_local_router() {
         let local = "[routing]\nenabled = true\ndiscover = false\n\
              [[routing.models]]\nid = \"qwen3:32b\"\ntier = \"large\"\n";
         let with_cloud = format!(
-            "{local}[routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"cloud\"\n\
+            "{local}[routing.endpoints.claude]\nkind = \"openai_compat\"\nbase_url = \"http://10.0.0.7:8000\"\nlocality = \"shared\"\n\
              [[routing.models]]\nid = \"claude-big\"\nendpoint = \"claude\"\ntier = \"large\"\n\
              capabilities = [\"completion\", \"tools\"]\ncontext_window = 200000\n"
         );
@@ -1912,7 +1909,7 @@ mod tests {
             let cfg = parse(&src);
             let (_, routed) = wrap_with_routing(
                 Some(&cfg),
-                &cloud_access(),
+                &shared_access(),
                 ProviderKind::Ollama,
                 None,
                 "qwen3:8b",
@@ -1950,7 +1947,7 @@ mod tests {
         );
         let err = wrap_with_routing(
             Some(&cfg),
-            &cloud_access(),
+            &shared_access(),
             ProviderKind::Ollama,
             None,
             "qwen3:8b",
@@ -2246,7 +2243,7 @@ mod tests {
     }
 
     #[test]
-    fn render_status_lists_escalation_settings_and_cloud_candidates() {
+    fn render_status_lists_escalation_settings_and_shared_candidates() {
         let mut claude = ModelProfile::new("claude-big", EndpointRef::new("claude"));
         claude.capabilities.insert(Capability::Tools);
         for (on_failure, marker) in [(false, "on_failure: off"), (true, "on_failure: on")] {
@@ -2261,7 +2258,7 @@ mod tests {
             assert!(text.contains("no_local_candidate"), "{text}");
             assert!(text.contains("plan"), "{text}");
             assert!(text.contains("claude-big@claude"), "{text}");
-            assert!(text.contains("/allow-cloud"), "{text}");
+            assert!(text.contains("/allow-shared"), "{text}");
             assert!(text.contains(marker), "{text}");
         }
     }
@@ -2284,12 +2281,12 @@ mod tests {
     async fn wrap_with_routing_enables_the_classifier_only_when_configured() {
         let cfg = parse("[routing]\nenabled = true\ndiscover = false\n");
         for (enabled, expected) in [(true, true), (false, false)] {
-            let access = CloudAccess {
+            let access = SharedAccess {
                 classifier: ClassifierConfig {
                     enabled,
                     timeout_ms: 1500,
                 },
-                ..CloudAccess::default()
+                ..SharedAccess::default()
             };
             let (_, routed) = wrap_with_routing(
                 Some(&cfg),
@@ -2443,7 +2440,7 @@ mod tests {
         );
         let (_, routed) = wrap_with_routing(
             Some(&cfg),
-            &CloudAccess::default(),
+            &SharedAccess::default(),
             ProviderKind::Ollama,
             None,
             "qwen3:8b",

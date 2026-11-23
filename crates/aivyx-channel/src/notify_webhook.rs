@@ -173,7 +173,7 @@ impl ReqwestWebhookSender {
 
 impl ReqwestWebhookSender {
     fn client_for(&self, url: &str) -> &reqwest::Client {
-        if aivyx_route::url_locality(url) == aivyx_route::Locality::Local {
+        if aivyx_route::url_is_local(url) {
             &self.direct
         } else {
             &self.client

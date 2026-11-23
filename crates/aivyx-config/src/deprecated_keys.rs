@@ -76,6 +76,38 @@ pub(crate) const DEPRECATED_KEYS: &[(&str, Change)] = &[
 /// commented out) is dropped without a word: it holds nothing to warn about.
 const RETIRED_SECTIONS: &[&str] = &["confine", "aivyx_pa"];
 
+/// 2.1 — the note for the 2.0 spelling of the less-trusted tier, which
+/// still parses (as `Shared`) until 3.0.
+pub const OLD_LOCALITY_NOTE: &str =
+    "locality = \"cloud\" is now \"shared\"; the old name works until 3.0";
+
+/// Whether the file spells a routing locality the 2.0 way (`"cloud"`):
+/// `routing.default.locality`, any `routing.endpoints.*.locality` or any
+/// `routing.models[].locality`. Read from the raw table before the typed
+/// parse (which reads `"cloud"` as an alias and keeps no trace of it).
+pub(crate) fn uses_old_locality(table: &toml::Table) -> bool {
+    fn is_cloud(t: &toml::Table) -> bool {
+        t.get("locality").and_then(toml::Value::as_str) == Some("cloud")
+    }
+    let Some(toml::Value::Table(routing)) = table.get("routing") else {
+        return false;
+    };
+    let default = matches!(routing.get("default"), Some(toml::Value::Table(t)) if is_cloud(t));
+    let endpoint = match routing.get("endpoints") {
+        Some(toml::Value::Table(endpoints)) => endpoints
+            .values()
+            .any(|e| matches!(e, toml::Value::Table(t) if is_cloud(t))),
+        _ => false,
+    };
+    let model = match routing.get("models") {
+        Some(toml::Value::Array(models)) => models
+            .iter()
+            .any(|m| matches!(m, toml::Value::Table(t) if is_cloud(t))),
+        _ => false,
+    };
+    default || endpoint || model
+}
+
 fn segments(path: &str) -> impl Iterator<Item = (&str, bool)> + Clone {
     path.split('.').map(|s| match s.strip_suffix("[]") {
         Some(name) => (name, true),

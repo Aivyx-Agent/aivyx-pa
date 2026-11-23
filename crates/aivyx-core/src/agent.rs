@@ -287,9 +287,9 @@ pub struct ConcreteAgent {
     /// confirms every change. Off everywhere by default.
     confirm_all: ConfirmAllAreas,
     /// Model routing Part 3b — where this agent marks a conversation
-    /// routing-tainted (so it never escalates to a cloud endpoint). `None`
+    /// routing-tainted (so it never escalates to a shared endpoint). `None`
     /// (the default) runs no taint machinery at all: the daemon attaches
-    /// one only when cloud escalation is active. See [`Self::with_taint`].
+    /// one only when shared escalation is active. See [`Self::with_taint`].
     taint: Option<Arc<dyn crate::TaintSink>>,
     /// `[routing.sensitive] tool_prefixes` — a completed call to a tool
     /// whose name starts with one of these taints the session.
@@ -297,7 +297,7 @@ pub struct ConcreteAgent {
     /// `[routing.sensitive] channels` — a turn arriving on one of these
     /// platforms taints the session at turn start.
     taint_channels: Vec<String>,
-    /// `on_failure` cloud escalation — where this agent brackets each turn
+    /// `on_failure` shared escalation — where this agent brackets each turn
     /// (`begin_armed_turn` / `end_armed_turn`) and arms the conversation's
     /// *next* turn after a failure signal. `None` (the default) runs no
     /// arming machinery at all. See [`Self::with_escalation_arming`].
@@ -497,7 +497,7 @@ impl ConcreteAgent {
         self
     }
 
-    /// `on_failure` cloud escalation (A16) — attach the arming the turn
+    /// `on_failure` shared escalation (A16) — attach the arming the turn
     /// loop reports to. Every turn is bracketed: `begin_armed_turn` before
     /// anything else runs (an armed mark becomes this turn's active mark,
     /// so its model calls escalate) and `end_armed_turn` on every exit.
@@ -515,13 +515,13 @@ impl ConcreteAgent {
         self
     }
 
-    /// `on_failure` cloud escalation — arm `session`'s next turn with
+    /// `on_failure` shared escalation — arm `session`'s next turn with
     /// `signal`, appending the returned `ask`-mode hint (if any) to the
     /// final message the channel is about to receive. No-op without an
     /// attached arming, and for any turn not originated by the operator:
     /// a trigger, cron, webhook, file-watch or loop fire runs on a fresh
     /// session that never gets a next turn, so a mark there would never
-    /// be consumed and its hint would invite `/allow-cloud` in a
+    /// be consumed and its hint would invite `/allow-shared` in a
     /// conversation that can't use it (final review I1). The loop arms
     /// its own iterations from outside, through `fire_armed`.
     async fn arm_next_turn(
@@ -537,7 +537,7 @@ impl ConcreteAgent {
         }
         if let Some(arming) = &self.arming {
             // Routing visibility B1 — the same test the daemon applies to
-            // `/allow-cloud`: only a Trusted or Kernel channel can grant
+            // `/allow-shared`: only a Trusted or Kernel channel can grant
             // consent, so only there does the hint invite it.
             let can_allow_here = matches!(tier, TrustTier::Trusted | TrustTier::Kernel);
             let (_newly_armed, hint) = arming.arm(session, signal, can_allow_here).await;
@@ -558,7 +558,7 @@ impl Agent for ConcreteAgent {
         &self.capabilities
     }
 
-    /// `on_failure` cloud escalation (A16) — bracket the whole turn with
+    /// `on_failure` shared escalation (A16) — bracket the whole turn with
     /// the arming's `begin_armed_turn` / `end_armed_turn`, so the active
     /// mark is cleared on *every* exit of
     /// [`ConcreteAgent::turn_inner`]: normal completion, the budget-denied
@@ -8493,7 +8493,7 @@ mod tests {
     }
 
     const HINT: &str =
-        "The local model got stuck; send /allow-cloud and resend to retry on `cloud-m` (an endpoint you marked less trusted).";
+        "The local model got stuck; send /allow-shared and resend to retry on `cloud-m` (an endpoint you marked less trusted).";
 
     fn arm_entries(log: &ArmLog) -> Vec<String> {
         log.lock()
@@ -8547,7 +8547,7 @@ mod tests {
         // Final review I1 — a trigger / cron / webhook / loop iteration is
         // system-originated and runs on a fresh session that never gets a
         // next turn, so arming it would only leave a dead mark, an
-        // `EscalationArmed` entry and a hint inviting `/allow-cloud` in a
+        // `EscalationArmed` entry and a hint inviting `/allow-shared` in a
         // conversation that can't use it. The bracket still runs: the
         // loop's `fire_armed` pre-arms a system turn and relies on
         // `begin_armed_turn` promoting that mark.
@@ -8798,9 +8798,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn arming_tells_the_guard_whether_this_channel_can_allow_cloud() {
+    async fn arming_tells_the_guard_whether_this_channel_can_allow_shared() {
         // Routing visibility B1 — the `ask`-mode hint is per channel: only
-        // a Trusted or Kernel channel can send `/allow-cloud` itself.
+        // a Trusted or Kernel channel can send `/allow-shared` itself.
         for (tier, want) in [
             (TrustTier::Untrusted, false),
             (TrustTier::SemiTrusted, false),

@@ -1,6 +1,6 @@
 //! The terminal REPL's own slash commands: `/help`, `/quit`, `/exit`, and
 //! the answer to a `/word` nothing handles. The routing commands
-//! (`/models`, `/model`), `/allow-cloud` and `/image` are handled where
+//! (`/models`, `/model`), `/allow-shared` and `/image` are handled where
 //! they always were; this only recognises them so they are not called
 //! unknown.
 
@@ -16,7 +16,9 @@ pub enum ReplCommand {
 }
 
 /// Commands handled elsewhere (routing, consent, images).
-const HANDLED_ELSEWHERE: &[&str] = &["/allow-cloud", "/models", "/model", "/image"];
+/// `/allow-cloud` is `/allow-shared`'s 2.0 spelling, accepted until 3.0.
+const HANDLED_ELSEWHERE: &[&str] =
+    &["/allow-shared", "/allow-cloud", "/models", "/model", "/image"];
 
 /// `None` for an ordinary message — including anything that merely starts
 /// with a slash, like a path (`/etc/hosts`), and the commands handled
@@ -69,7 +71,7 @@ pub fn help_text(studio_line: &str) -> String {
            /quit, /exit    leave (Ctrl-D also works)\n  \
            /models         list the models routing can choose from\n  \
            /model <name>   pin this conversation to a model (/model auto to unpin)\n  \
-           /allow-cloud    allow a less-trusted endpoint for this conversation, then resend\n  \
+           /allow-shared   allow a less-trusted endpoint for this conversation, then resend\n  \
            /image <path> [caption]   send a picture\n\
          Keys: Ctrl-C cancels the running turn (twice to leave).\n\
          When a tool needs your approval: [y] allow  [n] deny (default; Enter denies)  [a] show all\n\
@@ -100,7 +102,8 @@ mod tests {
     #[test]
     fn handled_elsewhere_paths_and_chat_pass_through() {
         for ok in [
-            "/models", "/models why", "/model big", "/allow-cloud", "/image a.png hi",
+            "/models", "/models why", "/model big", "/allow-shared", "/allow-cloud",
+            "/image a.png hi",
             "hello", "", "/", "//", "/etc/hosts", "/tmp/x.txt is broken", "/1", "what is /help",
         ] {
             assert_eq!(parse(ok), None, "{ok:?}");
@@ -119,6 +122,8 @@ mod tests {
             assert!(text.contains(want), "{want}: {text}");
         }
         assert!(!text.contains("[A]"), "pa has no lasting allow: {text}");
+        assert!(text.contains("/allow-shared"), "{text}");
+        assert!(!text.contains("/allow-cloud"), "help lists only the new name: {text}");
         assert!(studio_help_line(Some(&StudioState::Failed(7843))).contains("7843"));
         assert!(studio_help_line(None).contains("daemon"));
     }

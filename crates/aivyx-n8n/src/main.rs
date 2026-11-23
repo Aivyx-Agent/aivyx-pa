@@ -134,7 +134,7 @@ async fn run_ipc_loop() -> ExitCode {
 /// n8n API key -- to `HTTP_PROXY`/`ALL_PROXY` (aivyx-vision audit
 /// 2026-11-11, X1).
 fn http_client_for(base_url: &str) -> reqwest::Client {
-    let builder = if aivyx_route::url_locality(base_url) == aivyx_route::Locality::Local {
+    let builder = if aivyx_route::url_is_local(base_url) {
         reqwest::Client::builder().no_proxy()
     } else {
         reqwest::Client::builder()

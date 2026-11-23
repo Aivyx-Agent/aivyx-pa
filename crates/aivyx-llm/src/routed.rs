@@ -38,9 +38,9 @@ pub trait ProfileRefresher: Send + Sync {
     async fn refresh(&self) -> Vec<ModelProfile>;
 }
 
-/// Model routing Part 3b — consent-gated cloud escalation. A separate,
-/// cloud-only router (built `with_allow_cloud(true)` over the
-/// `[routing.endpoints.*]` cloud models) that a call reaches only through
+/// Model routing Part 3b — consent-gated shared escalation. A separate,
+/// cloud-only router (built `with_allow_shared(true)` over the
+/// `[routing.endpoints.*]` shared models) that a call reaches only through
 /// [`decide_escalation`]; the local router never sees these models.
 pub struct EscalationSetup {
     pub router: Router,
@@ -131,7 +131,7 @@ impl RoutedProvider {
         }
     }
 
-    /// Enables consent-gated cloud escalation (Part 3b). Without it,
+    /// Enables consent-gated shared escalation (Part 3b). Without it,
     /// behaviour is exactly Part 3a's.
     pub fn with_escalation(mut self, setup: EscalationSetup) -> Self {
         self.escalation = Some(setup);
@@ -164,7 +164,7 @@ impl RoutedProvider {
     }
 
     /// `session`'s escalation state (Part 3b) — its taint reason, if any,
-    /// and whether cloud escalation is allowed for it — or `None` when
+    /// and whether shared escalation is allowed for it — or `None` when
     /// escalation isn't configured.
     pub async fn escalation_state(&self, session: &str) -> Option<(Option<String>, bool)> {
         let esc = self.escalation.as_ref()?;
@@ -182,7 +182,7 @@ impl RoutedProvider {
             .is_some_and(|esc| esc.guard.armed_next(session))
     }
 
-    /// The cloud escalation candidates (Part 3b), empty when escalation
+    /// The shared escalation candidates (Part 3b), empty when escalation
     /// isn't configured. For `routing.status`.
     pub fn escalation_candidates(&self) -> Vec<ModelProfile> {
         self.escalation
@@ -323,7 +323,7 @@ impl RoutedProvider {
 
     /// Model routing Part 3b — one escalation attempt for `trigger`:
     /// decide (taint, consent, mode, session), record the decision, and
-    /// dispatch to the cloud router only on `Proceed`.
+    /// dispatch to the shared router only on `Proceed`.
     async fn escalate(
         &self,
         esc: &EscalationSetup,
@@ -361,7 +361,7 @@ impl RoutedProvider {
                     Ok(plan) => plan,
                     Err(e) => {
                         (esc.observer)(&record(None, "no_cloud_model"));
-                        return Escalated::Done(Err(no_cloud_model(&e)));
+                        return Escalated::Done(Err(no_shared_model(&e)));
                     }
                 };
                 let key = &plan.chain[0];
@@ -379,14 +379,14 @@ impl RoutedProvider {
                 if let Some(s) = session {
                     esc.guard.note_consent_requested(s, &consent);
                 }
-                Escalated::Done(Err(LlmError::NeedsCloudConsent(consent_lead(&consent))))
+                Escalated::Done(Err(LlmError::NeedsSharedConsent(consent_lead(&consent))))
             }
             EscalationVerdict::Proceed => {
                 let plan = match esc.router.plan(query, Instant::now()) {
                     Ok(plan) => plan,
                     Err(e) => {
                         (esc.observer)(&record(None, "no_cloud_model"));
-                        return Escalated::Done(Err(no_cloud_model(&e)));
+                        return Escalated::Done(Err(no_shared_model(&e)));
                     }
                 };
                 match self.dispatch(&esc.router, &plan, request, cancellation).await {
@@ -583,9 +583,9 @@ pub fn is_routable(messages: &[LlmMessage]) -> bool {
     })
 }
 
-fn no_cloud_model(e: &aivyx_route::NoRoute) -> LlmError {
+fn no_shared_model(e: &aivyx_route::NoRoute) -> LlmError {
     LlmError::Routing(format!(
-        "no cloud escalation model can serve this call either ({e}) — check the cloud entries in \
+        "no shared escalation model can serve this call either ({e}) — check the shared entries in \
          [[routing.models]]"
     ))
 }
@@ -696,7 +696,7 @@ impl LlmProvider for RoutedProvider {
                 }
                 return Err(match blocked {
                     Some(reason) => LlmError::Routing(format!(
-                        "cloud escalation blocked: this conversation contains {reason}; \
+                        "escalation to a shared endpoint blocked: this conversation contains {reason}; \
                          no local model can serve it ({e})"
                     )),
                     None => LlmError::Routing(format!(
@@ -789,7 +789,7 @@ impl LlmProvider for RoutedProvider {
     }
 
     async fn tool_call_family_hint(&self, model: &str) -> Option<String> {
-        // Local candidates first, then (Part 3b) cloud escalation models,
+        // Local candidates first, then (Part 3b) shared escalation models,
         // so a hint for an escalated model reaches its own provider.
         let cloud = self
             .escalation
@@ -1557,7 +1557,7 @@ mod tests {
         assert_eq!(routed_provider.default_key(), &key("default", "default"));
     }
 
-    // ---- Model routing Part 3b: cloud escalation ----
+    // ---- Model routing Part 3b: shared escalation ----
 
     use crate::escalation::{
         ConsentRequest, EscalationGuard, EscalationMode, EscalationRecord, Trigger, consent_lead,
@@ -1623,9 +1623,9 @@ mod tests {
         }
     }
 
-    fn cloud_profile() -> ModelProfile {
+    fn shared_profile() -> ModelProfile {
         let mut p = profile("cloud", "claude", Tier::Large, &[Capability::Tools]);
-        p.locality = aivyx_route::Locality::Cloud;
+        p.locality = aivyx_route::Locality::Shared;
         p
     }
 
@@ -1641,7 +1641,7 @@ mod tests {
         escalating_to(Scripted::ok(), mode, no_local_candidate, tiers, guard)
     }
 
-    /// [`escalating`], with `cloud` serving the cloud endpoint. `on_failure`
+    /// [`escalating`], with `cloud` serving the shared endpoint. `on_failure`
     /// stays off — see [`escalating_armed`] for Task 2's trigger.
     fn escalating_to(
         cloud: Arc<Scripted>,
@@ -1676,8 +1676,8 @@ mod tests {
         let records: Arc<Mutex<Vec<EscalationRecord>>> = Arc::default();
         let sink = Arc::clone(&records);
         f.routed = f.routed.with_escalation(EscalationSetup {
-            router: Router::new(vec![cloud_profile()], TaskOverrides::default())
-                .with_allow_cloud(true),
+            router: Router::new(vec![shared_profile()], TaskOverrides::default())
+                .with_allow_shared(true),
             mode,
             no_local_candidate,
             tiers,
@@ -1759,12 +1759,12 @@ mod tests {
         };
         // Routing visibility B1 — the channel-neutral two sentences, with
         // no framing, no internal trigger name and no `id@endpoint`.
-        assert_eq!(err, LlmError::NeedsCloudConsent(consent_lead(&want)));
+        assert_eq!(err, LlmError::NeedsSharedConsent(consent_lead(&want)));
         let msg = err.to_string();
         assert_eq!(
             msg,
             "This would use `claude` on the `cloud` endpoint, which you marked less trusted \
-             (`locality = \"cloud\"`), because no local model can handle this request. About \
+             (`locality = \"shared\"`), because no local model can handle this request. About \
              12,578 tokens — this conversation plus the assistant's instructions — would be \
              sent there."
         );
@@ -1792,7 +1792,7 @@ mod tests {
         );
         let (messages, mut hint) = routed(TaskKind::Chat, Some("s"));
         hint.estimated_prompt_tokens = 900;
-        let Err(LlmError::NeedsCloudConsent(msg)) =
+        let Err(LlmError::NeedsSharedConsent(msg)) =
             call(&f.routed, request(&messages, &[], Some(hint))).await
         else {
             panic!("expected a consent request");
@@ -1838,7 +1838,7 @@ mod tests {
         else {
             panic!("expected a blocked error");
         };
-        assert!(msg.contains("cloud escalation blocked"), "{msg}");
+        assert!(msg.contains("escalation to a shared endpoint blocked"), "{msg}");
         assert!(msg.contains("gmail.search output"), "{msg}");
         assert!(cloud.seen().is_empty());
         let recs = records.lock().unwrap().clone();
@@ -1892,7 +1892,7 @@ mod tests {
         assert_eq!(f.default.seen().len(), 1);
         assert_eq!(records.lock().unwrap()[0].outcome, "disabled");
 
-        // No local candidate either: the 3a error, still no cloud call.
+        // No local candidate either: the 3a error, still no shared call.
         let (messages, _, tools) = with_tools(None);
         let (_, hint) = routed(TaskKind::Chat, None);
         let err = call(&f.routed, request(&messages, &tools, Some(hint)))
@@ -1980,7 +1980,7 @@ mod tests {
             Arc::clone(&guard) as Arc<dyn EscalationGuard>,
         );
         let (messages, hint) = routed(TaskKind::Chat, Some("s"));
-        let Err(LlmError::NeedsCloudConsent(msg)) =
+        let Err(LlmError::NeedsSharedConsent(msg)) =
             call(&f.routed, request(&messages, &[], Some(hint))).await
         else {
             panic!("expected a consent request");
@@ -2374,7 +2374,7 @@ mod tests {
     }
 
     /// Final-review I1(b) / M1 — with no local candidate, classification
-    /// can't help, so it's skipped; the escalation's cloud pick is the
+    /// can't help, so it's skipped; the escalation's shared pick is the
     /// tier-less one (the classifier would have answered `small`).
     #[tokio::test]
     async fn no_local_candidate_is_not_classified_and_escalates_tier_free() {
@@ -2385,19 +2385,19 @@ mod tests {
             vec![("cpu", Arc::clone(&tiny)), ("cloud", Arc::clone(&cloud))],
         );
         let mut medium = profile("cloud", "claude", Tier::Medium, &[Capability::Tools]);
-        medium.locality = aivyx_route::Locality::Cloud;
+        medium.locality = aivyx_route::Locality::Shared;
         let mut small = profile("cloud", "haiku", Tier::Small, &[Capability::Tools]);
-        small.locality = aivyx_route::Locality::Cloud;
-        let cloud_router = || {
+        small.locality = aivyx_route::Locality::Shared;
+        let shared_router = || {
             Router::new(vec![medium.clone(), small.clone()], TaskOverrides::default())
-                .with_allow_cloud(true)
+                .with_allow_shared(true)
         };
         // Sanity: a `small` tier would have picked a different model.
         let mut probe = RouteQuery::new(TaskKind::Chat);
         probe.tools = true;
-        let tierless = cloud_router().plan(&probe, Instant::now()).unwrap().chain[0].clone();
+        let tierless = shared_router().plan(&probe, Instant::now()).unwrap().chain[0].clone();
         probe.tier = Some(Tier::Small);
-        let tiered = cloud_router().plan(&probe, Instant::now()).unwrap().chain[0].clone();
+        let tiered = shared_router().plan(&probe, Instant::now()).unwrap().chain[0].clone();
         assert_ne!(tierless, tiered);
 
         f.routed = f
@@ -2406,7 +2406,7 @@ mod tests {
                 timeout: Duration::from_secs(5),
             })
             .with_escalation(EscalationSetup {
-                router: cloud_router(),
+                router: shared_router(),
                 mode: EscalationMode::Auto,
                 no_local_candidate: true,
                 tiers: vec![],

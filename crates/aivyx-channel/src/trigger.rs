@@ -324,7 +324,7 @@ impl TriggerDispatch {
     }
 
     /// Model routing Part 3b (A16) — attach the `on_failure` arming so
-    /// [`Self::fire_armed`] can arm a fired turn for cloud escalation. The
+    /// [`Self::fire_armed`] can arm a fired turn for shared escalation. The
     /// daemon attaches it only when `on_failure` is on.
     pub fn with_escalation_arming(
         mut self,

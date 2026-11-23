@@ -214,13 +214,13 @@ pub enum AuditEvent {
     /// Model routing Part 3b — conversation `session_id` was first marked
     /// routing-tainted: it touched sensitive data (a sensitive tool's
     /// output, operator-private memory recall, a sensitive channel), so it
-    /// never escalates to a cloud endpoint. `reason` is a short label,
+    /// never escalates to a shared endpoint. `reason` is a short label,
     /// never content. Written once per session, on the first mark.
     /// Additive: an internally tagged variant, so existing entries
     /// canonicalize unchanged.
     ConversationTainted { session_id: String, reason: String },
 
-    /// Model routing Part 3b (A15) — one cloud-escalation decision (see
+    /// Model routing Part 3b (A15) — one shared-escalation decision (see
     /// `aivyx_core::AuditTag::CloudEscalation`). Never carries content:
     /// `payload_hash` is a hex SHA-256 of the would-be outbound request.
     /// Additive; `session_id`/`model` are omitted when `None`.
@@ -235,13 +235,13 @@ pub enum AuditEvent {
         payload_hash: String,
     },
 
-    /// Model routing Part 3b (A15) — the operator allowed cloud escalation
+    /// Model routing Part 3b (A15) — the operator allowed shared escalation
     /// for conversation `session_id` (`via` = `"chat"` or `"ipc"`).
     /// Additive.
     CloudConsentGranted { session_id: String, via: String },
 
     /// Model routing Part 3b (A16) — conversation `session_id` was newly
-    /// armed for `on_failure` cloud escalation (see
+    /// armed for `on_failure` shared escalation (see
     /// `aivyx_core::AuditTag::EscalationArmed`). `signal` is the exact
     /// failure spelling that armed it. Written once per new mark. Additive.
     EscalationArmed { session_id: String, signal: String },

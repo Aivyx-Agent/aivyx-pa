@@ -33,7 +33,7 @@ pub enum LineKind {
     Status,
     /// An approval-gate announcement.
     Gate,
-    /// Routing visibility B3 — a cloud-consent notice, styled like
+    /// Routing visibility B3 — a shared-consent notice, styled like
     /// [`LineKind::Gate`] (both are "something needs the operator's
     /// attention" flags) but tagged separately so it never gets grouped
     /// with, or mistaken for, an actual approval gate.
@@ -648,7 +648,7 @@ pub fn update(mut state: AppState, msg: Msg) -> AppState {
             let displayed = concat_text_events(&events);
             let consent_stop = events
                 .iter()
-                .any(|e| matches!(e, StreamEventPayload::CloudConsentRequested { .. }));
+                .any(|e| matches!(e, StreamEventPayload::SharedConsentRequested { .. }));
 
             // Coalesce consecutive Text events first: the daemon
             // streams token-level chunks ("Hi", " there", "!"), and
@@ -853,7 +853,7 @@ pub fn lines_from_event(event: &StreamEventPayload) -> Vec<ChatLine> {
         // carries the full per-channel request text, and `update`'s
         // `TurnFinished` arm shows that once, highlighted as
         // `LineKind::Consent`, when this event is present.
-        StreamEventPayload::CloudConsentRequested { .. } => return Vec::new(),
+        StreamEventPayload::SharedConsentRequested { .. } => return Vec::new(),
     };
 
     let rendered = event.render_for_cli();
@@ -896,7 +896,7 @@ mod tests {
 
     #[test]
     fn a_consent_stop_shows_its_full_text_once_highlighted() {
-        let consent = StreamEventPayload::CloudConsentRequested {
+        let consent = StreamEventPayload::SharedConsentRequested {
             model: "claude-sonnet-4-5".into(),
             endpoint: "anthropic".into(),
             why: "no local model can handle this request".into(),
@@ -906,10 +906,10 @@ mod tests {
         // The event alone adds no line: the outcome carries the text.
         assert!(lines_from_event(&consent).is_empty());
         let text = "This would use `claude-sonnet-4-5` on the `anthropic` endpoint, which you marked less \
-                    trusted (`locality = \"cloud\"`), because no local model can handle this \
+                    trusted (`locality = \"shared\"`), because no local model can handle this \
                     request. About 12,578 tokens — this conversation plus the assistant's \
                     instructions — would be sent there. \
-                    Send /allow-cloud to allow it for this conversation, then resend your message.";
+                    Send /allow-shared to allow it for this conversation, then resend your message.";
         let s = update(
             AppState::new(),
             Msg::TurnFinished {

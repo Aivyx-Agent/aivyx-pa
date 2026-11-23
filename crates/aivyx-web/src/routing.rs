@@ -1,5 +1,5 @@
 //! Routing visibility B4 — the Studio's pure routing helpers: the plain
-//! words the Models screen, the status bar and the cloud-consent card show
+//! words the Models screen, the status bar and the shared-consent card show
 //! for the router's state. No Dioxus, no IPC — every function here is a
 //! pure mapping so it can be tested natively (`cargo test -p aivyx-web`).
 
@@ -204,7 +204,7 @@ pub fn consent_parts(model: &str, endpoint: &str, why: &str, estimated_tokens: u
         ConsentPart::Text(" on the ".to_string()),
         ConsentPart::Code(endpoint.to_string()),
         ConsentPart::Text(format!(
-            " endpoint, which you marked less trusted (`locality = \"cloud\"`), because {why}. About {} \
+            " endpoint, which you marked less trusted (`locality = \"shared\"`), because {why}. About {} \
              tokens — this conversation plus the assistant's instructions — would be sent there.",
             with_thousands(u64::from(estimated_tokens))
         )),
@@ -349,7 +349,7 @@ mod tests {
                 last_model: None,
                 last_reason: None,
                 tainted: None,
-                cloud_allowed: false,
+                shared_allowed: false,
             }),
         }
     }
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(
             consent_lead("claude-sonnet-5", "claude", "this kind of request is set to use a less-trusted endpoint", 12578),
             "This would use `claude-sonnet-5` on the `claude` endpoint, which you marked less trusted \
-             (`locality = \"cloud\"`), because this kind of request is set to use a less-trusted \
+             (`locality = \"shared\"`), because this kind of request is set to use a less-trusted \
              endpoint. About 12,578 tokens — this conversation plus the assistant's instructions — \
              would be sent there."
         );
@@ -507,7 +507,7 @@ mod tests {
                 ConsentPart::Text(" on the ".to_string()),
                 ConsentPart::Code("claude".to_string()),
                 ConsentPart::Text(
-                    " endpoint, which you marked less trusted (`locality = \"cloud\"`), because this kind \
+                    " endpoint, which you marked less trusted (`locality = \"shared\"`), because this kind \
                      of request is set to use a less-trusted endpoint. About 12,578 tokens — this \
                      conversation plus the assistant's instructions — would be sent there."
                         .to_string()
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn the_outcome_line_is_suppressed_when_a_consent_card_was_shown() {
-        let outcome = "completed: This would use a less-trusted endpoint: … Send /allow-cloud to allow it.";
+        let outcome = "completed: This would use a less-trusted endpoint: … Send /allow-shared to allow it.";
         assert_eq!(outcome_note("", outcome, true), None);
         assert!(outcome_note("", outcome, false).is_some());
         // A normal turn is untouched either way.

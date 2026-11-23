@@ -65,7 +65,7 @@ fn kind_style(kind: LineKind) -> (&'static str, Style) {
         // (both flag something needing the operator's attention), with
         // its own glyph so a consent notice is never mistaken for an
         // actual approval gate.
-        LineKind::Consent => ("☁ ", bold(palette::AMBER)),
+        LineKind::Consent => ("⚠ ", bold(palette::AMBER)),
         LineKind::System => ("· ", fg(palette::LAV)),
     }
 }
@@ -840,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn cloud_consent_notice_is_styled_like_gate() {
+    fn shared_consent_notice_is_styled_like_gate() {
         assert_eq!(
             kind_style(LineKind::Consent).1,
             kind_style(LineKind::Gate).1,
@@ -850,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn cloud_consent_notice_renders_in_the_chat_pane() {
+    fn shared_consent_notice_renders_in_the_chat_pane() {
         let backend = TestBackend::new(72, 12);
         let mut terminal = Terminal::new(backend).unwrap();
 
@@ -865,7 +865,7 @@ mod tests {
         let text = buffer_text(&terminal);
 
         assert!(text.contains("consent needed"), "got: {text}");
-        assert!(text.contains("☁"), "got: {text}");
+        assert!(text.contains("⚠"), "got: {text}");
     }
 
     #[test]

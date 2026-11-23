@@ -3,7 +3,7 @@
 //!
 //! `aivyx-pa` on a terminal, with no daemon listening, used to chat
 //! in-process and never start one, so the Studio, scheduled routines and
-//! cloud escalation silently didn't work. Now [`decide`] picks one of:
+//! shared escalation silently didn't work. Now [`decide`] picks one of:
 //!
 //! - [`Decision::Connect`] — a daemon is already listening;
 //! - [`Decision::SpawnThenConnect`] — none is, but the passphrase comes from
@@ -125,22 +125,22 @@ pub fn start_failed_notice(error: &str, log_path: &std::path::Path) -> String {
 }
 
 /// The in-process startup warning when routing is enabled and
-/// `[routing.endpoints]` names a cloud endpoint: escalation needs the
+/// `[routing.endpoints]` names a shared endpoint: escalation needs the
 /// daemon, so this session can't use it.
-pub fn in_process_cloud_warning(routing: Option<&aivyx_route::RoutingConfig>) -> Option<String> {
-    // A cloud endpoint under disabled routing is inert either way.
+pub fn in_process_shared_warning(routing: Option<&aivyx_route::RoutingConfig>) -> Option<String> {
+    // A shared endpoint under disabled routing is inert either way.
     let routing = routing.filter(|r| r.enabled)?;
     let cloud: Vec<&str> = routing
         .endpoints
         .iter()
-        .filter(|(_, ep)| ep.effective_locality() == aivyx_route::Locality::Cloud)
+        .filter(|(_, ep)| ep.effective_locality() == aivyx_route::Locality::Shared)
         .map(|(name, _)| name.as_str())
         .collect();
     if cloud.is_empty() {
         return None;
     }
     Some(format!(
-        "aivyx-pa: [routing.endpoints] has an endpoint labelled `locality = \"cloud\"` ({}), but escalation to it \
+        "aivyx-pa: [routing.endpoints] has an endpoint labelled `locality = \"shared\"` ({}), but escalation to it \
          needs the daemon — this in-process session won't use it.",
         cloud.join(", ")
     ))
@@ -428,7 +428,7 @@ mod tests {
         assert!(!without.contains("Studio"), "{without}");
     }
 
-    /// `cloud` is an endpoint the operator marked `locality = "cloud"` (2.0:
+    /// `cloud` is an endpoint the operator marked `locality = "shared"` (2.0:
     /// the cloud kinds are gone).
     fn routing_with(kinds: &[(&str, &str)]) -> aivyx_route::RoutingConfig {
         let mut toml = String::from("enabled = true\n");
@@ -436,7 +436,7 @@ mod tests {
             match *kind {
                 "cloud" => toml.push_str(&format!(
                     "[endpoints.{name}]\nkind = \"openai_compat\"\n\
-                     base_url = \"http://10.0.0.7:8000\"\nlocality = \"cloud\"\n"
+                     base_url = \"http://10.0.0.7:8000\"\nlocality = \"shared\"\n"
                 )),
                 kind => toml.push_str(&format!("[endpoints.{name}]\nkind = \"{kind}\"\n")),
             }
@@ -445,10 +445,10 @@ mod tests {
     }
 
     #[test]
-    fn cloud_warning_only_for_a_cloud_endpoint() {
-        assert_eq!(in_process_cloud_warning(None), None);
-        assert_eq!(in_process_cloud_warning(Some(&routing_with(&[("box", "ollama")]))), None);
-        let w = in_process_cloud_warning(Some(&routing_with(&[
+    fn shared_warning_only_for_a_shared_endpoint() {
+        assert_eq!(in_process_shared_warning(None), None);
+        assert_eq!(in_process_shared_warning(Some(&routing_with(&[("box", "ollama")]))), None);
+        let w = in_process_shared_warning(Some(&routing_with(&[
             ("box", "ollama"),
             ("claude", "cloud"),
         ])))
@@ -457,23 +457,23 @@ mod tests {
         assert!(w.contains("needs the daemon"), "{w}");
         let mut off = routing_with(&[("claude", "cloud")]);
         off.enabled = false;
-        assert_eq!(in_process_cloud_warning(Some(&off)), None, "routing off: nothing to warn about");
+        assert_eq!(in_process_shared_warning(Some(&off)), None, "routing off: nothing to warn about");
     }
 
     #[test]
-    fn cloud_warning_for_a_local_kind_at_a_hosted_address() {
+    fn shared_warning_for_a_local_kind_at_a_hosted_address() {
         let hosted: aivyx_route::RoutingConfig = toml::from_str(
             "enabled = true\n[endpoints.groq]\nkind = \"openai_compat\"\n\
              base_url = \"https://api.groq.com/openai/v1\"\n",
         )
         .expect("routing snippet parses");
-        let w = in_process_cloud_warning(Some(&hosted)).expect("a hosted endpoint is cloud");
+        let w = in_process_shared_warning(Some(&hosted)).expect("a hosted endpoint is cloud");
         assert!(w.contains("groq"), "{w}");
         let lan: aivyx_route::RoutingConfig = toml::from_str(
             "enabled = true\n[endpoints.box]\nkind = \"openai_compat\"\n\
              base_url = \"http://192.168.1.5:8000/v1\"\n",
         )
         .expect("routing snippet parses");
-        assert_eq!(in_process_cloud_warning(Some(&lan)), None);
+        assert_eq!(in_process_shared_warning(Some(&lan)), None);
     }
 }

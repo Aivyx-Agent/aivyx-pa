@@ -887,16 +887,16 @@ pub enum AuditTag {
     },
     /// Model routing Part 3b — conversation `session_id` was first marked
     /// routing-tainted (it touched sensitive data, so it never escalates
-    /// to a cloud endpoint). `reason` is a short label (a tool name, "memory
+    /// to a shared endpoint). `reason` is a short label (a tool name, "memory
     /// recall", a channel), never content. Emitted once per session, by
     /// [`AuditedTaintSink`], only when the mark was new.
     ConversationTainted { session_id: String, reason: String },
-    /// Model routing Part 3b (A15) — one cloud-escalation decision: a
+    /// Model routing Part 3b (A15) — one shared-escalation decision: a
     /// trigger fired and escalation was allowed (and succeeded or
-    /// failed), stopped for consent, found no cloud model, was blocked by
+    /// failed), stopped for consent, found no shared model, was blocked by
     /// taint, or was disabled for this call. `payload_hash` is a
     /// hex SHA-256 of the would-be outbound request; content is never
-    /// recorded. `model` is the cloud model, where one was chosen.
+    /// recorded. `model` is the shared model, where one was chosen.
     CloudEscalation {
         session_id: Option<String>,
         model: Option<String>,
@@ -905,12 +905,12 @@ pub enum AuditTag {
         outcome: String,
         payload_hash: String,
     },
-    /// Model routing Part 3b (A15) — the operator allowed cloud escalation
+    /// Model routing Part 3b (A15) — the operator allowed shared escalation
     /// for conversation `session_id` (in-memory, this process only).
-    /// `via` is `"chat"` (`/allow-cloud`) or `"ipc"`.
+    /// `via` is `"chat"` (`/allow-shared`) or `"ipc"`.
     CloudConsentGranted { session_id: String, via: String },
     /// Model routing Part 3b (A16) — conversation `session_id` was newly
-    /// armed for `on_failure` cloud escalation by a failed local turn.
+    /// armed for `on_failure` shared escalation by a failed local turn.
     /// `signal` is the exact spelling of the failure that armed it
     /// (`"looping"`, `"tool_call_repair_exhausted"`, `"loop_verdict_fail"`,
     /// `"loop_stall_rescue"`). Emitted once per new mark, by
@@ -1298,7 +1298,7 @@ impl From<ChannelError> for AivyxError {
 /// Write side of the per-conversation routing taint (model routing Part
 /// 3b, G6). The turn loop / planner calls [`TaintSink::mark`] when a
 /// conversation touches sensitive data (a sensitive tool, a sensitive
-/// channel); a tainted conversation never escalates to a cloud endpoint.
+/// channel); a tainted conversation never escalates to a shared endpoint.
 ///
 /// Forward-declared here, like [`AuditHook`], so core code can mark a
 /// session without depending on the persisted implementation
@@ -1360,9 +1360,9 @@ impl TaintSink for AuditedTaintSink {
 pub trait EscalationArming: Send + Sync {
     /// Arm `session`'s next turn. Returns `(newly_armed, hint)`: `hint` is
     /// the `ask`-mode line for the operator, `None` when there is nothing
-    /// to say (not `ask`, no cloud candidate, or tainted).
+    /// to say (not `ask`, no shared candidate, or tainted).
     /// `can_allow_here` is whether the channel the hint goes to can grant
-    /// consent itself (Trusted or Kernel), so the hint says `/allow-cloud`
+    /// consent itself (Trusted or Kernel), so the hint says `/allow-shared`
     /// only where that works (routing visibility B1).
     async fn arm(
         &self,
@@ -1377,7 +1377,7 @@ pub trait EscalationArming: Send + Sync {
 
     /// Turn end (every exit): clear the active mark. Never re-arms: an
     /// `ask` turn that stopped for consent leaves a pending offer, which
-    /// only `/allow-cloud` arms (for the resend) and the next turn's
+    /// only `/allow-shared` arms (for the resend) and the next turn's
     /// `begin_armed_turn` otherwise drops.
     fn end_armed_turn(&self, session: &str);
 }

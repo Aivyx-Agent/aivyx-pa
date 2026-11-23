@@ -510,7 +510,7 @@ pub const COMMANDS: &[CommandHelp] = &[
         usage: &[
             "aivyx-pa routing status",
             "aivyx-pa routing explain [--limit <N>]",
-            "aivyx-pa routing allow-cloud <session-id>",
+            "aivyx-pa routing allow-shared <session-id>",
         ],
     },
     CommandHelp {
@@ -763,6 +763,16 @@ mod tests {
         cli.push("(deprecated flags)".to_string());
         cli.extend(
             crate::DEPRECATED_FLAGS
+                .iter()
+                .map(|(old, new)| format!("  {old}: deprecated alias of {new}")),
+        );
+        // Old subcommand spellings still accepted (the parser takes both),
+        // as `(old, new)`: part of the surface until 3.0.
+        const DEPRECATED_SUBCOMMANDS: &[(&str, &str)] =
+            &[("aivyx-pa routing allow-cloud", "aivyx-pa routing allow-shared")];
+        cli.push("(deprecated subcommands)".to_string());
+        cli.extend(
+            DEPRECATED_SUBCOMMANDS
                 .iter()
                 .map(|(old, new)| format!("  {old}: deprecated alias of {new}")),
         );

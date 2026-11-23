@@ -49,7 +49,7 @@ pub use transport_trait::McpTransport;
 /// reqwest would send even loopback requests to `HTTP_PROXY`/`ALL_PROXY`
 /// (aivyx-vision audit 2026-11-11, X1).
 pub(crate) fn client_for(url: &str) -> reqwest::ClientBuilder {
-    if aivyx_route::url_locality(url) == aivyx_route::Locality::Local {
+    if aivyx_route::url_is_local(url) {
         reqwest::Client::builder().no_proxy()
     } else {
         reqwest::Client::builder()

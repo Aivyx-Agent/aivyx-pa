@@ -351,6 +351,13 @@ fn config_warnings_section(warnings: &[String], still_runs: bool) -> String {
     }
     for warning in warnings {
         out.push_str(&format!("  \u{26a0} {warning}\n"));
+        // 2.1 — the tier's old spelling gets its own fix line.
+        if warning == aivyx_config::OLD_LOCALITY_NOTE {
+            out.push_str(&format!(
+                "     \u{2192} change locality = \"cloud\" to \"shared\" in {}\n",
+                config_path().display()
+            ));
+        }
     }
     out.push_str(&format!(
         "     \u{2192} edit {} to clear {}{}\n",
@@ -1636,6 +1643,27 @@ mod tests {
         let blocked = config_warnings_section(&warnings[..1], false);
         assert!(blocked.contains("to clear it\n"), "{blocked}");
         assert!(!out.contains('\u{2717}'), "a config warning never fails the doctor: {out}");
+    }
+
+    /// 2.1 — the old tier spelling is a warning row with its own fix.
+    #[test]
+    fn the_old_locality_note_is_a_warning_row_with_its_fix() {
+        let warnings = vec![aivyx_config::OLD_LOCALITY_NOTE.to_string()];
+        let out = config_warnings_section(&warnings, true);
+        assert!(
+            out.contains(
+                "  \u{26a0} locality = \"cloud\" is now \"shared\"; the old name works until 3.0\n"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!(
+                "     \u{2192} change locality = \"cloud\" to \"shared\" in {}\n",
+                config_path().display()
+            )),
+            "{out}"
+        );
+        assert!(!out.contains('\u{2717}'), "{out}");
     }
 
     #[tokio::test]

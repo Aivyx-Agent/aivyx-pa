@@ -1,8 +1,8 @@
-//! Model routing Part 3b — consent-gated cloud escalation.
+//! Model routing Part 3b — consent-gated shared escalation.
 //!
 //! [`EscalationGuard`] is the read side of the per-conversation privacy
 //! state the escalation path consults before any call leaves the machine
-//! for a `[routing.endpoints.*]` cloud endpoint (G6): the persisted,
+//! for a `[routing.endpoints.*]` shared endpoint (G6): the persisted,
 //! write-once routing taint and the in-memory, per-conversation consent
 //! grant. The daemon implements it with
 //! `aivyx_channel::routing_guard::RoutingGuard`; the write side is
@@ -19,7 +19,7 @@ pub trait EscalationGuard: Send + Sync {
     /// be read, they report the session as tainted.
     async fn taint(&self, session: &str) -> Option<String>;
 
-    /// Has the operator allowed cloud escalation for `session` in this
+    /// Has the operator allowed shared escalation for `session` in this
     /// process's lifetime? Consent is in-memory only (a restart re-asks)
     /// and never overrides a taint.
     fn consented(&self, session: &str) -> bool;
@@ -46,12 +46,12 @@ pub trait EscalationGuard: Send + Sync {
     /// Record that a call in `session` stopped for operator consent
     /// (`ask` mode), with what it would have sent where (`request`), so
     /// the front end can show it. When the trigger is `on_failure` this is
-    /// also a pending offer, which `/allow-cloud` arms for the resend and
+    /// also a pending offer, which `/allow-shared` arms for the resend and
     /// the next turn otherwise declines. Default: no-op.
     fn note_consent_requested(&self, _session: &str, _request: &ConsentRequest) {}
 }
 
-/// Routing visibility B1 — a cloud-consent stop: the cloud model the call
+/// Routing visibility B1 — a shared-consent stop: the shared model the call
 /// would have used, its endpoint, why it wanted the cloud, and roughly how
 /// much would have been sent. Never carries content.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,7 +97,7 @@ pub fn with_thousands(n: u32) -> String {
 pub fn consent_lead(req: &ConsentRequest) -> String {
     format!(
         "This would use `{}` on the `{}` endpoint, which you marked less trusted \
-         (`locality = \"cloud\"`), because {}. About {} tokens — this conversation plus the \
+         (`locality = \"shared\"`), because {}. About {} tokens — this conversation plus the \
          assistant's instructions — would be sent there.",
         req.model,
         req.endpoint,
@@ -108,16 +108,16 @@ pub fn consent_lead(req: &ConsentRequest) -> String {
 
 /// What only the operator can do, for a channel that can't grant consent.
 const OPERATOR_ONLY: &str = "Only the operator can allow a less-trusted endpoint — from the terminal \
-                             (`/allow-cloud`) or the Studio.";
+                             (`/allow-shared`) or the Studio.";
 
 /// The full consent-stop message for a channel: [`consent_lead`], then
-/// how to allow it — `/allow-cloud` where this channel can grant consent
+/// how to allow it — `/allow-shared` where this channel can grant consent
 /// (`can_allow_here`: Trusted or Kernel), otherwise who can.
 pub fn consent_text(req: &ConsentRequest, can_allow_here: bool) -> String {
     let lead = consent_lead(req);
     if can_allow_here {
         format!(
-            "{lead} Send /allow-cloud to allow it for this conversation, then resend your message."
+            "{lead} Send /allow-shared to allow it for this conversation, then resend your message."
         )
     } else {
         format!("{lead} {OPERATOR_ONLY}")
@@ -130,14 +130,14 @@ pub fn consent_text(req: &ConsentRequest, can_allow_here: bool) -> String {
 pub fn stuck_hint(model: &str, can_allow_here: bool) -> String {
     if can_allow_here {
         format!(
-            "The local model got stuck; send /allow-cloud and resend to retry on `{model}` (an endpoint you marked less trusted)."
+            "The local model got stuck; send /allow-shared and resend to retry on `{model}` (an endpoint you marked less trusted)."
         )
     } else {
         format!("The local model got stuck; it could retry on `{model}` (an endpoint you marked less trusted). {OPERATOR_ONLY}")
     }
 }
 
-/// How cloud escalation is gated. Mirrors `[routing.escalation] mode`.
+/// How shared escalation is gated. Mirrors `[routing.escalation] mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EscalationMode {
     Never,
@@ -156,7 +156,7 @@ impl EscalationMode {
     }
 }
 
-/// Why a call wants a cloud model.
+/// Why a call wants a shared model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trigger {
     /// No local model meets the call's hard needs.
@@ -181,7 +181,7 @@ impl Trigger {
 /// What to do with a call a trigger wants to escalate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EscalationVerdict {
-    /// Send it to a cloud model.
+    /// Send it to a shared model.
     Proceed,
     /// `ask` mode without a grant: stop the turn and ask.
     NeedsConsent,
@@ -219,7 +219,7 @@ pub fn decide_escalation(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EscalationRecord {
     pub session_id: Option<String>,
-    /// The cloud model, where one was chosen.
+    /// The shared model, where one was chosen.
     pub model: Option<String>,
     pub trigger: Trigger,
     pub mode: EscalationMode,
@@ -333,7 +333,7 @@ mod tests {
         assert_eq!(
             consent_lead(&tier_request(12578)),
             "This would use `claude-sonnet-5` on the `claude` endpoint, which you marked less trusted \
-             (`locality = \"cloud\"`), because this kind of request is set to use a less-trusted \
+             (`locality = \"shared\"`), because this kind of request is set to use a less-trusted \
              endpoint. About 12,578 tokens — this conversation plus the assistant's instructions — \
              would be sent there."
         );
@@ -344,9 +344,9 @@ mod tests {
         assert_eq!(
             consent_text(&tier_request(12578), true),
             "This would use `claude-sonnet-5` on the `claude` endpoint, which you marked less trusted \
-             (`locality = \"cloud\"`), because this kind of request is set to use a less-trusted \
+             (`locality = \"shared\"`), because this kind of request is set to use a less-trusted \
              endpoint. About 12,578 tokens — this conversation plus the assistant's instructions — \
-             would be sent there. Send /allow-cloud to allow it \
+             would be sent there. Send /allow-shared to allow it \
              for this conversation, then resend your message."
         );
     }
@@ -357,10 +357,10 @@ mod tests {
         assert_eq!(
             text,
             "This would use `claude-sonnet-5` on the `claude` endpoint, which you marked less trusted \
-             (`locality = \"cloud\"`), because this kind of request is set to use a less-trusted \
+             (`locality = \"shared\"`), because this kind of request is set to use a less-trusted \
              endpoint. About 1,234,567 tokens — this conversation plus the assistant's instructions — \
              would be sent there. Only the operator can allow a less-trusted endpoint — from the terminal \
-             (`/allow-cloud`) or the Studio."
+             (`/allow-shared`) or the Studio."
         );
     }
 
@@ -377,12 +377,12 @@ mod tests {
     fn the_stuck_hint_is_per_channel() {
         assert_eq!(
             stuck_hint("claude-sonnet-5", true),
-            "The local model got stuck; send /allow-cloud and resend to retry on `claude-sonnet-5` (an endpoint you marked less trusted)."
+            "The local model got stuck; send /allow-shared and resend to retry on `claude-sonnet-5` (an endpoint you marked less trusted)."
         );
         assert_eq!(
             stuck_hint("claude-sonnet-5", false),
             "The local model got stuck; it could retry on `claude-sonnet-5` (an endpoint you marked less trusted). Only the operator can \
-             allow a less-trusted endpoint — from the terminal (`/allow-cloud`) or the Studio."
+             allow a less-trusted endpoint — from the terminal (`/allow-shared`) or the Studio."
         );
     }
 

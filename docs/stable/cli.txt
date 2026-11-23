@@ -149,7 +149,7 @@ role
 routing
   aivyx-pa routing status
   aivyx-pa routing explain [--limit <N>]
-  aivyx-pa routing allow-cloud <session-id>
+  aivyx-pa routing allow-shared <session-id>
 signal (preview)
   aivyx-pa signal verify (preview)
 skills
@@ -206,3 +206,5 @@ workspace
   --mcp-server: deprecated alias of --mcp
   --web-ui: deprecated alias of --studio
   --web-ui-port: deprecated alias of --studio-port
+(deprecated subcommands)
+  aivyx-pa routing allow-cloud: deprecated alias of aivyx-pa routing allow-shared

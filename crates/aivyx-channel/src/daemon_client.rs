@@ -1194,29 +1194,29 @@ pub async fn get_reminders(
     }
 }
 
-/// Model routing Part 3b (A15) — allow cloud escalation for one
+/// Model routing Part 3b (A15) — allow shared escalation for one
 /// conversation on the running daemon. `Ok(true)` when recorded,
-/// `Ok(false)` when the daemon has no cloud escalation configured.
-pub async fn allow_cloud_escalation(
+/// `Ok(false)` when the daemon has no shared escalation configured.
+pub async fn allow_shared_escalation(
     socket_path: &Path,
     session_id: &str,
 ) -> Result<bool, DaemonError> {
     let payload = send_query(
         socket_path,
-        "allow-cloud",
-        QueryPayload::AllowCloudEscalation {
+        "allow-shared",
+        QueryPayload::AllowSharedEscalation {
             session_id: session_id.to_string(),
         },
     )
     .await?;
     match payload {
-        QueryResponsePayload::CloudEscalationAllowed { .. } => Ok(true),
-        QueryResponsePayload::CloudEscalationNotEnabled => Ok(false),
+        QueryResponsePayload::SharedEscalationAllowed { .. } => Ok(true),
+        QueryResponsePayload::SharedEscalationNotEnabled => Ok(false),
         QueryResponsePayload::QueryError { code, message } => {
             Err(DaemonError::Protocol(format!("{code}: {message}")))
         }
         other => Err(DaemonError::Protocol(format!(
-            "expected CloudEscalationAllowed, got {other:?}"
+            "expected SharedEscalationAllowed, got {other:?}"
         ))),
     }
 }

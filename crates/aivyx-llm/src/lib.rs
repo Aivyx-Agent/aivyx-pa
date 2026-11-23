@@ -128,7 +128,7 @@ pub use routed::{
     RoutedProvider, is_routable,
 };
 
-/// Model routing Part 3b — consent-gated cloud escalation. For now just
+/// Model routing Part 3b — consent-gated shared escalation. For now just
 /// the read-side [`escalation::EscalationGuard`] trait (per-conversation
 /// taint + consent) that `RoutedProvider` consults.
 pub mod escalation;
@@ -748,7 +748,7 @@ pub trait LlmStream: Send {
 /// - `UnknownModel` — the `model` field in the request isn't recognized
 /// - `Config` — provider misconfiguration (missing API key, bad URL)
 /// - `Routing` — model routing couldn't serve the call
-/// - `NeedsCloudConsent` — an `ask`-mode cloud escalation stopped for consent
+/// - `NeedsSharedConsent` — an `ask`-mode shared escalation stopped for consent
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum LlmError {
     #[error("http transport error: {0}")]
@@ -786,7 +786,7 @@ pub enum LlmError {
     /// two sentences, shown as-is (no framing); the structured request is
     /// on the escalation guard.
     #[error("{0}")]
-    NeedsCloudConsent(String),
+    NeedsSharedConsent(String),
 }
 
 // ---------------------------------------------------------------------------

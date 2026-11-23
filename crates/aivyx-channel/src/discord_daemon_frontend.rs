@@ -628,7 +628,7 @@ pub(crate) fn render_events_for_discord(events: &[StreamEventPayload]) -> String
             // words a consent request into the turn's outcome text for
             // this channel (which the correction line below surfaces).
             StreamEventPayload::ModelRouted { .. }
-            | StreamEventPayload::CloudConsentRequested { .. } => {}
+            | StreamEventPayload::SharedConsentRequested { .. } => {}
             // Chat-app connections never send `SetApprovals`, so the daemon
             // never asks them; their approvals are "reply to approve".
             StreamEventPayload::ApprovalRequest { .. } => {}
@@ -665,7 +665,7 @@ pub(crate) fn render_events_for_discord(events: &[StreamEventPayload]) -> String
 /// when it would exactly duplicate `render_events_for_discord`'s own
 /// empty-events "(no reply)" fallback.
 ///
-/// Routing visibility B3 — a cloud-consent stop is also a text-less
+/// Routing visibility B3 — a shared-consent stop is also a text-less
 /// turn (the model never answered), but its outcome *is* the whole
 /// reply — the daemon worded it for this channel. Showing the generic
 /// "(no reply)" filler ahead of it would read as "(no reply)\nThis
@@ -1286,12 +1286,12 @@ mod tests {
     #[test]
     fn discord_shows_the_consent_outcome_and_ignores_routing_events() {
         let outcome = "completed: This would use `m` on the `e` endpoint, which you marked less \
-                       trusted (`locality = \"cloud\"`), because no local model can handle this \
+                       trusted (`locality = \"shared\"`), because no local model can handle this \
                        request. About 1,234 tokens — this conversation plus the assistant's \
                        instructions — would be sent there. Only the operator can allow a \
-                       less-trusted endpoint — from the terminal (`/allow-cloud`) or the Studio.";
+                       less-trusted endpoint — from the terminal (`/allow-shared`) or the Studio.";
         let events = vec![
-            crate::daemon_ipc::StreamEventPayload::CloudConsentRequested {
+            crate::daemon_ipc::StreamEventPayload::SharedConsentRequested {
                 model: "m".into(),
                 endpoint: "e".into(),
                 why: "no local model can handle this request".into(),
@@ -1320,7 +1320,7 @@ mod tests {
     #[test]
     fn build_discord_reply_shows_the_note_alone_for_a_text_less_turn() {
         // A text-less turn with an outcome message (a reply floor here; a
-        // routing/allow-cloud command reply or a consent stop alike) shows
+        // routing/allow-shared command reply or a consent stop alike) shows
         // that message alone — no "(no reply)" prefix.
         let out = build_discord_reply(
             &[],

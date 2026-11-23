@@ -100,6 +100,7 @@ use aivyx_storage::{KeyDomain, Storage};
 // daemon's Settings IPC handlers).
 pub mod config_write;
 mod deprecated_keys;
+pub use deprecated_keys::OLD_LOCALITY_NOTE;
 pub mod not_stable;
 
 // R5: the values the string keys that take one of a fixed set accept. The
@@ -3307,7 +3308,7 @@ pub struct SkillDefaultsConfig {
 
 /// Model routing Part 3b — `[routing.escalation] mode`: whether a
 /// conversation may escalate to a `[routing.endpoints.*]` cloud
-/// endpoint. `Never` forbids cloud endpoints outright; `Ask` (the
+/// endpoint. `Never` forbids shared endpoints outright; `Ask` (the
 /// default) stops the turn for the operator's per-conversation consent;
 /// `Auto` escalates without asking. No mode bypasses the sensitivity
 /// taint.
@@ -3321,7 +3322,7 @@ pub enum EscalationMode {
 }
 
 /// Model routing Part 3b — `[routing.escalation]`. Only matters when a
-/// cloud endpoint is configured under `[routing.endpoints]`. Unknown keys
+/// shared endpoint is configured under `[routing.endpoints]`. Unknown keys
 /// are a config error, so a typo can't silently weaken a privacy setting.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -3330,12 +3331,12 @@ pub struct EscalationConfig {
     /// Escalate when no local candidate can serve the call.
     pub no_local_candidate: bool,
     /// `TaskKind` names (`[routing.tasks]` keys, e.g. `"plan"`) that
-    /// always prefer a cloud endpoint.
+    /// always prefer a shared endpoint.
     pub tiers: Vec<String>,
     /// A16 — after a local failure (Looping, exhausted tool-call repair)
     /// the conversation's next turn escalates, checked before `tiers`,
     /// through the same gate: `auto` proceeds, `ask` asks (the failing
-    /// turn's reply says to send /allow-cloud; an ignored offer lapses at
+    /// turn's reply says to send /allow-shared; an ignored offer lapses at
     /// the turn after), taint always blocks. The autonomous loop arms only
     /// in `auto`. Default `false`.
     pub on_failure: bool,
@@ -4292,7 +4293,7 @@ impl OllamaFamilyStrategy {
 /// - `gemma4:31b` → `Some("gemma4")`.
 /// - `llama3.1:latest` → `Some("llama3")`.
 /// - `claude-haiku-4-5` → `None` (not an Ollama-family
-///   model; cloud model names don't follow Ollama's
+///   model; shared model names don't follow Ollama's
 ///   convention).
 ///
 /// Returns `None` for names that don't match any documented
@@ -4384,7 +4385,7 @@ pub fn detect_model_family(model: &str) -> Option<String> {
 /// 2. **Per-family default** from
 ///    [`OllamaFamilyStrategy::default_for_family`].
 /// 3. **`None`** when [`detect_model_family`] returns `None`
-///    (cloud model name, bare family without digits, empty
+///    (shared model name, bare family without digits, empty
 ///    input). Unknown families always resolve to `None` so a
 ///    new model release doesn't silently pick up substrate
 ///    it wasn't tested against.

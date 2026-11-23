@@ -44,7 +44,7 @@ mod cron_text;
 mod guide;
 mod nav_state;
 /// Routing visibility B4 — pure helpers for the Models screen, the status
-/// bar's model segment and the cloud-consent card.
+/// bar's model segment and the shared-consent card.
 mod routing;
 mod sessions;
 mod tool_text;
@@ -360,7 +360,7 @@ struct McpState {
 /// latest `GetRoutingStatus` answer (the Models screen + whether the status
 /// bar says "routing off"), the latest `ModelRouted` for the Studio's own
 /// conversation (the status bar), the pin selector's last outcome, and the
-/// Chat screen's cloud-consent card. A dedicated struct so its context
+/// Chat screen's shared-consent card. A dedicated struct so its context
 /// can't collide by type with any other signal.
 #[derive(Clone, Default, PartialEq)]
 struct RoutingUi {
@@ -381,7 +381,7 @@ struct RoutingUi {
     /// operator sends another message (older cards stay as plain text).
     consent_line: Option<usize>,
     consent: ConsentState,
-    /// Set when a `CloudConsentRequested` arrives; the next `TurnComplete`
+    /// Set when a `SharedConsentRequested` arrives; the next `TurnComplete`
     /// reads (and clears) it to drop the duplicate outcome line.
     consent_this_turn: bool,
 }
@@ -391,16 +391,16 @@ struct RoutingUi {
 enum ConsentState {
     #[default]
     Asking,
-    /// `AllowCloudEscalation` sent, no answer yet.
+    /// `AllowSharedEscalation` sent, no answer yet.
     Allowing,
-    /// `CloudEscalationAllowed` — shows "Allowed until the daemon
+    /// `SharedEscalationAllowed` — shows "Allowed until the daemon
     /// restarts." and the Resend button.
     Allowed,
-    /// `CloudEscalationNotEnabled`, or a `QueryError`.
+    /// `SharedEscalationNotEnabled`, or a `QueryError`.
     Failed(String),
 }
 
-/// One cloud-consent request, as the Chat card shows it.
+/// One shared-consent request, as the Chat card shows it.
 #[derive(Clone, PartialEq)]
 struct ConsentInfo {
     model: String,
@@ -870,7 +870,7 @@ mod server_info_tests {
 struct ChatLine {
     role: Role,
     text: String,
-    /// Routing visibility B4 — set on a cloud-consent card line (`text`
+    /// Routing visibility B4 — set on a shared-consent card line (`text`
     /// then holds the card's sentence).
     consent: Option<ConsentInfo>,
 }
@@ -896,7 +896,7 @@ impl ChatLine {
     fn error(text: String) -> Self {
         Self { role: Role::Error, text, consent: None }
     }
-    /// A cloud-consent card (rendered by `ConsentCard`, not as text).
+    /// A shared-consent card (rendered by `ConsentCard`, not as text).
     fn consent_card(info: ConsentInfo) -> Self {
         let text = routing::consent_lead(&info.model, &info.endpoint, &info.why, info.estimated_tokens);
         Self { role: Role::System, text, consent: Some(info) }
@@ -4512,9 +4512,9 @@ fn ChatPanel() -> Element {
     }
 }
 
-/// Routing visibility B4 — a cloud-consent request in the Chat transcript:
+/// Routing visibility B4 — a shared-consent request in the Chat transcript:
 /// the model, why, and the token estimate, with "Allow for this
-/// conversation" (`AllowCloudEscalation`) and, once allowed, "Resend" (the
+/// conversation" (`AllowSharedEscalation`) and, once allowed, "Resend" (the
 /// last message again). Only the latest card (`live`) has buttons; an
 /// older one stays as a record.
 #[component]
@@ -4527,7 +4527,7 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
     let allow = move |_| {
         if let Some(sid) = session() {
             routing.write().consent = ConsentState::Allowing;
-            ws.send(allow_cloud_query(sid));
+            ws.send(allow_shared_query(sid));
         }
     };
     // One source for the sentence: routing::consent_parts (also what
@@ -4536,7 +4536,7 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
     let parts = routing::consent_parts(&info.model, &info.endpoint, &info.why, info.estimated_tokens);
     rsx! {
         div { class: "glass-card consent-card", role: "status",
-            span { class: "gate-label", "☁ less-trusted endpoint: consent needed" }
+            span { class: "gate-label", "⚠ less-trusted endpoint: consent needed" }
             p { class: "consent-text",
                 for part in parts {
                     match part {
@@ -4548,7 +4548,7 @@ fn ConsentCard(info: ConsentInfo, live: bool) -> Element {
             if !info.can_allow_here {
                 p { class: "help",
                     "Only the operator can allow a less-trusted endpoint — from the terminal \
-                     (/allow-cloud) or the Studio."
+                     (/allow-shared) or the Studio."
                 }
             } else if live {
                 div { class: "actions",
@@ -6364,7 +6364,7 @@ fn ModelsPanel() -> Element {
                 }
                 if let Some(taint) = conv.as_ref().and_then(|c| c.tainted.clone()) {
                     p { class: "help sub", "Never escalates to a less-trusted endpoint: {taint}" }
-                } else if conv.as_ref().is_some_and(|c| c.cloud_allowed) {
+                } else if conv.as_ref().is_some_and(|c| c.shared_allowed) {
                     p { class: "help sub",
                         "Less-trusted endpoint allowed for this conversation until the page reloads or the daemon restarts."
                     }
@@ -8922,10 +8922,10 @@ fn set_routing_pin_query(session_id: String, model: Option<String>) -> FrontendM
 
 /// Routing visibility B4 — the consent card's "Allow for this
 /// conversation".
-fn allow_cloud_query(session_id: String) -> FrontendMessage {
+fn allow_shared_query(session_id: String) -> FrontendMessage {
     FrontendMessage::Query {
-        id: "routing-allow-cloud".to_string(),
-        payload: QueryPayload::AllowCloudEscalation { session_id },
+        id: "routing-allow-shared".to_string(),
+        payload: QueryPayload::AllowSharedEscalation { session_id },
     }
 }
 
@@ -11658,10 +11658,10 @@ async fn read_task(
                         }
                     }
                     // Routing visibility B4 — the turn stopped to ask for
-                    // cloud consent: a card in the transcript (the turn's
+                    // shared consent: a card in the transcript (the turn's
                     // outcome line, the same request in words, is dropped at
                     // `TurnComplete`).
-                    StreamEventPayload::CloudConsentRequested {
+                    StreamEventPayload::SharedConsentRequested {
                         model,
                         endpoint,
                         why,
@@ -11744,13 +11744,13 @@ async fn read_task(
                 }
                 // The consent card's "Allow for this conversation".
                 DaemonEnvelope::QueryResponse {
-                    payload: QueryResponsePayload::CloudEscalationAllowed { .. },
+                    payload: QueryResponsePayload::SharedEscalationAllowed { .. },
                     ..
                 } => {
                     routing.write().consent = ConsentState::Allowed;
                 }
                 DaemonEnvelope::QueryResponse {
-                    payload: QueryResponsePayload::CloudEscalationNotEnabled,
+                    payload: QueryResponsePayload::SharedEscalationNotEnabled,
                     ..
                 } => {
                     routing.write().consent = ConsentState::Failed(
@@ -11760,7 +11760,7 @@ async fn read_task(
                 DaemonEnvelope::QueryResponse {
                     id,
                     payload: QueryResponsePayload::QueryError { message, .. },
-                } if id == "routing-allow-cloud" => {
+                } if id == "routing-allow-shared" => {
                     routing.write().consent = ConsentState::Failed(message);
                 }
                 DaemonEnvelope::GateResolved { mission_id, gate_id, .. } => {
