@@ -414,8 +414,15 @@ fn install_trust_config(dirs: &BaseDirs) -> Option<PathBuf> {
     InstancePaths::new(InstanceName::default_instance(), dirs.clone()).config_file()
 }
 
-/// What to do after a config pack installs.
-pub fn next_steps(instance: &InstanceName, summary: &PaPartSummary, port: u16) -> String {
+/// What to do after a config pack installs. `config` is the new
+/// instance's `aivyx-pa.toml`, named in the steps for a required tool
+/// `connect` can't set up (the Toolkit).
+pub fn next_steps(
+    instance: &InstanceName,
+    summary: &PaPartSummary,
+    port: u16,
+    config: Option<&Path>,
+) -> String {
     let m = &summary.manifest;
     let pa = m.pa.as_ref().expect("checked: has a pa part");
     let mut out = format!(
@@ -435,8 +442,16 @@ pub fn next_steps(instance: &InstanceName, summary: &PaPartSummary, port: u16) -
         }
         out.push('\n');
     }
+    let config_name = config.map_or_else(
+        || "this instance's aivyx-pa.toml".to_string(),
+        |c| c.display().to_string(),
+    );
     for r in pa.requires.iter().filter(|r| !connect.contains(&r.as_str())) {
-        out.push_str(&format!("  add the {r} as a [[tool_process]] — see docs/INSTALL.md\n"));
+        out.push_str(&format!(
+            "  the {r}: `aivyx-pa tool-programs install` (if `aivyx-pa tool-programs list` \
+             doesn't show aivyx-{r}), then add to {config_name}:\n      \
+             [[tool_process]]\n      name = \"{r}\"\n      command = \"aivyx-{r}\"\n"
+        ));
     }
     if !pa.optional.is_empty() {
         out.push_str(&format!("  optional: {}\n", pa.optional.join(", ")));
@@ -480,12 +495,12 @@ pub async fn run_config_install(file: &Path) -> Result<(), String> {
         why
     };
     crate::init::run_init_wizard(Some(&install.template)).await.map_err(undo)?;
-    if !config.is_some_and(|c| c.exists()) {
+    if !config.as_ref().is_some_and(|c| c.exists()) {
         return Err(undo("setup didn't finish, so nothing was installed".into()));
     }
     // The wizard already wrote this instance's port; report that one.
     let port = crate::instances::ensure_studio_port()?;
-    print!("\n{}", next_steps(&install.instance, &install.summary, port));
+    print!("\n{}", next_steps(&install.instance, &install.summary, port, config.as_deref()));
     Ok(())
 }
 
@@ -873,11 +888,36 @@ mod tests {
     #[test]
     fn next_steps_say_what_to_connect() {
         let summary = check_pa_part(&good_pack("next")).unwrap();
-        let text = next_steps(&name("shop"), &summary, 7845);
+        let text = next_steps(&name("shop"), &summary, 7845, None);
         assert!(text.starts_with("Installed business-manager v0.1.0 as instance `shop` (Studio port 7845)."), "{text}");
         assert!(text.contains("aivyx-pa --instance shop connect gmail\n"), "{text}");
         assert!(text.contains("optional: notion"), "{text}");
         assert!(text.contains("aivyx-pa --instance shop daemon run"), "{text}");
+    }
+
+    /// A required tool `connect` can't set up (the Toolkit) gets the two real
+    /// steps: install the program, then register it in this instance's
+    /// config. Not a pointer into docs/INSTALL.md, whose Toolkit section
+    /// builds from source.
+    #[test]
+    fn next_steps_say_how_to_add_the_toolkit() {
+        let dir = good_pack("toolkit-hint");
+        rewrite(&dir, "manifest.toml", |t| {
+            t.replace(r#"requires = ["gmail"]"#, r#"requires = ["gmail", "toolkit"]"#)
+        });
+        let summary = check_pa_part(&dir).unwrap();
+        let config = Path::new("/home/me/.config/aivyx-pa/instances/shop/aivyx-pa.toml");
+        let text = next_steps(&name("shop"), &summary, 7845, Some(config));
+        assert!(!text.contains("docs/INSTALL.md"), "{text}");
+        assert!(text.contains("aivyx-pa tool-programs install"), "{text}");
+        assert!(text.contains(&config.display().to_string()), "{text}");
+        assert!(
+            text.contains("      [[tool_process]]\n      name = \"toolkit\"\n      command = \"aivyx-toolkit\"\n"),
+            "{text}"
+        );
+        // Without a known config path it still names the file to edit.
+        let text = next_steps(&name("shop"), &summary, 7845, None);
+        assert!(text.contains("this instance's aivyx-pa.toml"), "{text}");
     }
 
     /// A config pack (format 2) needs a newer aivyx-pa: building one and

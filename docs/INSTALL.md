@@ -4536,9 +4536,11 @@ bases via `capability_scopes` on the role.
 
 #### One-time operator setup
 
-**1. Build / install the toolkit binary.**
+**1. Install the toolkit binary.**
 
-From the workspace root:
+After the one-line install, `aivyx-pa tool-programs install` puts it (and
+the other tool programs) beside `aivyx-pa`; the `.deb` and the Docker image
+already include it. Building from source instead, from the workspace root:
 
 ```sh
 cargo install --path crates/aivyx-toolkit

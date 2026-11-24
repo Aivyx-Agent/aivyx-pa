@@ -3,6 +3,16 @@
 All notable changes to Aivyx are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org). Dates are ISO-8601.
 
+## [Unreleased]
+
+### Fixed
+
+- After `aivyx-pa pack install`, a required tool that `connect` can't set
+  up (the Toolkit) now gets its real steps: `aivyx-pa tool-programs install`,
+  then the `[[tool_process]]` lines to add to the new instance's config, which
+  it names. It used to point at `docs/INSTALL.md`, whose Toolkit section
+  builds from source.
+
 ## [2.1.1] - 2026-11-24
 
 ### Fixed
