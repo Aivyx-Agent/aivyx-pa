@@ -285,6 +285,22 @@ jobs:
           name: artifacts-dist-manifest
           path: dist-manifest.json
       # Create a GitHub Release while uploading all files to it
+      # HAND-EDITED: wait until the manifest uploaded just above can be
+      # downloaded. GitHub's artifact API can lag the upload: pa v2.1.0's
+      # listing missed it, and v2.1.1's download step then failed with "No
+      # artifacts found for ID" (fixed by re-running the job).
+      - name: Wait for the dist-manifest artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 12); do
+            if gh run download "${{ github.run_id }}" -R "${{ github.repository }}" \
+                -n artifacts-dist-manifest -D "$RUNNER_TEMP/dm-probe" 2>/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "artifacts-dist-manifest still not downloadable after 60 s"; exit 1
       - name: "Download GitHub Artifacts"
         uses: actions/download-artifact@v7
         with:
